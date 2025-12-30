@@ -830,6 +830,80 @@ fn introduceTypeNameOnly(
     try self.exposed_type_texts.put(self.env.gpa, type_text, region);
 }
 
+/// Collects all type name references from an AST type annotation.
+/// This walks the AST annotation tree and collects all type names that are referenced.
+/// Used for building the dependency graph for topological sorting of type declarations.
+fn collectTypeReferencesFromAST(
+    self: *Self,
+    anno_idx: AST.TypeAnno.Idx,
+    refs: *std.AutoHashMapUnmanaged(base.Ident.Idx, void),
+) std.mem.Allocator.Error!void {
+    const anno = self.parse_ir.store.getTypeAnno(anno_idx);
+
+    switch (anno) {
+        .ty => |ty| {
+            // This is a type name reference like "Str" or "Node"
+            // Resolve the token to get the identifier
+            if (self.parse_ir.tokens.resolveIdentifier(ty.token)) |type_ident| {
+                // Check if this is a local type (not a builtin)
+                // We only care about references to types defined in this module
+                if (!CIR.TypeAnno.Builtin.isBuiltinTypeIdent(type_ident, self.env.idents)) {
+                    try refs.put(self.env.gpa, type_ident, {});
+                }
+            }
+        },
+        .apply => |apply| {
+            // Type application like "List(Str)" or "Node(a)"
+            // The first element in args is the type being applied
+            // Recurse into all args to find references
+            for (self.parse_ir.store.typeAnnoSlice(apply.args)) |arg_idx| {
+                try self.collectTypeReferencesFromAST(arg_idx, refs);
+            }
+        },
+        .tag_union => |tag_union| {
+            // Tag union like "[Ok(a), Err(b)]"
+            // Tags are type annotations that may reference other types
+            for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
+                try self.collectTypeReferencesFromAST(tag_idx, refs);
+            }
+            // Also check the open annotation if present
+            if (tag_union.open_anno) |open_idx| {
+                try self.collectTypeReferencesFromAST(open_idx, refs);
+            }
+        },
+        .tuple => |tuple| {
+            // Tuple like "(A, B, C)"
+            for (self.parse_ir.store.typeAnnoSlice(tuple.annos)) |elem_idx| {
+                try self.collectTypeReferencesFromAST(elem_idx, refs);
+            }
+        },
+        .record => |record| {
+            // Record like "{ field: Type }"
+            for (self.parse_ir.store.annoRecordFieldSlice(record.fields)) |field_idx| {
+                const field = self.parse_ir.store.getAnnoRecordField(field_idx) catch continue;
+                try self.collectTypeReferencesFromAST(field.ty, refs);
+            }
+            // Also check the extension type if present
+            if (record.ext) |ext_idx| {
+                try self.collectTypeReferencesFromAST(ext_idx, refs);
+            }
+        },
+        .@"fn" => |func| {
+            // Function type like "a -> b" or "a, b -> c"
+            for (self.parse_ir.store.typeAnnoSlice(func.args)) |arg_idx| {
+                try self.collectTypeReferencesFromAST(arg_idx, refs);
+            }
+            try self.collectTypeReferencesFromAST(func.ret, refs);
+        },
+        .parens => |parens| {
+            // Parenthesized annotation - just recurse
+            try self.collectTypeReferencesFromAST(parens.anno, refs);
+        },
+        // These don't contain type references to other defined types
+        .ty_var, .underscore_type_var, .underscore, .malformed => {},
+    }
+}
+
 /// Recursively introduce nested item aliases into the current scope.
 /// Given a type prefix (e.g., "Inner" or "Inner.Deep"), this adds aliases for all items
 /// defined in that nested type and all of its nested types.
@@ -2008,21 +2082,240 @@ pub fn canonicalizeFile(
 
     // Phase 1.7: Process type declarations WITHOUT associated blocks
     // These can now reference nested types that were introduced in Phase 1.6
-    // Set the flag so forward references between aliases are rejected
+    // Use topological sorting to allow forward references between types
     {
         self.processing_alias_declarations = true;
         defer self.processing_alias_declarations = false;
+
+        const gpa = self.env.gpa;
+
+        // Step 1: Collect all type declarations without associated blocks and their dependencies
+        const TypeDeclInfo = struct {
+            stmt_id: AST.Statement.Idx,
+            type_decl: std.meta.fieldInfo(AST.Statement, .type_decl).type,
+            name_ident: Ident.Idx,
+            region: Region,
+        };
+        var type_decls = std.ArrayList(TypeDeclInfo){};
+        defer type_decls.deinit(gpa);
+
+        // Map from type name to index in type_decls
+        var name_to_idx = std.AutoHashMapUnmanaged(Ident.Idx, usize){};
+        defer name_to_idx.deinit(gpa);
+
         for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
             const stmt = self.parse_ir.store.getStatement(stmt_id);
-            switch (stmt) {
-                .type_decl => |type_decl| {
-                    if (type_decl.associated == null) {
-                        try self.processTypeDeclFirstPass(type_decl, null, null, false); // no associated block to defer
+            if (stmt == .type_decl) {
+                const type_decl = stmt.type_decl;
+                if (type_decl.associated == null) {
+                    // Get the type name from the header
+                    const type_header = self.parse_ir.store.getTypeHeader(type_decl.header) catch continue;
+                    const name_ident = self.parse_ir.tokens.resolveIdentifier(type_header.name) orelse continue;
+                    const region = self.parse_ir.tokenizedRegionToRegion(type_decl.region);
+
+                    try name_to_idx.put(gpa, name_ident, type_decls.items.len);
+                    try type_decls.append(gpa, .{
+                        .stmt_id = stmt_id,
+                        .type_decl = type_decl,
+                        .name_ident = name_ident,
+                        .region = region,
+                    });
+                }
+            }
+        }
+
+        // If no type declarations, skip the rest
+        if (type_decls.items.len == 0) {
+            // Nothing to process
+        } else {
+            // Step 2: Build dependency graph (edges from referencer to referenced)
+            // For each type, collect which other types it references
+            var dependencies = std.ArrayList(std.ArrayList(usize)){};
+            defer {
+                for (dependencies.items) |*dep_list| {
+                    dep_list.deinit(gpa);
+                }
+                dependencies.deinit(gpa);
+            }
+
+            for (type_decls.items, 0..) |info, current_idx| {
+                var refs = std.AutoHashMapUnmanaged(Ident.Idx, void){};
+                defer refs.deinit(gpa);
+
+                // Collect type references from the annotation
+                try self.collectTypeReferencesFromAST(info.type_decl.anno, &refs);
+
+                // Convert to indices in our type_decls array
+                var dep_list = std.ArrayList(usize){};
+                var ref_iter = refs.keyIterator();
+                while (ref_iter.next()) |ref_ident| {
+                    if (name_to_idx.get(ref_ident.*)) |idx| {
+                        // Don't add self-references to dependencies for topological sort
+                        // (self-references are handled by Check as RECURSIVE ALIAS)
+                        if (idx != current_idx) {
+                            try dep_list.append(gpa, idx);
+                        }
                     }
-                },
-                else => {
-                    // Skip non-type-declaration statements
-                },
+                }
+                try dependencies.append(gpa, dep_list);
+            }
+
+            // Step 3: Compute SCCs using Tarjan's algorithm
+            const SccResult = struct {
+                sccs: std.ArrayList(std.ArrayList(usize)),
+                is_recursive: std.ArrayList(bool),
+                allocator: std.mem.Allocator,
+
+                fn deinit(self_inner: *@This()) void {
+                    for (self_inner.sccs.items) |*scc| {
+                        scc.deinit(self_inner.allocator);
+                    }
+                    self_inner.sccs.deinit(self_inner.allocator);
+                    self_inner.is_recursive.deinit(self_inner.allocator);
+                }
+            };
+
+            var scc_result = blk: {
+                var result = SccResult{
+                    .sccs = std.ArrayList(std.ArrayList(usize)){},
+                    .is_recursive = std.ArrayList(bool){},
+                    .allocator = gpa,
+                };
+
+                var index: u32 = 0;
+                var indices = std.AutoHashMapUnmanaged(usize, u32){};
+                defer indices.deinit(gpa);
+                var lowlinks = std.AutoHashMapUnmanaged(usize, u32){};
+                defer lowlinks.deinit(gpa);
+                var on_stack = std.AutoHashMapUnmanaged(usize, void){};
+                defer on_stack.deinit(gpa);
+                var stack = std.ArrayList(usize){};
+                defer stack.deinit(gpa);
+
+                // Tarjan's strongconnect function (iterative to avoid stack overflow)
+                const Frame = struct {
+                    v: usize,
+                    dep_idx: usize,
+                    phase: enum { init, process_deps, finish },
+                    last_child: ?usize, // Track which child we just finished processing
+                };
+                var call_stack = std.ArrayList(Frame){};
+                defer call_stack.deinit(gpa);
+
+                for (0..type_decls.items.len) |start_v| {
+                    if (indices.contains(start_v)) continue;
+
+                    try call_stack.append(gpa, .{ .v = start_v, .dep_idx = 0, .phase = .init, .last_child = null });
+
+                    while (call_stack.items.len > 0) {
+                        const frame = &call_stack.items[call_stack.items.len - 1];
+                        const v = frame.v;
+
+                        switch (frame.phase) {
+                            .init => {
+                                try indices.put(gpa, v, index);
+                                try lowlinks.put(gpa, v, index);
+                                index += 1;
+                                try stack.append(gpa, v);
+                                try on_stack.put(gpa, v, {});
+                                frame.phase = .process_deps;
+                            },
+                            .process_deps => {
+                                // First, update lowlink from any child we just finished recursing into
+                                if (frame.last_child) |child| {
+                                    if (lowlinks.get(child)) |child_lowlink| {
+                                        const v_lowlink = lowlinks.get(v).?;
+                                        try lowlinks.put(gpa, v, @min(v_lowlink, child_lowlink));
+                                    }
+                                    frame.last_child = null;
+                                }
+
+                                const deps = dependencies.items[v].items;
+                                while (frame.dep_idx < deps.len) {
+                                    const w = deps[frame.dep_idx];
+                                    if (!indices.contains(w)) {
+                                        // Push w onto call stack to process it
+                                        frame.last_child = w; // Remember which child we're recursing into
+                                        frame.dep_idx += 1;
+                                        try call_stack.append(gpa, .{ .v = w, .dep_idx = 0, .phase = .init, .last_child = null });
+                                        break; // Process w first
+                                    } else if (on_stack.contains(w)) {
+                                        const v_lowlink = lowlinks.get(v).?;
+                                        const w_index = indices.get(w).?;
+                                        try lowlinks.put(gpa, v, @min(v_lowlink, w_index));
+                                    }
+                                    // Note: if w is visited but not on stack, it's in a different SCC - do nothing
+                                    frame.dep_idx += 1;
+                                } else {
+                                    // All deps processed
+                                    frame.phase = .finish;
+                                }
+                            },
+                            .finish => {
+                                const v_lowlink = lowlinks.get(v).?;
+                                const v_index = indices.get(v).?;
+                                if (v_lowlink == v_index) {
+                                    // v is root of an SCC
+                                    var scc = std.ArrayList(usize){};
+                                    while (true) {
+                                        const w = stack.pop() orelse unreachable;
+                                        _ = on_stack.remove(w);
+                                        try scc.append(gpa, w);
+                                        if (w == v) break;
+                                    }
+
+                                    // Check if recursive (size > 1 or has self-loop)
+                                    const is_recursive = scc.items.len > 1 or has_self_loop: {
+                                        if (scc.items.len == 1) {
+                                            const node_v = scc.items[0];
+                                            for (dependencies.items[node_v].items) |dep| {
+                                                if (dep == node_v) break :has_self_loop true;
+                                            }
+                                        }
+                                        break :has_self_loop false;
+                                    };
+
+                                    try result.sccs.append(gpa, scc);
+                                    try result.is_recursive.append(gpa, is_recursive);
+                                }
+
+                                _ = call_stack.pop();
+                            },
+                        }
+                    }
+                }
+
+                break :blk result;
+            };
+            defer scc_result.deinit();
+
+            // Step 4: Report diagnostics for mutually recursive type aliases (SCCs with size > 1)
+            for (scc_result.sccs.items, scc_result.is_recursive.items) |scc, is_recursive| {
+                if (is_recursive and scc.items.len > 1) {
+                    // This is a mutually recursive group - report diagnostic for all pairs
+                    const first_idx = scc.items[0];
+                    const second_idx = scc.items[1];
+                    const first_info = type_decls.items[first_idx];
+                    const second_info = type_decls.items[second_idx];
+
+                    // Only report for aliases, not nominal types (which can be recursive)
+                    if (first_info.type_decl.kind == .alias and second_info.type_decl.kind == .alias) {
+                        try self.env.pushDiagnostic(.{ .mutually_recursive_type_aliases = .{
+                            .name = first_info.name_ident,
+                            .other_name = second_info.name_ident,
+                            .region = first_info.region,
+                            .other_region = second_info.region,
+                        } });
+                    }
+                }
+            }
+
+            // Step 5: Process types in topological order (SCCs are already in topo order from Tarjan)
+            for (scc_result.sccs.items) |scc| {
+                for (scc.items) |idx| {
+                    const info = type_decls.items[idx];
+                    try self.processTypeDeclFirstPass(info.type_decl, null, null, false);
+                }
             }
         }
     }

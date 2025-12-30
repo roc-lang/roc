@@ -873,6 +873,15 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .mutually_recursive_type_aliases = .{
+            .name = rand_ident_idx(),
+            .other_name = rand_ident_idx(),
+            .region = rand_region(),
+            .other_region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);

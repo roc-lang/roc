@@ -135,7 +135,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 60;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
@@ -3277,6 +3277,18 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_break_outside_loop;
             region = r.region;
         },
+        .mutually_recursive_type_aliases => |r| {
+            node.tag = .diag_mutually_recursive_type_aliases;
+            region = r.region;
+            node.data_1 = @bitCast(r.name);
+            node.data_2 = @bitCast(r.other_name);
+
+            // Store other_region in extra_data
+            const extra_start = store.extra_data.len();
+            _ = try store.extra_data.append(store.gpa, r.other_region.start.offset);
+            _ = try store.extra_data.append(store.gpa, r.other_region.end.offset);
+            node.data_3 = @intCast(extra_start);
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3603,6 +3615,20 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_mutually_recursive_type_aliases => {
+            const extra_data = store.extra_data.items.items[node.data_3..];
+            const other_start = extra_data[0];
+            const other_end = extra_data[1];
+            return CIR.Diagnostic{ .mutually_recursive_type_aliases = .{
+                .name = @bitCast(node.data_1),
+                .other_name = @bitCast(node.data_2),
+                .region = store.getRegionAt(node_idx),
+                .other_region = .{
+                    .start = .{ .offset = other_start },
+                    .end = .{ .offset = other_end },
+                },
+            } };
+        },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
