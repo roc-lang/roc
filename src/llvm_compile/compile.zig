@@ -281,8 +281,8 @@ pub fn compileAndExecute(
     const builder = bindings.OrcLLJITBuilder.create();
     // Note: builder is consumed by createLLJIT
 
-    // Configure the JIT to use a generic CPU target to avoid issues with
-    // unrecognized CPU features on various ARM64 platforms.
+    // Configure the JIT to use a baseline CPU target to avoid issues with
+    // unrecognized CPU features on various platforms.
     // LLVM's default host detection may return CPU names/features that
     // the bundled LLVM version doesn't fully support.
     {
@@ -299,13 +299,23 @@ pub fn compileAndExecute(
             return error.JITCreationFailed;
         }
 
-        // Create a target machine with "generic" CPU and no specific features.
+        // Use a baseline CPU that has the required features for each architecture.
+        // - x86_64: "x86-64" enables SSE2 which is required for the Windows x64 ABI
+        //   (floats are returned in XMM0). "generic" doesn't guarantee SSE2.
+        // - aarch64/arm64: "generic" is fine as NEON is part of the base architecture.
+        // - Other architectures: "generic" as a safe fallback.
+        const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
+            .x86_64 => "x86-64",
+            else => "generic",
+        };
+
+        // Create a target machine with the baseline CPU and no specific extra features.
         // This avoids issues where LLVM detects CPU features it doesn't fully support.
         const target_machine = bindings.TargetMachine.create(
             target,
             triple,
-            "generic", // Use generic CPU instead of detecting specific CPU
-            "", // No specific features
+            cpu,
+            "", // No specific extra features
             .Default, // optimization level
             .Default, // reloc mode
             .Default, // code model
