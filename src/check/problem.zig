@@ -2132,11 +2132,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression uses ");
-        try report.document.addAnnotated("==", .emphasized);
-        try report.document.addReflowingText(" or ");
-        try report.document.addAnnotated("!=", .emphasized);
-        try report.document.addReflowingText(" on a type that doesn't support equality:");
+        try report.document.addReflowingText("This expression is doing an equality check on a type that doesn't support equality:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -2267,6 +2263,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             const field_names = fields.items(.name);
             const field_contents = fields.items(.content);
@@ -2281,9 +2278,11 @@ pub const ReportBuilder = struct {
                     try report.document.addText(": ");
                     try report.document.addAnnotated(field_type_str, .type_variable);
                     try report.document.addLineBreak();
+
+                    // Explain WHY this field doesn't support equality
+                    _ = try self.explainWhyNoEquality(report, field_content_idx, "        ");
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Anonymous records only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2316,6 +2315,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
@@ -2328,9 +2328,11 @@ pub const ReportBuilder = struct {
                     try report.document.addText(": ");
                     try report.document.addAnnotated(elem_type_str, .type_variable);
                     try report.document.addLineBreak();
+
+                    // Explain WHY this element doesn't support equality
+                    _ = try self.explainWhyNoEquality(report, elem_content_idx, "        ");
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tuples only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2367,6 +2369,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
@@ -2398,9 +2401,15 @@ pub const ReportBuilder = struct {
                         try report.document.addText(")");
                     }
                     try report.document.addLineBreak();
+
+                    // Explain WHY each problematic payload doesn't support equality
+                    for (args) |arg_content_idx| {
+                        if (!self.snapshotSupportsEquality(arg_content_idx)) {
+                            _ = try self.explainWhyNoEquality(report, arg_content_idx, "        ");
+                        }
+                    }
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tag unions only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2447,7 +2456,16 @@ pub const ReportBuilder = struct {
                     }
                     return true;
                 },
-                // Other types (nominal, box, etc.) assumed to support equality
+                // Nominal types: check the backing type (first element in vars)
+                .nominal_type => |nominal| {
+                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    if (vars.len > 0) {
+                        // First var is the backing type
+                        return self.snapshotSupportsEquality(vars[0]);
+                    }
+                    return true;
+                },
+                // Other types (box, etc.) assumed to support equality
                 else => true,
             },
             // Aliases: check the underlying type
@@ -2455,6 +2473,122 @@ pub const ReportBuilder = struct {
             // Other types (flex, rigid, recursive, err) assumed to support equality
             else => true,
         };
+    }
+
+    /// Explain why a type doesn't support equality, adding the explanation to the report.
+    /// Returns true if an explanation was added.
+    fn explainWhyNoEquality(self: *Self, report: *Report, content_idx: snapshot.SnapshotContentIdx, indent: []const u8) !bool {
+        const content = self.snapshots.getContent(content_idx);
+        switch (content) {
+            .structure => |s| switch (s) {
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    try report.document.addText(indent);
+                    try report.document.addReflowingText("Function equality is not supported.");
+                    try report.document.addLineBreak();
+                    return true;
+                },
+                .record => |record| {
+                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const field_names = fields.items(.name);
+                    const field_contents = fields.items(.content);
+                    for (field_names, field_contents) |name, field_content| {
+                        if (!self.snapshotSupportsEquality(field_content)) {
+                            const field_name = self.can_ir.getIdentText(name);
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("The ");
+                            try report.document.addAnnotated(field_name, .emphasized);
+                            try report.document.addReflowingText(" field doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, field_content, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                .tuple => |tuple| {
+                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    for (elems, 0..) |elem_content, i| {
+                        if (!self.snapshotSupportsEquality(elem_content)) {
+                            var buf: [20]u8 = undefined;
+                            const index_str = std.fmt.bufPrint(&buf, "{}", .{i}) catch "?";
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("Element ");
+                            try report.document.addAnnotated(index_str, .emphasized);
+                            try report.document.addReflowingText(" doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, elem_content, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                .tag_union => |tag_union| {
+                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tag_names = tags_slice.items(.name);
+                    const tag_args_list = tags_slice.items(.args);
+                    for (tag_names, tag_args_list) |name, tag_args| {
+                        const args = self.snapshots.sliceVars(tag_args);
+                        for (args, 0..) |arg_content, i| {
+                            if (!self.snapshotSupportsEquality(arg_content)) {
+                                const tag_name = self.can_ir.getIdentText(name);
+                                try report.document.addText(indent);
+                                try report.document.addReflowingText("The ");
+                                try report.document.addAnnotated(tag_name, .emphasized);
+                                if (args.len > 1) {
+                                    var buf: [32]u8 = undefined;
+                                    const payload_str = std.fmt.bufPrint(&buf, " tag's payload {}", .{i}) catch " tag's payload";
+                                    try report.document.addReflowingText(payload_str);
+                                } else {
+                                    try report.document.addReflowingText(" tag's payload");
+                                }
+                                try report.document.addReflowingText(" doesn't support equality:");
+                                try report.document.addLineBreak();
+                                // Recurse with more indent
+                                var deeper_indent_buf: [64]u8 = undefined;
+                                const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                                _ = try self.explainWhyNoEquality(report, arg_content, deeper_indent);
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                },
+                .nominal_type => |nominal| {
+                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    if (vars.len > 0) {
+                        const backing = vars[0];
+                        if (!self.snapshotSupportsEquality(backing)) {
+                            const nominal_name = self.can_ir.getIdentText(nominal.ident.ident_idx);
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("The ");
+                            try report.document.addAnnotated(nominal_name, .emphasized);
+                            try report.document.addReflowingText(" type's backing structure doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, backing, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                else => return false,
+            },
+            .alias => |alias| {
+                if (!self.snapshotSupportsEquality(alias.backing)) {
+                    return try self.explainWhyNoEquality(report, alias.backing, indent);
+                }
+                return false;
+            },
+            else => return false,
+        }
     }
 
     // number problems //

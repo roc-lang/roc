@@ -1819,3 +1819,30 @@ test "comptime eval - modulo by zero produces error" {
 // Note: "division by zero does not halt other defs" test is skipped because
 // the interpreter state after an eval error may not allow continuing evaluation
 // of subsequent definitions that share the same evaluation context.
+
+test "encode - custom format type definition for Str.encode static dispatch" {
+    // Test that a custom format type can be defined with an encode_str method
+    // that matches the signature required by Str.encode's where clause:
+    //   where [fmt.encode_str : fmt, Str -> List(U8)]
+    //
+    // This demonstrates how users can create custom encoding formats
+    // that work with the Str.encode and List.encode static dispatch pattern.
+    const src =
+        \\# Define a format type with encode_str method matching Str.encode's requirement
+        \\LineSep := [Format].{
+        \\    encode_str : LineSep, Str -> List(U8)
+        \\    encode_str = |_format, str| Str.to_utf8(str)
+        \\}
+        \\
+        \\fmt = LineSep.Format
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Type definition and value creation should succeed
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}

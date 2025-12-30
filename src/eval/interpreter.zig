@@ -7116,29 +7116,11 @@ pub const Interpreter = struct {
                         payload_value = null;
                     }
                 } else if (arg_vars.len == 1) {
-                    // Get the payload layout from the variant
-                    const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
-                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                    const effective_layout = blk: {
-                        // First try: if arg is a rigid with a substitution, use substituted type's layout
-                        if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
-                            }
-                        }
-                        // Second try: compute layout directly from arg_var
-                        // This handles concrete types like opaque Item returned from polymorphic functions
-                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                            break :blk computed_layout;
-                        } else |_| {}
-                        // Fallback to variant_layout
-                        break :blk variant_layout;
-                    };
-
+                    const arg_layout = try self.getRuntimeLayout(arg_var);
                     payload_value = StackValue{
-                        .layout = effective_layout,
-                        .ptr = value.ptr, // Payload is at offset 0
+                        .layout = arg_layout,
+                        .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
                     };
@@ -13692,6 +13674,22 @@ pub const Interpreter = struct {
                     try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
                 }
             },
+            .s_nominal_decl => {
+                // Nominal type declaration is a compile-time construct, no runtime effect
+                // Just continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    // Evaluate final expression
+                    const final_ct_var = can.ModuleEnv.varFrom(final_expr);
+                    const final_rt_var = try self.translateTypeVar(self.env, final_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = if (expected_rt_var) |e| e else final_rt_var,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
+                }
+            },
             else => {
                 self.triggerCrash("Statement type not yet implemented in interpreter", false, roc_ops);
                 return error.NotImplemented;
@@ -16761,13 +16759,24 @@ pub const Interpreter = struct {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
                     _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
 
-                    // Save and update rigid_subst
+                    // Save and update rigid_subst AND empty_scope.
+                    // Both are needed: rigid_subst for runtime type resolution in getRuntimeLayout,
+                    // and empty_scope for the layout store's TypeScope.lookup() during layout computation.
                     saved_rigid_subst = try self.rigid_subst.clone();
+
+                    // Ensure we have at least one scope level for empty_scope
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
                         // Skip identity mappings to avoid infinite loops when following substitution chains
                         if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                        // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
+                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // No explicit @memset needed.
@@ -16936,7 +16945,19 @@ pub const Interpreter = struct {
                     // Bind all arguments to parameters
                     for (params_slice, 0..) |param, idx| {
                         if (idx >= arg_values.len) break;
-                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        const param_ct_var = can.ModuleEnv.varFrom(param);
+
+                        // Propagate flex mappings from the argument's concrete type to the parameter type.
+                        // This is critical for cross-module dispatch: when calling U8.encode(self, format)
+                        // where format has type SimpleFormat (a local type from the test module),
+                        // we need to map Builtin's fmt type parameter to SimpleFormat.
+                        // This allows Fmt.encode_u8(format, self) inside U8.encode to resolve correctly.
+                        const arg_rt_resolved = self.runtime_types.resolveVar(arg_values[idx].rt_var);
+                        if (arg_rt_resolved.desc.content == .structure) {
+                            try self.propagateFlexMappings(self.env, param_ct_var, arg_values[idx].rt_var);
+                        }
+
+                        const param_rt_var = try self.translateTypeVar(self.env, param_ct_var);
                         if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             self.env = saved_env;
                             self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
