@@ -1350,6 +1350,9 @@ pub fn main() !void {
     // Find Utf8Problem nested inside Str (e.g., Builtin.Str.Utf8Problem)
     const utf8_problem_type_idx = try findNestedTypeDeclaration(builtin_env, "Str", "Utf8Problem");
 
+    // Find Encode type
+    const encode_type_idx = try findTypeDeclaration(builtin_env, "Encode");
+
     // Find numeric types nested inside Num (e.g., Builtin.Num.U8)
     const u8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "U8");
     const i8_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "I8");
@@ -1378,6 +1381,7 @@ pub fn main() !void {
     const list_ident = builtin_env.common.findIdent("Builtin.List") orelse unreachable;
     const box_ident = builtin_env.common.findIdent("Builtin.Box") orelse unreachable;
     const utf8_problem_ident = builtin_env.common.findIdent("Builtin.Str.Utf8Problem") orelse unreachable;
+    const encode_ident = builtin_env.common.findIdent("Builtin.Encode") orelse unreachable;
     const u8_ident = builtin_env.common.findIdent("Builtin.Num.U8") orelse unreachable;
     const i8_ident = builtin_env.common.findIdent("Builtin.Num.I8") orelse unreachable;
     const u16_ident = builtin_env.common.findIdent("Builtin.Num.U16") orelse unreachable;
@@ -1404,6 +1408,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, set_ident, @intCast(@intFromEnum(set_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, str_ident, @intCast(@intFromEnum(str_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, list_ident, @intCast(@intFromEnum(list_type_idx)));
+    try builtin_env.common.setNodeIndexById(gpa, encode_ident, @intCast(@intFromEnum(encode_type_idx)));
 
     try builtin_env.common.setNodeIndexById(gpa, u8_ident, @intCast(@intFromEnum(u8_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, i8_ident, @intCast(@intFromEnum(i8_type_idx)));
@@ -1437,6 +1442,7 @@ pub fn main() !void {
         .list_type = list_type_idx,
         .box_type = box_type_idx,
         .utf8_problem_type = utf8_problem_type_idx,
+        .encode_type = encode_type_idx,
         .u8_type = u8_type_idx,
         .i8_type = i8_type_idx,
         .u16_type = u16_type_idx,
@@ -1459,6 +1465,7 @@ pub fn main() !void {
         .list_ident = list_ident,
         .box_ident = box_ident,
         .utf8_problem_ident = utf8_problem_ident,
+        .encode_ident = encode_ident,
         .u8_ident = u8_ident,
         .i8_ident = i8_ident,
         .u16_ident = u16_ident,
