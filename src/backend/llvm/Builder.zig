@@ -1997,7 +1997,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/include/llvm/CodeGen/WasmAddressSpaces.h
     pub const wasm = struct {
-        pub const @"default": AddrSpace = .default;
+        pub const default: AddrSpace = .default;
         pub const variable: AddrSpace = @enumFromInt(1);
         pub const externref: AddrSpace = @enumFromInt(10);
         pub const funcref: AddrSpace = @enumFromInt(20);
