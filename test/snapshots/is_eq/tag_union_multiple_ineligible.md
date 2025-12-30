@@ -17,7 +17,7 @@ TYPE DOES NOT SUPPORT EQUALITY - tag_union_multiple_ineligible.md:6:8:6:24
 : - :0:0:0:0
 # PROBLEMS
 **TYPE DOES NOT SUPPORT EQUALITY**
-This expression uses **==** or **!=** on a type that doesn't support equality:
+This expression is doing an equality check on a type that does not support equality checks:
 **tag_union_multiple_ineligible.md:6:8:6:24:**
 ```roc
 expect result == result

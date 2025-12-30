@@ -2120,11 +2120,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression uses ");
-        try report.document.addAnnotated("==", .emphasized);
-        try report.document.addReflowingText(" or ");
-        try report.document.addAnnotated("!=", .emphasized);
-        try report.document.addReflowingText(" on a type that doesn't support equality:");
+        try report.document.addReflowingText("This expression is doing an equality check on a type that does not support equality checks:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
