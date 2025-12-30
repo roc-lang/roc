@@ -248,11 +248,10 @@ pub fn compileAndExecute(
     const builder = bindings.OrcLLJITBuilder.create();
     // Note: builder is consumed by createLLJIT
 
-    // Configure the JIT to use a generic CPU target to avoid issues with
-    // unrecognized CPU features on various ARM64 platforms.
-    // LLVM's default host detection may return CPU names/features that
-    // the bundled LLVM version doesn't fully support.
-    {
+    // Try to configure the JIT with a generic CPU target to avoid issues with
+    // unrecognized CPU features on various ARM64 platforms. If this fails
+    // (e.g., target not found), fall back to LLJIT's default host detection.
+    configure_target: {
         // Get the host target triple
         const triple = bindings.GetDefaultTargetTriple();
         defer bindings.disposeMessage(triple);
@@ -261,13 +260,10 @@ pub fn compileAndExecute(
         var target: *bindings.Target = undefined;
         var error_message: [*:0]const u8 = undefined;
         if (bindings.Target.getFromTriple(triple, &target, &error_message).toBool()) {
-            std.debug.print("LLVM JIT error: getFromTriple failed for '{s}': {s}\n", .{
-                triple,
-                error_message,
-            });
+            // Target lookup failed - this can happen with certain configurations.
+            // Fall back to LLJIT's default host detection.
             bindings.disposeMessage(error_message);
-            ts_module.dispose();
-            return error.JITCreationFailed;
+            break :configure_target;
         }
 
         // Create a target machine with "generic" CPU and no specific features.
