@@ -14,8 +14,12 @@
 //! with Roc's IR is done in src/eval/llvm_evaluator.zig.
 
 const std = @import("../../std.zig");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");
+const layout_mod = @import("../../layout/mod.zig");
+
+const Layout = layout_mod.Layout;
 
 /// Roc numeric type kinds (mirrors CIR.NumKind for type mapping)
 pub const NumKind = enum {
@@ -344,10 +348,55 @@ pub const LlvmEmitter = struct {
     /// Finish building a function body
     pub fn endFunction(self: *LlvmEmitter) Error!void {
         if (self.wip_function) |wip| {
+            // In debug builds, verify the function IR before finishing
+            if (builtin.mode == .Debug) {
+                verifyFunction(wip);
+            }
+
             wip.finish() catch return error.OutOfMemory;
             wip.deinit();
             self.allocator.destroy(wip);
             self.wip_function = null;
+        }
+    }
+
+    /// Verify that a function's IR is valid.
+    /// This is called automatically in debug builds before finishing a function.
+    /// Checks:
+    /// - All blocks are properly terminated (end with ret, br, switch, or unreachable)
+    fn verifyFunction(wip: *Builder.WipFunction) void {
+        for (wip.blocks.items, 0..) |block, block_idx| {
+            // Each block must have at least one instruction (the terminator)
+            if (block.instructions.items.len == 0) {
+                std.debug.panic(
+                    "LLVM IR verification failed: Block {d} '{s}' has no instructions (missing terminator)",
+                    .{ block_idx, wip.builder.getString(block.name).slice(wip.builder) },
+                );
+            }
+
+            // Get the last instruction in the block
+            const last_inst_idx = block.instructions.items[block.instructions.items.len - 1];
+            const last_inst = wip.instructions.items[@intFromEnum(last_inst_idx)];
+
+            // Check if it's a terminator instruction
+            const is_terminator = switch (last_inst.tag) {
+                .ret,
+                .@"ret void",
+                .br,
+                .br_cond,
+                .@"switch",
+                .indirectbr,
+                .@"unreachable",
+                => true,
+                else => false,
+            };
+
+            if (!is_terminator) {
+                std.debug.panic(
+                    "LLVM IR verification failed: Block {d} '{s}' does not end with a terminator instruction (found {s})",
+                    .{ block_idx, wip.builder.getString(block.name).slice(wip.builder), @tagName(last_inst.tag) },
+                );
+            }
         }
     }
 
@@ -488,15 +537,31 @@ pub const LlvmEmitter = struct {
     /// Allocas are always placed in the entry block to ensure proper LLVM semantics
     /// and prevent stack growth when called in loops.
     pub fn emitAlloca(self: *LlvmEmitter, ty: Builder.Type) Error!Builder.Value {
+        return self.emitAllocaAligned(ty, .default);
+    }
+
+    /// Emit an alloca instruction with explicit alignment.
+    /// For i128 on ARM platforms, use 16-byte alignment.
+    /// Allocas are always placed in the entry block to ensure proper LLVM semantics.
+    pub fn emitAllocaAligned(self: *LlvmEmitter, ty: Builder.Type, alignment: Builder.Alignment) Error!Builder.Value {
         const wip = self.wip_function orelse return error.NoActiveFunction;
         // Save current cursor position
         const saved_cursor = wip.cursor;
         // Move to start of entry block (allocas should be at function entry, not in loops)
         wip.cursor = .{ .block = .entry, .instruction = 0 };
-        const result = wip.alloca(.normal, ty, .none, .default, .default, "") catch return error.OutOfMemory;
+        const result = wip.alloca(.normal, ty, .none, alignment, .default, "") catch return error.OutOfMemory;
         // Restore cursor
         wip.cursor = saved_cursor;
         return result;
+    }
+
+    /// Get the required alignment for a given LLVM type.
+    /// Returns 16-byte alignment for i128 (important for ARM), default otherwise.
+    pub fn getTypeAlignment(ty: Builder.Type) Builder.Alignment {
+        return switch (ty) {
+            .i128 => Builder.Alignment.fromByteUnits(16),
+            else => .default,
+        };
     }
 
     /// Emit a load instruction
@@ -513,15 +578,27 @@ pub const LlvmEmitter = struct {
 
     // Call Operations
 
-    /// Emit a function call
+    /// Emit a function call with default C calling convention and no attributes
     pub fn emitCall(
         self: *LlvmEmitter,
         fn_type: Builder.Type,
         callee: Builder.Value,
         args: []const Builder.Value,
     ) Error!Builder.Value {
+        return self.emitCallWithConv(fn_type, callee, args, .ccc, .none);
+    }
+
+    /// Emit a function call with explicit calling convention and attributes
+    pub fn emitCallWithConv(
+        self: *LlvmEmitter,
+        fn_type: Builder.Type,
+        callee: Builder.Value,
+        args: []const Builder.Value,
+        call_conv: Builder.CallConv,
+        function_attributes: Builder.FunctionAttributes,
+    ) Error!Builder.Value {
         const wip = self.wip_function orelse return error.NoActiveFunction;
-        return wip.call(.normal, fn_type, callee, args, "") catch return error.OutOfMemory;
+        return wip.call(.normal, call_conv, function_attributes, fn_type, callee, args, "") catch return error.OutOfMemory;
     }
 
     // PHI Node Operations
@@ -637,6 +714,9 @@ pub const ScopedValue = struct {
     /// The LLVM type of the value
     llvm_type: Builder.Type,
 
+    /// The Roc layout of the value (needed for proper refcount cleanup)
+    layout: ?Layout,
+
     /// Whether this value is stored on the stack (and value is a pointer to it)
     is_ptr: bool,
 
@@ -648,16 +728,18 @@ pub const ScopedValue = struct {
         return .{
             .value = value,
             .llvm_type = llvm_type,
+            .layout = null,
             .is_ptr = false,
             .needs_decref = false,
         };
     }
 
     /// Create a refcounted value that needs decref on scope exit
-    pub fn refcounted(value: Builder.Value, llvm_type: Builder.Type, is_ptr: bool) ScopedValue {
+    pub fn refcounted(value: Builder.Value, llvm_type: Builder.Type, layout: Layout, is_ptr: bool) ScopedValue {
         return .{
             .value = value,
             .llvm_type = llvm_type,
+            .layout = layout,
             .is_ptr = is_ptr,
             .needs_decref = true,
         };

@@ -39,6 +39,9 @@ pub const BuiltinCategory = enum {
 /// Common builtin function names used in code generation.
 /// These match the exported function names from src/builtins/*.zig
 pub const BuiltinNames = struct {
+    // Memory allocation (from utils.zig)
+    pub const allocate_with_refcount = "roc_builtins_utils_allocate_with_refcount";
+
     // Reference counting (from utils.zig)
     pub const incref_rc_ptr = "roc_builtins_utils_incref_rc_ptr_c";
     pub const decref_rc_ptr = "roc_builtins_utils_decref_rc_ptr_c";
@@ -233,8 +236,10 @@ pub const I128Abi = struct {
 /// Helper to emit a call to a builtin function.
 /// Handles the common pattern of:
 /// 1. Ensure the function is declared
-/// 2. Emit the call instruction
+/// 2. Emit the call instruction with C calling convention
 /// 3. Return the result value
+///
+/// Builtins are implemented in Zig/C, so they use the C calling convention (ccc).
 pub fn emitBuiltinCall(
     ctx: *BuiltinContext,
     emitter: *emit.LlvmEmitter,
@@ -252,8 +257,17 @@ pub fn emitBuiltinCall(
     // Get the function type
     const declared = ctx.declared_functions.get(name).?;
 
-    // Emit the call
-    return emitter.emitCall(declared.fn_type, fn_value, args) catch return error.OutOfMemory;
+    // Emit the call with C calling convention (builtins are C-compatible)
+    // Note: We use FunctionAttributes.none for now. If specific builtins need
+    // attributes like sret or byval, those should be added here or via a
+    // more sophisticated attribute propagation system.
+    return emitter.emitCallWithConv(
+        declared.fn_type,
+        fn_value,
+        args,
+        .ccc, // C calling convention for builtins
+        .none, // No special attributes
+    ) catch return error.OutOfMemory;
 }
 
 // ============================================================
@@ -298,5 +312,32 @@ pub fn emitDecref(
         .void,
         &.{ .ptr, .i64, .i1 }, // ptr, alignment, elements_refcounted
         &.{ ptr, alignment, elements_refcounted },
+    );
+}
+
+/// Emit a heap allocation with refcount.
+/// This allocates memory with space for a reference count before the data.
+/// Returns a pointer to the data portion (not the refcount).
+///
+/// data_bytes: Size of the data to allocate (not including refcount)
+/// alignment: Alignment requirement for the data
+/// elements_refcounted: Whether elements are refcounted (for nested data)
+/// roc_ops: Pointer to RocOps struct for allocation
+pub fn emitAllocateWithRefcount(
+    ctx: *BuiltinContext,
+    emitter: *emit.LlvmEmitter,
+    data_bytes: Builder.Value,
+    alignment: Builder.Value,
+    elements_refcounted: Builder.Value,
+    roc_ops: Builder.Value,
+) Error!Builder.Value {
+    // allocate_with_refcount(data_bytes: usize, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps) -> *u8
+    return try emitBuiltinCall(
+        ctx,
+        emitter,
+        BuiltinNames.allocate_with_refcount,
+        .ptr, // Returns pointer to allocated data
+        &.{ .i64, .i32, .i1, .ptr }, // data_bytes, alignment, elements_refcounted, roc_ops
+        &.{ data_bytes, alignment, elements_refcounted, roc_ops },
     );
 }

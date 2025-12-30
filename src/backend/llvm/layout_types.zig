@@ -36,7 +36,7 @@ pub fn layoutToLlvmType(
     layout_val: Layout,
 ) Error!Builder.Type {
     return switch (layout_val.tag) {
-        .scalar => scalarToLlvmType(layout_val),
+        .scalar => try scalarToLlvmType(builder, layout_val),
         .box, .box_of_zst => .ptr, // Boxes are just pointers
         .list, .list_of_zst => listLlvmType(builder),
         .record => try recordToLlvmType(builder, store, layout_val),
@@ -48,10 +48,10 @@ pub fn layoutToLlvmType(
 }
 
 /// Convert a scalar layout to LLVM type
-fn scalarToLlvmType(layout_val: Layout) Builder.Type {
+fn scalarToLlvmType(builder: *Builder, layout_val: Layout) Error!Builder.Type {
     return switch (layout_val.data.scalar.tag) {
         .opaque_ptr => .ptr,
-        .str => .ptr, // Str is a pointer to the string data (RocStr)
+        .str => strLlvmType(builder), // RocStr: { ptr, len }
         .int => intPrecisionToLlvmType(layout_val.data.scalar.data.int),
         .frac => fracPrecisionToLlvmType(layout_val.data.scalar.data.frac),
     };
@@ -162,12 +162,7 @@ fn tagUnionToLlvmType(
     const tu_data = store.getTagUnion(tu_layout.idx);
 
     // Discriminant type based on size
-    const disc_type: Builder.Type = switch (tu_data.discriminant_size) {
-        1 => .i8,
-        2 => .i16,
-        4 => .i32,
-        else => .i8, // Fallback
-    };
+    const disc_type: Builder.Type = try getDiscriminantTypeChecked(tu_data.discriminant_size);
 
     // Payload size in bytes (total size minus discriminant, accounting for alignment)
     const payload_size = tu_data.discriminant_offset;
@@ -186,14 +181,22 @@ fn tagUnionToLlvmType(
     return builder.structType(.normal, &fields) catch return error.OutOfMemory;
 }
 
-/// Get the discriminant type for a tag union
-pub fn getDiscriminantType(discriminant_size: u8) Builder.Type {
+/// Get the discriminant type for a tag union.
+/// Returns an error for unsupported discriminant sizes.
+pub fn getDiscriminantTypeChecked(discriminant_size: u8) Error!Builder.Type {
     return switch (discriminant_size) {
         1 => .i8,
         2 => .i16,
         4 => .i32,
-        else => .i8,
+        8 => .i64,
+        else => error.UnsupportedLayout, // Unsupported discriminant size
     };
+}
+
+/// Get the discriminant type for a tag union.
+/// Panics on unsupported discriminant sizes (use getDiscriminantTypeChecked for error handling).
+pub fn getDiscriminantType(discriminant_size: u8) Builder.Type {
+    return getDiscriminantTypeChecked(discriminant_size) catch unreachable;
 }
 
 /// Helper for layout conversion from an index
@@ -207,8 +210,14 @@ pub fn layoutIdxToLlvmType(
 }
 
 /// Check if a layout represents a type that needs to be passed by pointer
-/// (too large to pass in registers efficiently)
-pub fn shouldPassByPointer(store: *const Store, layout_val: Layout) bool {
+/// (too large to pass in registers efficiently).
+///
+/// This is platform-specific:
+/// - Windows: threshold is 1 pointer width (8 bytes on 64-bit)
+/// - Linux/macOS/Others: threshold is 2 pointer widths (16 bytes on 64-bit)
+pub fn shouldPassByPointer(store: *const Store, layout_val: Layout, config: PlatformConfig) bool {
+    const threshold = config.return_by_pointer_threshold;
+
     return switch (layout_val.tag) {
         // Scalars are always passed by value
         .scalar => false,
@@ -218,20 +227,39 @@ pub fn shouldPassByPointer(store: *const Store, layout_val: Layout) bool {
         .box, .box_of_zst => false,
         // Lists and closures are small structs, pass by value
         .list, .list_of_zst, .closure => false,
-        // Records/tuples depend on size
+        // Records/tuples depend on size vs platform threshold
         .record => blk: {
             const record_data = store.getRecord(layout_val.data.record.idx);
-            // Pass by pointer if larger than 2 pointers (16 bytes on 64-bit)
-            break :blk record_data.size > 16;
+            break :blk record_data.size > threshold;
         },
         .tuple => blk: {
             const tuple_data = store.getTuple(layout_val.data.tuple.idx);
-            break :blk tuple_data.size > 16;
+            break :blk tuple_data.size > threshold;
         },
         .tag_union => blk: {
             const tu_data = store.getTagUnion(layout_val.data.tag_union.idx);
-            break :blk tu_data.size > 16;
+            break :blk tu_data.size > threshold;
         },
+    };
+}
+
+/// Check if a layout represents a type that needs to be passed by pointer.
+/// Uses native platform configuration.
+pub fn shouldPassByPointerNative(store: *const Store, layout_val: Layout) bool {
+    return shouldPassByPointer(store, layout_val, PlatformConfig.native());
+}
+
+/// Check if a layout represents a refcounted type.
+/// Refcounted types need special handling for reference counting.
+pub fn isRefcounted(layout_val: Layout) bool {
+    return switch (layout_val.tag) {
+        // These are heap-allocated and refcounted
+        .list, .list_of_zst => true,
+        .box, .box_of_zst => true,
+        // Strings are refcounted
+        .scalar => layout_val.data.scalar.tag == .str,
+        // These are value types, not refcounted themselves
+        .record, .tuple, .tag_union, .closure, .zst => false,
     };
 }
 
@@ -282,6 +310,9 @@ pub const PlatformConfig = struct {
     ptr_bits: u16,
     /// Whether i128 needs ABI conversion (Windows, macOS ARM64)
     i128_needs_conversion: bool,
+    /// Threshold in bytes for returning by pointer instead of value.
+    /// Windows uses ptr_width (8 bytes on 64-bit), others use 2*ptr_width (16 bytes).
+    return_by_pointer_threshold: u32,
 
     /// Create config for the current compile-time target
     pub fn native() PlatformConfig {
@@ -300,10 +331,18 @@ pub const PlatformConfig = struct {
             else => false,
         };
 
+        // Windows has a smaller threshold for return-by-pointer.
+        // See: crates/compiler/gen_llvm/src/llvm/build.rs:6541-6564
+        const return_threshold: u32 = switch (t.os.tag) {
+            .windows => ptr_size, // 1 pointer width (8 bytes on 64-bit)
+            else => ptr_size * 2, // 2 pointer widths (16 bytes on 64-bit)
+        };
+
         return .{
             .ptr_size = ptr_size,
             .ptr_bits = ptr_bits,
             .i128_needs_conversion = i128_needs_conversion,
+            .return_by_pointer_threshold = return_threshold,
         };
     }
 

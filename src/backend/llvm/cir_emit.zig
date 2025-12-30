@@ -29,11 +29,20 @@ const refcount = @import("refcount.zig");
 const layout_types = @import("layout_types.zig");
 const layout_mod = @import("../../layout/mod.zig");
 const can = @import("can");
+const types = @import("types");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Layout = layout_mod.Layout;
 const Store = layout_mod.Store;
+const TypeScope = types.TypeScope;
+
+/// Number of decimal places used for Dec (fixed-point decimal) representation.
+/// Dec is stored as i128 scaled by 10^DEC_PRECISION.
+pub const DEC_PRECISION: u5 = 18;
+
+/// Scale factor for Dec values: 10^18
+pub const DEC_SCALE: i128 = std.math.pow(i128, 10, DEC_PRECISION);
 
 /// Errors during CIR translation
 pub const Error = error{
@@ -42,22 +51,26 @@ pub const Error = error{
     UnsupportedExpression,
     VariableNotFound,
     TypeMismatch,
-};
+} || layout_mod.LayoutError;
 
 /// Context for CIR translation
 pub const CirContext = struct {
     allocator: Allocator,
     emitter: *emit.LlvmEmitter,
     module_env: *ModuleEnv,
-    layout_store: *const Store,
+    layout_store: *Store, // mutable: addTypeVar caches results
+    type_scope: *const TypeScope, // needed for layout computation
     builtin_ctx: *builtins_mod.BuiltinContext,
     refcount_ctx: *refcount.RefcountContext,
+    /// Counter for generating unique lambda names
+    lambda_counter: u32,
 
     pub fn init(
         allocator: Allocator,
         emitter: *emit.LlvmEmitter,
         module_env: *ModuleEnv,
-        layout_store: *const Store,
+        layout_store: *Store,
+        type_scope: *const TypeScope,
         builtin_ctx: *builtins_mod.BuiltinContext,
         refcount_ctx: *refcount.RefcountContext,
     ) CirContext {
@@ -66,9 +79,44 @@ pub const CirContext = struct {
             .emitter = emitter,
             .module_env = module_env,
             .layout_store = layout_store,
+            .type_scope = type_scope,
             .builtin_ctx = builtin_ctx,
             .refcount_ctx = refcount_ctx,
+            .lambda_counter = 0,
         };
+    }
+
+    /// Generate a unique name for a lambda function
+    pub fn nextLambdaName(self: *CirContext) []const u8 {
+        const name = std.fmt.allocPrint(self.allocator, "roc_lambda_{d}", .{self.lambda_counter}) catch "roc_lambda";
+        self.lambda_counter += 1;
+        return name;
+    }
+
+    /// Get the Layout for a CIR expression index
+    pub fn getExprLayout(self: *CirContext, expr_idx: CIR.Expr.Idx) Error!Layout {
+        const type_var = ModuleEnv.varFrom(expr_idx);
+        const layout_idx = try self.layout_store.addTypeVar(type_var, self.type_scope);
+        return self.layout_store.get(layout_idx);
+    }
+
+    /// Get the LLVM type for a CIR expression index
+    pub fn getExprLlvmType(self: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Type {
+        const layout_val = try self.getExprLayout(expr_idx);
+        return layout_types.layoutToLlvmType(self.emitter.builder, self.layout_store, layout_val);
+    }
+
+    /// Get the Layout for a CIR pattern index
+    pub fn getPatternLayout(self: *CirContext, pattern_idx: CIR.Pattern.Idx) Error!Layout {
+        const type_var = ModuleEnv.varFrom(pattern_idx);
+        const layout_idx = try self.layout_store.addTypeVar(type_var, self.type_scope);
+        return self.layout_store.get(layout_idx);
+    }
+
+    /// Get the LLVM type for a CIR pattern index
+    pub fn getPatternLlvmType(self: *CirContext, pattern_idx: CIR.Pattern.Idx) Error!Builder.Type {
+        const layout_val = try self.getPatternLayout(pattern_idx);
+        return layout_types.layoutToLlvmType(self.emitter.builder, self.layout_store, layout_val);
     }
 };
 
@@ -191,8 +239,8 @@ fn emitDec(ctx: *CirContext, value: i128) Error!Builder.Value {
 
 fn emitDecSmall(ctx: *CirContext, value: CIR.SmallDecValue) Error!Builder.Value {
     // Convert small Dec to full i128 representation
-    const decimal_places: u5 = 18;
-    const scale_factor = std.math.pow(i128, 10, decimal_places - value.denominator_power_of_ten);
+    // Dec uses DEC_PRECISION decimal places, so we need to scale by 10^(DEC_PRECISION - given_power)
+    const scale_factor = std.math.pow(i128, 10, DEC_PRECISION - value.denominator_power_of_ten);
     const scaled_value = @as(i128, value.numerator) * scale_factor;
     return ctx.emitter.emitIntConst(.i128, scaled_value) catch return error.OutOfMemory;
 }
@@ -265,13 +313,26 @@ fn emitLocalLookup(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx) Error!Builder
     const pattern = ctx.module_env.store.getPattern(pattern_idx);
 
     // Get the variable name based on pattern type
+    // Only patterns that bind a single identifier can be looked up
     const name = switch (pattern) {
         .assign => |assign| ctx.module_env.getIdent(assign.ident),
+        .as => |as_pattern| ctx.module_env.getIdent(as_pattern.ident),
+        // Patterns that don't bind to a single name (underscore, destructures, etc.)
+        // cannot be directly looked up - this indicates a compiler bug if reached
+        .underscore => return error.VariableNotFound, // _ doesn't bind
+        .record_destructure, .tuple, .list, .applied_tag => {
+            // Destructuring patterns bind multiple names; lookup should be by child pattern
+            return error.UnsupportedExpression;
+        },
         else => return error.UnsupportedExpression,
     };
 
     // Look up in current scope
     if (ctx.emitter.lookupVar(name)) |scoped_val| {
+        // If the value is stored on the stack (is_ptr), load it
+        if (scoped_val.is_ptr) {
+            return ctx.emitter.emitLoad(scoped_val.llvm_type, scoped_val.value) catch return error.OutOfMemory;
+        }
         return scoped_val.value;
     }
 
@@ -317,18 +378,52 @@ fn emitBinop(ctx: *CirContext, binop: CIR.Expr.Binop) Error!Builder.Value {
     const lhs = try emitExpr(ctx, lhs_expr);
     const rhs = try emitExpr(ctx, rhs_expr);
 
-    // Emit the operation based on the operator
+    // Get the layout to determine if this is a float operation
+    const lhs_layout = try ctx.getExprLayout(binop.left);
+    const is_float = lhs_layout.tag == .scalar and lhs_layout.data.scalar.tag == .frac;
+
+    // Emit the operation based on the operator and operand type
     return switch (binop.op) {
-        .add => ctx.emitter.emitAdd(lhs, rhs) catch return error.OutOfMemory,
-        .sub => ctx.emitter.emitSub(lhs, rhs) catch return error.OutOfMemory,
-        .mul => ctx.emitter.emitMul(lhs, rhs) catch return error.OutOfMemory,
-        .div => ctx.emitter.emitSDiv(lhs, rhs) catch return error.OutOfMemory,
-        .eq => ctx.emitter.emitICmpEq(lhs, rhs) catch return error.OutOfMemory,
-        .neq => ctx.emitter.emitICmpNe(lhs, rhs) catch return error.OutOfMemory,
-        .lt => ctx.emitter.emitICmpSlt(lhs, rhs) catch return error.OutOfMemory,
-        .lte => ctx.emitter.emitICmpSle(lhs, rhs) catch return error.OutOfMemory,
-        .gt => ctx.emitter.emitICmpSgt(lhs, rhs) catch return error.OutOfMemory,
-        .gte => ctx.emitter.emitICmpSge(lhs, rhs) catch return error.OutOfMemory,
+        .add => if (is_float)
+            ctx.emitter.emitFAdd(lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitAdd(lhs, rhs) catch return error.OutOfMemory,
+        .sub => if (is_float)
+            ctx.emitter.emitFSub(lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitSub(lhs, rhs) catch return error.OutOfMemory,
+        .mul => if (is_float)
+            ctx.emitter.emitFMul(lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitMul(lhs, rhs) catch return error.OutOfMemory,
+        .div => if (is_float)
+            ctx.emitter.emitFDiv(lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitSDiv(lhs, rhs) catch return error.OutOfMemory,
+        .eq => if (is_float)
+            ctx.emitter.emitFCmp(.oeq, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpEq(lhs, rhs) catch return error.OutOfMemory,
+        .neq => if (is_float)
+            ctx.emitter.emitFCmp(.one, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpNe(lhs, rhs) catch return error.OutOfMemory,
+        .lt => if (is_float)
+            ctx.emitter.emitFCmp(.olt, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpSlt(lhs, rhs) catch return error.OutOfMemory,
+        .lte => if (is_float)
+            ctx.emitter.emitFCmp(.ole, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpSle(lhs, rhs) catch return error.OutOfMemory,
+        .gt => if (is_float)
+            ctx.emitter.emitFCmp(.ogt, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpSgt(lhs, rhs) catch return error.OutOfMemory,
+        .gte => if (is_float)
+            ctx.emitter.emitFCmp(.oge, lhs, rhs) catch return error.OutOfMemory
+        else
+            ctx.emitter.emitICmpSge(lhs, rhs) catch return error.OutOfMemory,
         .@"and" => ctx.emitter.emitAnd(lhs, rhs) catch return error.OutOfMemory,
         .@"or" => ctx.emitter.emitOr(lhs, rhs) catch return error.OutOfMemory,
         else => return error.UnsupportedExpression,
@@ -339,9 +434,22 @@ fn emitUnaryMinus(ctx: *CirContext, unary: CIR.Expr.UnaryMinus) Error!Builder.Va
     const expr = ctx.module_env.store.getExpr(unary.expr);
     const val = try emitExpr(ctx, expr);
 
-    // Negate: 0 - val
-    const zero = ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
-    return ctx.emitter.emitSub(zero, val) catch return error.OutOfMemory;
+    // Get the layout to determine if this is a float operation
+    const layout = try ctx.getExprLayout(unary.expr);
+
+    if (layout.tag == .scalar and layout.data.scalar.tag == .frac) {
+        // Float negation: 0.0 - val
+        const zero = switch (layout.data.scalar.data.frac) {
+            .f32 => ctx.emitter.emitF32Const(0.0) catch return error.OutOfMemory,
+            .f64, .dec => ctx.emitter.emitF64Const(0.0) catch return error.OutOfMemory,
+        };
+        return ctx.emitter.emitFSub(zero, val) catch return error.OutOfMemory;
+    } else {
+        // Integer negation: 0 - val
+        const llvm_type = try ctx.getExprLlvmType(unary.expr);
+        const zero = ctx.emitter.emitIntConst(llvm_type, 0) catch return error.OutOfMemory;
+        return ctx.emitter.emitSub(zero, val) catch return error.OutOfMemory;
+    }
 }
 
 fn emitUnaryNot(ctx: *CirContext, unary: CIR.Expr.UnaryNot) Error!Builder.Value {
@@ -374,8 +482,6 @@ fn emitDbg(ctx: *CirContext, expr_idx: CIR.Expr.Idx) Error!Builder.Value {
 /// These are inserted when the compiler encounters semantic errors.
 /// At runtime, this calls roc_crashed with an error message.
 fn emitRuntimeError(ctx: *CirContext, diagnostic_idx: CIR.Diagnostic.Idx) Error!Builder.Value {
-    _ = diagnostic_idx;
-
     // Get RocOps pointer from refcount context
     const roc_ops = ctx.refcount_ctx.roc_ops_ptr orelse {
         // If no RocOps, just emit unreachable
@@ -385,8 +491,21 @@ fn emitRuntimeError(ctx: *CirContext, diagnostic_idx: CIR.Diagnostic.Idx) Error!
         return ctx.emitter.emitIntConst(.i64, 0) catch return error.OutOfMemory;
     };
 
-    // Create error message string constant
-    const msg = "Runtime error";
+    // Get the diagnostic to build a more informative message
+    const diagnostic = ctx.module_env.store.getDiagnostic(diagnostic_idx);
+
+    // Build error message based on diagnostic type
+    const msg = switch (diagnostic) {
+        .not_implemented => "Runtime error: Feature not yet implemented",
+        .exposed_but_not_implemented => "Runtime error: Exposed value not implemented",
+        .ident_not_in_scope => "Runtime error: Identifier not in scope",
+        .invalid_num_literal => "Runtime error: Invalid numeric literal",
+        .invalid_string_interpolation => "Runtime error: Invalid string interpolation",
+        .if_expr_without_else => "Runtime error: If expression missing else branch",
+        .type_mismatch => "Runtime error: Type mismatch",
+        else => "Runtime error: Compilation error encountered",
+    };
+
     const msg_ptr = ctx.emitter.emitStringConst(msg) catch return error.OutOfMemory;
     const msg_len = ctx.emitter.emitIntConst(.i64, @intCast(msg.len)) catch return error.OutOfMemory;
 
@@ -666,7 +785,7 @@ fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
 
         // Generate pattern check
         const pattern = ctx.module_env.store.getPattern(branch.pattern);
-        const matches = try emitPatternCheck(ctx, subject_val, pattern);
+        const matches = try emitPatternCheck(ctx, subject_val, match_expr.subject, pattern);
 
         // Handle optional guard
         const final_cond = if (branch.guard) |guard_idx| blk: {
@@ -692,8 +811,8 @@ fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
         const body_expr = ctx.module_env.store.getExpr(branch.body);
         const body_val = try emitExpr(ctx, body_expr);
 
-        // Pop scope
-        ctx.emitter.popScope();
+        // Emit decrefs for scope values and pop scope
+        try emitScopeCleanup(ctx);
 
         // Record value for phi node
         phi_incoming.append(.{ .value = body_val, .block = body_block }) catch return error.OutOfMemory;
@@ -737,6 +856,7 @@ fn emitMatch(ctx: *CirContext, match_expr: CIR.Expr.Match) Error!Builder.Value {
 fn emitPatternCheck(
     ctx: *CirContext,
     subject_val: Builder.Value,
+    subject_expr_idx: CIR.Expr.Idx,
     pattern: CIR.Pattern,
 ) Error!Builder.Value {
     return switch (pattern) {
@@ -751,8 +871,9 @@ fn emitPatternCheck(
         },
 
         .num => |num| {
-            // Compare with numeric literal
-            const lit_val = try emitNumber(ctx, num.value, .i64);
+            // Compare with numeric literal using subject's type
+            const subject_type = try ctx.getExprLlvmType(subject_expr_idx);
+            const lit_val = try emitNumber(ctx, num.value, subject_type);
             ctx.emitter.emitICmpEq(subject_val, lit_val) catch return error.OutOfMemory
         },
 
@@ -806,30 +927,30 @@ fn emitCall(
     const func_expr = ctx.module_env.store.getExpr(func_idx);
     const callee = try emitExpr(ctx, func_expr);
 
-    // Evaluate all arguments
+    // Get the argument expression indices for type lookup
+    const arg_indices = ctx.module_env.store.exprSlice(args);
+
+    // Evaluate all arguments and collect their types
     var arg_values = std.ArrayList(Builder.Value).init(ctx.allocator);
     defer arg_values.deinit();
 
-    var iter = ctx.module_env.store.exprs.iterate(args);
-    while (iter.next()) |arg_expr| {
-        const arg_val = try emitExpr(ctx, arg_expr.*);
-        arg_values.append(arg_val) catch return error.OutOfMemory;
-    }
-
-    // For now, assume the function is a pointer and we need to call it
-    // This is a simplified version - real implementation needs type info
-    // to construct the proper function type
-
-    // Get the function type from the callee
-    // For now, create a simple function type based on arg count
     var param_types = std.ArrayList(Builder.Type).init(ctx.allocator);
     defer param_types.deinit();
 
-    for (0..arg_values.items.len) |_| {
-        param_types.append(.i64) catch return error.OutOfMemory; // TODO: Get actual types
+    for (arg_indices) |arg_idx| {
+        const arg_expr = ctx.module_env.store.getExpr(arg_idx);
+        const arg_val = try emitExpr(ctx, arg_expr);
+        arg_values.append(arg_val) catch return error.OutOfMemory;
+
+        // Get the LLVM type for this argument
+        const arg_type = try ctx.getExprLlvmType(arg_idx);
+        param_types.append(arg_type) catch return error.OutOfMemory;
     }
 
-    const fn_type = ctx.emitter.createFunctionType(.i64, param_types.items) catch return error.OutOfMemory;
+    // Get the return type from the function call expression itself
+    const return_type = try ctx.getExprLlvmType(func_idx);
+
+    const fn_type = ctx.emitter.createFunctionType(return_type, param_types.items) catch return error.OutOfMemory;
 
     // Emit the call
     return ctx.emitter.emitCall(fn_type, callee, arg_values.items) catch return error.OutOfMemory;
@@ -842,21 +963,25 @@ fn emitLambda(ctx: *CirContext, lambda: CIR.Expr.Lambda) Error!Builder.Value {
     const builder = ctx.emitter.builder;
 
     // Create a unique name for this lambda
-    // TODO: Use proper naming based on module and location
-    const lambda_name = "roc_lambda";
+    const lambda_name = ctx.nextLambdaName();
+
+    // Get parameter pattern indices for type lookup
+    const param_indices = ctx.module_env.store.slicePatterns(lambda.params);
 
     // Build parameter types from the lambda's parameter patterns
     var param_types = std.ArrayList(Builder.Type).init(ctx.allocator);
     defer param_types.deinit();
 
-    var param_iter = ctx.module_env.store.patterns.iterate(lambda.params);
-    while (param_iter.next()) |_| {
-        // TODO: Get actual type from layout
-        param_types.append(.i64) catch return error.OutOfMemory;
+    for (param_indices) |param_idx| {
+        const param_type = try ctx.getPatternLlvmType(param_idx);
+        param_types.append(param_type) catch return error.OutOfMemory;
     }
 
-    // Create function type (TODO: Get return type from lambda)
-    const fn_type = ctx.emitter.createFunctionType(.i64, param_types.items) catch return error.OutOfMemory;
+    // Get return type from the lambda body expression
+    const return_type = try ctx.getExprLlvmType(lambda.body);
+
+    // Create function type
+    const fn_type = ctx.emitter.createFunctionType(return_type, param_types.items) catch return error.OutOfMemory;
 
     // Add the function to the module
     const fn_idx = ctx.emitter.addFunction(lambda_name, fn_type) catch return error.OutOfMemory;
@@ -870,23 +995,22 @@ fn emitLambda(ctx: *CirContext, lambda: CIR.Expr.Lambda) Error!Builder.Value {
     // Push a scope for the lambda body
     ctx.emitter.pushScope() catch return error.OutOfMemory;
 
-    // Bind parameters to their names
-    var param_idx: usize = 0;
-    param_iter = ctx.module_env.store.patterns.iterate(lambda.params);
-    while (param_iter.next()) |param_pattern| {
-        switch (param_pattern.*) {
+    // Bind parameters to their names with proper types
+    for (param_indices, 0..) |pattern_idx, param_idx| {
+        const pattern = ctx.module_env.store.getPattern(pattern_idx);
+        switch (pattern) {
             .assign => |assign| {
                 const name = ctx.module_env.getIdent(assign.ident);
                 const wip = ctx.emitter.wip_function.?;
                 const param_val = wip.arg(@intCast(param_idx));
-                const scoped = emit.ScopedValue.simple(param_val, .i64);
+                const param_type = try ctx.getPatternLlvmType(pattern_idx);
+                const scoped = emit.ScopedValue.simple(param_val, param_type);
                 ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
             },
             else => {
                 // Complex patterns need Phase 9
             },
         }
-        param_idx += 1;
     }
 
     // Emit the lambda body
@@ -896,8 +1020,8 @@ fn emitLambda(ctx: *CirContext, lambda: CIR.Expr.Lambda) Error!Builder.Value {
     // Return the result
     ctx.emitter.emitRet(result) catch return error.OutOfMemory;
 
-    // Pop scope and finish function
-    ctx.emitter.popScope();
+    // Emit decrefs for scope values and pop scope, then finish function
+    try emitScopeCleanup(ctx);
     ctx.emitter.endFunction() catch return error.OutOfMemory;
 
     // Restore the previous WIP function
@@ -910,19 +1034,131 @@ fn emitLambda(ctx: *CirContext, lambda: CIR.Expr.Lambda) Error!Builder.Value {
 /// Emit a closure expression (lambda with captured variables).
 ///
 /// Creates a closure struct containing the function pointer and captured environment.
+/// The struct layout is: { fn_ptr: *fn, capture1: T1, capture2: T2, ... }
+///
+/// Closures are heap-allocated so they can safely escape their defining scope.
+/// The memory is allocated with a refcount for proper memory management.
 fn emitClosure(ctx: *CirContext, closure: CIR.Expr.Closure) Error!Builder.Value {
     // First, emit the underlying lambda
     const fn_value = try emitLambda(ctx, closure.lambda);
 
     // If there are no captures, just return the function pointer
-    const captures = closure.captures;
-    if (captures.count == 0) {
+    const captures_span = closure.captures;
+    if (captures_span.span.len == 0) {
         return fn_value;
     }
 
-    // TODO: Create closure struct with captures
-    // For now, just return the function (ignoring captures)
-    return fn_value;
+    // Get the capture indices
+    const capture_indices = ctx.module_env.store.sliceCaptures(captures_span);
+
+    // Build closure struct type: { fn_ptr, capture1, capture2, ... }
+    var field_types = std.ArrayList(Builder.Type).init(ctx.allocator);
+    defer field_types.deinit();
+
+    // Track size and check if any captured values are refcounted
+    var closure_size: u64 = 8; // Start with function pointer size (8 bytes on 64-bit)
+    var has_refcounted_captures = false;
+
+    // First field is the function pointer
+    field_types.append(.ptr) catch return error.OutOfMemory;
+
+    // Remaining fields are the captured values' types
+    for (capture_indices) |capture_idx| {
+        const capture = ctx.module_env.store.getCapture(capture_idx);
+        const capture_type = try ctx.getPatternLlvmType(capture.pattern_idx);
+        field_types.append(capture_type) catch return error.OutOfMemory;
+
+        // Compute size contribution of this field
+        closure_size += getTypeSizeBytes(capture_type);
+
+        // Check if this capture is refcounted (for proper decref)
+        const capture_layout = try ctx.getPatternLayout(capture.pattern_idx);
+        if (layout_types.isRefcounted(capture_layout)) {
+            has_refcounted_captures = true;
+        }
+    }
+
+    // Create the closure struct type
+    const closure_type = ctx.emitter.builder.structType(.normal, field_types.items) catch return error.OutOfMemory;
+
+    // Allocate the closure on the heap with refcount
+    // This ensures closures can safely escape their defining scope
+    const closure_ptr = blk: {
+        if (ctx.refcount_ctx.roc_ops_ptr) |roc_ops| {
+            // We have RocOps - allocate on the heap
+            const size_val = ctx.emitter.emitIntConst(.i64, @intCast(closure_size)) catch return error.OutOfMemory;
+            const align_val = ctx.emitter.emitIntConst(.i32, 8) catch return error.OutOfMemory; // Pointer alignment
+            const refcounted_val = ctx.emitter.emitBoolConst(has_refcounted_captures) catch return error.OutOfMemory;
+
+            break :blk builtins_mod.emitAllocateWithRefcount(
+                ctx.builtin_ctx,
+                ctx.emitter,
+                size_val,
+                align_val,
+                refcounted_val,
+                roc_ops,
+            ) catch return error.OutOfMemory;
+        } else {
+            // No RocOps available (e.g., in REPL without full runtime)
+            // Fall back to stack allocation - caller must ensure closure doesn't escape
+            break :blk ctx.emitter.emitAlloca(closure_type) catch return error.OutOfMemory;
+        }
+    };
+
+    // Store function pointer at index 0
+    const fn_field_ptr = ctx.emitter.emitStructGep(closure_type, closure_ptr, 0) catch return error.OutOfMemory;
+    ctx.emitter.emitStore(fn_value, fn_field_ptr) catch return error.OutOfMemory;
+
+    // Store each captured value
+    var field_idx: u32 = 1;
+    for (capture_indices) |capture_idx| {
+        const capture = ctx.module_env.store.getCapture(capture_idx);
+
+        // Look up the captured variable's current value
+        const name = ctx.module_env.getIdent(capture.name);
+        const scoped_val = ctx.emitter.lookupVar(name) orelse
+            return error.VariableNotFound;
+
+        // Get the value (load if it's a pointer to a mutable var)
+        const capture_val = if (scoped_val.is_ptr)
+            ctx.emitter.emitLoad(scoped_val.llvm_type, scoped_val.value) catch return error.OutOfMemory
+        else
+            scoped_val.value;
+
+        // Store into closure struct
+        const field_ptr = ctx.emitter.emitStructGep(closure_type, closure_ptr, field_idx) catch return error.OutOfMemory;
+        ctx.emitter.emitStore(capture_val, field_ptr) catch return error.OutOfMemory;
+
+        field_idx += 1;
+    }
+
+    return closure_ptr;
+}
+
+/// Get the size in bytes for a given LLVM type.
+/// This is a compile-time approximation for 64-bit targets.
+fn getTypeSizeBytes(ty: Builder.Type) u64 {
+    return switch (ty) {
+        .void => 0,
+        .i1 => 1,
+        .i8 => 1,
+        .i16 => 2,
+        .i32 => 4,
+        .i64 => 8,
+        .i128 => 16,
+        .half => 2,
+        .bfloat => 2,
+        .float => 4,
+        .double => 8,
+        .fp128 => 16,
+        .x86_fp80 => 10,
+        .ppc_fp128 => 16,
+        .ptr => 8, // 64-bit pointer
+        .token => 0,
+        .label => 0,
+        .metadata => 0,
+        else => 8, // Default to pointer size for complex types
+    };
 }
 
 /// Emit a block expression.
@@ -935,7 +1171,7 @@ fn emitBlock(
 ) Error!Builder.Value {
     // Push a new scope for the block
     ctx.emitter.pushScope() catch return error.OutOfMemory;
-    defer ctx.emitter.popScope();
+    errdefer ctx.emitter.popScope(); // Clean up on error (without decref since we're failing anyway)
 
     // Execute each statement
     var iter = ctx.module_env.store.statements.iterate(stmts);
@@ -943,9 +1179,14 @@ fn emitBlock(
         try emitStatement(ctx, stmt.*);
     }
 
-    // Evaluate and return the final expression
+    // Evaluate the final expression
     const final_expr = ctx.module_env.store.getExpr(final_expr_idx);
-    return try emitExpr(ctx, final_expr);
+    const result = try emitExpr(ctx, final_expr);
+
+    // Emit decrefs for scope values and pop scope
+    try emitScopeCleanup(ctx);
+
+    return result;
 }
 
 /// Emit a statement (helper for block emission)
@@ -973,9 +1214,14 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
             const value_expr = ctx.module_env.store.getExpr(var_decl.expr);
             const value = try emitExpr(ctx, value_expr);
 
-            // For mutable vars, we allocate on stack
-            const wip = ctx.emitter.wip_function orelse return error.NoActiveFunction;
-            const alloca = wip.alloca(.i64, .default, "") catch return error.OutOfMemory; // TODO: Get proper type
+            // Get the proper type and layout for the alloca from the expression
+            const var_type = try ctx.getExprLlvmType(var_decl.expr);
+            const var_layout = try ctx.getExprLayout(var_decl.expr);
+
+            // For mutable vars, we allocate on stack with proper alignment
+            // (i128/Dec types need 16-byte alignment on ARM)
+            const alignment = emit.LlvmEmitter.getTypeAlignment(var_type);
+            const alloca = ctx.emitter.emitAllocaAligned(var_type, alignment) catch return error.OutOfMemory;
 
             // Store initial value
             ctx.emitter.emitStore(value, alloca) catch return error.OutOfMemory;
@@ -985,8 +1231,8 @@ fn emitStatement(ctx: *CirContext, stmt: CIR.Statement) Error!void {
             switch (pattern) {
                 .assign => |assign| {
                     const name = ctx.module_env.getIdent(assign.ident);
-                    // Mark as pointer so lookups will load
-                    const scoped = emit.ScopedValue.refcounted(alloca, .ptr, true);
+                    // Mark as pointer so lookups will load; include layout for decref
+                    const scoped = emit.ScopedValue.refcounted(alloca, .ptr, var_layout, true);
                     ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
                 },
                 else => return error.UnsupportedExpression,
@@ -1065,7 +1311,8 @@ fn bindPatternToValue(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx, value: Bui
     switch (pattern) {
         .assign => |assign| {
             const name = ctx.module_env.getIdent(assign.ident);
-            const scoped = emit.ScopedValue.simple(value, .i64); // TODO: Get proper type
+            const pattern_type = try ctx.getPatternLlvmType(pattern_idx);
+            const scoped = emit.ScopedValue.simple(value, pattern_type);
             ctx.emitter.defineVar(name, scoped) catch return error.OutOfMemory;
         },
         .underscore => {
@@ -1089,4 +1336,42 @@ fn bindPatternToValue(ctx: *CirContext, pattern_idx: CIR.Pattern.Idx, value: Bui
         },
         else => return error.UnsupportedExpression,
     }
+}
+
+/// Emit decrefs for all refcounted values in the current scope and pop the scope.
+/// This should be called instead of ctx.emitter.popScope() when exiting scopes
+/// that may contain refcounted values.
+fn emitScopeCleanup(ctx: *CirContext) Error!void {
+    // Get all values that need decref before popping the scope
+    const decref_values = ctx.emitter.getDecrefValues();
+
+    // Emit decref for each value that has layout info
+    for (decref_values) |scoped_val| {
+        if (scoped_val.layout) |layout_val| {
+            // If the value is stored on the stack (is_ptr), we need to load it first
+            const value_to_decref = if (scoped_val.is_ptr)
+                ctx.emitter.emitLoad(scoped_val.llvm_type, scoped_val.value) catch return error.OutOfMemory
+            else
+                scoped_val.value;
+
+            // Emit the decref call
+            refcount.emitDecref(
+                ctx.refcount_ctx,
+                ctx.emitter,
+                ctx.layout_store,
+                value_to_decref,
+                layout_val,
+            ) catch |err| {
+                // If decref fails (e.g., RocOps not set up), continue with other cleanup
+                // This handles cases like the REPL where not all infrastructure is available
+                switch (err) {
+                    error.NoActiveFunction => {}, // RocOps not available, skip decref
+                    else => return err,
+                }
+            };
+        }
+    }
+
+    // Now pop the scope
+    ctx.emitter.popScope();
 }
