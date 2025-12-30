@@ -23,6 +23,7 @@
           zig
           zls
           git # for use in ci/zig_lints.sh
+          kcov # for code coverage
         ]);
 
         shellFunctions = ''
@@ -41,8 +42,13 @@
           }
           export -f fmtcmd
 
+          covcmd() {
+            zig build coverage
+          }
+          export -f covcmd
+
           cicmd() {
-            zig build fmt && ./ci/zig_lints.sh && zig build && zig build snapshot && zig build test && zig build test-playground
+            zig build fmt && ./ci/zig_lints.sh && zig build && zig build snapshot && zig build test && zig build test-playground && zig build coverage
           }
           export -f cicmd
         '';
