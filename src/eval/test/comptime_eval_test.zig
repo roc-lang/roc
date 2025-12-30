@@ -1827,12 +1827,12 @@ test "encode - custom format type with infallible encoding (empty error type)" {
     //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
     const src =
         \\# Define a format type with infallible encoding (error type is [])
-        \\Utf8 := [Format].{
+        \\Utf8 := [].{
         \\    encode_str : Str -> Try(List(U8), [])
         \\    encode_str = |str| Ok(Str.to_utf8(str))
         \\}
         \\
-        \\fmt = Utf8.Format
+        \\fmt = Utf8
     ;
 
     var res = try parseCheckAndEvalModule(src);
