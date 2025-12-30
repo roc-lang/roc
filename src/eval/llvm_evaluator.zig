@@ -426,6 +426,14 @@ pub const LlvmEvaluator = struct {
         const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
         eval_fn.setLinkage(.external, builder);
 
+        // On Windows, explicitly set win64cc calling convention.
+        // This ensures LLVM uses the correct Windows x64 ABI for returning
+        // large values (i128 via hidden sret pointer) and floats (in XMM0).
+        // Without this, LLVM's default ccc may not match what Zig expects.
+        if (builtin.os.tag == .windows) {
+            eval_fn.setCallConv(.win64cc, builder);
+        }
+
         // Build eval function body
         var wip = try LlvmBuilder.WipFunction.init(builder, .{
             .function = eval_fn,
