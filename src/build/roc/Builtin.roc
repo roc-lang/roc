@@ -41,11 +41,10 @@ Builtin :: [].{
 		inspect : _val -> Str
 
 		# Encode a string using a format that provides encode_str
-		encode : Str, fmt -> List(U8)
-			where [fmt.encode_str : fmt, Str -> List(U8)]
+		encode : Str, fmt -> Try(encoded, err)
+			where [fmt.encode_str : fmt, Str -> Try(encoded, err)]
 		encode = |self, format| {
-			Fmt : fmt
-			Fmt.encode_str(format, self)
+			format.encode_str(self)
 		}
 	}
 
@@ -261,12 +260,13 @@ Builtin :: [].{
 		}
 
 		# Encode a list using a format that provides encode_list
-		encode : List(item), fmt -> List(U8)
-			where [fmt.encode_list : fmt, List(item), (item, fmt -> List(U8)) -> List(U8), item.encode : item, fmt -> List(U8)]
+		encode : List(item), fmt -> Try(encoded, err)
+			where [
+				fmt.encode_list : fmt, List(item), (item, fmt -> Try(encoded, err)) -> Try(encoded, err),
+				item.encode : item, fmt -> Try(encoded, err),
+			]
 		encode = |self, format| {
-			Fmt : fmt
-			Item : item
-			Fmt.encode_list(format, self, |elem, f| Item.encode(elem, f))
+			format.encode_list(self, |elem, f| elem.encode(f))
 		}
 
 	}
@@ -1273,17 +1273,6 @@ Builtin :: [].{
 					Err(OutOfRange)
 				}
 			}
-		}
-	}
-
-	# Encoding module for serializing values to bytes
-	Encode :: {}.{
-		# Encode a value to bytes using a format
-		to_bytes : val, fmt -> List(U8)
-			where [val.encode : val, fmt -> List(U8)]
-		to_bytes = |value, format| {
-			Val : val
-			Val.encode(value, format)
 		}
 	}
 }

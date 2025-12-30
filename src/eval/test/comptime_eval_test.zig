@@ -1820,21 +1820,19 @@ test "comptime eval - modulo by zero produces error" {
 // the interpreter state after an eval error may not allow continuing evaluation
 // of subsequent definitions that share the same evaluation context.
 
-test "encode - custom format type definition for Str.encode static dispatch" {
-    // Test that a custom format type can be defined with an encode_str method
-    // that matches the signature required by Str.encode's where clause:
-    //   where [fmt.encode_str : fmt, Str -> List(U8)]
-    //
-    // This demonstrates how users can create custom encoding formats
-    // that work with the Str.encode and List.encode static dispatch pattern.
+test "encode - custom format type with infallible encoding (empty error type)" {
+    // Test that a custom format type can define an encode_str method that can't fail.
+    // Using [] as the error type means encoding always succeeds.
+    // This matches the signature required by Str.encode's where clause:
+    //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
     const src =
-        \\# Define a format type with encode_str method matching Str.encode's requirement
-        \\LineSep := [Format].{
-        \\    encode_str : LineSep, Str -> List(U8)
-        \\    encode_str = |_format, str| Str.to_utf8(str)
+        \\# Define a format type with infallible encoding (error type is [])
+        \\Utf8 := [].{
+        \\    encode_str : Str -> Try(List(U8), [])
+        \\    encode_str = |str| Ok(Str.to_utf8(str))
         \\}
         \\
-        \\fmt = LineSep.Format
+        \\fmt = Utf8
     ;
 
     var res = try parseCheckAndEvalModule(src);
