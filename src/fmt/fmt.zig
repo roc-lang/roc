@@ -1993,14 +1993,13 @@ const Formatter = struct {
             .tag_union => |t| {
                 region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const has_open = t.open_anno != null;
                 const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
                 const tag_indent = fmt.curr_indent;
                 defer {
                     fmt.curr_indent = tag_indent;
                 }
                 try fmt.push('[');
-                if (tags.len == 0 and !has_open) {
+                if (tags.len == 0 and !t.is_open) {
                     try fmt.push(']');
                 } else {
                     if (tag_multiline) {
@@ -2016,20 +2015,22 @@ const Formatter = struct {
                         _ = try fmt.formatTypeAnno(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
-                        } else if (i < (tags.len - 1) or has_open) {
+                        } else if (i < (tags.len - 1) or t.is_open) {
                             try fmt.pushAll(", ");
                         }
                     }
-                    // Handle the open extension (..others)
-                    if (t.open_anno) |open| {
-                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                    // Handle open tag unions - always format as just ".." (silently drop any named extension)
+                    if (t.is_open) {
+                        // If there was a named extension, use its region for comment flushing
+                        const open_region = if (t.open_anno) |open| fmt.nodeRegion(@intFromEnum(open)) else null;
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            if (open_region) |oreg| {
+                                _ = try fmt.flushCommentsBefore(oreg.start);
+                            }
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.pushAll("..");
-                        _ = try fmt.formatTypeAnno(open);
                         if (tag_multiline) {
                             try fmt.push(',');
                         }

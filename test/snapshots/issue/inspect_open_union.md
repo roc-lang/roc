@@ -74,7 +74,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-main_for_host : Try({}, [Exit(I32), ..others]) -> Str
+main_for_host : Try({}, [Exit(I32), ..]) -> Str
 main_for_host = |result|
 	match result {
 		Ok({}) => "ok"

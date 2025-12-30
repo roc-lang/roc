@@ -7933,25 +7933,15 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
 const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
-    /// When true, we're processing a tag union extension (the `..others` part of
-    /// `[Exit(I32), ..others]`). This allows new type variables to be introduced
-    /// even in type_decl_anno context, since extension variables are valid.
-    in_tag_union_extension: bool,
 
     const TypeAnnoCtxType = enum(u1) { type_decl_anno, inline_anno };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
-        return .{ .type = typ, .found_underscore = false, .in_tag_union_extension = false };
+        return .{ .type = typ, .found_underscore = false };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
         return self.type == .type_decl_anno and self.found_underscore;
-    }
-
-    /// Returns true if new type variables can be introduced in this context.
-    /// This is allowed for inline annotations OR when in a tag union extension.
-    pub fn allowsNewTypeVars(self: TypeAnnoCtx) bool {
-        return self.type == .inline_anno or self.in_tag_union_extension;
     }
 };
 
@@ -7987,9 +7977,14 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    // New type variables can be introduced in inline annotations OR
-                    // when processing tag union extensions (e.g., `..others`)
-                    if (type_anno_ctx.allowsNewTypeVars()) {
+                    // In inline annotations, new type variables can always be introduced.
+                    // In type declarations, new type variables can only be introduced if
+                    // they're marked as ignored (start with underscore, e.g., `_others`),
+                    // indicating they're intentionally unused and don't need to be declared
+                    // in a for-clause.
+                    const can_introduce = type_anno_ctx.type == .inline_anno or name_ident.attributes.ignored;
+
+                    if (can_introduce) {
                         // Track this type variable for underscore validation
                         try self.scratch_type_var_validation.append(name_ident);
 
@@ -8041,9 +8036,12 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    // New type variables can be introduced in inline annotations OR
-                    // when processing tag union extensions (e.g., `..others`)
-                    if (type_anno_ctx.allowsNewTypeVars()) {
+                    // In inline annotations, new type variables can always be introduced.
+                    // In type declarations, new type variables can only be introduced if
+                    // they're marked as ignored (start with underscore, e.g., `_others`).
+                    const can_introduce = type_anno_ctx.type == .inline_anno or name_ident.attributes.ignored;
+
+                    if (can_introduce) {
                         // Track this type variable for underscore validation
                         try self.scratch_type_var_validation.append(name_ident);
 
@@ -8637,14 +8635,13 @@ fn canonicalizeTypeAnnoTagUnion(
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
 
-    // Canonicalize the ext, if it exists
-    // Set in_tag_union_extension to allow new type variables in the extension
-    // (e.g., `..others` introduces the `others` type variable)
-    const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
-        const was_in_extension = type_anno_ctx.in_tag_union_extension;
-        type_anno_ctx.in_tag_union_extension = true;
-        defer type_anno_ctx.in_tag_union_extension = was_in_extension;
+    // Canonicalize the ext, if it exists, or create anonymous ext for open unions
+    const mb_ext_anno: ?TypeAnno.Idx = if (tag_union.open_anno) |open_idx| blk: {
+        // Named extension like `..ext`
         break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
+    } else if (tag_union.is_open) blk: {
+        // Anonymous open union `..` - create an anonymous underscore (inferred) type
+        break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
     } else null;
 
     return try self.env.addTypeAnno(.{ .tag_union = .{

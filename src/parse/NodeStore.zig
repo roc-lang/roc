@@ -972,12 +972,14 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
 
-            var rhs = AST.TypeAnno.TagUnionRhs{
-                .open = 0,
-                .tags_len = @as(u31, @intCast(tu.tags.span.len)),
+            // Track both is_open (has .. syntax) and has_open_anno (named extension variable)
+            const has_open_anno = tu.open_anno != null;
+            const rhs = AST.TypeAnno.TagUnionRhs{
+                .is_open = if (tu.is_open) 1 else 0,
+                .has_open_anno = if (has_open_anno) 1 else 0,
+                .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
             if (tu.open_anno) |a| {
-                rhs.open = 1;
                 try store.extra_data.append(store.gpa, @intFromEnum(a));
             }
 
@@ -1925,11 +1927,12 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const tags_len = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
 
-            const open_anno = if (rhs.open == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
+            const open_anno = if (rhs.has_open_anno == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
 
             return .{ .tag_union = .{
                 .region = node.region,
                 .open_anno = open_anno,
+                .is_open = rhs.is_open == 1,
                 .tags = .{ .span = .{
                     .start = tags_start,
                     .len = tags_len,
