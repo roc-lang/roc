@@ -32,37 +32,66 @@ const builtin_loading = eval_mod.builtin_loading;
 /// Get the LLVM target triple for the current platform.
 /// This is needed so LLVM knows to use the correct calling conventions
 /// (e.g., Windows x64 ABI for i128/f64 returns).
+///
+/// Reference triples from target/mod.zig:
+/// - x86_64-apple-darwin, aarch64-apple-darwin
+/// - x86_64-pc-windows-msvc, aarch64-pc-windows-msvc
+/// - x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu
+/// - x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+/// - arm-unknown-linux-gnueabihf, arm-unknown-linux-musleabihf
+/// - x86_64-unknown-freebsd
+/// - wasm32-unknown-unknown
 fn getLlvmTriple() []const u8 {
-    // Construct LLVM triple from Zig builtin values
+    // Construct LLVM triple from Zig builtin values.
+    // Format: <arch>-<vendor>-<os>-<abi>
     const arch = switch (builtin.cpu.arch) {
         .x86_64 => "x86_64",
         .aarch64 => "aarch64",
         .x86 => "i686",
-        .arm => "arm",
+        .arm, .armeb => "arm",
+        .thumb, .thumbeb => "thumb",
         .wasm32 => "wasm32",
+        .wasm64 => "wasm64",
+        .riscv32 => "riscv32",
+        .riscv64 => "riscv64",
         else => "unknown",
     };
 
     const vendor_os = switch (builtin.os.tag) {
         .windows => "-pc-windows",
         .macos => "-apple-darwin",
+        .ios => "-apple-ios",
         .linux => "-unknown-linux",
         .freebsd => "-unknown-freebsd",
-        .ios => "-apple-ios",
+        .openbsd => "-unknown-openbsd",
+        .netbsd => "-unknown-netbsd",
+        .freestanding => "-unknown-unknown",
+        .wasi => "-wasi",
         else => "-unknown-unknown",
     };
 
+    // ABI suffix - must match exactly what LLVM expects
     const abi = switch (builtin.os.tag) {
         .windows => switch (builtin.abi) {
-            .gnu => "-gnu",
+            .gnu => "-gnu", // MinGW
             else => "-msvc",
         },
         .linux => switch (builtin.abi) {
-            .musl, .musleabi, .musleabihf => "-musl",
-            .gnu, .gnueabi, .gnueabihf => "-gnu",
+            // ARM hard float variants need the "hf" suffix
+            .musleabihf => "-musleabihf",
+            .gnueabihf => "-gnueabihf",
+            // ARM soft float variants
+            .musleabi => "-musleabi",
+            .gnueabi => "-gnueabi",
+            // Standard variants
+            .musl => "-musl",
+            .gnu => "-gnu",
+            // Android
+            .android => "-android",
             else => "-gnu",
         },
-        else => "",
+        .freestanding, .wasi => "",
+        else => "", // macOS, iOS, BSDs don't need ABI suffix
     };
 
     return arch ++ vendor_os ++ abi;

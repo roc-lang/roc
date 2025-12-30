@@ -300,12 +300,19 @@ pub fn compileAndExecute(
         }
 
         // Use a baseline CPU that has the required features for each architecture.
-        // - x86_64: "x86-64" enables SSE2 which is required for the Windows x64 ABI
-        //   (floats are returned in XMM0). "generic" doesn't guarantee SSE2.
-        // - aarch64/arm64: "generic" is fine as NEON is part of the base architecture.
-        // - Other architectures: "generic" as a safe fallback.
+        // The CPU name must enable required features for the platform's calling convention.
+        //
+        // x86_64: "x86-64" enables SSE2 which is required for the Windows x64 ABI
+        //         (floats are returned in XMM0). "generic" doesn't guarantee SSE2.
+        // x86:    "pentium4" enables SSE2 for consistent float handling.
+        //         "i686" only guarantees SSE, not SSE2.
+        // aarch64: "generic" is fine - NEON/FP are part of the base AArch64 architecture.
+        // arm:    "generic" works, but hard-float targets need VFP which is enabled
+        //         by the target triple's ABI suffix (gnueabihf/musleabihf).
+        // Other:  "generic" as a safe fallback.
         const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
             .x86_64 => "x86-64",
+            .x86 => "pentium4",
             else => "generic",
         };
 
