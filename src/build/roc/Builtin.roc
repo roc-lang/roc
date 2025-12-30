@@ -41,8 +41,8 @@ Builtin :: [].{
 		inspect : _val -> Str
 
 		# Encode a string using a format that provides encode_str
-		encode : Str, fmt -> Try(ok, err)
-			where [fmt.encode_str : fmt, Str -> Try(ok, err)]
+		encode : Str, fmt -> Try(encoded, err)
+			where [fmt.encode_str : fmt, Str -> Try(encoded, err)]
 		encode = |self, format| {
 			format.encode_str(self)
 		}
@@ -260,10 +260,10 @@ Builtin :: [].{
 		}
 
 		# Encode a list using a format that provides encode_list
-		encode : List(item), fmt -> Try(ok, err)
+		encode : List(item), fmt -> Try(encoded, err)
 			where [
-				fmt.encode_list : fmt, List(item), (item, fmt -> Try(ok, err)) -> Try(ok, err),
-				item.encode : item, fmt -> Try(ok, err),
+				fmt.encode_list : fmt, List(item), (item, fmt -> Try(encoded, err)) -> Try(encoded, err),
+				item.encode : item, fmt -> Try(encoded, err),
 			]
 		encode = |self, format| {
 			format.encode_list(self, |elem, f| elem.encode(f))
@@ -1279,8 +1279,8 @@ Builtin :: [].{
 	# Encoding module for serializing values to bytes
 	Encode :: {}.{
 		# Encode a value using a format
-		encode : val, fmt -> Try(ok, err)
-			where [val.encode : val, fmt -> Try(ok, err)]
+		encode : val, fmt -> Try(encoded, err)
+			where [val.encode : val, fmt -> Try(encoded, err)]
 		encode = |value, format| {
 			value.encode(format)
 		}
