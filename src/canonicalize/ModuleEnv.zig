@@ -1970,6 +1970,57 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .mutually_recursive_type_aliases => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const other_type_name = self.getIdent(data.other_name);
+            const region_info = self.calcRegionInfo(data.region);
+            const other_region_info = self.calcRegionInfo(data.other_region);
+
+            var report = Report.init(allocator, "MUTUALLY RECURSIVE TYPE ALIASES", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            const owned_other_name = try report.addOwnedString(other_type_name);
+
+            try report.document.addReflowingText("The type alias ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" and ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" form a recursive cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This type is declared here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                other_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => unreachable, // All diagnostics must have explicit handlers
     };
 }
