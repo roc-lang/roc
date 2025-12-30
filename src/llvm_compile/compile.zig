@@ -394,17 +394,31 @@ pub fn compileAndExecute(
     }
 
     // Call the function and format the result based on the return type.
-    // On Windows x64, we use .x86_64_win calling convention explicitly to match the
-    // win64cc we set in the generated LLVM IR. On other platforms, .c works.
-    const cc: std.builtin.CallingConvention = if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64)
-        .{ .x86_64_win = .{} }
-    else
-        .c;
+    // On Windows x64, i128/u128/dec use explicit pointer output to avoid sret ABI issues.
+    // For these types, the function signature is: void roc_eval(i128* out_ptr)
+    // For other types, the function returns the value directly.
+    const use_out_ptr = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64 and
+        (result_type == .i128 or result_type == .u128 or result_type == .dec);
+
+    if (use_out_ptr) {
+        // Windows x64 i128/u128/dec: void roc_eval(i128* out_ptr)
+        const EvalFn = *const fn (*i128) callconv(.c) void;
+        const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+        var result: i128 = undefined;
+        eval_fn(&result);
+
+        return switch (result_type) {
+            .i128 => std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory,
+            .u128 => std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory,
+            .dec => formatDec(allocator, result) catch return error.OutOfMemory,
+            else => unreachable,
+        };
+    }
 
     switch (result_type) {
         .f64 => {
             // Function returns f64
-            const EvalFn = *const fn () callconv(cc) f64;
+            const EvalFn = *const fn () callconv(.c) f64;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
@@ -412,8 +426,8 @@ pub fn compileAndExecute(
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .i128 => {
-            // Function returns i128 (signed)
-            const EvalFn = *const fn () callconv(cc) i128;
+            // Function returns i128 (signed) - non-Windows path
+            const EvalFn = *const fn () callconv(.c) i128;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
@@ -421,10 +435,10 @@ pub fn compileAndExecute(
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .u128 => {
-            // Function returns u128 (unsigned)
+            // Function returns u128 (unsigned) - non-Windows path
             // At the LLVM level, i128 and u128 have the same representation,
             // but we interpret the bits as unsigned here
-            const EvalFn = *const fn () callconv(cc) u128;
+            const EvalFn = *const fn () callconv(.c) u128;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
@@ -433,7 +447,7 @@ pub fn compileAndExecute(
         },
         .i64 => {
             // Function returns i64 (signed)
-            const EvalFn = *const fn () callconv(cc) i64;
+            const EvalFn = *const fn () callconv(.c) i64;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
@@ -444,7 +458,7 @@ pub fn compileAndExecute(
             // Function returns u64 (unsigned)
             // At the LLVM level, i64 and u64 have the same representation,
             // but we interpret the bits as unsigned here
-            const EvalFn = *const fn () callconv(cc) u64;
+            const EvalFn = *const fn () callconv(.c) u64;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 
@@ -452,8 +466,8 @@ pub fn compileAndExecute(
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .dec => {
-            // Function returns i128 representing a Dec (fixed-point with 18 decimal places)
-            const EvalFn = *const fn () callconv(cc) i128;
+            // Function returns i128 representing a Dec - non-Windows path
+            const EvalFn = *const fn () callconv(.c) i128;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             const result = eval_fn();
 

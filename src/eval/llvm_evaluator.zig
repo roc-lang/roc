@@ -396,62 +396,100 @@ pub const LlvmEvaluator = struct {
         };
     }
 
-    /// Emit an eval function that returns the computed value directly.
+    /// Emit an eval function that returns the computed value.
     /// For JIT execution, this avoids printf complexity and vararg ABI issues.
-    /// The return type must match what compile.zig expects based on result_type:
-    /// - i64/u64 -> i64 (64-bit integer)
-    /// - i128/u128/dec -> i128 (128-bit integer)
-    /// - f64 -> double
+    ///
+    /// The function signature depends on the platform and type:
+    /// - For i128/u128/dec on Windows: void roc_eval(i128* out_ptr)
+    ///   Windows x64 ABI has complex sret handling for i128 that causes
+    ///   mismatches between LLVM's sret and Zig's sret. Using explicit
+    ///   pointer output avoids this issue.
+    /// - For other types/platforms: <type> roc_eval()
+    ///   Direct return works fine for i64/u64/f64 and for i128 on non-Windows.
     fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
-        // Determine the return type based on what compile.zig expects
-        const return_type: LlvmBuilder.Type = switch (result_type) {
-            .i64, .u64 => .i64,
-            .i128, .u128, .dec => .i128,
-            .f64 => .double,
-        };
+        // On Windows x64, i128 returns have complex sret ABI that causes mismatches.
+        // Use explicit pointer output to avoid this.
+        const use_out_ptr = builtin.os.tag == .windows and builtin.cpu.arch == .x86_64 and
+            (result_type == .i128 or result_type == .u128 or result_type == .dec);
 
-        // Determine signedness for integer extension
-        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
-            .i64, .i128 => .signed,
-            .u64, .u128 => .unsigned,
-            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
-        };
+        if (use_out_ptr) {
+            // Windows i128: void roc_eval(i128* out_ptr)
+            const ptr_type = try builder.ptrType(.default);
+            const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
+            const eval_name = try builder.strtabString("roc_eval");
+            const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
+            eval_fn.setLinkage(.external, builder);
 
-        // Create eval function
-        const eval_type = try builder.fnType(return_type, &.{}, .normal);
-        const eval_name = if (builtin.os.tag == .macos)
-            try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
-        else
-            try builder.strtabString("roc_eval");
-        const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
-        eval_fn.setLinkage(.external, builder);
+            // Build function body
+            var wip = try LlvmBuilder.WipFunction.init(builder, .{
+                .function = eval_fn,
+                .strip = false,
+            });
+            defer wip.deinit();
 
-        // On Windows, explicitly set win64cc calling convention.
-        // This ensures LLVM uses the correct Windows x64 ABI for returning
-        // large values (i128 via hidden sret pointer) and floats (in XMM0).
-        // Without this, LLVM's default ccc may not match what Zig expects.
-        if (builtin.os.tag == .windows) {
-            eval_fn.setCallConv(.win64cc, builder);
+            const entry_block = try wip.block(1, "entry"); // 1 arg
+            wip.cursor = .{ .block = entry_block };
+
+            // Get the pointer argument
+            const out_ptr = wip.arg(0);
+
+            // Convert value if needed and store through pointer
+            const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
+                .i128 => .signed,
+                .u128, .dec => .unsigned,
+                else => unreachable,
+            };
+            const store_value = if (value_type == .i128)
+                value.toValue()
+            else
+                try wip.conv(signedness, value.toValue(), .i128, "");
+
+            _ = try wip.store(.default, store_value, out_ptr);
+            _ = try wip.retVoid();
+            try wip.finish();
+        } else {
+            // Standard case: direct return
+            const return_type: LlvmBuilder.Type = switch (result_type) {
+                .i64, .u64 => .i64,
+                .i128, .u128, .dec => .i128,
+                .f64 => .double,
+            };
+
+            // Determine signedness for integer extension
+            const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
+                .i64, .i128 => .signed,
+                .u64, .u128 => .unsigned,
+                .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
+            };
+
+            // Create eval function
+            const eval_type = try builder.fnType(return_type, &.{}, .normal);
+            const eval_name = if (builtin.os.tag == .macos)
+                try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
+            else
+                try builder.strtabString("roc_eval");
+            const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
+            eval_fn.setLinkage(.external, builder);
+
+            // Build eval function body
+            var wip = try LlvmBuilder.WipFunction.init(builder, .{
+                .function = eval_fn,
+                .strip = false,
+            });
+            defer wip.deinit();
+
+            const entry_block = try wip.block(0, "entry");
+            wip.cursor = .{ .block = entry_block };
+
+            // Convert the value to the return type if needed
+            const return_value = if (value_type == return_type)
+                value.toValue()
+            else
+                try wip.conv(signedness, value.toValue(), return_type, "");
+
+            _ = try wip.ret(return_value);
+            try wip.finish();
         }
-
-        // Build eval function body
-        var wip = try LlvmBuilder.WipFunction.init(builder, .{
-            .function = eval_fn,
-            .strip = false,
-        });
-        defer wip.deinit();
-
-        const entry_block = try wip.block(0, "entry");
-        wip.cursor = .{ .block = entry_block };
-
-        // Convert the value to the return type if needed
-        const return_value = if (value_type == return_type)
-            value.toValue()
-        else
-            try wip.conv(signedness, value.toValue(), return_type, "");
-
-        _ = try wip.ret(return_value);
-        try wip.finish();
     }
 };
 
