@@ -1790,3 +1790,26 @@ test "issue 8821: List.get with records and pattern match on Try type" {
         \\}
     , "Alice", .no_trace);
 }
+
+test "encode: just convert string to utf8" {
+    // Simple test: convert string to utf8 and back
+    try runExpectStr(
+        \\{
+        \\    bytes = Str.to_utf8("hello")
+        \\    Str.from_utf8_lossy(bytes)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "static dispatch: List.sum uses item.plus and item.default" {
+    // Test that static dispatch works with List.sum
+    // List.sum requires: item.plus : item, item -> item, item.default : item
+    // This demonstrates the static dispatch pattern that Encode uses
+    try runExpectI64(
+        \\{
+        \\    list : List(I64)
+        \\    list = [1i64, 2i64, 3i64, 4i64, 5i64]
+        \\    List.sum(list)
+        \\}
+    , 15, .no_trace);
+}
