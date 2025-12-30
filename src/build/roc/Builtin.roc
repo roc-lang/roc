@@ -1275,16 +1275,6 @@ Builtin :: [].{
 			}
 		}
 	}
-
-	# Encoding module for serializing values to bytes
-	Encode :: {}.{
-		# Encode a value using a format
-		encode : val, fmt -> Try(encoded, err)
-			where [val.encode : val, fmt -> Try(encoded, err)]
-		encode = |value, format| {
-			value.encode(format)
-		}
-	}
 }
 
 range_to = |var $current, end| {
