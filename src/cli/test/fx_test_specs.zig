@@ -248,6 +248,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>False",
         .description = "Regression test: Method lookup for nominal types in roc build executables (issue #8654)",
     },
+    .{
+        .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
+        .io_spec = "1>Child is Text: hello",
+        .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
+    },
 };
 
 /// Get the total number of IO spec tests
