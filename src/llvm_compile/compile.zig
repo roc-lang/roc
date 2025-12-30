@@ -307,9 +307,10 @@ pub fn compileAndExecute(
     // Get main JIT dylib
     const dylib = jit.getMainJITDylib();
 
-    // Add a generator so the JIT can find symbols from the current process
-    // (not needed for roc_eval since it doesn't call external functions,
-    // but keep it for future flexibility)
+    // Try to add a generator so the JIT can find symbols from the current process.
+    // This is not needed for roc_eval since it doesn't call external functions,
+    // but is useful for future flexibility. It may fail on statically-linked
+    // binaries (e.g., musl) since there's no dynamic symbol table to search.
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -318,10 +319,12 @@ pub fn compileAndExecute(
         null, // no filter
         null, // no filter context
     )) |err| {
+        // On statically linked binaries, this may fail - that's OK since
+        // roc_eval doesn't need external symbols from the process.
         bindings.consumeError(err);
-        return error.JITCreationFailed;
+    } else {
+        bindings.jitDylibAddGenerator(dylib, process_syms_generator);
     }
-    bindings.jitDylibAddGenerator(dylib, process_syms_generator);
 
     // Add module to JIT (takes ownership of ts_module)
     if (jit.addLLVMIRModule(dylib, ts_module)) |err| {
