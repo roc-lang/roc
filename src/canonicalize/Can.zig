@@ -3145,11 +3145,12 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
         // Canonicalize the type annotation for this entrypoint
         //
-        // We use inline_anno context here to allow open tag union extensions
-        // (like `..others` in `[Exit(I32), ..others]`) to introduce new type
-        // variables. Type variables from the for-clause (e.g., `model` in
-        // `[Model : model]`) are already in scope from the processing above.
-        var type_anno_ctx = TypeAnnoCtx.init(.inline_anno);
+        // We use type_decl_anno context to catch undeclared type variables.
+        // However, open tag union extensions (like `..others`) are allowed to
+        // introduce new type variables via the in_tag_union_extension flag.
+        // Type variables from the for-clause (e.g., `model` in `[Model : model]`)
+        // are already in scope from the processing above.
+        var type_anno_ctx = TypeAnnoCtx.init(.type_decl_anno);
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env
@@ -7932,15 +7933,25 @@ fn processCollectedTypeVars(self: *Self) std.mem.Allocator.Error!void {
 const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
+    /// When true, we're processing a tag union extension (the `..others` part of
+    /// `[Exit(I32), ..others]`). This allows new type variables to be introduced
+    /// even in type_decl_anno context, since extension variables are valid.
+    in_tag_union_extension: bool,
 
     const TypeAnnoCtxType = enum(u1) { type_decl_anno, inline_anno };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
-        return .{ .type = typ, .found_underscore = false };
+        return .{ .type = typ, .found_underscore = false, .in_tag_union_extension = false };
     }
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
         return self.type == .type_decl_anno and self.found_underscore;
+    }
+
+    /// Returns true if new type variables can be introduced in this context.
+    /// This is allowed for inline annotations OR when in a tag union extension.
+    pub fn allowsNewTypeVars(self: TypeAnnoCtx) bool {
+        return self.type == .inline_anno or self.in_tag_union_extension;
     }
 };
 
@@ -7976,29 +7987,26 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    switch (type_anno_ctx.type) {
-                        // If this is an inline anno, then we can introduce the variable
-                        // into the scope
-                        .inline_anno => {
-                            // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(name_ident);
+                    // New type variables can be introduced in inline annotations OR
+                    // when processing tag union extensions (e.g., `..others`)
+                    if (type_anno_ctx.allowsNewTypeVars()) {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(name_ident);
 
-                            const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                                .name = name_ident,
-                            } }, region);
+                        const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                            .name = name_ident,
+                        } }, region);
 
-                            // Add to scope
-                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        // Add to scope
+                        _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
 
-                            return new_anno_idx;
-                        },
-                        // Otherwise, this is malformed
-                        .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
-                                .name = name_ident,
-                                .region = region,
-                            } });
-                        },
+                        return new_anno_idx;
+                    } else {
+                        // In type declarations, undeclared type variables are errors
+                        return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                            .name = name_ident,
+                            .region = region,
+                        } });
                     }
                 },
             }
@@ -8033,29 +8041,26 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    switch (type_anno_ctx.type) {
-                        // If this is an inline anno, then we can introduce the variable
-                        // into the scope
-                        .inline_anno => {
-                            // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(name_ident);
+                    // New type variables can be introduced in inline annotations OR
+                    // when processing tag union extensions (e.g., `..others`)
+                    if (type_anno_ctx.allowsNewTypeVars()) {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(name_ident);
 
-                            const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                                .name = name_ident,
-                            } }, region);
+                        const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                            .name = name_ident,
+                        } }, region);
 
-                            // Add to scope
-                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        // Add to scope
+                        _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
 
-                            return new_anno_idx;
-                        },
-                        // Otherwise, this is malformed
-                        .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
-                                .name = name_ident,
-                                .region = region,
-                            } });
-                        },
+                        return new_anno_idx;
+                    } else {
+                        // In type declarations, undeclared type variables are errors
+                        return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                            .name = name_ident,
+                            .region = region,
+                        } });
                     }
                 },
             }
@@ -8633,7 +8638,12 @@ fn canonicalizeTypeAnnoTagUnion(
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
 
     // Canonicalize the ext, if it exists
+    // Set in_tag_union_extension to allow new type variables in the extension
+    // (e.g., `..others` introduces the `others` type variable)
     const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
+        const was_in_extension = type_anno_ctx.in_tag_union_extension;
+        type_anno_ctx.in_tag_union_extension = true;
+        defer type_anno_ctx.in_tag_union_extension = was_in_extension;
         break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
     } else null;
 
