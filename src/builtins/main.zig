@@ -12,9 +12,7 @@
 //! #include "roc_builtins.h"
 //! // Link against libroc_builtins.a
 //! ```
-const std = @import("std");
 const builtin = @import("builtin");
-const math = std.math;
 const utils = @import("utils.zig");
 
 const ROC_BUILTINS = "roc_builtins";
@@ -103,7 +101,6 @@ const num = @import("num.zig");
 const INTEGERS = [_]type{ i8, i16, i32, i64, i128, u8, u16, u32, u64, u128 };
 const WIDEINTS = [_]type{ i16, i32, i64, i128, i256, u16, u32, u64, u128, u256 };
 const FLOATS = [_]type{ f32, f64 };
-const NUMBERS = INTEGERS ++ FLOATS;
 
 comptime {
     exportNumFn(num.shiftRightZeroFillI128, "shift_right_zero_fill.i128");
@@ -272,9 +269,6 @@ fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 fn exportStrFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "str." ++ func_name);
-}
-fn exportDictFn(comptime func: anytype, comptime func_name: []const u8) void {
-    exportBuiltinFn(func, "dict." ++ func_name);
 }
 fn exportListFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "list." ++ func_name);

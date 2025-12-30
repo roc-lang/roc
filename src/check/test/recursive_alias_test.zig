@@ -3,10 +3,7 @@
 //! Type aliases (`:`) cannot be recursive because they are transparent type synonyms.
 //! Recursive types must use nominal types (`:=`) instead.
 
-const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
-
-const testing = std.testing;
 
 // Direct self-reference tests
 

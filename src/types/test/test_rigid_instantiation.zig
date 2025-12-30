@@ -15,35 +15,13 @@ const Ident = base.Ident;
 
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
-const Desc = types_mod.Descriptor;
-const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
-const Alias = types_mod.Alias;
-const NominalType = types_mod.NominalType;
-const FlatType = types_mod.FlatType;
-const Builtin = types_mod.Builtin;
-const Tuple = types_mod.Tuple;
-const Num = types_mod.Num;
-const NumCompact = types_mod.Num.Compact;
-const Func = types_mod.Func;
 const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
-const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
-const TwoTags = types_mod.TwoTags;
-
-const VarSafeList = Var.SafeList;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const RecordFieldSafeList = RecordField.SafeList;
-const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
-const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
-const TagSafeList = Tag.SafeList;
-const TagSafeMultiList = Tag.SafeMultiList;
-const TwoTagsSafeList = TwoTags.SafeList;
 
 test "instantiate - flex var creates new flex var" {
     const gpa = std.testing.allocator;
@@ -508,11 +486,6 @@ const TestEnv = struct {
         return .{ .content = Content{ .structure = .{ .record = record } }, .record = record };
     }
 
-    fn mkRecordOpen(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.types.freshFromContent(.{ .flex = Flex.init() });
-        return self.mkRecord(fields, ext_var);
-    }
-
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
         const ext_var = try self.types.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
@@ -528,10 +501,6 @@ const TestEnv = struct {
 
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
 
-    fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.types.appendVars(args);
-    }
-
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.idents.insert(self.gpa, Ident.for_text(name));
         return Tag{ .name = ident_idx, .args = try self.types.appendVars(args) };
@@ -541,11 +510,6 @@ const TestEnv = struct {
         const tags_range = try self.types.appendTags(tags);
         const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
         return .{ .content = Content{ .structure = .{ .tag_union = tag_union } }, .tag_union = tag_union };
-    }
-
-    fn mkTagUnionOpen(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.types.freshFromContent(.{ .flex = Flex.init() });
-        return self.mkTagUnion(tags, ext_var);
     }
 
     fn mkTagUnionClosed(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {

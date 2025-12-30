@@ -5,12 +5,9 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const tracy = @import("tracy");
 
-const is_freestanding = builtin.os.tag == .freestanding;
-
 /// Stack size for the interpreter. WASM targets use a smaller stack to avoid
 /// memory pressure from repeated allocations that can't be efficiently coalesced.
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
-const trace_eval = build_options.trace_eval;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -31,13 +28,11 @@ const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
-const helpers = @import("test/helpers.zig");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
@@ -115,20 +110,6 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
 /// different element types (e.g., List(Dec) vs List(generic_num)) will be different.
 fn layoutsEqual(a: Layout, b: Layout) bool {
     return a.eql(b);
-}
-
-fn interpreterLookupModuleEnv(
-    ctx: ?*const anyopaque,
-    module_ident: base_pkg.Ident.Idx,
-) ?*const can.ModuleEnv {
-    const map_ptr = ctx orelse return null;
-    const map: *const std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv) =
-        @ptrCast(@alignCast(map_ptr));
-
-    if (map.*.get(module_ident)) |entry| {
-        return entry;
-    }
-    return null;
 }
 
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
@@ -810,8 +791,8 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| {
-                if (err == error.EarlyReturn) {
+            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| switch (err) {
+                error.EarlyReturn => {
                     const return_val = self.early_return_value orelse return error.Crash;
                     self.early_return_value = null;
                     defer return_val.decref(&self.runtime_layout_store, roc_ops);
@@ -819,12 +800,12 @@ pub const Interpreter = struct {
                         try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
                     }
                     return;
-                }
-                if (err == error.TypeMismatch) {
+                },
+                error.TypeMismatch => {
                     self.triggerCrash("Type mismatch error during evaluation - this may indicate a compile-time error that was deferred to runtime", false, roc_ops);
                     return;
-                }
-                return err;
+                },
+                else => return err,
             };
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
@@ -6058,123 +6039,6 @@ pub const Interpreter = struct {
         }
     }
 
-    const NumericKind = enum { int, dec, f32, f64 };
-
-    fn numericKindFromLayout(layout_val: Layout) ?NumericKind {
-        if (layout_val.tag != .scalar) return null;
-        return switch (layout_val.data.scalar.tag) {
-            .int => .int,
-            .frac => switch (layout_val.data.scalar.data.frac) {
-                .dec => .dec,
-                .f32 => .f32,
-                .f64 => .f64,
-            },
-            else => null,
-        };
-    }
-
-    fn unifyNumericKinds(lhs: NumericKind, rhs: NumericKind) ?NumericKind {
-        if (lhs == rhs) return lhs;
-        if (lhs == .int) return rhs;
-        if (rhs == .int) return lhs;
-        return null;
-    }
-
-    fn layoutMatchesKind(_: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
-        if (layout_val.tag != .scalar) return false;
-        return switch (kind) {
-            .int => layout_val.data.scalar.tag == .int,
-            .dec => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .dec,
-            .f32 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f32,
-            .f64 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f64,
-        };
-    }
-
-    fn invalidateRuntimeLayoutCache(self: *Interpreter, type_var: types.Var) void {
-        const slot_idx = @intFromEnum(type_var);
-        if (slot_idx < self.var_to_layout_slot.items.len) {
-            self.var_to_layout_slot.items[slot_idx] = 0;
-        }
-
-        const resolved = self.runtime_types.resolveVar(type_var);
-        const map_idx = @intFromEnum(resolved.var_);
-        if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
-            self.runtime_layout_store.layouts_by_var.entries[map_idx] = layout.Idx.none;
-        }
-    }
-
-    fn adjustNumericResultLayout(
-        self: *Interpreter,
-        result_rt_var: types.Var,
-        current_layout: Layout,
-        lhs: StackValue,
-        lhs_rt_var: types.Var,
-        rhs: StackValue,
-        rhs_rt_var: types.Var,
-    ) !Layout {
-        const lhs_kind_opt = numericKindFromLayout(lhs.layout);
-        const rhs_kind_opt = numericKindFromLayout(rhs.layout);
-        if (lhs_kind_opt == null or rhs_kind_opt == null) return current_layout;
-
-        const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
-
-        if (self.layoutMatchesKind(current_layout, desired_kind)) return current_layout;
-
-        const source = blk: {
-            if (self.layoutMatchesKind(lhs.layout, desired_kind)) break :blk lhs_rt_var;
-            if (self.layoutMatchesKind(rhs.layout, desired_kind)) break :blk rhs_rt_var;
-            return error.TypeMismatch;
-        };
-
-        const source_resolved = self.runtime_types.resolveVar(source);
-        try self.runtime_types.setVarContent(result_rt_var, source_resolved.desc.content);
-        self.invalidateRuntimeLayoutCache(result_rt_var);
-
-        const updated_layout = try self.getRuntimeLayout(result_rt_var);
-        if (!self.layoutMatchesKind(updated_layout, desired_kind)) return error.TypeMismatch;
-        return updated_layout;
-    }
-
-    fn evalDecBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        _: Layout, // Ignored - we always use Dec layout for proper alignment
-        lhs: StackValue,
-        rhs: StackValue,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const lhs_dec = try self.stackValueToDecimal(lhs);
-        const rhs_dec = try self.stackValueToDecimal(rhs);
-
-        const result_dec: RocDec = switch (op) {
-            .add => RocDec.add(lhs_dec, rhs_dec, roc_ops),
-            .sub => RocDec.sub(lhs_dec, rhs_dec, roc_ops),
-            .mul => RocDec.mul(lhs_dec, rhs_dec, roc_ops),
-            .div, .div_trunc => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec.div(lhs_dec, rhs_dec, roc_ops);
-            },
-            .rem => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec.rem(lhs_dec, rhs_dec, roc_ops);
-            },
-            else => {
-                self.triggerCrash("Decimal operation not yet implemented in interpreter", false, roc_ops);
-                return error.TypeMismatch;
-            },
-        };
-
-        // Use proper Dec layout to ensure 16-byte alignment for RocDec
-        const dec_layout = Layout.frac(.dec);
-        var out = try self.pushRaw(dec_layout, 0, lhs.rt_var);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *RocDec = @ptrCast(@alignCast(ptr));
-            dest.* = result_dec;
-        }
-        return out;
-    }
-
     /// Evaluate a binary operation on numeric values (int, f32, f64, or dec)
     /// This function dispatches to the appropriate type-specific operation.
     fn evalNumericBinop(
@@ -6334,117 +6198,12 @@ pub const Interpreter = struct {
         return out;
     }
 
-    fn evalFloatBinop(
-        self: *Interpreter,
-        comptime FloatT: type,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const lhs_float = try self.stackValueToFloat(FloatT, lhs);
-        const rhs_float = try self.stackValueToFloat(FloatT, rhs);
-
-        const result_float: FloatT = switch (op) {
-            .add => lhs_float + rhs_float,
-            .sub => lhs_float - rhs_float,
-            .mul => lhs_float * rhs_float,
-            .div => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk lhs_float / rhs_float;
-            },
-            .div_trunc => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                const quotient = lhs_float / rhs_float;
-                break :blk std.math.trunc(quotient);
-            },
-            .rem => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk @rem(lhs_float, rhs_float);
-            },
-            else => {
-                self.triggerCrash("Float operation not yet implemented in interpreter", false, roc_ops);
-                return error.TypeMismatch;
-            },
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *FloatT = @ptrCast(@alignCast(ptr));
-            dest.* = result_float;
-        }
-        return out;
-    }
-
-    fn stackValueToDecimal(_: *Interpreter, value: StackValue) !RocDec {
-        if (value.layout.tag != .scalar) return error.TypeMismatch;
-        switch (value.layout.data.scalar.tag) {
-            .frac => switch (value.layout.data.scalar.data.frac) {
-                .dec => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const dec_ptr: *const RocDec = @ptrCast(@alignCast(ptr));
-                    return dec_ptr.*;
-                },
-                else => return error.TypeMismatch,
-            },
-            .int => {
-                return RocDec{ .num = value.asI128() * RocDec.one_point_zero_i128 };
-            },
-            else => return error.TypeMismatch,
-        }
-    }
-
-    fn stackValueToFloat(_: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
-        if (value.layout.tag != .scalar) return error.TypeMismatch;
-        switch (value.layout.data.scalar.tag) {
-            .int => {
-                return @floatFromInt(value.asI128());
-            },
-            .frac => switch (value.layout.data.scalar.data.frac) {
-                .f32 => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const val_ptr: *const f32 = @ptrCast(@alignCast(ptr));
-                    if (FloatT == f32) {
-                        return val_ptr.*;
-                    }
-                    return @floatCast(val_ptr.*);
-                },
-                .f64 => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const val_ptr: *const f64 = @ptrCast(@alignCast(ptr));
-                    if (FloatT == f64) {
-                        return val_ptr.*;
-                    }
-                    return @floatCast(val_ptr.*);
-                },
-                else => return error.TypeMismatch,
-            },
-            else => return error.TypeMismatch,
-        }
-    }
-
-    fn debugAssertIsBoolLayout(layout_val: Layout) void {
-        std.debug.assert(layout_val.tag == .scalar);
-        std.debug.assert(layout_val.data.scalar.tag == .int);
-        std.debug.assert(layout_val.data.scalar.data.int == .u8);
-    }
-
     const NumericValue = union(enum) {
         int: i128,
         f32: f32,
         f64: f64,
         dec: RocDec,
     };
-
-    fn isNumericScalar(_: *Interpreter, layout_val: Layout) bool {
-        if (layout_val.tag != .scalar) return false;
-        return switch (layout_val.data.scalar.tag) {
-            .int, .frac => true,
-            else => false,
-        };
-    }
 
     fn extractNumericValue(_: *Interpreter, value: StackValue) !NumericValue {
         if (value.layout.tag != .scalar) return error.NotNumeric;
@@ -6759,44 +6518,6 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn structuralEqualList(
-        self: *Interpreter,
-        lhs: StackValue,
-        rhs: StackValue,
-        elem_var: types.Var,
-        roc_ops: *RocOps,
-    ) StructuralEqError!bool {
-        const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
-        const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
-        if (!lhs_is_list or !rhs_is_list) return error.TypeMismatch;
-        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-
-        const lhs_header = @as(*const RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
-        const rhs_header = @as(*const RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
-        if (lhs_header.len() != rhs_header.len()) return false;
-
-        const elem_layout = try self.getRuntimeLayout(elem_var);
-        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-        if (elem_size == 0 or lhs_header.len() == 0) {
-            return true;
-        }
-
-        var lhs_acc = try lhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
-        var rhs_acc = try rhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
-
-        var index: usize = 0;
-        while (index < lhs_header.len()) : (index += 1) {
-            const lhs_elem = try lhs_acc.getElement(index, elem_var);
-            const rhs_elem = try rhs_acc.getElement(index, elem_var);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
-            if (!elems_equal) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     fn structuralEqualTag(
         self: *Interpreter,
         lhs: StackValue,
@@ -6908,12 +6629,10 @@ pub const Interpreter = struct {
             self.root_env.idents.is_eq,
             roc_ops,
             lhs.rt_var,
-        ) catch |err| {
+        ) catch |err| switch (err) {
             // If method lookup fails, we can't compare this type
-            if (err == error.MethodLookupFailed) {
-                return error.NotImplemented;
-            }
-            return err;
+            error.MethodLookupFailed => return error.NotImplemented,
+            else => return err,
         };
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
@@ -8014,15 +7733,20 @@ pub const Interpreter = struct {
                     break :blk vars[1];
                 };
 
-                // Get element layout from the actual list layout, not from the type system.
-                // The list's runtime layout may differ from the type system's expectation
-                // due to numeric literal defaulting.
-                const elem_layout = if (list_layout.tag == .list)
+                // Get element layout from the actual list layout for memory access.
+                // The list's runtime layout may differ from the type system's expectation.
+                const physical_elem_layout = if (list_layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_layout.data.list)
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
-                var accessor = try value.asList(&self.runtime_layout_store, elem_layout, roc_ops);
+                // Get type-based layout for element extraction.
+                // This is important for recursive opaque types where the physical layout is 'tuple'
+                // but we need 'tag_union' layout for proper pattern matching.
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch physical_elem_layout;
+
+                // Use physical layout for memory access (size/stride)
+                var accessor = try value.asList(&self.runtime_layout_store, physical_elem_layout, roc_ops);
                 const total_len = accessor.len();
                 const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
 
@@ -8034,7 +7758,13 @@ pub const Interpreter = struct {
 
                     var idx: usize = 0;
                     while (idx < prefix_len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary.
+                        // This handles recursive opaque types where the physical layout is 'tuple'
+                        // but we need 'tag_union' for proper pattern matching.
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8047,7 +7777,11 @@ pub const Interpreter = struct {
                     while (suffix_idx < suffix_len) : (suffix_idx += 1) {
                         const suffix_pattern_idx = non_rest_patterns[prefix_len + suffix_idx];
                         const element_idx = total_len - suffix_len + suffix_idx;
-                        const elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8058,7 +7792,7 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
+                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
                         if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
@@ -8072,7 +7806,11 @@ pub const Interpreter = struct {
                     if (total_len != non_rest_patterns.len) return false;
                     var idx: usize = 0;
                     while (idx < non_rest_patterns.len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -9090,7 +8828,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9152,7 +8889,6 @@ pub const Interpreter = struct {
             },
             .flex => {},
             .err => {},
-            .recursion_var => {},
         }
     }
 
@@ -9222,8 +8958,25 @@ pub const Interpreter = struct {
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
+            const flex = ct_resolved.desc.content.flex;
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+
+            // Check if we've already mapped this flex var (cycle detection)
+            if (self.flex_type_context.get(flex_key)) |_| {
+                return; // Already processed, avoid infinite recursion
+            }
+
             try self.putFlexTypeContext(flex_key, rt_var);
+
+            // Also propagate through constraints if mapping to a nominal type.
+            // For example, if flex `a` has constraint `a.to_utf8 : a -> List(item)` and we map
+            // `a -> Str`, we should look up `Str.to_utf8 : Str -> List(U8)` and propagate
+            // `item -> U8` so numeric literals inside lambda bodies get the correct type.
+            if (flex.constraints.len() > 0 and rt_resolved.desc.content == .structure and
+                rt_resolved.desc.content.structure == .nominal_type)
+            {
+                try self.propagateConstraintMappings(module, flex.constraints, rt_resolved.desc.content.structure.nominal_type);
+            }
             return;
         }
 
@@ -9304,6 +9057,64 @@ pub const Interpreter = struct {
         if (ct_resolved.desc.content == .flex or ct_resolved.desc.content == .rigid) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
             try self.putFlexTypeContext(flex_key, rt_var);
+        }
+    }
+
+    /// Propagate type mappings through static dispatch constraints.
+    /// When a flex var with constraints is mapped to a concrete nominal type, we need to
+    /// resolve each constraint against the nominal type's actual methods and propagate
+    /// the return type mappings. This ensures that type variables inside lambda bodies
+    /// (like `item` in `List(item)`) get correctly mapped to their concrete types.
+    fn propagateConstraintMappings(
+        self: *Interpreter,
+        module: *can.ModuleEnv,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+        nominal_type: types.NominalType,
+    ) Error!void {
+        // Get the origin module for this nominal type
+        const origin_module = nominal_type.origin_module;
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse return;
+
+        // Get the nominal type's ident for method lookup
+        const nominal_ident = nominal_type.ident.ident_idx;
+
+        // Process each constraint
+        const ct_constraints = module.types.sliceStaticDispatchConstraints(constraints);
+        for (ct_constraints) |constraint| {
+            // Skip from_numeral constraints - they don't have methods to look up
+            if (constraint.origin == .from_numeral) continue;
+
+            // Look up the real method in the origin module
+            // constraint.fn_name is in module's ident space, nominal_ident is in runtime space
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                module,
+                constraint.fn_name,
+            ) orelse continue;
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse continue;
+            const def_idx: can.CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
+            const def_var = can.ModuleEnv.varFrom(def_idx);
+
+            // Get the real method's type
+            const real_resolved = origin_env.types.resolveVar(def_var);
+            const real_func = real_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Get the constraint's function type
+            const constraint_resolved = module.types.resolveVar(constraint.fn_var);
+            const constraint_func = constraint_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Propagate return type mapping: constraint ret -> real method ret
+            // For example: List(item) -> List(U8) propagates item -> U8
+            const ct_ret = constraint_func.ret;
+            const real_ret = real_func.ret;
+
+            // Translate the real method's return type to runtime
+            const rt_ret = self.translateTypeVar(@constCast(origin_env), real_ret) catch continue;
+
+            // Propagate mappings from constraint return type to real return type
+            try self.propagateFlexMappings(module, ct_ret, rt_ret);
         }
     }
 
@@ -9614,20 +9425,6 @@ pub const Interpreter = struct {
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
                     break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
-                },
-                .recursion_var => |rec_var| {
-                    // Translate the structure variable that the recursion var points to
-                    const rt_structure = try self.translateTypeVar(module, rec_var.structure);
-                    // Translate the recursion var's name (if present) from source module's ident store
-                    const rt_name: ?base_pkg.Ident.Idx = if (rec_var.name) |name| blk_name: {
-                        const source_name_str = module.getIdent(name);
-                        break :blk_name try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_name_str));
-                    } else null;
-                    const content: types.Content = .{ .recursion_var = .{
-                        .structure = rt_structure,
-                        .name = rt_name,
-                    } };
-                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -10058,11 +9855,6 @@ pub const Interpreter = struct {
         const entry = PolyEntry{ .return_var = substituted_ret, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(module_id, func_id, entry);
         return entry;
-    }
-
-    /// Initial a TypeWriter from an interpreter. Useful when debugging
-    fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
-        return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 
     // Stack-Safe Interpreter Infrastructure
@@ -10809,10 +10601,13 @@ pub const Interpreter = struct {
                 },
                 .apply_continuation => |cont| {
                     const should_continue = self.applyContinuation(&work_stack, &value_stack, cont, roc_ops) catch |err| {
-                        if (err == error.TypeMismatch) {
-                            var buf: [128]u8 = undefined;
-                            const msg = std.fmt.bufPrint(&buf, "Internal error: TypeMismatch in {s} continuation", .{@tagName(cont)}) catch "Internal error: TypeMismatch in continuation";
-                            self.triggerCrash(msg, false, roc_ops);
+                        switch (err) {
+                            error.TypeMismatch => {
+                                var buf: [128]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Internal error: TypeMismatch in {s} continuation", .{@tagName(cont)}) catch "Internal error: TypeMismatch in continuation";
+                                self.triggerCrash(msg, false, roc_ops);
+                            },
+                            else => {},
                         }
                         return err;
                     };
@@ -11274,8 +11069,8 @@ pub const Interpreter = struct {
                     tvd.method_name,
                     roc_ops,
                     dispatch_rt_var,
-                ) catch |err| {
-                    if (err == error.MethodLookupFailed) {
+                ) catch |err| switch (err) {
+                    error.MethodLookupFailed => {
                         const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
@@ -11289,8 +11084,8 @@ pub const Interpreter = struct {
                         };
                         self.triggerCrash(crash_msg, true, roc_ops);
                         return error.Crash;
-                    }
-                    return err;
+                    },
+                    else => return err,
                 };
 
                 if (method_func.layout.tag != .closure) {
@@ -12434,12 +12229,7 @@ pub const Interpreter = struct {
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
 
                 // Prepare polymorphic call entry for unification
-                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch |err| blk: {
-                    if (err == error.TypeMismatch) {
-                        break :blk null;
-                    }
-                    break :blk null;
-                };
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch null;
 
                 // Unify call return type with function's return type
                 // Use the function's return var (from instantiated function) instead of
@@ -15263,10 +15053,9 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // No branch matched
+                // No branch matched - this should be caught by compile-time exhaustiveness checking
                 scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                self.triggerCrash("non-exhaustive match", false, roc_ops);
-                return error.Crash;
+                unreachable;
             },
             .match_guard => |mg| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
@@ -15295,11 +15084,10 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
 
                     if (mg.remaining_branches.len == 0) {
-                        // No more branches
+                        // No more branches - this should be caught by compile-time exhaustiveness checking
                         const scrutinee = value_stack.pop() orelse return error.Crash;
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                        self.triggerCrash("non-exhaustive match", false, roc_ops);
-                        return error.Crash;
+                        unreachable;
                     }
 
                     // Continue with remaining branches
@@ -16151,12 +15939,12 @@ pub const Interpreter = struct {
                         .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Anonymous structural types have implicit is_eq
                             if (ba.method_ident == self.root_env.idents.is_eq) {
-                                var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
-                                    if (err == error.NotImplemented) {
+                                var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
+                                    error.NotImplemented => {
                                         self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                         return error.Crash;
-                                    }
-                                    return err;
+                                    },
+                                    else => return err,
                                 };
                                 // For != operator, negate the result
                                 if (ba.negate_result) result = !result;
@@ -16213,12 +16001,12 @@ pub const Interpreter = struct {
                             }
 
                             // Structural equality using effective_receiver_rt_var for proper type tracking
-                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
-                                if (err == error.NotImplemented) {
+                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
+                                error.NotImplemented => {
                                     self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                     return error.Crash;
-                                }
-                                return err;
+                                },
+                                else => return err,
                             };
                             // For != operator, negate the result
                             if (ba.negate_result) result = !result;
@@ -16704,11 +16492,13 @@ pub const Interpreter = struct {
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    if (err == error.NotImplemented) {
-                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                        return error.Crash;
+                                    switch (err) {
+                                        error.NotImplemented => {
+                                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                            return error.Crash;
+                                        },
+                                        else => return err,
                                     }
-                                    return err;
                                 };
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
                                 const result_val = try self.makeBoolValue(result);
@@ -16730,11 +16520,13 @@ pub const Interpreter = struct {
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    if (err == error.NotImplemented) {
-                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                        return error.Crash;
+                                    switch (err) {
+                                        error.NotImplemented => {
+                                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                            return error.Crash;
+                                        },
+                                        else => return err,
                                     }
-                                    return err;
                                 };
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
                                 const result_val = try self.makeBoolValue(result);
@@ -16775,11 +16567,13 @@ pub const Interpreter = struct {
                             const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                             const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                if (err == error.NotImplemented) {
-                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                    return error.Crash;
+                                switch (err) {
+                                    error.NotImplemented => {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    },
+                                    else => return err,
                                 }
-                                return err;
                             };
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                             const result_val = try self.makeBoolValue(result);
@@ -16872,22 +16666,24 @@ pub const Interpreter = struct {
                     effective_receiver_rt_var,
                 ) catch |err| {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (err == error.MethodLookupFailed) {
-                        const layout_env = self.runtime_layout_store.env;
-                        const type_name = import_mapping_mod.getDisplayName(
-                            self.import_mapping,
-                            layout_env.common.getIdentStore(),
-                            nominal_info.?.ident,
-                        );
-                        const method_name = self.env.getIdent(da.field_name);
-                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
-                            self.triggerCrash("Method not found", false, roc_ops);
+                    switch (err) {
+                        error.MethodLookupFailed => {
+                            const layout_env = self.runtime_layout_store.env;
+                            const type_name = import_mapping_mod.getDisplayName(
+                                self.import_mapping,
+                                layout_env.common.getIdentStore(),
+                                nominal_info.?.ident,
+                            );
+                            const method_name = self.env.getIdent(da.field_name);
+                            const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                                self.triggerCrash("Method not found", false, roc_ops);
+                                return error.Crash;
+                            };
+                            self.triggerCrash(crash_msg, true, roc_ops);
                             return error.Crash;
-                        };
-                        self.triggerCrash(crash_msg, true, roc_ops);
-                        return error.Crash;
+                        },
+                        else => return err,
                     }
-                    return err;
                 };
 
                 if (method_func.layout.tag != .closure) {
@@ -17553,11 +17349,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout = if (list_value.layout.tag == .list)
+                var elem_layout = if (list_value.layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_value.layout.data.list)
                 else
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
@@ -17583,6 +17378,41 @@ pub const Interpreter = struct {
                     // Fall back to the pattern's translated type
                     break :blk fl_in.patt_rt_var;
                 };
+
+                // For recursive opaque types, the list's physical layout might have element layout
+                // as 'tuple' but the actual data is stored with 'tag_union' layout. We need to
+                // compute the type-based layout and use the larger size for correct iteration.
+                // Use elem_rt_var (which was already resolved from the list's type) rather than
+                // fl_in.patt_rt_var (which might be a flex variable that causes infinite loops).
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch elem_layout;
+
+                // For 'box' layouts (recursive types), unwrap to get the actual backing layout
+                const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
+                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
+                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
+                        // Need to resolve the nominal type to get its backing layout
+                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
+                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                            const nom = resolved.desc.content.structure.nominal_type;
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
+                            break :blk backing_layout;
+                        }
+                    }
+                    break :blk inner;
+                } else type_based_elem_layout;
+
+                // Use the larger of the two layouts for element size to handle cases where
+                // the physical layout doesn't match the type-based layout
+                const stored_elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const type_based_size = self.runtime_layout_store.layoutSize(effective_elem_layout);
+                const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
+
+                // Override elem_layout if physical is tuple but type-based is tag_union
+                // This ensures proper discriminant extraction during pattern matching
+                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                    elem_layout = effective_elem_layout;
+                }
 
                 // Create the proper for_iterate with list info filled in
                 var fl = fl_in;

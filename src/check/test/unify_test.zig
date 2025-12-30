@@ -9,7 +9,6 @@ const problem_mod = @import("../problem.zig");
 const occurs = @import("../occurs.zig");
 const snapshot_mod = @import("../snapshot.zig");
 
-const Region = base.Region;
 const Ident = base.Ident;
 
 const ModuleEnv = can.ModuleEnv;
@@ -17,42 +16,18 @@ const ModuleEnv = can.ModuleEnv;
 const Scratch = unify_mod.Scratch;
 const Result = unify_mod.Result;
 
-const Slot = types_mod.Slot;
-const ResolvedVarDesc = types_mod.ResolvedVarDesc;
-const ResolvedVarDescs = types_mod.ResolvedVarDescs;
-
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
-const Desc = types_mod.Descriptor;
-const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
-const RecursionVar = types_mod.RecursionVar;
 const Content = types_mod.Content;
-const Alias = types_mod.Alias;
-const NominalType = types_mod.NominalType;
-const FlatType = types_mod.FlatType;
-const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
-const Func = types_mod.Func;
 const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
-const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
-const TwoTags = types_mod.TwoTags;
-
-const VarSafeList = Var.SafeList;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const RecordFieldSafeList = RecordField.SafeList;
-const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
-const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
-const TagSafeList = Tag.SafeList;
-const TagSafeMultiList = Tag.SafeMultiList;
-const TwoTagsSafeList = TwoTags.SafeList;
-
-const Problem = problem_mod.Problem;
+const Desc = types_mod.Descriptor;
+const Slot = types_mod.Slot;
 
 /// A lightweight test harness used in unification and type inference tests.
 ///
@@ -212,11 +187,6 @@ const TestEnv = struct {
         return try self.module_env.types.mkFuncUnbound(args, ret);
     }
 
-    fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) std.mem.Allocator.Error!Content {
-        // For flex functions, we use unbound since we don't know the effectfulness yet
-        return try self.module_env.types.mkFuncUnbound(args, ret);
-    }
-
     // helpers - structure - records //
 
     fn mkRecordField(self: *Self, name: []const u8, var_: Var) std.mem.Allocator.Error!RecordField {
@@ -249,10 +219,6 @@ const TestEnv = struct {
     // helpers - structure - tag union //
 
     const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
-
-    fn mkTagArgs(self: *Self, args: []const Var) std.mem.Allocator.Error!VarSafeList.Range {
-        return try self.module_env.types.appendVars(args);
-    }
 
     fn mkTag(self: *Self, name: []const u8, args: []const Var) std.mem.Allocator.Error!Tag {
         const ident_idx = try self.module_env.getIdentStore().insert(self.module_env.gpa, Ident.for_text(name));
@@ -1373,7 +1339,9 @@ test "unify - closed tag union extends open" {
 
 // unification - recursion //
 
-test "unify - fails on infinite type" {
+test "unify - infinite type detected by occurs check" {
+    // Unification succeeds but creates an infinite type.
+    // The occurs check (run after definition solving, like Rust does) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
@@ -1390,34 +1358,23 @@ test "unify - fails on infinite type" {
     const b_tuple = types_mod.Tuple{ .elems = b_elems_range };
     try env.module_env.types.setRootVarContent(b, Content{ .structure = .{ .tuple = b_tuple } });
 
+    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(a, b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.infinite_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.infinite_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    // But the occurs check (run after definition solving) detects the infinite type
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, a);
+    try std.testing.expectEqual(.infinite, occurs_result);
 }
 
-test "unify - fails on anonymous recursion" {
+test "unify - anonymous recursion detected by occurs check" {
+    // Unification succeeds but creates an anonymous recursive type.
+    // The occurs check (run after definition solving, like Rust does) detects it.
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    // Create a tag union that recursively contains itself (anonymous recursion)
-    // This is like: a = [A a] unifying with b = [A b]
+    // Create self-referential tag unions: a = [A a], b = [A b]
     const tag_var_a = try env.module_env.types.fresh();
     const tag_a = try env.mkTag("A", &[_]Var{tag_var_a});
     const tag_union_a = try env.mkTagUnionClosed(&[_]Tag{tag_a});
@@ -1428,25 +1385,13 @@ test "unify - fails on anonymous recursion" {
     const tag_union_b = try env.mkTagUnionClosed(&[_]Tag{tag_b});
     try env.module_env.types.setRootVarContent(tag_var_b, tag_union_b.content);
 
+    // Unification succeeds (doesn't fail during unification)
     const result = try env.unify(tag_var_a, tag_var_b);
+    try std.testing.expectEqual(.ok, result);
 
-    switch (result) {
-        .ok => try std.testing.expect(false),
-        .problem => |problem_idx| {
-            const problem = env.problems.get(problem_idx);
-            try std.testing.expectEqual(.anonymous_recursion, @as(Problem.Tag, problem));
-
-            // Verify that a snapshot was created for the recursion error
-            const snapshot_idx = problem.anonymous_recursion.snapshot;
-            const snapshot_content = env.snapshots.getContent(snapshot_idx);
-            // The snapshot should be some valid content (not just err)
-            try std.testing.expect(snapshot_content != .err);
-
-            // Verify a formatted string was created
-            const formatted = env.snapshots.getFormattedString(snapshot_idx);
-            try std.testing.expect(formatted != null);
-        },
-    }
+    // But the occurs check (run after definition solving) detects the anonymous recursion
+    const occurs_result = try occurs.occurs(&env.module_env.types, &env.occurs_scratch, tag_var_a);
+    try std.testing.expectEqual(.recursive_anonymous, occurs_result);
 }
 
 test "unify - succeeds on nominal, tag union recursion" {
@@ -1696,470 +1641,4 @@ test "unify - flex vs nominal type captures constraint" {
         env.module_env.types.resolveVar(deferred.var_).var_,
     );
     try std.testing.expectEqual(constraints, deferred.constraints);
-}
-
-// RecursionVar tests
-
-test "recursion_var - can be created and points to structure" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a structure variable (e.g., a Str type)
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    // Create a RecursionVar pointing to the structure
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // Verify the recursion var was created correctly
-    const resolved = env.module_env.types.resolveVar(rec_var);
-    try std.testing.expect(resolved.desc.content == .recursion_var);
-
-    const rec_var_content = resolved.desc.content.recursion_var;
-    try std.testing.expectEqual(structure_var, rec_var_content.structure);
-}
-
-test "recursion_var - unifies with its structure" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a structure variable
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    // Create a RecursionVar pointing to the structure
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // Unify the recursion var with its structure - this should succeed
-    // because RecursionVar represents equirecursive types
-    const result = try env.unify(rec_var, structure_var);
-    try std.testing.expectEqual(.ok, result);
-}
-
-test "recursion_var - does not cause infinite loop during resolution" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a circular structure: rec_var -> structure_var -> rec_var
-    const structure_var = try env.module_env.types.fresh();
-
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // Make structure_var point back to rec_var to create a cycle
-    // This tests that resolveVar and other operations handle cycles properly
-    _ = try env.unify(structure_var, rec_var);
-
-    // If we get here without hanging, the test passed
-    // Just verify the vars are connected
-    const resolved_rec = env.module_env.types.resolveVar(rec_var);
-    const resolved_structure = env.module_env.types.resolveVar(structure_var);
-
-    // Both should resolve to the same root var
-    try std.testing.expectEqual(resolved_rec.var_, resolved_structure.var_);
-}
-
-// Equirecursive unification tests
-
-test "recursion_var - unifies with alias" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create an alias MyStr = Str
-    const str_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const alias_content = try env.mkAlias("MyStr", str_var, &[_]Var{});
-    const alias_var = try env.module_env.types.freshFromContent(alias_content);
-
-    // Create a RecursionVar pointing to str
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = str_var,
-            .name = null,
-        },
-    });
-
-    // RecursionVar should unify with alias by going through to the backing var
-    const result = try env.unify(rec_var, alias_var);
-    try std.testing.expectEqual(.ok, result);
-}
-
-test "recursion_var - cannot unify with rigid" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a rigid var
-    const rigid_content = try env.mkRigidVar("a");
-    const rigid_var = try env.module_env.types.freshFromContent(rigid_content);
-
-    // Create a RecursionVar
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // RecursionVar cannot unify with rigid
-    const result = try env.unify(rec_var, rigid_var);
-    try std.testing.expectEqual(false, result.isOk());
-}
-
-test "recursion_var - two recursion vars with same structure unify" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a shared structure
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    // Create two RecursionVars both pointing to the same structure
-    const rec_var_1 = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    const rec_var_2 = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // They should unify successfully
-    const result = try env.unify(rec_var_1, rec_var_2);
-    try std.testing.expectEqual(.ok, result);
-}
-
-test "recursion_var - equirecursive unification with nested structure" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a list structure: List(a) where a is flexible
-    const elem_var = try env.module_env.types.fresh();
-    const list_content = try env.mkList(elem_var);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
-
-    // Create a RecursionVar that points to the list
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = list_var,
-            .name = null,
-        },
-    });
-
-    // Create another list with the same structure
-    const elem_var_2 = try env.module_env.types.fresh();
-    const list_content_2 = try env.mkList(elem_var_2);
-    const list_var_2 = try env.module_env.types.freshFromContent(list_content_2);
-
-    // RecursionVar should unify with the list
-    const result = try env.unify(rec_var, list_var_2);
-    try std.testing.expectEqual(.ok, result);
-
-    // The element vars should also have been unified
-    const resolved_elem_1 = env.module_env.types.resolveVar(elem_var);
-    const resolved_elem_2 = env.module_env.types.resolveVar(elem_var_2);
-    try std.testing.expectEqual(resolved_elem_1.var_, resolved_elem_2.var_);
-}
-
-test "recursion_var - unifies with flex preserving constraints" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a flex var with static dispatch constraints
-    const fn_var = try env.module_env.types.freshFromContent(Content{
-        .structure = .{ .fn_pure = .{
-            .args = VarSafeList.Range.empty(),
-            .ret = try env.module_env.types.fresh(),
-            .needs_instantiation = false,
-        } },
-    });
-
-    const constraint = types_mod.StaticDispatchConstraint{
-        .fn_name = try env.module_env.getIdentStore().insert(env.module_env.gpa, Ident.for_text("to_str")),
-        .fn_var = fn_var,
-        .origin = .method_call,
-    };
-
-    const constraints_range = try env.module_env.types.appendStaticDispatchConstraints(&[_]types_mod.StaticDispatchConstraint{constraint});
-    const flex_with_constraints = try env.module_env.types.freshFromContent(Content{
-        .flex = Flex.init().withConstraints(constraints_range),
-    });
-
-    // Create a RecursionVar
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // Unify - should defer the constraints
-    const result = try env.unify(rec_var, flex_with_constraints);
-    try std.testing.expectEqual(.ok, result);
-
-    // Should have deferred the constraints
-    try std.testing.expectEqual(@as(usize, 1), env.scratch.deferred_constraints.len());
-}
-
-// TypeWriter tests for RecursionVar
-
-test "type_writer - recursion_var displays structure" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a structure variable (empty record)
-    const structure_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    // Create a RecursionVar pointing to it
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = structure_var,
-            .name = null,
-        },
-    });
-
-    // Write the recursion var to a string
-    const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
-    defer writer.deinit();
-
-    const result = try writer.writeGet(rec_var, .wrap);
-
-    // Should display as "{}" (the structure it points to)
-    try std.testing.expectEqualStrings("{}", result);
-}
-
-test "type_writer - recursion_var with cycle displays correctly" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create a self-referential structure: rec_var -> list -> rec_var
-    const rec_var_placeholder = try env.module_env.types.fresh();
-
-    // Create a list that points to the placeholder
-    const list_content = try env.mkList(rec_var_placeholder);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
-
-    // Create a RecursionVar that points to the list
-    const rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = list_var,
-            .name = null,
-        },
-    });
-
-    // Unify the placeholder with the rec_var to create the cycle
-    _ = try env.unify(rec_var_placeholder, rec_var);
-
-    // Write the recursion var
-    const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
-    defer writer.deinit();
-
-    const result = try writer.writeGet(rec_var, .wrap);
-
-    // Should display as "List(...)" - the cycle is detected and shown as "..."
-    try std.testing.expectEqualStrings("List(...)", result);
-}
-
-test "type_writer - nested recursion_var displays correctly" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Create nested structure: RecursionVar -> List -> RecursionVar -> empty_record
-    const empty_record_var = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    const inner_rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = empty_record_var,
-            .name = null,
-        },
-    });
-
-    const list_content = try env.mkList(inner_rec_var);
-    const list_var = try env.module_env.types.freshFromContent(list_content);
-
-    const outer_rec_var = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = list_var,
-            .name = null,
-        },
-    });
-
-    // Write the outer recursion var
-    const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
-    defer writer.deinit();
-
-    const result = try writer.writeGet(outer_rec_var, .wrap);
-
-    // Should display as "List({})" - following through the RecursionVars
-    try std.testing.expectEqualStrings("List({})", result);
-}
-
-// Integration test for recursive constraints (motivating example)
-
-test "recursion_var - integration: deep recursion with RecursionVar prevents infinite loops" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Simulate the motivating example problem: recursive constraint chains
-    // Without RecursionVar, this would infinite loop during unification
-    // With RecursionVar, it terminates successfully
-
-    // Create a deep chain of RecursionVars pointing to each other
-    // var1 -> rec_var1 -> var2 -> rec_var2 -> var3 -> rec_var3 -> var1 (cycle!)
-
-    const var1 = try env.module_env.types.fresh();
-    const var2 = try env.module_env.types.fresh();
-    const var3 = try env.module_env.types.fresh();
-
-    // Create rec_var3 pointing to var1 (will create the cycle)
-    const rec_var3 = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = var1,
-            .name = null,
-        },
-    });
-
-    // Create rec_var2 pointing to var3
-    const rec_var2 = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = var3,
-            .name = null,
-        },
-    });
-
-    // Create rec_var1 pointing to var2
-    const rec_var1 = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = var2,
-            .name = null,
-        },
-    });
-
-    // Now unify to create the chain
-    _ = try env.unify(var1, rec_var1); // var1 -> rec_var1 -> var2
-    _ = try env.unify(var2, rec_var2); // var2 -> rec_var2 -> var3
-    const result = try env.unify(var3, rec_var3); // var3 -> rec_var3 -> var1 (CYCLE!)
-
-    // **KEY TEST**: This should succeed without infinite loop!
-    // Before RecursionVar, this would hang indefinitely
-    try std.testing.expectEqual(.ok, result);
-
-    // Verify the unification created connections between the vars
-    // The exact vars may differ due to redirects, but they should all be connected
-    const resolved_var1 = env.module_env.types.resolveVar(var1);
-    const resolved_var2 = env.module_env.types.resolveVar(var2);
-    const resolved_var3 = env.module_env.types.resolveVar(var3);
-
-    // At least one should be a RecursionVar, indicating the cycle was detected
-    const has_recursion_var = resolved_var1.desc.content == .recursion_var or
-        resolved_var2.desc.content == .recursion_var or
-        resolved_var3.desc.content == .recursion_var;
-    try std.testing.expect(has_recursion_var);
-
-    // The type should display with cycle detection
-    const TypeWriter = types_mod.TypeWriter;
-    var writer = try TypeWriter.initFromParts(gpa, &env.module_env.types, env.module_env.getIdentStore(), null);
-    defer writer.deinit();
-
-    const display = try writer.writeGet(var1, .wrap);
-
-    // Should display "..." indicating cycle detection
-    try std.testing.expect(std.mem.indexOf(u8, display, "...") != null);
-}
-
-test "recursion_var - integration: multiple recursive constraints unify correctly" {
-    const gpa = std.testing.allocator;
-
-    var env = try TestEnv.init(gpa);
-    defer env.deinit();
-
-    // Test that two different recursive constraint chains can unify
-    // Chain A: a1 -> rec_var_a -> a2 -> a1 (cycle)
-    // Chain B: b1 -> rec_var_b -> b2 -> b1 (cycle)
-    // They should unify if their base structures match
-
-    // Create chain A
-    const a1 = try env.module_env.types.fresh();
-    const a2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    const rec_var_a = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = a2,
-            .name = null,
-        },
-    });
-
-    _ = try env.unify(a1, rec_var_a);
-
-    // Create chain B with same base structure
-    const b1 = try env.module_env.types.fresh();
-    const b2 = try env.module_env.types.freshFromContent(Content{ .structure = .empty_record });
-
-    const rec_var_b = try env.module_env.types.freshFromContent(Content{
-        .recursion_var = .{
-            .structure = b2,
-            .name = null,
-        },
-    });
-
-    _ = try env.unify(b1, rec_var_b);
-
-    // Unify chain A with chain B - should succeed because both point to Str
-    const result = try env.unify(a1, b1);
-    try std.testing.expectEqual(.ok, result);
-
-    // Verify they unified - both should ultimately point to the same content
-    // Note: They may not be the exact same var due to redirects, but should be equivalent
-    const resolved_a1 = env.module_env.types.resolveVar(a1);
-    const resolved_b1 = env.module_env.types.resolveVar(b1);
-
-    // Check that both resolve to the same structure content
-    try std.testing.expect(resolved_a1.desc.content == .recursion_var or resolved_a1.desc.content == .structure);
-    try std.testing.expect(resolved_b1.desc.content == .recursion_var or resolved_b1.desc.content == .structure);
-
-    // The key test: no infinite loop occurred during unification
-    // If we got here, RecursionVar successfully prevented the infinite loop
 }

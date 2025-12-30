@@ -26,7 +26,6 @@ const increfDataPtrC = utils.increfDataPtrC;
 
 /// Pointer to the bytes of a list element or similar data
 pub const Opaque = ?[*]u8;
-const EqFn = *const fn (Opaque, Opaque) callconv(.c) bool;
 const CompareFn = *const fn (Opaque, Opaque, Opaque) callconv(.c) u8;
 const CopyFn = *const fn (Opaque, Opaque) callconv(.c) void;
 /// Function copying data between 2 Opaques with a slot for the element's width
@@ -35,7 +34,6 @@ pub const CopyFallbackFn = *const fn (Opaque, Opaque, usize) callconv(.c) void;
 const Inc = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
 const IncN = *const fn (?*anyopaque, ?[*]u8, usize) callconv(.c) void;
 const Dec = *const fn (?*anyopaque, ?[*]u8) callconv(.c) void;
-const HasTagId = *const fn (u16, ?[*]u8) callconv(.c) extern struct { matched: bool, data: ?[*]u8 };
 
 /// A bit mask were the only set bit is the bit indicating if the List is a seamless slice.
 pub const SEAMLESS_SLICE_BIT: usize =

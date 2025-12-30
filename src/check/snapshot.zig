@@ -4,22 +4,28 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
-const can = @import("can");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
 const TypesStore = types.Store;
 const Ident = base.Ident;
 
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
+/// Index for extra strings stored in the snapshot store (e.g., formatted pattern strings)
+pub const ExtraStringIdx = enum(u32) {
+    _,
+
+    pub fn toInt(self: ExtraStringIdx) u32 {
+        return @intFromEnum(self);
+    }
+};
+
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
 const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
-const MkSafeMultiList = collections.SafeMultiList;
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {
@@ -27,16 +33,9 @@ pub const SnapshotContent = union(enum) {
     rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
-    recursion_var: SnapshotRecursionVar,
     /// A recursive type reference. Stores the name of the type variable if available.
     recursive: ?Ident.Idx,
     err,
-};
-
-/// A snapshotted recursion variable that points to its recursive structure.
-pub const SnapshotRecursionVar = struct {
-    structure: SnapshotContentIdx,
-    name: ?base.Ident.Idx,
 };
 
 /// A snapshotted flex (unbound) type variable with optional name and constraints.
@@ -186,6 +185,9 @@ pub const Store = struct {
     /// Formatted type strings, indexed by SnapshotContentIdx
     formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
 
+    /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
+    extra_strings: std.ArrayListUnmanaged([]const u8),
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -200,6 +202,7 @@ pub const Store = struct {
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
             .formatted_strings = .{},
+            .extra_strings = .{},
         };
     }
 
@@ -210,6 +213,12 @@ pub const Store = struct {
             self.gpa.free(str.*);
         }
         self.formatted_strings.deinit(self.gpa);
+
+        // Free all extra strings
+        for (self.extra_strings.items) |str| {
+            self.gpa.free(str);
+        }
+        self.extra_strings.deinit(self.gpa);
 
         // Free all formatted tag strings
         const tags_len = self.tags.len();
@@ -236,6 +245,19 @@ pub const Store = struct {
     /// Get the pre-formatted string for a snapshot.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
         return self.formatted_strings.get(idx);
+    }
+
+    /// Store an extra string (e.g., formatted pattern) and return its index.
+    /// The string will be freed when the store is deinitialized.
+    pub fn storeExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
+        const idx: ExtraStringIdx = @enumFromInt(self.extra_strings.items.len);
+        try self.extra_strings.append(self.gpa, str);
+        return idx;
+    }
+
+    /// Get an extra string by index.
+    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
+        return self.extra_strings.items[idx.toInt()];
     }
 
     /// Deep copy a type variable for error reporting. This snapshots the type structure
@@ -265,7 +287,6 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                .recursion_var => |rec_var| rec_var.name,
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
@@ -346,11 +367,6 @@ pub const Store = struct {
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, type_writer, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, type_writer, alias) },
             .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type, root_var) },
-            .recursion_var => |rec_var| blk: {
-                // Snapshot the recursion var by snapshotting the structure it points to
-                const structure_snapshot = try self.deepCopyVarInternal(store, type_writer, rec_var.structure);
-                break :blk SnapshotContent{ .recursion_var = .{ .structure = structure_snapshot, .name = rec_var.name } };
-            },
             .err => SnapshotContent.err,
         };
 

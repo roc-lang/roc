@@ -1,11 +1,8 @@
 //! Modern cache manager that uses BLAKE3-based keys and subdirectory splitting.
 
 const std = @import("std");
-const base = @import("base");
 const fs_mod = @import("fs");
 const can = @import("can");
-const reporting = @import("reporting");
-const collections = @import("collections");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const CacheModule = @import("cache_module.zig").CacheModule;
@@ -14,7 +11,6 @@ const ModuleEnv = can.ModuleEnv;
 const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
-const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 const builtin = @import("builtin");
 
 const is_windows = builtin.target.os.tag == .windows;

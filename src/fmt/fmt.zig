@@ -1,7 +1,6 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
-const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
@@ -13,15 +12,10 @@ const builtin = @import("builtin");
 
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
-const Parser = parse.Parser;
 const AST = parse.AST;
-const Node = parse.Node;
-const NodeStore = parse.NodeStore;
 const SafeList = collections.SafeList;
-const CommonEnv = base.CommonEnv;
 
 const tokenize = parse.tokenize;
-const fatal = collections.utils.fatal;
 
 const is_windows = builtin.target.os.tag == .windows;
 
@@ -79,22 +73,24 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             if (entry.kind == .file) {
                 if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
                     success_count += 1;
-                } else |err| {
-                    if (err != error.NotRocFile) {
+                } else |err| switch (err) {
+                    error.NotRocFile => {},
+                    else => {
                         try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
                         failed_count += 1;
-                    }
+                    },
                 }
             }
         }
     } else |_| {
         if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
             success_count += 1;
-        } else |err| {
-            if (err != error.NotRocFile) {
+        } else |err| switch (err) {
+            error.NotRocFile => {},
+            else => {
                 try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
                 failed_count += 1;
-            }
+            },
         }
     }
 
@@ -736,7 +732,7 @@ const Formatter = struct {
             fmt.curr_indent = curr_indent;
         }
         if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
+            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident + 1 });
             try fmt.pushTokenText(q);
             if (multiline and try fmt.flushCommentsAfter(q)) {
                 fmt.curr_indent += 1;
@@ -1885,10 +1881,6 @@ const Formatter = struct {
         switch (clause) {
             .mod_method => |c| {
                 // Format as: a.method : Type
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -1945,10 +1937,6 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -2280,11 +2268,6 @@ const Formatter = struct {
         const first_region = fmt.ast.store.nodes.items.items(.region)[first];
         const last_region = fmt.ast.store.nodes.items.items(.region)[last];
         return first_region.spanAcross(last_region);
-    }
-
-    fn displayRegion(fmt: *Formatter, region: AST.TokenizedRegion) void {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
     }
 
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {

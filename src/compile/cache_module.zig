@@ -4,21 +4,11 @@
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
 
 const std = @import("std");
-const Can = @import("can");
-const base = @import("base");
-const fs_mod = @import("fs");
-const types = @import("types");
-const parse = @import("parse");
 const can = @import("can");
 const collections = @import("collections");
 
-const TypeStore = types.Store;
-const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const Filesystem = fs_mod.Filesystem;
-const SafeList = collections.SafeList;
-const SafeStringHashMap = collections.SafeStringHashMap;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 

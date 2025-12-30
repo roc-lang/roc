@@ -47,6 +47,8 @@ pub const Work = struct {
         backing_var: types.Var,
     };
 
+    /// A container being processed. The var_ is optional because synthetic tuples
+    /// (created for multi-arg tag union variants) don't have a meaningful var to cache.
     pub const PendingContainerItem = struct { var_: ?types.Var, container: PendingContainer };
 
     /// Tuple field for layout work - similar to RecordField but with index instead of name.

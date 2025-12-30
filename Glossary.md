@@ -1,3 +1,5 @@
+# Glossary
+
 Here you can find definitions for words that are commonly used in the **compiler** along
 with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know
 about general Roc terms. Feel free to ask for a term to be added or add one yourself!

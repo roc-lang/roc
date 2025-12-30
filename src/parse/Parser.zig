@@ -8,12 +8,10 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
-const collections = @import("collections");
 
 const AST = @import("AST.zig");
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
-const NodeList = AST.NodeList;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
 const TokenIdx = Token.Idx;
@@ -57,21 +55,6 @@ pub fn deinit(parser: *Parser) void {
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
-}
-
-const TestError = error{TestError};
-
-fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
-    const messages = [128]tokenize.Diagnostic;
-    const tokenizer = tokenize.Tokenizer.init(source, messages[0..], std.testing.allocator);
-    tokenizer.tokenize();
-    const tok_result = tokenizer.finalize_and_deinit();
-    defer tok_result.tokens.deinit();
-    const parser = try Parser.init(tok_result.tokens, std.testing.allocator);
-    defer parser.store.deinit();
-    defer parser.scratch_nodes.deinit();
-    defer parser.diagnostics.deinit();
-    try run(parser);
 }
 
 /// helper to advance the parser by one token
@@ -303,24 +286,6 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
     self.expect(end_token) catch {
         return error.ExpectedNotFound;
     };
-}
-
-/// Utility to see where a the current position is within the buffer of tokens
-fn debugToken(self: *Parser, window: usize) void {
-    const current = self.pos;
-    const start = if (window > current) 0 else current - window;
-    const end = std.math.clamp(current + window, current, self.tok_buf.tokens.len);
-    const tags = self.tok_buf.tokens.items(.tag);
-    const tok_extra = self.tok_buf.tokens.items(.extra);
-    for (start..end) |i| {
-        const tag = tags[i];
-        var extra: []u8 = "";
-        if (tag == .LowerIdent or tag == .UpperIdent) {
-            const e = tok_extra[i];
-            extra = self.tok_buf.env.getIdent(e.interned);
-        }
-        std.debug.print("{s}{d}: {s} \"{s}\"\n", .{ if (i == current) "-->" else "   ", i, @tagName(tag), extra });
-    }
 }
 
 /// Parses a module header using the following grammar:
@@ -3234,6 +3199,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     }
                     // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
                     break;
                 } else {
                     // Regular record field
@@ -3271,6 +3237,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
                     }
                     // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
+                    self.expect(.Comma) catch {};
                     break;
                 } else {
                     // Regular tag in the union
@@ -3313,9 +3280,10 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         // Don't treat comma as function argument separator if followed by:
         // - CloseCurly (end of record)
         // - DoubleDot (record extension like { field: Type, ..ext })
-        if ((looking_for_args == .not_looking_for_args) and
+        // - CloseSquare (where clause)
+        if (looking_for_args == .not_looking_for_args and
             (curr_is_arrow or
-                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot)))
+                (curr == .Comma and (next_is_not_lower_ident or not_followed_by_colon or two_away_is_arrow) and next_tok != .CloseCurly and next_tok != .DoubleDot and next_tok != .CloseSquare)))
         {
             const scratch_top = self.store.scratchTypeAnnoTop();
             try self.store.addScratchTypeAnno(an);

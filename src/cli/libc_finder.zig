@@ -8,8 +8,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const base = @import("base");
-const Allocators = base.Allocators;
 const cli_ctx = @import("CliContext.zig");
 const CliContext = cli_ctx.CliContext;
 const Io = cli_ctx.Io;

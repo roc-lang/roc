@@ -3,13 +3,6 @@
 //! This module implements constraint-based type inference.
 
 const std = @import("std");
-const builtin = @import("builtin");
-const base = @import("base");
-const tracy = @import("tracy");
-const collections = @import("collections");
-const types_mod = @import("types");
-const Can = @import("can");
-const compile = @import("compile");
 
 /// **Hindley-Milner+ Unification**
 pub const unifier = @import("unify.zig");
@@ -19,6 +12,8 @@ pub const snapshot = @import("snapshot.zig");
 pub const occurs = @import("occurs.zig");
 /// **Problem Reporting**
 pub const problem = @import("problem.zig");
+/// **Exhaustiveness Checking**
+pub const exhaustive = @import("exhaustive.zig");
 
 pub const Check = @import("Check.zig");
 
@@ -27,6 +22,7 @@ pub const ReportBuilder = problem.ReportBuilder;
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
     std.testing.refAllDecls(@import("copy_import.zig"));
+    std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
@@ -44,4 +40,9 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
     std.testing.refAllDecls(@import("test/recursive_alias_test.zig"));
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
+    std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
+    std.testing.refAllDecls(@import("test/repros_test.zig"));
+
+    // Cross-module monomorphization tests
+    std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));
 }

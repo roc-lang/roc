@@ -7,7 +7,6 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const serialization = @import("serialization");
 const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");
@@ -1760,4 +1759,17 @@ test "early return: ? in first argument of multi-arg call" {
         \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
         \\}
     , 0, .no_trace);
+}
+
+test "issue 8783: List.fold with match on tag union elements from pattern match" {
+    // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
+    // would fail with TypeMismatch in match_branches continuation.
+    try runExpectI64(
+        \\{
+        \\    elem = Element("div", [Text("hello")])
+        \\    children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\    count_child = |acc, child| match child { Text(_) => acc + 1, Element(_, _) => acc + 10 }
+        \\    List.fold(children, 0, count_child)
+        \\}
+    , 1, .no_trace);
 }
