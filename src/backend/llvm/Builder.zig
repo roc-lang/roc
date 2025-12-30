@@ -92,8 +92,12 @@ pub const Options = struct {
 
 /// Interned string handle for efficient string storage and comparison.
 pub const String = enum(u32) {
+    /// Sentinel value indicating no string.
     none = std.math.maxInt(u31),
+    /// Empty string.
     empty,
+    /// The first anonymous name index (used for counter initialization).
+    first_anon = 0,
     _,
 
     pub fn isAnon(self: String) bool {
@@ -670,9 +674,7 @@ pub const Type = enum(u32) {
         };
     }
 
-    pub fn targetLayoutType(self: Type, builder: *const Builder) Type {
-        _ = self;
-        _ = builder;
+    pub fn targetLayoutType(_: Type, _: *const Builder) Type {
         @panic("TODO: implement targetLayoutType");
     }
 
@@ -1930,7 +1932,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/AVR/AVR.h
     pub const avr = struct {
-        pub const data: AddrSpace = @enumFromInt(0);
+        pub const data: AddrSpace = .default;
         pub const program: AddrSpace = @enumFromInt(1);
         pub const program1: AddrSpace = @enumFromInt(2);
         pub const program2: AddrSpace = @enumFromInt(3);
@@ -1941,7 +1943,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/NVPTX/NVPTX.h
     pub const nvptx = struct {
-        pub const generic: AddrSpace = @enumFromInt(0);
+        pub const generic: AddrSpace = .default;
         pub const global: AddrSpace = @enumFromInt(1);
         pub const constant: AddrSpace = @enumFromInt(2);
         pub const shared: AddrSpace = @enumFromInt(3);
@@ -1951,7 +1953,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/lib/Target/AMDGPU/AMDGPU.h
     pub const amdgpu = struct {
-        pub const flat: AddrSpace = @enumFromInt(0);
+        pub const flat: AddrSpace = .default;
         pub const global: AddrSpace = @enumFromInt(1);
         pub const region: AddrSpace = @enumFromInt(2);
         pub const local: AddrSpace = @enumFromInt(3);
@@ -1983,7 +1985,7 @@ pub const AddrSpace = enum(u24) {
     };
 
     pub const spirv = struct {
-        pub const function: AddrSpace = @enumFromInt(0);
+        pub const function: AddrSpace = .default;
         pub const cross_workgroup: AddrSpace = @enumFromInt(1);
         pub const uniform_constant: AddrSpace = @enumFromInt(2);
         pub const workgroup: AddrSpace = @enumFromInt(3);
@@ -1995,7 +1997,7 @@ pub const AddrSpace = enum(u24) {
 
     // See llvm/include/llvm/CodeGen/WasmAddressSpaces.h
     pub const wasm = struct {
-        pub const default: AddrSpace = @enumFromInt(0);
+        pub const @"default": AddrSpace = .default;
         pub const variable: AddrSpace = @enumFromInt(1);
         pub const externref: AddrSpace = @enumFromInt(10);
         pub const funcref: AddrSpace = @enumFromInt(20);
@@ -2199,8 +2201,12 @@ pub const CallConv = enum(u10) {
 
 /// Interned string stored in the LLVM string table for symbol names.
 pub const StrtabString = enum(u32) {
+    /// Sentinel value indicating no string.
     none = std.math.maxInt(u31),
+    /// Empty string.
     empty,
+    /// The first anonymous name index (used for counter initialization).
+    first_anon = 0,
     _,
 
     pub fn isAnon(self: StrtabString) bool {
@@ -4441,7 +4447,10 @@ pub const Function = struct {
         };
 
         pub const Index = enum(u32) {
+            /// Sentinel value indicating no instruction.
             none = std.math.maxInt(u31),
+            /// The first valid instruction index (used for counter initialization).
+            first = 0,
             _,
 
             pub fn name(self: Instruction.Index, function: *const Function) String {
@@ -6368,7 +6377,7 @@ pub const WipFunction = struct {
         errdefer function.instructions.shrinkRetainingCapacity(0);
 
         {
-            var final_instruction_index: Instruction.Index = @enumFromInt(0);
+            var final_instruction_index: Instruction.Index = .first;
             for (0..params_len) |param_index| {
                 instructions.items[param_index] = final_instruction_index;
                 final_instruction_index = @enumFromInt(@intFromEnum(final_instruction_index) + 1);
@@ -6385,7 +6394,7 @@ pub const WipFunction = struct {
         }
 
         var wip_name: struct {
-            next_name: String = @enumFromInt(0),
+            next_name: String = .first_anon,
             next_unique_name: std.AutoHashMap(String, String),
             builder: *Builder,
 
@@ -6401,7 +6410,7 @@ pub const WipFunction = struct {
                         assert(!name.isAnon());
                         const gop = try wip_name.next_unique_name.getOrPut(name);
                         if (!gop.found_existing) {
-                            gop.value_ptr.* = @enumFromInt(0);
+                            gop.value_ptr.* = .first_anon;
                             return name;
                         }
 
@@ -6414,7 +6423,7 @@ pub const WipFunction = struct {
                             });
                             const unique_gop = try wip_name.next_unique_name.getOrPut(unique_name);
                             if (!unique_gop.found_existing) {
-                                unique_gop.value_ptr.* = @enumFromInt(0);
+                                unique_gop.value_ptr.* = .first_anon;
                                 return unique_name;
                             }
                         }
@@ -8698,7 +8707,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .string_bytes = .{},
 
         .types = .{},
-        .next_unnamed_type = @enumFromInt(0),
+        .next_unnamed_type = .first_anon,
         .next_unique_type_id = .{},
         .type_map = .{},
         .type_items = .{},
@@ -8712,7 +8721,7 @@ pub fn init(options: Options) Allocator.Error!Builder {
         .function_attributes_set = .{},
 
         .globals = .{},
-        .next_unnamed_global = @enumFromInt(0),
+        .next_unnamed_global = .first_anon,
         .next_replaced_global = .none,
         .next_unique_global_id = .{},
         .aliases = .{},
@@ -14709,7 +14718,7 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                 var adapter: FunctionAdapter = .{
                     .metadata_adapter = metadata_adapter,
                     .func = &func,
-                    .instruction_index = @enumFromInt(0),
+                    .instruction_index = .first,
                 };
 
                 // Emit function level metadata block
