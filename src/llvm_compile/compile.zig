@@ -394,9 +394,12 @@ pub fn compileAndExecute(
     }
 
     // Call the function and format the result based on the return type.
-    // On Windows, we use .win64 calling convention explicitly to match the
+    // On Windows x64, we use .x86_64_win calling convention explicitly to match the
     // win64cc we set in the generated LLVM IR. On other platforms, .c works.
-    const cc: std.builtin.CallingConvention = if (builtin.os.tag == .windows) .win64 else .c;
+    const cc: std.builtin.CallingConvention = if (builtin.os.tag == .windows and builtin.cpu.arch == .x86_64)
+        .{ .x86_64_win = .{} }
+    else
+        .c;
 
     switch (result_type) {
         .f64 => {
