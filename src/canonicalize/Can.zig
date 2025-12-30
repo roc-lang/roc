@@ -102,13 +102,13 @@ malformed_import_count: u32 = 0,
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
 loop_depth: u32 = 0,
-/// Flag to indicate we're currently processing alias type declarations (Phase 1.7)
-/// During this phase, references to other alias placeholders should be rejected
-/// as forward references are not allowed between aliases.
+/// Flag to indicate we're currently processing alias type declarations (Phase 1.7).
+/// Types are processed in topological order, so forward references work. However,
+/// for mutually recursive aliases (which form a cycle), when processing one type
+/// in the cycle, others may still be placeholders - these produce UNDECLARED TYPE.
 processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
-/// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check),
-/// while still rejecting forward references to other aliases (reported as UNDECLARED TYPE).
+/// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
 
 const Ident = base.Ident;
@@ -611,7 +611,7 @@ fn processTypeDeclFirstPass(
         try self.introduceTypeParametersFromHeader(final_header_idx);
 
         // For alias types, track the name so self-references can pass through
-        // (to be caught as RECURSIVE ALIAS in Check), while forward refs are rejected.
+        // (to be caught as RECURSIVE ALIAS in Check).
         if (type_decl.kind == .alias) {
             self.current_alias_name = qualified_name_idx;
         }
@@ -709,7 +709,7 @@ fn processTypeDeclFirstPassWithExisting(
         try self.introduceTypeParametersFromHeader(header_idx);
 
         // For alias types, track the name so self-references can pass through
-        // (to be caught as RECURSIVE ALIAS in Check), while forward refs are rejected.
+        // (to be caught as RECURSIVE ALIAS in Check).
         if (type_decl.kind == .alias) {
             self.current_alias_name = qualified_name_idx;
         }
@@ -8151,11 +8151,11 @@ fn canonicalizeTypeAnnoBasicType(
                         .base = .{ .local = .{ .decl_idx = stmt } },
                     } }, region),
                     .local_alias => |stmt| blk: {
-                        // Check if this is an alias placeholder (introduced but not yet processed)
-                        // Forward references between aliases are not allowed, but associated blocks
-                        // CAN reference alias placeholders (they'll be processed later in Phase 1.7).
-                        // Only reject if we're currently processing alias declarations (Phase 1.7).
-                        // EXCEPTION: Self-references are allowed so they can be caught as RECURSIVE ALIAS in Check.
+                        // Check if this is an alias placeholder (introduced but not yet processed).
+                        // During Phase 1.7, types are processed in topological order so forward refs work.
+                        // However, for mutually recursive aliases (cycles), one type may still be a
+                        // placeholder when another is processed - these get UNDECLARED TYPE.
+                        // EXCEPTION: Self-references pass through to be caught as RECURSIVE ALIAS in Check.
                         if (self.processing_alias_declarations) {
                             const alias_stmt = self.env.store.getStatement(stmt);
                             if (alias_stmt == .s_alias_decl and alias_stmt.s_alias_decl.anno == .placeholder) {
@@ -8166,7 +8166,7 @@ fn canonicalizeTypeAnnoBasicType(
                                     false;
 
                                 if (!is_self_reference) {
-                                    // This alias is a placeholder and not a self-reference - forward ref error
+                                    // This alias is a placeholder and not a self-reference - part of a cycle
                                     break :blk try self.env.pushMalformed(TypeAnno.Idx, CIR.Diagnostic{ .undeclared_type = .{
                                         .name = type_name_ident,
                                         .region = region,
