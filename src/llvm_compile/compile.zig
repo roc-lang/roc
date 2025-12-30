@@ -208,8 +208,23 @@ pub const Error = error{
 };
 
 /// Returns true if JIT compilation is supported on this platform.
-/// LLVM ORC JIT requires dynamic loading, which is not available on
-/// statically-linked musl binaries.
+///
+/// LLVM ORC JIT requires dynamic loading (`dlopen`/`dlsym`). On statically-linked
+/// musl binaries, musl intentionally stubs out `dlopen` to always fail:
+///
+/// ```c
+/// static void *stub_dlopen(const char *file, int mode) {
+///     __dl_seterr("Dynamic loading not supported");
+///     return 0;
+/// }
+/// ```
+///
+/// This is by design - if a statically-linked binary loaded a dynamic library,
+/// that library would need its own libc (you can't share the statically-linked
+/// libc with dynamically loaded code), causing issues with global state and
+/// symbol tables.
+///
+/// See: https://www.openwall.com/lists/musl/2017/05/17/2
 pub fn isJITSupported() bool {
     return comptime !(builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf);
 }
