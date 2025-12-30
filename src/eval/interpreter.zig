@@ -7116,29 +7116,11 @@ pub const Interpreter = struct {
                         payload_value = null;
                     }
                 } else if (arg_vars.len == 1) {
-                    // Get the payload layout from the variant
-                    const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
-                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
-                    const effective_layout = blk: {
-                        // First try: if arg is a rigid with a substitution, use substituted type's layout
-                        if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
-                            }
-                        }
-                        // Second try: compute layout directly from arg_var
-                        // This handles concrete types like opaque Item returned from polymorphic functions
-                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                            break :blk computed_layout;
-                        } else |_| {}
-                        // Fallback to variant_layout
-                        break :blk variant_layout;
-                    };
-
+                    const arg_layout = try self.getRuntimeLayout(arg_var);
                     payload_value = StackValue{
-                        .layout = effective_layout,
-                        .ptr = value.ptr, // Payload is at offset 0
+                        .layout = arg_layout,
+                        .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
                     };
@@ -16761,13 +16743,24 @@ pub const Interpreter = struct {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
                     _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
 
-                    // Save and update rigid_subst
+                    // Save and update rigid_subst AND empty_scope.
+                    // Both are needed: rigid_subst for runtime type resolution in getRuntimeLayout,
+                    // and empty_scope for the layout store's TypeScope.lookup() during layout computation.
                     saved_rigid_subst = try self.rigid_subst.clone();
+
+                    // Ensure we have at least one scope level for empty_scope
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
                         // Skip identity mappings to avoid infinite loops when following substitution chains
                         if (entry.key_ptr.* == entry.value_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                        // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
+                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // No explicit @memset needed.

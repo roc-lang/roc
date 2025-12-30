@@ -1773,3 +1773,20 @@ test "issue 8783: List.fold with match on tag union elements from pattern match"
         \\}
     , 1, .no_trace);
 }
+
+test "issue 8821: List.get with records and pattern match on Try type" {
+    // Regression test for issue #8821
+    // Test List.get with a list of records, pattern matching on Try/Result,
+    // and accessing record fields from the matched value
+    try runExpectStr(
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(client) => client.name
+        \\        Err(_) => "missing"
+        \\    }
+        \\}
+    , "Alice", .no_trace);
+}
