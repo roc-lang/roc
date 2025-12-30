@@ -202,14 +202,32 @@ pub const Error = error{
     SymbolNotFound,
     ExecutionFailed,
     BitcodeParseError,
+    /// JIT is not supported on this platform (e.g., statically-linked musl binaries
+    /// don't support dynamic loading which LLVM ORC JIT requires).
+    JITNotSupported,
 };
 
-/// JIT compile LLVM bitcode and execute it, returning the formatted result
+/// Returns true if JIT compilation is supported on this platform.
+/// LLVM ORC JIT requires dynamic loading, which is not available on
+/// statically-linked musl binaries.
+pub fn isJITSupported() bool {
+    return comptime !(builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf);
+}
+
+/// JIT compile LLVM bitcode and execute it, returning the formatted result.
+/// Returns `error.JITNotSupported` on platforms where JIT is not available
+/// (e.g., statically-linked musl binaries).
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
     result_type: ResultType,
 ) Error![]const u8 {
+    // LLVM ORC JIT requires dynamic loading, which is not available on
+    // statically-linked musl binaries.
+    if (comptime !isJITSupported()) {
+        return error.JITNotSupported;
+    }
+
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
@@ -248,10 +266,11 @@ pub fn compileAndExecute(
     const builder = bindings.OrcLLJITBuilder.create();
     // Note: builder is consumed by createLLJIT
 
-    // Try to configure the JIT with a generic CPU target to avoid issues with
-    // unrecognized CPU features on various ARM64 platforms. If this fails
-    // (e.g., target not found), fall back to LLJIT's default host detection.
-    configure_target: {
+    // Configure the JIT to use a generic CPU target to avoid issues with
+    // unrecognized CPU features on various ARM64 platforms.
+    // LLVM's default host detection may return CPU names/features that
+    // the bundled LLVM version doesn't fully support.
+    {
         // Get the host target triple
         const triple = bindings.GetDefaultTargetTriple();
         defer bindings.disposeMessage(triple);
@@ -260,10 +279,9 @@ pub fn compileAndExecute(
         var target: *bindings.Target = undefined;
         var error_message: [*:0]const u8 = undefined;
         if (bindings.Target.getFromTriple(triple, &target, &error_message).toBool()) {
-            // Target lookup failed - this can happen with certain configurations.
-            // Fall back to LLJIT's default host detection.
             bindings.disposeMessage(error_message);
-            break :configure_target;
+            ts_module.dispose();
+            return error.JITCreationFailed;
         }
 
         // Create a target machine with "generic" CPU and no specific features.
@@ -294,9 +312,7 @@ pub fn compileAndExecute(
     // Create LLJIT instance
     var jit: *bindings.OrcLLJIT = undefined;
     if (bindings.createLLJIT(&jit, builder)) |err| {
-        const err_msg = bindings.getErrorMessage(err);
-        std.debug.print("LLVM JIT error: createLLJIT failed: {s}\n", .{err_msg});
-        bindings.disposeErrorMessage(err_msg);
+        bindings.consumeError(err);
         ts_module.dispose();
         return error.JITCreationFailed;
     }
@@ -309,10 +325,9 @@ pub fn compileAndExecute(
     // Get main JIT dylib
     const dylib = jit.getMainJITDylib();
 
-    // Try to add a generator so the JIT can find symbols from the current process.
-    // This is not needed for roc_eval since it doesn't call external functions,
-    // but is useful for future flexibility. It may fail on statically-linked
-    // binaries (e.g., musl) since there's no dynamic symbol table to search.
+    // Add a generator so the JIT can find symbols from the current process
+    // (not needed for roc_eval since it doesn't call external functions,
+    // but keep it for future flexibility)
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -321,12 +336,10 @@ pub fn compileAndExecute(
         null, // no filter
         null, // no filter context
     )) |err| {
-        // On statically linked binaries, this may fail - that's OK since
-        // roc_eval doesn't need external symbols from the process.
         bindings.consumeError(err);
-    } else {
-        bindings.jitDylibAddGenerator(dylib, process_syms_generator);
+        return error.JITCreationFailed;
     }
+    bindings.jitDylibAddGenerator(dylib, process_syms_generator);
 
     // Add module to JIT (takes ownership of ts_module)
     if (jit.addLLVMIRModule(dylib, ts_module)) |err| {

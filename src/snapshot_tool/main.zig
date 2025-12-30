@@ -3511,8 +3511,9 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     }
 
     // Dual-mode testing: Run full LLVM compilation pipeline and compare outputs
-    // This ensures the LLVM backend produces the same results as the interpreter
-    {
+    // This ensures the LLVM backend produces the same results as the interpreter.
+    // Skip on platforms where JIT is not supported (e.g., statically-linked musl).
+    if (llvm_compile.isJITSupported()) {
         var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
             std.debug.print("LLVM evaluator init failed: {}\n", .{err});
             success = false;
