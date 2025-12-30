@@ -12,7 +12,7 @@ TYPE DOES NOT SUPPORT EQUALITY - record_with_lambda_field.md:1:1:1:91
 : - :0:0:0:0
 # PROBLEMS
 **TYPE DOES NOT SUPPORT EQUALITY**
-This expression is doing an equality check on a type that does not support equality checks:
+This expression is doing an equality check on a type that doesn't support equality:
 **record_with_lambda_field.md:1:1:1:91:**
 ```roc
 { name: "Alice", age: "30", process: |x| x } == { name: "Bob", age: "25", process: |y| y }
