@@ -479,13 +479,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
                     const disc_ptr = base_ptr + disc_offset;
-                    // Read discriminant based on its size
                     const discriminant: usize = switch (tu_data.discriminant_size) {
                         1 => @as(*const u8, @ptrCast(disc_ptr)).*,
                         2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
                         4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
                         8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                        else => 0,
+                        else => unreachable,
                     };
                     tag_index = discriminant;
                     have_tag = true;
@@ -880,7 +879,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
                 4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
                 8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                else => 0,
+                else => unreachable,
             };
             try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
         } else {

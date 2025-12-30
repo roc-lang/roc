@@ -1871,14 +1871,13 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write discriminant at discriminant_offset (dynamically computed)
                             const disc_ptr = ptr_u8 + disc_offset;
                             const disc_value: u32 = @intCast(ok_index orelse 0);
                             switch (tu_data.discriminant_size) {
                                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
                                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
                                 4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
+                                else => unreachable,
                             }
 
                             // Write Str payload at offset 0
@@ -2095,14 +2094,14 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write outer discriminant (Err) at discriminant_offset (dynamically computed)
+                            // Write outer discriminant (Err)
                             const disc_ptr = ptr_u8 + disc_offset;
                             const disc_value: u32 = @intCast(err_index orelse 1);
                             switch (tu_data.discriminant_size) {
                                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
                                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
                                 4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
+                                else => unreachable,
                             }
 
                             // Get Err variant's payload layout (BadUtf8 - also a tag_union)
@@ -4587,7 +4586,6 @@ pub const Interpreter = struct {
                     const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                     const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                    // Write tag discriminant at discriminant_offset (dynamically computed)
                     const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
                     const disc_ptr = base_ptr + disc_offset;
                     const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
@@ -4596,7 +4594,7 @@ pub const Interpreter = struct {
                         2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                         4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                         8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        else => {},
+                        else => unreachable,
                     }
 
                     // Clear payload area (at offset 0)
@@ -5301,7 +5299,6 @@ pub const Interpreter = struct {
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-            // Write tag discriminant at discriminant_offset (dynamically computed)
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
             const disc_ptr = base_ptr + disc_offset;
             const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
@@ -5310,11 +5307,11 @@ pub const Interpreter = struct {
                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                 4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                 8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
+                else => unreachable,
             }
 
-            // Clear payload area (at offset 0)
-            const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
+            // Clear payload area
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -5911,13 +5908,12 @@ pub const Interpreter = struct {
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
             const disc_ptr = base_ptr + disc_offset;
 
-            // Write discriminant
             switch (tu_data.discriminant_size) {
                 1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                 4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
                 8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
+                else => unreachable,
             }
 
             // Clear and write payload
@@ -8574,9 +8570,12 @@ pub const Interpreter = struct {
         );
     }
 
-    /// Find the index of a Box layout that points to a specific tag_union within a layout tree.
-    /// Returns the index of the Box layout if found, or null if not found.
-    /// This preserves the exact index from the layout store to avoid creating duplicates.
+    /// Recursively searches a layout tree to find an existing Box(target_tag_union) layout.
+    ///
+    /// For recursive types like `Node := [Text(Str), Element(List(Node))]`, the compiler
+    /// auto-inserts Box layouts at runtime even though `Node` isn't a `Box` at type-checking
+    /// time. When we need to box a value of this type, we must reuse the existing Box layout
+    /// index rather than creating a new one, since layouts are compared by index for equality.
     fn findBoxIdxForTagUnion(self: *Interpreter, lay_idx: layout.Idx, target_tu_idx: layout.TagUnionIdx) ?layout.Idx {
         const lay = self.runtime_layout_store.getLayout(lay_idx);
         switch (lay.tag) {
@@ -8621,8 +8620,10 @@ pub const Interpreter = struct {
     }
 
     /// Check if a layout contains a Box that points to a specific tag_union.
-    /// This is used to detect recursive types - a tag_union is recursive if one of its
-    /// variant payloads contains a Box pointing back to the same tag_union.
+    ///
+    /// This detects recursive types: a tag_union is recursive if one of its variant payloads
+    /// contains a Box pointing back to the same tag_union. The compiler auto-inserts these
+    /// Box layouts at runtime even though the type isn't a `Box` at type-checking time.
     fn layoutContainsBoxOfTagUnion(self: *Interpreter, lay: layout.Layout, target_tu_idx: layout.TagUnionIdx) bool {
         switch (lay.tag) {
             .box => {
@@ -8677,23 +8678,13 @@ pub const Interpreter = struct {
 
         var resolved = self.runtime_types.resolveVar(type_var);
 
-        // Apply rigid variable substitution if this is a rigid variable
-        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to detect infinite loops from cyclic substitutions
-        var count: u32 = 0;
+        // Apply rigid variable substitution if this is a rigid variable.
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
         while (resolved.desc.content == .rigid) {
             const rigid_name = resolved.desc.content.rigid.name;
-            // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                count += 1;
-                if (count >= 1000) return error.Crash; // Cyclic rigid substitution
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
-                // Also add this to rigid_subst for faster future lookups
-                self.rigid_subst.put(resolved.var_, substituted_var) catch {};
-                count += 1;
-                if (count >= 1000) return error.Crash; // Cyclic rigid substitution
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -9590,12 +9581,16 @@ pub const Interpreter = struct {
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Mapping found! Add to empty_scope and rigid_subst
-                        if (self.empty_scope.scopes.items.len == 0) {
-                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                        // Don't add if it would create a cycle (target resolves back to source)
+                        const resolved_target = self.runtime_types.resolveVar(concrete_rt_var);
+                        if (resolved_target.var_ != rt_rigid_var) {
+                            // Mapping found! Add to empty_scope and rigid_subst
+                            if (self.empty_scope.scopes.items.len == 0) {
+                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                            }
+                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                         }
-                        try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
-                        try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                     }
 
                     break :blk rt_rigid_var;
@@ -9615,12 +9610,8 @@ pub const Interpreter = struct {
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
-            // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
-            var count: u32 = 0;
             while (self.rigid_subst.get(current)) |next_subst| {
-                count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 current = next_subst;
             }
             break :blk current;
@@ -11678,7 +11669,11 @@ pub const Interpreter = struct {
                                                 rt_type_args[i],
                                             else => rt_type_args[i],
                                         };
-                                        try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        // Don't add if it would create a cycle
+                                        const resolved_concrete = self.runtime_types.resolveVar(concrete_type);
+                                        if (resolved_concrete.var_ != rigids.items[i]) {
+                                            try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        }
                                     }
                                 }
                                 // Return backing and preserve the nominal type for wrapping
@@ -12183,6 +12178,9 @@ pub const Interpreter = struct {
                     while (subst_iter.next()) |entry| {
                         // Skip identity mappings to avoid infinite loops when following substitution chains
                         if (entry.key_ptr.* == entry.value_ptr.*) continue;
+                        // Skip if target resolves back to source (would create cycle)
+                        const resolved_target = self.runtime_types.resolveVar(entry.value_ptr.*);
+                        if (resolved_target.var_ == entry.key_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -12965,7 +12963,6 @@ pub const Interpreter = struct {
             return dest;
         } else if (layout_val.tag == .tag_union) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            // Write discriminant at discriminant_offset (dynamically computed)
             const tu_idx = layout_val.data.tag_union.idx;
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
@@ -12976,7 +12973,7 @@ pub const Interpreter = struct {
                 2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
                 4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
                 8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                else => {},
+                else => unreachable,
             }
             dest.is_initialized = true;
             return dest;
@@ -14216,12 +14213,7 @@ pub const Interpreter = struct {
                         const actual_elem_layout = values[0].layout;
 
                         // Try to get the expected element layout to check for Box.
-                        // If elem_rt_var is a rigid var with cyclic substitution, fall back to
-                        // checking the actual layout for recursiveness.
-                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch |err| switch (err) {
-                            error.Crash => null,
-                            else => return err,
-                        };
+                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch null;
 
                         // Check if the element type is a recursive nominal that needs boxing.
                         // We check if the actual element layout is a tag_union that contains
@@ -14274,15 +14266,11 @@ pub const Interpreter = struct {
                                 }
                             }
 
-                            if (found_box_idx) |box_idx| {
-                                list_elem_idx = box_idx;
-                                list_elem_layout = self.runtime_layout_store.getLayout(box_idx);
-                            } else {
-                                // Fallback: create a new Box layout
-                                const actual_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                                list_elem_layout = Layout.box(actual_elem_idx);
-                                list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
-                            }
+                            // We detected this is a recursive type (need_auto_box=true), so there MUST be
+                            // a Box layout in the tag union's variants. If not, it's a compiler bug.
+                            const box_idx = found_box_idx orelse unreachable;
+                            list_elem_idx = box_idx;
+                            list_elem_layout = self.runtime_layout_store.getLayout(box_idx);
                         } else {
                             // No boxing needed - use the actual element layout
                             list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
@@ -14838,7 +14826,7 @@ pub const Interpreter = struct {
                                     2 => .u16,
                                     4 => .u32,
                                     8 => .u64,
-                                    else => .u8,
+                                    else => unreachable,
                                 };
                                 const disc_layout = Layout{
                                     .tag = .scalar,
@@ -14929,81 +14917,60 @@ pub const Interpreter = struct {
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
                             const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
 
-                            // If expected payload is a tuple, we need to check each field for auto-boxing
-                            if (expected_payload_layout.tag == .tuple) {
-                                const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
-                                const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
+                            // A multi-value tag payload MUST have a tuple layout. If not, it's a compiler bug.
+                            if (expected_payload_layout.tag != .tuple) unreachable;
+                            const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
+                            const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
 
-                                // Create tuple with expected layouts for proper sizing
-                                // We must use the ORIGINAL index from expected_fields, not the sorted index
-                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                                defer self.allocator.free(elem_layouts);
-                                var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                                defer self.allocator.free(elem_rt_vars);
-                                // Initialize with actual value layouts first
-                                for (values, 0..) |val, idx| {
-                                    elem_layouts[idx] = val.layout;
-                                    elem_rt_vars[idx] = val.rt_var;
+                            // Create tuple with expected layouts for proper sizing
+                            // We must use the ORIGINAL index from expected_fields, not the sorted index
+                            var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                            defer self.allocator.free(elem_layouts);
+                            var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
+                            defer self.allocator.free(elem_rt_vars);
+                            // Initialize with actual value layouts first
+                            for (values, 0..) |val, idx| {
+                                elem_layouts[idx] = val.layout;
+                                elem_rt_vars[idx] = val.rt_var;
+                            }
+                            // Override with expected layouts using original indices
+                            for (0..expected_fields.len) |sorted_idx| {
+                                const field = expected_fields.get(sorted_idx);
+                                const orig_idx = field.index;
+                                if (orig_idx < total_count) {
+                                    elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
                                 }
-                                // Override with expected layouts using original indices
-                                for (0..expected_fields.len) |sorted_idx| {
-                                    const field = expected_fields.get(sorted_idx);
-                                    const orig_idx = field.index;
-                                    if (orig_idx < total_count) {
-                                        elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                            }
+                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                            const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                            const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+
+                            // Set each element, auto-boxing if needed
+                            // Use elem_layouts which we already populated with correct original indices
+                            for (values, 0..) |val, idx| {
+                                const expected_elem_layout = elem_layouts[idx];
+                                // Check if we need to auto-box
+                                if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
+                                    // Auto-box the value
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                    if (inner_elem_size > 0 and val.ptr != null) {
+                                        try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
                                     }
-                                }
-                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                                const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
-                                const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
-                                const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
-                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
-                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
 
-                                // Set each element, auto-boxing if needed
-                                // Use elem_layouts which we already populated with correct original indices
-                                for (values, 0..) |val, idx| {
-                                    const expected_elem_layout = elem_layouts[idx];
-                                    // Check if we need to auto-box
-                                    if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
-                                        // Auto-box the value
-                                        const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
-                                        const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
-                                        const target_usize = self.runtime_layout_store.targetUsize();
-                                        const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
-
-                                        const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
-                                        if (inner_elem_size > 0 and val.ptr != null) {
-                                            try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
-                                        }
-
-                                        // Write box pointer to element location
-                                        const elem_ptr = try tup_acc.getElementPtr(idx);
-                                        const slot: *usize = @ptrCast(@alignCast(elem_ptr));
-                                        slot.* = @intFromPtr(data_ptr);
-                                    } else {
-                                        try tup_acc.setElement(idx, val, roc_ops);
-                                    }
-                                }
-                            } else {
-                                // Fallback: use actual value layouts
-                                var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                                defer self.allocator.free(elem_layouts);
-                                var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                                defer self.allocator.free(elem_rt_vars);
-                                for (values, 0..) |val, idx| {
-                                    elem_layouts[idx] = val.layout;
-                                    elem_rt_vars[idx] = val.rt_var;
-                                }
-                                const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                                const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                                const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
-                                const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
-                                const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
-                                var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
-                                var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                                for (values, 0..) |val, idx| {
+                                    // Write box pointer to element location
+                                    const elem_ptr = try tup_acc.getElementPtr(idx);
+                                    const slot: *usize = @ptrCast(@alignCast(elem_ptr));
+                                    slot.* = @intFromPtr(data_ptr);
+                                } else {
                                     try tup_acc.setElement(idx, val, roc_ops);
                                 }
                             }
@@ -15017,7 +14984,7 @@ pub const Interpreter = struct {
                             2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
                             4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
                             8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
+                            else => unreachable,
                         }
 
                         for (values) |val| {
@@ -17120,6 +17087,9 @@ pub const Interpreter = struct {
                     while (subst_iter.next()) |entry| {
                         // Skip identity mappings to avoid infinite loops when following substitution chains
                         if (entry.key_ptr.* == entry.value_ptr.*) continue;
+                        // Skip if target resolves back to source (would create cycle)
+                        const resolved_target = self.runtime_types.resolveVar(entry.value_ptr.*);
+                        if (resolved_target.var_ == entry.key_ptr.*) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.

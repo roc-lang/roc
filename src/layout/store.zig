@@ -449,7 +449,7 @@ pub const Store = struct {
             1 => 1,
             2 => 2,
             4 => 4,
-            else => 1,
+            else => unreachable,
         };
 
         return @intCast(std.mem.alignForward(u32, max_payload_size, disc_align));
