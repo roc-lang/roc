@@ -263,7 +263,7 @@ Builtin :: [].{
 		encode : List(item), fmt -> Try(ok, err)
 			where [
 				fmt.encode_list : fmt, List(item), (item, fmt -> Try(ok, err)) -> Try(ok, err),
-				item.encode : item, fmt -> Try(ok, err)
+				item.encode : item, fmt -> Try(ok, err),
 			]
 		encode = |self, format| {
 			format.encode_list(self, |elem, f| elem.encode(f))
