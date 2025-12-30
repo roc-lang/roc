@@ -611,6 +611,48 @@ pub const Interpreter = struct {
         @memset(self.var_to_layout_slot.items, 0);
     }
 
+    /// Check if adding source -> target to rigid_subst would create a cycle.
+    /// A cycle exists if following the substitution chain from target eventually leads back to source.
+    /// This checks BOTH rigid_subst and rigid_name_subst since getRuntimeLayout follows both.
+    fn wouldCreateRigidSubstCycle(self: *Interpreter, source: types.Var, target: types.Var) bool {
+        // First check: if source == target, it's a trivial cycle
+        if (source == target) return true;
+
+        // Follow the substitution chain from target, checking both rigid_subst and rigid_name_subst
+        // (same logic as getRuntimeLayout uses)
+        var resolved = self.runtime_types.resolveVar(target);
+        var count: u32 = 0;
+        while (true) {
+            count += 1;
+            if (count > 1000) {
+                // Safety limit - if we've followed 1000 substitutions, something is wrong
+                return true;
+            }
+
+            // Check if we've reached the source
+            if (resolved.var_ == source) {
+                return true;
+            }
+
+            // Try to follow substitution chain (same order as getRuntimeLayout)
+            if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (resolved.desc.content == .rigid) {
+                const rigid_name = resolved.desc.content.rigid.name;
+                if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
+                    resolved = self.runtime_types.resolveVar(substituted_var);
+                } else {
+                    // No more substitutions available
+                    break;
+                }
+            } else {
+                // Not a rigid, no more substitutions
+                break;
+            }
+        }
+        return false;
+    }
+
     /// Find a type alias declaration by name in a module and return the var for its underlying type.
     /// Returns null if no type alias declaration with the given name is found.
     fn findTypeAliasBodyVar(module: *const can.ModuleEnv, name: base_pkg.Ident.Idx) ?types.Var {
@@ -8630,7 +8672,14 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable.
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
+        // Use a limit to detect cycles that can form due to unification happening after rigid_subst entries are added.
+        var rigid_count: u32 = 0;
         while (resolved.desc.content == .rigid) {
+            rigid_count += 1;
+            if (rigid_count >= 100) {
+                // Cycle detected - stop following substitutions and use the current resolved var
+                break;
+            }
             const rigid_name = resolved.desc.content.rigid.name;
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 resolved = self.runtime_types.resolveVar(substituted_var);
@@ -9531,9 +9580,8 @@ pub const Interpreter = struct {
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Don't add if it would create a cycle (target resolves back to source)
-                        const resolved_target = self.runtime_types.resolveVar(concrete_rt_var);
-                        if (resolved_target.var_ != rt_rigid_var) {
+                        // Don't add if it would create a cycle in rigid_subst
+                        if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
                             // Mapping found! Add to empty_scope and rigid_subst
                             if (self.empty_scope.scopes.items.len == 0) {
                                 try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
@@ -9561,8 +9609,17 @@ pub const Interpreter = struct {
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
             var current = substituted;
-            while (self.rigid_subst.get(current)) |next_subst| {
-                current = next_subst;
+            if (comptime builtin.mode == .Debug) {
+                var chain_count: u32 = 0;
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    chain_count += 1;
+                    std.debug.assert(chain_count < 1000);
+                    current = next_subst;
+                }
+            } else {
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    current = next_subst;
+                }
             }
             break :blk current;
         } else out_var;
@@ -11004,10 +11061,21 @@ pub const Interpreter = struct {
                 var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
 
                 // Follow aliases to get to the underlying type
-                while (resolved.desc.content == .alias) {
-                    const alias = resolved.desc.content.alias;
-                    const backing = self.runtime_types.getAliasBackingVar(alias);
-                    resolved = self.runtime_types.resolveVar(backing);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (resolved.desc.content == .alias) {
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
                 }
 
                 // Get nominal type info for method resolution
@@ -11630,8 +11698,7 @@ pub const Interpreter = struct {
                                             else => rt_type_args[i],
                                         };
                                         // Don't add if it would create a cycle
-                                        const resolved_concrete = self.runtime_types.resolveVar(concrete_type);
-                                        if (resolved_concrete.var_ != rigids.items[i]) {
+                                        if (!self.wouldCreateRigidSubstCycle(rigids.items[i], concrete_type)) {
                                             try self.rigid_subst.put(rigids.items[i], concrete_type);
                                         }
                                     }
@@ -12136,11 +12203,8 @@ pub const Interpreter = struct {
 
                     var subst_iter = subst_map.iterator();
                     while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
-                        // Skip if target resolves back to source (would create cycle)
-                        const resolved_target = self.runtime_types.resolveVar(entry.value_ptr.*);
-                        if (resolved_target.var_ == entry.key_ptr.*) continue;
+                        // Skip if it would create a cycle in rigid_subst
+                        if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -17058,11 +17122,8 @@ pub const Interpreter = struct {
 
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
-                        // Skip if target resolves back to source (would create cycle)
-                        const resolved_target = self.runtime_types.resolveVar(entry.value_ptr.*);
-                        if (resolved_target.var_ == entry.key_ptr.*) continue;
+                        // Skip if it would create a cycle in rigid_subst
+                        if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
