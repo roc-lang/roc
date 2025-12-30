@@ -261,6 +261,10 @@ pub fn compileAndExecute(
         var target: *bindings.Target = undefined;
         var error_message: [*:0]const u8 = undefined;
         if (bindings.Target.getFromTriple(triple, &target, &error_message).toBool()) {
+            std.debug.print("LLVM JIT error: getFromTriple failed for '{s}': {s}\n", .{
+                triple,
+                error_message,
+            });
             bindings.disposeMessage(error_message);
             ts_module.dispose();
             return error.JITCreationFailed;
@@ -294,7 +298,9 @@ pub fn compileAndExecute(
     // Create LLJIT instance
     var jit: *bindings.OrcLLJIT = undefined;
     if (bindings.createLLJIT(&jit, builder)) |err| {
-        bindings.consumeError(err);
+        const err_msg = bindings.getErrorMessage(err);
+        std.debug.print("LLVM JIT error: createLLJIT failed: {s}\n", .{err_msg});
+        bindings.disposeErrorMessage(err_msg);
         ts_module.dispose();
         return error.JITCreationFailed;
     }
