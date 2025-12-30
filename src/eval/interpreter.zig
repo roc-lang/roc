@@ -1871,14 +1871,7 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            const disc_ptr = ptr_u8 + disc_offset;
-                            const disc_value: u32 = @intCast(ok_index orelse 0);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => unreachable,
-                            }
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
 
                             // Write Str payload at offset 0
                             const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
@@ -2095,14 +2088,7 @@ pub const Interpreter = struct {
                             }
 
                             // Write outer discriminant (Err)
-                            const disc_ptr = ptr_u8 + disc_offset;
-                            const disc_value: u32 = @intCast(err_index orelse 1);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => unreachable,
-                            }
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(err_index orelse 1));
 
                             // Get Err variant's payload layout (BadUtf8 - also a tag_union)
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
@@ -2115,13 +2101,7 @@ pub const Interpreter = struct {
                                 const inner_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(inner_tu_idx);
 
                                 // Write inner discriminant (BadUtf8 is index 0)
-                                const inner_disc_ptr = ptr_u8 + inner_disc_offset;
-                                switch (inner_tu_data.discriminant_size) {
-                                    1 => @as(*u8, @ptrCast(inner_disc_ptr)).* = 0,
-                                    2 => @as(*u16, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    4 => @as(*u32, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    else => {},
-                                }
+                                inner_tu_data.writeDiscriminantToPtr(ptr_u8 + inner_disc_offset, 0);
 
                                 // Get BadUtf8's payload layout (should be record { problem, index })
                                 const inner_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
@@ -2548,10 +2528,19 @@ pub const Interpreter = struct {
                                 const elem_var = vars[1];
                                 // Follow aliases to check if underlying type is concrete
                                 var elem_resolved = self.runtime_types.resolveVar(elem_var);
-                                var unwrap_count: u32 = 0;
-                                while (elem_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                                    const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
-                                    elem_resolved = self.runtime_types.resolveVar(backing);
+                                if (comptime builtin.mode == .Debug) {
+                                    var unwrap_count: u32 = 0;
+                                    while (elem_resolved.desc.content == .alias) {
+                                        unwrap_count += 1;
+                                        std.debug.assert(unwrap_count < 1000);
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
+                                } else {
+                                    while (elem_resolved.desc.content == .alias) {
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
                                 }
                                 // If element type is concrete (structure or alias to structure), create a fresh copy
                                 // to avoid corruption from later unifications during equality checking
@@ -2586,10 +2575,19 @@ pub const Interpreter = struct {
                     // List came from polymorphic context - try return_rt_var if it's concrete
                     if (return_rt_var) |rv| {
                         var rv_resolved = self.runtime_types.resolveVar(rv);
-                        var unwrap_count: u32 = 0;
-                        while (rv_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                            const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
-                            rv_resolved = self.runtime_types.resolveVar(backing);
+                        if (comptime builtin.mode == .Debug) {
+                            var unwrap_count: u32 = 0;
+                            while (rv_resolved.desc.content == .alias) {
+                                unwrap_count += 1;
+                                std.debug.assert(unwrap_count < 1000);
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
+                        } else {
+                            while (rv_resolved.desc.content == .alias) {
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
                         }
                         if (rv_resolved.desc.content == .structure) {
                             break :blk rv;
@@ -4587,15 +4585,8 @@ pub const Interpreter = struct {
                     const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                     const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                    const disc_ptr = base_ptr + disc_offset;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    switch (tu_data.discriminant_size) {
-                        1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                        2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        else => unreachable,
-                    }
+                    const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+                    tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
                     // Clear payload area (at offset 0)
                     const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
@@ -5300,15 +5291,8 @@ pub const Interpreter = struct {
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + disc_offset;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => unreachable,
-            }
+            const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
             // Clear payload area
             const payload_size = disc_offset;
@@ -5906,15 +5890,7 @@ pub const Interpreter = struct {
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + disc_offset;
-
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => unreachable,
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_idx));
 
             // Clear and write payload
             const payload_size = disc_offset;
@@ -9836,18 +9812,28 @@ pub const Interpreter = struct {
 
         // Apply rigid substitutions to ret_var if needed
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to prevent infinite loops from cyclic substitutions
         var resolved_ret = self.runtime_types.resolveVar(ret_var);
         var substituted_ret = ret_var;
-        var ret_count: u32 = 0;
-        while (resolved_ret.desc.content == .rigid) {
-            if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
-                ret_count += 1;
-                if (ret_count > 1000) break; // Prevent infinite loops
-                substituted_ret = subst_var;
-                resolved_ret = self.runtime_types.resolveVar(subst_var);
-            } else {
-                break;
+        if (comptime builtin.mode == .Debug) {
+            var ret_count: u32 = 0;
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    ret_count += 1;
+                    std.debug.assert(ret_count < 1000);
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
+            }
+        } else {
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -12941,14 +12927,7 @@ pub const Interpreter = struct {
             const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
             const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + disc_offset;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_index),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                else => unreachable,
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
             dest.is_initialized = true;
             return dest;
         }
@@ -14811,13 +14790,7 @@ pub const Interpreter = struct {
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
-                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
-                                    1 => .u8,
-                                    2 => .u16,
-                                    4 => .u32,
-                                    8 => .u64,
-                                    else => unreachable,
-                                };
+                                const disc_precision = tu_data.discriminantPrecision();
                                 const disc_layout = Layout{
                                     .tag = .scalar,
                                     .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
@@ -14968,14 +14941,7 @@ pub const Interpreter = struct {
 
                         // Write discriminant AFTER the payload, so it doesn't get overwritten
                         // by a payload that extends past the discriminant offset.
-                        const disc_ptr = base_ptr + disc_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => unreachable,
-                        }
+                        tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
 
                         for (values) |val| {
                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -15877,13 +15843,21 @@ pub const Interpreter = struct {
                 // Follow aliases to get to the underlying type
                 var current_var = effective_receiver_rt_var;
                 var current_resolved = lhs_resolved;
-                var alias_count: u32 = 0;
-                while (current_resolved.desc.content == .alias) {
-                    alias_count += 1;
-                    std.debug.assert(alias_count < 1000); // Prevent infinite loops
-                    const alias = current_resolved.desc.content.alias;
-                    current_var = self.runtime_types.getAliasBackingVar(alias);
-                    current_resolved = self.runtime_types.resolveVar(current_var);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (current_resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
+                } else {
+                    while (current_resolved.desc.content == .alias) {
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
                 }
 
                 // Check if we can use low-level numeric comparison based on layout

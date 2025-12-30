@@ -445,14 +445,8 @@ pub const Store = struct {
         }
 
         // Align the discriminant offset to the discriminant's alignment
-        const disc_align: u32 = switch (tu_data.discriminant_size) {
-            1 => 1,
-            2 => 2,
-            4 => 4,
-            else => unreachable,
-        };
-
-        return @intCast(std.mem.alignForward(u32, max_payload_size, disc_align));
+        const disc_align = tu_data.discriminantAlignment();
+        return @intCast(std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())));
     }
 
     /// Dynamically compute the total size of a tag union.
@@ -1157,12 +1151,7 @@ pub const Store = struct {
         // Calculate discriminant info from the stored discriminant layout
         const discriminant_layout = self.getLayout(pending.discriminant_layout);
         const discriminant_size: u8 = @intCast(self.layoutSize(discriminant_layout));
-        const discriminant_alignment: std.mem.Alignment = switch (discriminant_size) {
-            1 => .@"1",
-            2 => .@"2",
-            4 => .@"4",
-            else => .@"1",
-        };
+        const discriminant_alignment = TagUnionData.alignmentForDiscriminantSize(discriminant_size);
 
         // Calculate total size: payload at offset 0, discriminant at aligned offset after payload
         const payload_end = max_payload_size;

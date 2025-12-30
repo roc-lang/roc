@@ -478,15 +478,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
-                    const disc_ptr = base_ptr + disc_offset;
-                    const discriminant: usize = switch (tu_data.discriminant_size) {
-                        1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                        2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                        4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                        8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                        else => unreachable,
-                    };
-                    tag_index = discriminant;
+                    tag_index = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
                     have_tag = true;
                 }
                 // Use getSortedTag to ensure consistent tag ordering
@@ -873,14 +865,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         errdefer out.deinit();
         if (value.ptr) |ptr| {
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + disc_offset;
-            const discriminant: usize = switch (tu_data.discriminant_size) {
-                1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                else => unreachable,
-            };
+            const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
             try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
         } else {
             try out.appendSlice("<tag_union>");
