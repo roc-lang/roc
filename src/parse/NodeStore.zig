@@ -18,6 +18,10 @@ const Diagnostic = AST.Diagnostic;
 /// packing optional data into u32 fields where 0 would otherwise be ambiguous.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
+/// Bit flag for is_var in type_anno statement's main_token field.
+/// Uses the high bit to store whether this is a var declaration.
+const TYPE_ANNO_IS_VAR_BIT: u32 = 0x80000000;
+
 /// The root node is always stored at index 0 in the node list.
 pub const root_node_idx: Node.List.Idx = .first;
 
@@ -465,7 +469,9 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = a.region;
             node.data.lhs = a.name;
             node.data.rhs = @intFromEnum(a.anno);
-            node.main_token = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
+            const where_val: u32 = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
+            const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
+            node.main_token = where_val | is_var_bit;
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -1396,11 +1402,14 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             } };
         },
         .type_anno => {
+            const is_var = (node.main_token & TYPE_ANNO_IS_VAR_BIT) != 0;
+            const where_val = node.main_token & ~TYPE_ANNO_IS_VAR_BIT;
             return .{ .type_anno = .{
                 .region = node.region,
                 .name = node.data.lhs,
                 .anno = @enumFromInt(node.data.rhs),
-                .where = if (node.main_token != 0) @enumFromInt(node.main_token - OPTIONAL_VALUE_OFFSET) else null,
+                .where = if (where_val != 0) @enumFromInt(where_val - OPTIONAL_VALUE_OFFSET) else null,
+                .is_var = is_var,
             } };
         },
         .malformed => {
