@@ -253,6 +253,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Child is Text: hello",
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
+    .{
+        .roc_file = "test/fx/primitive_encode.roc",
+        .io_spec = "1>U64.encode(42): 42|1>Done",
+        .description = "Primitive types have encode methods for static dispatch (issue #8853)",
+    },
 };
 
 /// Get the total number of IO spec tests
