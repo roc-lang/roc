@@ -8025,12 +8025,14 @@ pub const Interpreter = struct {
             return self.builtin_module_env orelse self.env;
         }
 
-        // Check if it's the current module (both translated and original idents)
+        // Check if it's the root module (both translated and original idents)
+        // Note: we return root_env instead of self.env because self.env may have changed
+        // during evaluation (e.g., when evaluating cross-module calls)
         if (!self.translated_env_module.isNone() and origin_module.idx == self.translated_env_module.idx) {
-            return self.env;
+            return self.root_env;
         }
-        if (self.env.module_name_idx == origin_module) {
-            return self.env;
+        if (self.root_env.module_name_idx == origin_module) {
+            return self.root_env;
         }
 
         // Check if it's the app module (both translated and original idents)
@@ -10928,6 +10930,7 @@ pub const Interpreter = struct {
                                 }
                             }
                         }
+
                         break :blk null;
                     },
                     .rigid => |rigid| blk: {
@@ -11486,6 +11489,25 @@ pub const Interpreter = struct {
                     // Use the expected type's backing - but we need to set up rigid substitution
                     // because the backing may still have rigids that need to map to concrete type args
                     const expected_resolved = self.runtime_types.resolveVar(expected);
+
+                    // If expected type is flex or rigid (not concrete), fall through to create from CT
+                    if (expected_resolved.desc.content == .flex or expected_resolved.desc.content == .rigid) {
+                        // Expected type is polymorphic - need to create the nominal type from CT
+                        const ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                        break :blk switch (nominal_resolved.desc.content) {
+                            .structure => |st| switch (st) {
+                                .nominal_type => |nt| BackingInfo{
+                                    .backing = self.runtime_types.getNominalBackingVar(nt),
+                                    .nominal = nominal_rt_var,
+                                },
+                                else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                            },
+                            else => BackingInfo{ .backing = nominal_rt_var, .nominal = null },
+                        };
+                    }
+
                     switch (expected_resolved.desc.content) {
                         .structure => |st| switch (st) {
                             .nominal_type => |nt| {
@@ -13144,6 +13166,7 @@ pub const Interpreter = struct {
         while (i > 0) {
             i -= 1;
             const b = self.bindings.items[i];
+
             // Check both pattern_idx AND source module to avoid cross-module collisions.
             const same_module = (b.source_env == self.env) or
                 (b.source_env.module_name_idx == self.env.module_name_idx);

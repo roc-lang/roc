@@ -1797,27 +1797,24 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     , 15, .no_trace);
 }
 
-// TODO: Enable this test once cross-module type variable dispatch is fixed.
-// The issue is that the flex_type_context mapping needs to properly connect
-// the parameter's type variable to the type alias's type variable.
-// test "encode: Str.encode with local format type" {
-//     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
-//     // where Fmt is a local type defined in the test.
-//     // This exercises the flex_type_context propagation in type_var_dispatch_invoke.
-//     try runExpectListI64(
-//         \\{
-//         \\    # Define a local format type that converts strings to UTF-8
-//         \\    Utf8Format := {}.{
-//         \\        encode_str : Utf8Format, Str -> List(U8)
-//         \\        encode_str = |_fmt, s| Str.to_utf8(s)
-//         \\    }
-//         \\
-//         \\    fmt : Utf8Format
-//         \\    fmt = {}
-//         \\
-//         \\    # The result is List(U8) but we cast it to List(I64) for the test helper
-//         \\    bytes = Str.encode("hi", fmt)
-//         \\    List.map(bytes, |b| U8.to_i64(b))
-//         \\}
-//     , &[_]i64{ 104, 105 }, .no_trace);
-// }
+test "encode: Str.encode with local format type" {
+    // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
+    // where Fmt is a local type defined in the test.
+    // This exercises the flex_type_context propagation via s_type_var_alias.
+    try runExpectListI64(
+        \\{
+        \\    # Define a local nominal type that converts strings to UTF-8
+        \\    Utf8Format := {}.{
+        \\        encode_str : Utf8Format, Str -> List(U8)
+        \\        encode_str = |_fmt, s| Str.to_utf8(s)
+        \\    }
+        \\
+        \\    # Use the nominal type directly
+        \\    fmt = Utf8Format
+        \\
+        \\    # The result is List(U8) but we cast it to List(I64) for the test helper
+        \\    bytes = Str.encode("hi", fmt)
+        \\    List.map(bytes, |b| U8.to_i64(b))
+        \\}
+    , &[_]i64{ 104, 105 }, .no_trace);
+}

@@ -817,6 +817,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     };
     const canonical_expr_idx = canonical_expr.get_idx();
 
+    // Set up all_defs from scratch defs so type checker can process them
+    // This is critical for local type declarations whose associated block defs
+    // need to be type-checked before they can be used
+    module_env.all_defs = try module_env.store.defSpanFrom(0);
+
     // Create type checker - pass Builtin as imported module
     const imported_envs = [_]*const ModuleEnv{builtin_module.env};
 
@@ -826,8 +831,8 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     const checker = try allocator.create(Check);
     checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
 
-    // Type check the expression
-    _ = try checker.checkExprRepl(canonical_expr_idx);
+    // Type check the expression (including any defs from local type declarations)
+    _ = try checker.checkExprReplWithDefs(canonical_expr_idx);
 
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
