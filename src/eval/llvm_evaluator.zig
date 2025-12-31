@@ -49,7 +49,8 @@ fn getLlvmTriple() []const u8 {
     };
 
     const vendor_os = switch (builtin.os.tag) {
-        .windows => "-pc-windows",
+        // Windows 64-bit uses w64 (mingw-w64) vendor, not pc
+        .windows => "-w64-windows",
         .macos => "-apple-darwin",
         .ios => "-apple-ios",
         .linux => "-unknown-linux",
