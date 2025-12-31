@@ -4226,8 +4226,11 @@ pub fn canonicalizeExpr(
                                         if (module_env.common.findIdent(qualified_text)) |qname_ident| {
                                             if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
                                                 // Found it! This is a module-qualified lookup
-                                                // Need to get or create the auto-import for the Builtin module
-                                                const actual_module_name = module_env.module_name;
+                                                // Need to get or create the auto-import for the module
+                                                // For package-qualified imports (pf.Stdout), use the qualified name
+                                                // For builtin nested types (Bool, Str), use the parent module name
+                                                const is_qualified_import = std.mem.indexOfScalar(u8, type_text, '.') != null;
+                                                const actual_module_name = if (is_qualified_import) type_text else module_env.module_name;
                                                 const import_idx = try self.getOrCreateAutoImport(actual_module_name);
 
                                                 // Create e_lookup_external expression
@@ -4297,7 +4300,11 @@ pub fn canonicalizeExpr(
 
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
-                            const lookup_module_name = if (self.module_envs) |envs_map| blk_lookup: {
+                            // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                            const is_qualified = std.mem.indexOfScalar(u8, module_text, '.') != null;
+                            const lookup_module_name = if (is_qualified)
+                                module_text
+                            else if (self.module_envs) |envs_map| blk_lookup: {
                                 if (envs_map.get(module_name)) |auto_imported_type| {
                                     break :blk_lookup auto_imported_type.env.module_name;
                                 } else {
@@ -4311,7 +4318,8 @@ pub fn canonicalizeExpr(
                                 if (self.module_envs) |envs_map| {
                                     if (envs_map.get(module_name)) |auto_imported_type| {
                                         // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
-                                        const actual_module_name = auto_imported_type.env.module_name;
+                                        // For package-qualified imports (pf.Stdout), use the qualified name
+                                        const actual_module_name = if (is_qualified) module_text else auto_imported_type.env.module_name;
                                         break :blk try self.getOrCreateAutoImport(actual_module_name);
                                     }
                                 }
