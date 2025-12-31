@@ -14598,8 +14598,7 @@ pub const Interpreter = struct {
                                     // If we hit this, it means there's a bug in how we're structuring
                                     // the work stack (likely a nested evalWithExpectedType call that
                                     // shouldn't be nested).
-                                    self.triggerCrash("Internal error", false, roc_ops);
-                                    return error.Crash;
+                                    debugUnreachable(roc_ops, "early_return hit return_result without finding call_cleanup", @src());
                                 },
                                 .call_invoke_closure => |ci| {
                                     // Free resources if we're skipping a pending call invocation.
