@@ -14208,7 +14208,12 @@ pub const Interpreter = struct {
                                     }
                                 }
 
-                                // Must find a Box layout since we detected recursion
+                                // This is unreachable because:
+                                // 1. We only enter this block if need_auto_box[idx] is true
+                                // 2. need_auto_box[idx] is only set true if layoutContainsBoxOfTagUnion
+                                //    found a Box pointing to this tag_union in some variant's payload
+                                // 3. findBoxIdxForTagUnion searches the same layouts and returns the
+                                //    index of that Box, so it must find the same Box that was detected
                                 const box_idx = found_box_idx orelse unreachable;
                                 const box_layout = self.runtime_layout_store.getLayout(box_idx);
 
