@@ -67,6 +67,25 @@ pub const windows = if (is_windows) struct {
     pub const INVALID_HANDLE_VALUE = @as(HANDLE, @ptrFromInt(std.math.maxInt(usize)));
     pub const FALSE = 0;
 
+    // SEC_RESERVE: Reserve pages without committing them. Pages must be committed
+    // via VirtualAlloc before they can be accessed. This allows reserving large
+    // virtual address spaces (e.g., 2TB) without requiring immediate page file backing.
+    pub const SEC_RESERVE = 0x4000000;
+
+    // Memory allocation constants for VirtualAlloc
+    pub const MEM_COMMIT = 0x1000;
+    pub const MEM_RESERVE = 0x2000;
+
+    // VirtualAlloc: Commits reserved pages so they can be accessed.
+    // When used with MEM_COMMIT on a reserved region, it commits the pages
+    // without requiring a new reservation.
+    pub extern "kernel32" fn VirtualAlloc(
+        lpAddress: ?*anyopaque,
+        dwSize: SIZE_T,
+        flAllocationType: DWORD,
+        flProtect: DWORD,
+    ) ?*anyopaque;
+
     pub const SYSTEM_INFO = extern struct {
         wProcessorArchitecture: u16,
         wReserved: u16,
@@ -160,10 +179,20 @@ pub fn createMapping(size: usize) SharedMemoryError!Handle {
                 0;
             const size_low: windows.DWORD = @intCast(size & 0xFFFFFFFF);
 
+            // Use SEC_RESERVE to only reserve virtual address space without committing
+            // physical memory or page file backing. This allows reserving very large
+            // address spaces (e.g., 2TB) without requiring that much RAM or page file.
+            //
+            // Pages must be committed via VirtualAlloc(MEM_COMMIT) before they can be
+            // accessed. The SharedMemoryAllocator handles this in its alloc function.
+            //
+            // Without SEC_RESERVE, CreateFileMapping with PAGE_READWRITE would require
+            // the full size to be backed by the page file immediately, which would fail
+            // on systems without enough page file space.
             const handle = windows.CreateFileMappingW(
                 windows.INVALID_HANDLE_VALUE,
                 null, // default security
-                windows.PAGE_READWRITE,
+                windows.PAGE_READWRITE | windows.SEC_RESERVE,
                 size_high, // high 32 bits
                 size_low, // low 32 bits
                 null, // anonymous mapping

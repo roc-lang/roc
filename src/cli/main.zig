@@ -358,18 +358,32 @@ fn renderTypeProblems(
     return error_count;
 }
 
-/// Size for shared memory allocator (just virtual address space to reserve)
+/// Size for shared memory allocator.
 ///
-/// We pick a large number because we can't resize this without messing up the
-/// child process. It's just virtual address space though, not physical memory.
-/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
+/// We need a large size because SharedMemoryAllocator is a bump allocator that
+/// cannot free memory. During type checking, the types Store grows significantly
+/// and every array growth allocates new memory without freeing old, causing
+/// memory fragmentation. With a 25KB source file, type checking can use ~2GB
+/// of shared memory due to this fragmentation.
 ///
-/// Note: We use 2GB to handle worst-case memory fragmentation during type checking.
-/// The SharedMemoryAllocator is a bump allocator that can't free memory, so growing
-/// arrays repeatedly can waste significant space. 2GB provides enough headroom for
-/// large source files with complex types.
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible without
+/// consuming physical memory or page file space because:
+///
+/// - On Linux/macOS/BSD: mmap with MAP_SHARED reserves virtual address space without
+///   backing it with physical memory until pages are actually touched.
+///
+/// - On Windows: We use SEC_RESERVE when creating the file mapping, which reserves the
+///   virtual address space without committing physical memory or page file. Pages are then
+///   committed on-demand in SharedMemoryAllocator using VirtualAlloc(MEM_COMMIT) as memory
+///   is needed. Without SEC_RESERVE, CreateFileMapping would fail for large sizes because
+///   it would try to immediately reserve page file space for the entire mapping.
+///
+/// This large reservation ensures we never run out of space during type checking of large
+/// programs, while only actually consuming memory for pages that are used.
+///
+/// On 32-bit targets, we use 256MB since 2TB won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    2 * 1024 * 1024 * 1024 // 2GB for 64-bit targets
+    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
 else
     256 * 1024 * 1024; // 256MB for 32-bit targets
 

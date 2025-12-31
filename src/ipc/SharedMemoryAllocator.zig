@@ -77,6 +77,22 @@ pub fn create(size: usize, page_size: usize) !SharedMemoryAllocator {
     const base_ptr = try platform.mapMemory(handle, aligned_size, platform.SHARED_MEMORY_BASE_ADDR);
     errdefer platform.unmapMemory(base_ptr, aligned_size);
 
+    // On Windows with SEC_RESERVE, we must commit pages before accessing them.
+    // Commit the first page for the header before we write to it.
+    if (comptime platform.is_windows) {
+        const commit_result = platform.windows.VirtualAlloc(
+            base_ptr,
+            @sizeOf(Header),
+            platform.windows.MEM_COMMIT,
+            platform.windows.PAGE_READWRITE,
+        );
+        if (commit_result == null) {
+            platform.unmapMemory(base_ptr, aligned_size);
+            platform.closeHandle(handle, true);
+            return error.OutOfMemory;
+        }
+    }
+
     const result = SharedMemoryAllocator{
         .handle = handle,
         .base_ptr = @ptrCast(@alignCast(base_ptr)),
@@ -240,6 +256,26 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[
         ) == null) {
             // Success! We claimed this region
             const ptr = self.base_ptr + aligned_offset;
+
+            // On Windows, pages are reserved but not committed (due to SEC_RESERVE).
+            // We must commit pages before they can be accessed.
+            if (comptime platform.is_windows) {
+                // Commit the pages for this allocation. VirtualAlloc with MEM_COMMIT
+                // on already-reserved pages commits them without requiring a new reservation.
+                // We commit only the pages needed for this allocation.
+                const commit_result = platform.windows.VirtualAlloc(
+                    @ptrCast(ptr),
+                    len,
+                    platform.windows.MEM_COMMIT,
+                    platform.windows.PAGE_READWRITE,
+                );
+                if (commit_result == null) {
+                    // Failed to commit memory - this shouldn't happen normally
+                    // but could occur if the system is truly out of memory
+                    return null;
+                }
+            }
+
             return @ptrCast(ptr);
         }
         // CAS failed, another thread allocated - retry with new offset
@@ -282,6 +318,21 @@ fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usi
                         .monotonic,
                         .monotonic,
                     ) == null) {
+                        // On Windows, commit the additional pages for the growth
+                        if (comptime platform.is_windows) {
+                            const grow_ptr = self.base_ptr + old_offset;
+                            const commit_result = platform.windows.VirtualAlloc(
+                                @ptrCast(grow_ptr),
+                                grow_amount,
+                                platform.windows.MEM_COMMIT,
+                                platform.windows.PAGE_READWRITE,
+                            );
+                            if (commit_result == null) {
+                                // Failed to commit - rollback the offset change
+                                _ = self.offset.fetchSub(grow_amount, .monotonic);
+                                return false;
+                            }
+                        }
                         return true;
                     }
                     // CAS failed, retry
