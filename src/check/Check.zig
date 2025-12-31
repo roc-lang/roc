@@ -845,7 +845,10 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
-/// Create a nominal Try type with the given success and error types
+/// Create a nominal Try type with the given success and error types.
+/// Note: The backing var is a placeholder. For nominal-to-nominal unification,
+/// only the type ident and type args matter. For unification with anonymous
+/// tag unions, use mkTryTagUnion instead.
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
     // Use the cached builtin_module_ident from the current module's ident store.
     // This represents the "Builtin" module where Try is defined.
@@ -860,9 +863,8 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // The backing var doesn't matter here. Nominal types unify based on their ident
-    // and type args only - the backing is never examined during unification.
-    // Creating the real backing type ([Ok(ok), Err(err)]) would be a waste of time.
+    // The backing var is a placeholder - it won't be examined during
+    // nominal-to-nominal unification.
     const backing_var = ok_var;
     const type_args = [_]Var{ ok_var, err_var };
 
@@ -873,6 +875,15 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         origin_module_id,
         false, // Try is nominal (not opaque)
     );
+}
+
+/// Create a tag union [Ok(ok_var), Err(err_var)] for use in validating
+/// that an expression is compatible with the Try type for the `?` operator.
+fn mkTryTagUnion(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
+    const ok_tag = try self.types.mkTag(self.cir.idents.ok, &.{ok_var});
+    const err_tag = try self.types.mkTag(self.cir.idents.err, &.{err_var});
+    const empty_ext = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
+    return try self.types.mkTagUnion(&.{ ok_tag, err_tag }, empty_ext);
 }
 
 /// Create a nominal Numeral type (from Builtin.Num.Numeral)
@@ -4519,66 +4530,6 @@ fn checkIfElseExpr(
 
 // match //
 
-/// Check if a type variable represents a valid Try type for the `?` operator.
-/// A valid Try type must have exactly Ok and Err tags (with possible flex extension).
-/// Returns false if it has any other concrete tags, as those wouldn't be handled.
-fn isValidTryType(self: *Self, var_: Var) bool {
-    var current_var = var_;
-    var iterations: u32 = 0;
-    const max_iterations: u32 = 100;
-    var has_ok = false;
-    var has_err = false;
-    const ok_ident = self.cir.idents.ok;
-    const err_ident = self.cir.idents.err;
-
-    while (iterations < max_iterations) : (iterations += 1) {
-        const resolved = self.types.resolveVar(current_var);
-        switch (resolved.desc.content) {
-            .flex => {
-                // Open extension is fine - we just need Ok and Err
-                return has_ok and has_err;
-            },
-            .structure => |flat_type| {
-                switch (flat_type) {
-                    .tag_union => |tag_union| {
-                        // Check tags in this union
-                        const tags_slice = self.types.getTagsSlice(tag_union.tags);
-                        for (tags_slice.items(.name)) |tag_name| {
-                            if (tag_name == ok_ident) {
-                                has_ok = true;
-                            } else if (tag_name == err_ident) {
-                                has_err = true;
-                            } else {
-                                // Found a tag that's neither Ok nor Err
-                                // This is not a valid Try type for `?`
-                                return false;
-                            }
-                        }
-                        // Follow the extension chain for more tags
-                        current_var = tag_union.ext;
-                    },
-                    .empty_tag_union => return has_ok and has_err,
-                    .nominal_type => |nominal| {
-                        // Follow nominal backing var
-                        current_var = self.types.getNominalBackingVar(nominal);
-                    },
-                    else => return false, // Not a tag union
-                }
-            },
-            .alias => |alias| {
-                // Follow alias backing var
-                current_var = self.types.getAliasBackingVar(alias);
-            },
-            .err => {
-                // If the type is an error type, don't report additional errors
-                return true;
-            },
-            else => return false,
-        }
-    }
-    return has_ok and has_err;
-}
-
 /// Check the types for a match expr
 fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
@@ -4689,26 +4640,25 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         }
     }
 
-    // For matches desugared from `?` operator, verify the condition is a valid Try type
-    // (has exactly Ok and Err tags, no other concrete tags). Otherwise report an error.
-    // If we detect an invalid try, skip exhaustiveness checking since the desugared match
-    // only handles Ok/Err branches and would report a confusing NON-EXHAUSTIVE MATCH error.
-    const has_invalid_try = match.is_try_suffix and !self.isValidTryType(cond_var);
-    if (has_invalid_try) {
-        const cond_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
-        _ = try self.problems.appendProblem(self.cir.gpa, .{ .type_mismatch = .{
-            .types = .{
-                .expected_var = cond_var,
-                .expected_snapshot = cond_snapshot,
-                .actual_var = cond_var,
-                .actual_snapshot = cond_snapshot,
-                .from_annotation = false,
-                .constraint_origin_var = null,
-            },
-            .detail = .{ .invalid_try_operator = .{
+    // For matches desugared from `?` operator, verify the condition unifies with Try type.
+    // If it doesn't, report an error. Skip exhaustiveness checking for invalid try since
+    // the desugared match only handles Ok/Err branches and would report confusing errors.
+    var has_invalid_try = false;
+    if (match.is_try_suffix) {
+        // Create a [Ok(ok_var), Err(err_var)] tag union to unify against
+        const ok_var = try self.fresh(env, Region.zero());
+        const err_var = try self.fresh(env, Region.zero());
+        const try_content = try self.mkTryTagUnion(ok_var, err_var, env);
+        const try_var = try self.freshFromContent(try_content, env, Region.zero());
+
+        // Unify the condition with Try tag union
+        const try_result = try self.unify(try_var, cond_var, env);
+        if (!try_result.isOk()) {
+            has_invalid_try = true;
+            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
                 .expr = match.cond,
-            } },
-        } });
+            } });
+        }
     }
 
     // Unify the root expr with the match value
