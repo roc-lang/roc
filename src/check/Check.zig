@@ -4686,19 +4686,27 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
-            // Format missing patterns and store in snapshot store for lifecycle management
-            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
-            for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
-                const idx = try self.snapshots.storeExtraString(formatted);
-                try missing_indices.append(self.cir.gpa, idx);
-            }
+            // If this is a try-desugared match (from the ? operator), provide a more helpful error
+            if (match.is_try_desugar) {
+                _ = try self.problems.appendProblem(self.cir.gpa, .{ .try_operator_on_non_try = .{
+                    .match_expr = expr_idx,
+                    .condition_snapshot = condition_snapshot,
+                } });
+            } else {
+                // Format missing patterns and store in snapshot store for lifecycle management
+                var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+                for (result.missing_patterns) |pattern| {
+                    const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                    const idx = try self.snapshots.storeExtraString(formatted);
+                    try missing_indices.append(self.cir.gpa, idx);
+                }
 
-            _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
-                .match_expr = expr_idx,
-                .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
-            } });
+                _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
+                    .match_expr = expr_idx,
+                    .condition_snapshot = condition_snapshot,
+                    .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
+                } });
+            }
         }
 
         // Report redundant patterns

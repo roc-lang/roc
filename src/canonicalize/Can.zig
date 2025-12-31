@@ -5553,6 +5553,7 @@ pub fn canonicalizeExpr(
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_desugar = true, // This match came from the ? operator
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5948,6 +5949,7 @@ pub fn canonicalizeExpr(
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_desugar = false, // Regular match expression, not from ? operator
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 

@@ -1682,6 +1682,7 @@ fn duplicateExpr(
                     .cond = new_cond,
                     .branches = new_branches_span,
                     .exhaustive = match.exhaustive,
+                    .is_try_desugar = match.is_try_desugar,
                 },
             }, base.Region.zero());
         },

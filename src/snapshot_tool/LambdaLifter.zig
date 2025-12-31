@@ -612,6 +612,7 @@ fn transformBodyWithCaptures(
                     .cond = new_cond,
                     .branches = match.branches,
                     .exhaustive = match.exhaustive,
+                    .is_try_desugar = match.is_try_desugar,
                 },
             }, base.Region.zero());
         },

@@ -630,12 +630,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const branches_start = extra_data[1];
             const branches_len = extra_data[2];
             const exhaustive = @as(types.Var, @enumFromInt(extra_data[3]));
+            const is_try_desugar = extra_data[4] != 0;
 
             return CIR.Expr{
                 .e_match = CIR.Expr.Match{
                     .cond = cond,
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
                     .exhaustive = exhaustive,
+                    .is_try_desugar = is_try_desugar,
                 },
             };
         },
@@ -1812,6 +1814,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.extra_data.append(store.gpa, e.branches.span.start);
             _ = try store.extra_data.append(store.gpa, e.branches.span.len);
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive));
+            _ = try store.extra_data.append(store.gpa, @intFromBool(e.is_try_desugar));
             node.data_1 = @intCast(extra_data_start);
         },
         .e_if => |e| {

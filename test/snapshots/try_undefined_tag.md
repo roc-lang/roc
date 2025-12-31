@@ -8,23 +8,20 @@ type=expr
 A?
 ~~~
 # EXPECTED
-NON-EXHAUSTIVE MATCH - try_undefined_tag.md:1:1:1:3
+TRY OPERATOR TYPE MISMATCH - try_undefined_tag.md:1:1:1:3
 # PROBLEMS
-**NON-EXHAUSTIVE MATCH**
-This `match` expression doesn't cover all possible cases:
+**TRY OPERATOR TYPE MISMATCH**
+The `?` operator expects a _Try_ value (`Ok(...)` or `Err(...)`), but this expression has a different type:
 **try_undefined_tag.md:1:1:1:3:**
 ```roc
 A?
 ```
 ^^
 
-The value being matched on has type:
+The expression has type:
         _[A, Ok(_a), Err(_b), .._others]_
 
-Missing patterns:
-        A
-
-Hint: Add branches to handle these cases, or use `_` to match anything.
+**Hint:** The `?` operator unwraps `Ok` values and returns early on `Err`. Make sure your expression evaluates to a _Try_ type.
 
 # TOKENS
 ~~~zig
