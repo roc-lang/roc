@@ -486,7 +486,6 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         },
     }
 }
-
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {

@@ -13,6 +13,7 @@ extend-exclude = [
     "test/snapshots/",
     "build.zig.zon",
     "src/cli/darwin/",
+    "src/backend/llvm/",
 ]
 
 [default]
