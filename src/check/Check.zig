@@ -846,25 +846,19 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 }
 
 /// Create a nominal Try type with the given success and error types.
-/// Note: The backing var is a placeholder. For nominal-to-nominal unification,
-/// only the type ident and type args matter. For unification with anonymous
-/// tag unions, use mkTryTagUnion instead.
+/// This is used for creating Try types in function signatures (e.g., from_numeral).
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Try is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
-    // Use the relative name "Try" (not "Builtin.Try") to match the relative_name in TypeHeader
-    // The origin_module field already captures that this type is from Builtin
     const try_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // The backing var is a placeholder - it won't be examined during
-    // nominal-to-nominal unification.
+    // mkNominal requires a backing_var, but for nominal-to-nominal unification
+    // only the type ident and type args are compared, so ok_var is fine here.
     const backing_var = ok_var;
     const type_args = [_]Var{ ok_var, err_var };
 
@@ -875,15 +869,6 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         origin_module_id,
         false, // Try is nominal (not opaque)
     );
-}
-
-/// Create a tag union [Ok(ok_var), Err(err_var)] for use in validating
-/// that an expression is compatible with the Try type for the `?` operator.
-fn mkTryTagUnion(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
-    const ok_tag = try self.types.mkTag(self.cir.idents.ok, &.{ok_var});
-    const err_tag = try self.types.mkTag(self.cir.idents.err, &.{err_var});
-    const empty_ext = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
-    return try self.types.mkTagUnion(&.{ ok_tag, err_tag }, empty_ext);
 }
 
 /// Create a nominal Numeral type (from Builtin.Num.Numeral)
@@ -4645,13 +4630,15 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // the desugared match only handles Ok/Err branches and would report confusing errors.
     var has_invalid_try = false;
     if (match.is_try_suffix) {
-        // Create a [Ok(ok_var), Err(err_var)] tag union to unify against
-        const ok_var = try self.fresh(env, Region.zero());
-        const err_var = try self.fresh(env, Region.zero());
-        const try_content = try self.mkTryTagUnion(ok_var, err_var, env);
-        const try_var = try self.freshFromContent(try_content, env, Region.zero());
+        // Get the actual Try type from builtins and instantiate it with fresh type vars
+        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
+        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
+            try self.copyVar(try_type_var, builtin_env, Region.zero())
+        else
+            try_type_var;
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
 
-        // Unify the condition with Try tag union
+        // Unify the condition with Try type
         const try_result = try self.unify(try_var, cond_var, env);
         if (!try_result.isOk()) {
             has_invalid_try = true;
