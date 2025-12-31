@@ -158,7 +158,16 @@ pub const Generalizer = struct {
         // Copy all variables at this rank into the temporary pool, resolving redirects
         for (vars_to_generalize) |var_| {
             const resolved = self.store.resolveVar(var_);
-            try self.tmp_var_pool.addVarToRank(resolved.var_, resolved.desc.rank);
+            // Cap the rank at the rank we're generalizing. A var in var_pool at this rank
+            // might resolve to a higher rank if it was unified (after being added to the pool)
+            // with a var from a nested scope that has since been popped. In that case, the
+            // higher rank is stale and we should treat the var as being at our current rank.
+            const effective_rank = Rank.min(resolved.desc.rank, rank_to_generalize);
+            // Also update the descriptor's rank to match, so subsequent operations see the correct rank
+            if (@intFromEnum(resolved.desc.rank) > @intFromEnum(rank_to_generalize)) {
+                self.store.setDescRank(resolved.desc_idx, effective_rank);
+            }
+            try self.tmp_var_pool.addVarToRank(resolved.var_, effective_rank);
             try self.vars_to_generalized.put(resolved.var_, {});
         }
 
