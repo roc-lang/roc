@@ -210,6 +210,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:50:132:55
+UNDEFINED VARIABLE - fuzz_crash_027.md:132:50:132:55
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
@@ -724,6 +725,17 @@ Is there an `import` or `exposing` missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `tuple` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_027.md:132:50:132:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2211,8 +2223,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-list
 									(elems
 										(e-num (value "1"))
