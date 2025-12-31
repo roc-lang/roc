@@ -141,25 +141,32 @@ pub const Instantiator = struct {
                 return fresh_var;
             },
             else => {
-                // Remember this substitution for recursive references
-                // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
-                const fresh_var = try self.store.fresh();
-                try self.var_map.put(resolved_var, fresh_var);
+                if (resolved.desc.rank != .generalized and resolved.desc.content == .flex) {
+                    // If this is a flex var that's NOT generalized, then return
+                    // it unmodified
+                    return resolved.var_;
+                } else {
+                    // Generate the content
 
-                // Generate the content
-                const fresh_content = try self.instantiateContent(resolved.desc.content);
+                    // Remember this substitution for recursive references
+                    // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
+                    const fresh_var = try self.store.fresh();
+                    try self.var_map.put(resolved_var, fresh_var);
 
-                // Update the placeholder fresh var with the real content
-                try self.store.dangerousSetVarDesc(
-                    fresh_var,
-                    .{
-                        .content = fresh_content,
-                        .rank = self.current_rank,
-                        .mark = Mark.none,
-                    },
-                );
+                    const fresh_content = try self.instantiateContent(resolved.desc.content);
 
-                return fresh_var;
+                    // Update the placeholder fresh var with the real content
+                    try self.store.dangerousSetVarDesc(
+                        fresh_var,
+                        .{
+                            .content = fresh_content,
+                            .rank = self.current_rank,
+                            .mark = Mark.none,
+                        },
+                    );
+
+                    return fresh_var;
+                }
             },
         }
     }

@@ -323,6 +323,7 @@ const Env = struct {
     ) std.mem.Allocator.Error!Env {
         var pool = try VarPool.init(gpa);
         pool.current_rank = at;
+        try pool.ensureRanksThrough(at);
 
         return .{
             .var_pool = pool,
@@ -336,9 +337,10 @@ const Env = struct {
     }
 
     /// Resets internal state of env and set rank to generalized
-    fn reset(self: *Env) void {
-        self.var_pool.current_rank = .generalized;
+    fn reset(self: *Env, to: Rank) !void {
+        self.var_pool.current_rank = to;
         self.var_pool.clearRetainingCapacity();
+        try self.var_pool.ensureRanksThrough(to);
         self.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
     }
 
@@ -998,13 +1000,17 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     try ensureTypeStoreIsFilled(self);
 
     // Create a solver env
-    var env = try self.env_pool.acquire(.generalized);
+    var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
 
+    std.debug.assert(env.rank() == .generalized);
+
     // Copy builtin types (Bool, Try) into this module's type store
+    // Note that bool_var and try_var will have generalized rank
     try self.copyBuiltinTypes();
 
     // First, iterate over the builtin statements, generating types for each type declaration
+    // Note that any types generated will be generalized
     const builtin_stmts_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (builtin_stmts_slice) |builtin_stmt_idx| {
         // If the statement is a type declaration, then generate the it's type
@@ -1019,9 +1025,11 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
     // First pass: generate types for each type declaration
+    // Note that any types generated will be generalized
     for (stmts_slice) |stmt_idx| {
         const stmt = self.cir.store.getStatement(stmt_idx);
         const stmt_var = ModuleEnv.varFrom(stmt_idx);
+
         try self.setVarRank(stmt_var, &env);
 
         switch (stmt) {
@@ -1044,17 +1052,24 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     }
 
     // Next, capture all top level defs
-    // This is used to support out-of-order defts
+    // This is used to support out-of-order defs
     const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
     for (defs_slice) |def_idx| {
         const def = self.cir.store.getDef(def_idx);
         try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
     }
 
+    // Set the rank to be outermost
+    try env.var_pool.pushRank();
+    std.debug.assert(env.rank() == .outermost);
+
     // Then, iterate over defs again, inferring types
     for (defs_slice) |def_idx| {
-        env.reset();
         try self.checkDef(def_idx, &env);
+
+        // Ensure that after processing a def, checkDef correctly restores the
+        // rank to outermost for the next level of processing
+        std.debug.assert(env.rank() == .outermost);
     }
 
     // Finally, type-check top-level statements (like expect)
@@ -1067,12 +1082,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
         switch (stmt) {
             .s_expect => |expr_stmt| {
-                env.reset();
-
-                // Enter a new rank for this expect
-                try env.var_pool.pushRank();
-                defer env.var_pool.popRank();
-
                 // Check the body expression
                 _ = try self.checkExpr(expr_stmt.body, &env, .no_expectation);
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
@@ -1083,16 +1092,18 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
-
-                // Clean up rank pool without generalizing (expect is not a lambda definition)
-                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), false);
-                try self.checkDeferredStaticDispatchConstraints(&env);
             },
             else => {
                 // Other statement types are handled elsewhere (type decls, defs, etc.)
             },
         }
     }
+
+    // Check any accumulated static dispatch constraints
+    try self.checkDeferredStaticDispatchConstraints(&env);
+
+    // Only generalize if this is a lambda expression (value restriction)
+    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -1198,7 +1209,7 @@ pub fn checkPlatformRequirements(
     defer trace.end();
 
     // Create a solver env for type operations
-    var env = try self.env_pool.acquire(.generalized);
+    var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
 
     // Iterate over the platform's required types
@@ -1452,8 +1463,9 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.copyBuiltinTypes();
 
     // Create a solver env
-    var env = try self.env_pool.acquire(.generalized);
+    var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
+    std.debug.assert(env.rank() == .generalized);
 
     // First, iterate over the statements, generating types for each type declaration
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
@@ -1464,18 +1476,25 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     }
 
     {
-        try env.var_pool.pushRank();
-        defer env.var_pool.popRank();
+
+        // Check if this expr is one that should be generalized
+        const should_generalize = self.isLambdaExpr(expr_idx);
+
+        // If this type of expr should be generalized, push a new rank
+        if (should_generalize) try env.var_pool.pushRank();
+        defer if (should_generalize) env.var_pool.popRank();
 
         // Check the expr
         _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-        // Only generalize if this is a lambda expression (value restriction)
-        const should_generalize = self.isLambdaExpr(expr_idx);
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+        // If this type of expr should be generalized, generalize it!
+        if (should_generalize) {
+            // Check any accumulated static dispatch constraints
+            try self.checkDeferredStaticDispatchConstraints(&env);
 
-        // Check any accumulated static dispatch constraints
-        try self.checkDeferredStaticDispatchConstraints(&env);
+            // Only generalize if this is a lambda expression (value restriction)
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+        }
     }
 }
 
@@ -1487,10 +1506,12 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     try self.copyBuiltinTypes();
 
     // Create a solver env
-    var env = try self.env_pool.acquire(.generalized);
+    var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
+    std.debug.assert(env.rank() == .generalized);
 
     // First, iterate over the statements, generating types for each type declaration
+    // Note that any types generated will be generalized
     const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
     for (stms_slice) |stmt_idx| {
         try self.generateStmtTypeDeclType(stmt_idx, &env);
@@ -1503,25 +1524,38 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
     }
 
+    // Set the rank to be outermost
+    try env.var_pool.pushRank();
+    std.debug.assert(env.rank() == .outermost);
+
     // Type-check defs from local type declarations (their associated blocks)
     for (defs_slice) |def_idx| {
-        env.reset();
         try self.checkDef(def_idx, &env);
+
+        // Ensure that after processing a def, checkDef correctly restores the
+        // rank to outermost for the next level of processing
+        std.debug.assert(env.rank() == .outermost);
     }
 
     {
-        try env.var_pool.pushRank();
-        defer env.var_pool.popRank();
+        // Check if this expr is one that should be generalized
+        const should_generalize = self.isLambdaExpr(expr_idx);
+
+        // If this type of expr should be generalized, push a new rank
+        if (should_generalize) try env.var_pool.pushRank();
+        defer if (should_generalize) env.var_pool.popRank();
 
         // Check the expr
         _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-        // Only generalize if this is a lambda expression (value restriction)
-        const should_generalize = self.isLambdaExpr(expr_idx);
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+        // If this type of expr should be generalized, generalize it!
+        if (should_generalize) {
+            // Check any accumulated static dispatch constraints
+            try self.checkDeferredStaticDispatchConstraints(&env);
 
-        // Check any accumulated static dispatch constraints
-        try self.checkDeferredStaticDispatchConstraints(&env);
+            // Only generalize if this is a lambda expression (value restriction)
+            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+        }
     }
 }
 
@@ -1532,13 +1566,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Ensure that initiailly we're at the generalized level
-    std.debug.assert(env.rank() == .generalized);
-
     const def = self.cir.store.getDef(def_idx);
-    const def_var = ModuleEnv.varFrom(def_idx);
-    const ptrn_var = ModuleEnv.varFrom(def.pattern);
-    const expr_var = ModuleEnv.varFrom(def.expr);
 
     if (self.top_level_ptrns.get(def.pattern)) |processing_def| {
         if (processing_def.status == .processed) {
@@ -1550,102 +1578,75 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Make as processing
     try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processing });
 
-    {
-        try env.var_pool.pushRank();
-        defer env.var_pool.popRank();
+    // Check if this expr is one that should be generalized
+    const def_var = ModuleEnv.varFrom(def_idx);
+    const ptrn_var = ModuleEnv.varFrom(def.pattern);
+    const expr_var = ModuleEnv.varFrom(def.expr);
 
-        std.debug.assert(env.rank() == .top_level);
+    // Ensure that initially we are at top level
+    std.debug.assert(env.rank() == .outermost);
 
-        try self.setVarRank(def_var, env);
-        try self.setVarRank(ptrn_var, env);
-        try self.setVarRank(expr_var, env);
+    // Set the ptrn and expr rank
+    try self.setVarRank(def_var, env);
+    try self.setVarRank(ptrn_var, env);
 
-        // Check the pattern
-        try self.checkPattern(def.pattern, env, .no_expectation);
+    // Check the pattern
+    try self.checkPattern(def.pattern, env);
 
-        // Extract function name from the pattern (for better error messages)
-        const saved_func_name = self.enclosing_func_name;
-        self.enclosing_func_name = blk: {
-            const pattern = self.cir.store.getPattern(def.pattern);
-            switch (pattern) {
-                .assign => |assign| break :blk assign.ident,
-                else => break :blk null,
-            }
-        };
-        defer self.enclosing_func_name = saved_func_name;
-
-        // Create placeholder for the annotation, if it exists
-        var mb_instantiated_anno_var: ?Var = null;
-
-        // Check the annotation, if it exists
-        const expectation = blk: {
-            if (def.annotation) |annotation_idx| {
-                // Generate the annotation type var in-place
-                try self.generateAnnotationType(annotation_idx, env);
-                const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                // Here we copy the annotation before we unify against it
-                //
-                // This is so if there's an error in the expr/ptrn, we can preserve
-                // the annotation so other places that reference it still get the
-                // type of the annotation.
-                mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
-                    annotation_var,
-                    env,
-                    .use_last_var,
-                );
-
-                // Return the expectation
-                break :blk Expected{
-                    .expected = .{ .var_ = annotation_var, .from_annotation = true },
-                };
-            } else {
-                break :blk Expected.no_expectation;
-            }
-        };
-
-        // Infer types for the body, checking against the instantaited annotation
-        _ = try self.checkExpr(def.expr, env, expectation);
-
-        // Only generalize if this is a lambda expression (value restriction)
-        const should_generalize = self.isLambdaExpr(def.expr);
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
-
-        // Check any accumulated static dispatch constraints
-        try self.checkDeferredStaticDispatchConstraints(env);
-
-        // Check if the expression type contains any errors anywhere in its structure.
-        // If it does and we have an annotation, use the annotation type for the pattern
-        // instead of the expression type. This preserves the annotation type for other
-        // code that references this identifier, even when the expression has errors.
-        //
-        // For example, if the annotation is `I64 -> Str` and the expression has an error
-        // in the return type (making it `I64 -> Error`), the pattern should still get
-        // `I64 -> Str` from the annotation.
-        if (mb_instantiated_anno_var) |instantiated_anno_var| {
-            var visited = std.AutoHashMap(Var, void).init(self.gpa);
-            defer visited.deinit();
-            if (self.varContainsError(expr_var, &visited)) {
-                // If there was an annotation AND the expr contains errors, then unify the
-                // ptrn against the annotation
-                _ = try self.unify(ptrn_var, instantiated_anno_var, env);
-            } else {
-                // Otherwise, unify the ptrn and expr
-                _ = try self.unify(ptrn_var, expr_var, env);
-            }
-        } else {
-            // No annotation, just unify the ptrn and expr
-            _ = try self.unify(ptrn_var, expr_var, env);
+    // Extract function name from the pattern (for better error messages)
+    const saved_func_name = self.enclosing_func_name;
+    self.enclosing_func_name = blk: {
+        const pattern = self.cir.store.getPattern(def.pattern);
+        switch (pattern) {
+            .assign => |assign| break :blk assign.ident,
+            else => break :blk null,
         }
+    };
+    defer self.enclosing_func_name = saved_func_name;
 
-        // Check that the def and ptrn match
-        _ = try self.unify(def_var, ptrn_var, env);
+    // Check the annotation, if it exists
+    const expectation = blk: {
+        if (def.annotation) |annotation_idx| {
+            break :blk Expected{ .expected = annotation_idx };
+        } else {
+            break :blk Expected.no_expectation;
+        }
+    };
 
-        // After solving the definition, check for infinite types.
-        // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
-        // Similar to Rust's check_for_infinite_type called after LetCon.
-        try self.checkForInfiniteType(def_var);
-    }
+    // Infer types for the body, checking against the instantiated annotation
+    _ = try self.checkExpr(def.expr, env, expectation);
+
+    // Check if the expression type contains any errors anywhere in its structure.
+    // If it does and we have an annotation, use the annotation type for the pattern
+    // instead of the expression type. This preserves the annotation type for other
+    // code that references this identifier, even when the expression has errors.
+    //
+    // For example, if the annotation is `I64 -> Str` and the expression has an error
+    // in the return type (making it `I64 -> Error`), the pattern should still get
+    // `I64 -> Str` from the annotation.
+    // if (mb_instantiated_anno_var) |instantiated_anno_var| {
+    //     var visited = std.AutoHashMap(Var, void).init(self.gpa);
+    //     defer visited.deinit();
+    //     if (self.varContainsError(expr_var, &visited)) {
+    //         // If there was an annotation AND the expr contains errors, then unify the
+    //         // ptrn against the annotation
+    //         _ = try self.unify(ptrn_var, instantiated_anno_var, env);
+    //     } else {
+    //         // Otherwise, unify the ptrn and expr
+    //         _ = try self.unify(ptrn_var, expr_var, env);
+    //     }
+    // } else {
+    // No annotation, just unify the ptrn and expr
+    _ = try self.unify(ptrn_var, expr_var, env);
+    // }
+
+    // Check that the def and ptrn match
+    _ = try self.unify(def_var, ptrn_var, env);
+
+    // After solving the definition, check for infinite types.
+    // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
+    // Similar to Rust's check_for_infinite_type called after LetCon.
+    try self.checkForInfiniteType(def_var);
 
     // Mark as processed
     try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
@@ -2506,7 +2507,7 @@ fn setBuiltinTypeContent(
 
 const Expected = union(enum) {
     no_expectation,
-    expected: struct { var_: Var, from_annotation: bool },
+    expected: CIR.Annotation.Idx,
 };
 
 // pattern //
@@ -2516,9 +2517,8 @@ fn checkPattern(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     env: *Env,
-    expected: Expected,
 ) std.mem.Allocator.Error!void {
-    _ = try self.checkPatternHelp(pattern_idx, env, expected, .in_place);
+    _ = try self.checkPatternHelp(pattern_idx, env, .in_place);
 }
 
 /// Check the types for the provided pattern, either as fresh var or in-place
@@ -2526,7 +2526,6 @@ fn checkPatternHelp(
     self: *Self,
     pattern_idx: CIR.Pattern.Idx,
     env: *Env,
-    expected: Expected,
     comptime out_var: OutVar,
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
@@ -2559,7 +2558,7 @@ fn checkPatternHelp(
         },
         // as //
         .as => |p| {
-            const var_ = try self.checkPatternHelp(p.pattern, env, expected, out_var);
+            const var_ = try self.checkPatternHelp(p.pattern, env, out_var);
             _ = try self.unify(var_, pattern_var, env);
         },
         // tuple //
@@ -2573,7 +2572,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, env, .no_expectation, out_var);
+                            const elem_var = try self.checkPatternHelp(single_elem_ptrn_idx, env, out_var);
                             try self.scratch_vars.append(elem_var);
                         }
 
@@ -2584,7 +2583,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const elems_slice = self.cir.store.slicePatterns(tuple.patterns);
                         for (elems_slice) |single_elem_ptrn_idx| {
-                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, env, .no_expectation, out_var);
+                            _ = try self.checkPatternHelp(single_elem_ptrn_idx, env, out_var);
                         }
 
                         // Add to types store
@@ -2613,12 +2612,12 @@ fn checkPatternHelp(
                 // constrain the rest of the list
 
                 // Check the first elem
-                const elem_var = try self.checkPatternHelp(elems[0], env, .no_expectation, out_var);
+                const elem_var = try self.checkPatternHelp(elems[0], env, out_var);
 
                 // Iterate over the remaining elements
                 var last_elem_ptrn_idx = elems[0];
                 for (elems[1..], 1..) |elem_ptrn_idx, i| {
-                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, env, .no_expectation, out_var);
+                    const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, env, out_var);
 
                     // Unify each element's var with the list's elem var
                     const result = try self.unify(elem_var, cur_elem_var, env);
@@ -2632,7 +2631,7 @@ fn checkPatternHelp(
                     // to the elem_var to catch their individual errors
                     if (!result.isOk()) {
                         for (elems[i + 1 ..]) |remaining_elem_expr_idx| {
-                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, env, .no_expectation, out_var);
+                            _ = try self.checkPatternHelp(remaining_elem_expr_idx, env, out_var);
                         }
 
                         // Break to avoid cascading errors
@@ -2650,7 +2649,7 @@ fn checkPatternHelp(
                 // This is if the pattern is like `.. as x`
                 if (list.rest_info) |rest_info| {
                     if (rest_info.pattern) |rest_pattern_idx| {
-                        const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, env, .no_expectation, out_var);
+                        const rest_pattern_var = try self.checkPatternHelp(rest_pattern_idx, env, out_var);
 
                         _ = try self.unify(pattern_var, rest_pattern_var, env);
                     }
@@ -2670,7 +2669,7 @@ fn checkPatternHelp(
                         // Check tuple elements
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            const arg_var = try self.checkPatternHelp(arg_expr_idx, env, .no_expectation, out_var);
+                            const arg_var = try self.checkPatternHelp(arg_expr_idx, env, out_var);
                             try self.scratch_vars.append(arg_var);
                         }
 
@@ -2682,7 +2681,7 @@ fn checkPatternHelp(
                         // Process each tag arg
                         const arg_ptrn_idx_slice = self.cir.store.slicePatterns(applied_tag.args);
                         for (arg_ptrn_idx_slice) |arg_expr_idx| {
-                            _ = try self.checkPatternHelp(arg_expr_idx, env, .no_expectation, out_var);
+                            _ = try self.checkPatternHelp(arg_expr_idx, env, out_var);
                         }
 
                         // Add to types store
@@ -2704,7 +2703,7 @@ fn checkPatternHelp(
         // nominal //
         .nominal => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, .no_expectation, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, out_var);
 
             // Use shared nominal type checking logic
             _ = try self.checkNominalTypeUsage(
@@ -2718,7 +2717,7 @@ fn checkPatternHelp(
         },
         .nominal_external => |nominal| {
             // Check the backing pattern first
-            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, .no_expectation, out_var);
+            const actual_backing_var = try self.checkPatternHelp(nominal.backing_pattern, env, out_var);
 
             // Resolve the external type declaration
             if (try self.resolveVarFromExternal(nominal.module_idx, nominal.target_node_idx)) |ext_ref| {
@@ -2749,10 +2748,10 @@ fn checkPatternHelp(
                 const field_pattern_var = blk: {
                     switch (destruct.kind) {
                         .Required => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, .no_expectation, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, out_var);
                         },
                         .SubPattern => |sub_pattern_idx| {
-                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, .no_expectation, out_var);
+                            break :blk try self.checkPatternHelp(sub_pattern_idx, env, out_var);
                         },
                     }
                 };
@@ -2858,18 +2857,6 @@ fn checkPatternHelp(
         },
     }
 
-    // If we were provided with an expected type, unify against it
-    switch (expected) {
-        .no_expectation => {},
-        .expected => |expected_type| {
-            if (expected_type.from_annotation) {
-                _ = try self.unifyWithCtx(expected_type.var_, pattern_var, env, .anno);
-            } else {
-                _ = try self.unify(expected_type.var_, pattern_var, env);
-            }
-        },
-    }
-
     return pattern_var;
 }
 
@@ -2883,12 +2870,31 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
 
-    // Set the rank of the expr var, if it is not a lambda
-    //
-    // Lambdas push a new rank, so the var must be added to _that_ rank
-    if (expr != .e_lambda) {
-        try self.setVarRank(expr_var, env);
-    }
+    // Check if this is a lambda expression. If so, then we should generalize.
+    const should_generalize = expr == .e_lambda;
+
+    // Push/pop ranks based on if we should generalize
+    if (should_generalize) try env.var_pool.pushRank();
+    defer if (should_generalize) env.var_pool.popRank();
+
+    // Set the correct rank of this expr
+    try self.setVarRank(expr_var, env);
+
+    // Generate annotation type variables
+    const mb_anno_vars: ?AnnoVars = switch (expected) {
+        .no_expectation => null,
+        .expected => |annotation_idx| blk: {
+            // Generate the type for the annotation
+            try self.generateAnnotationType(annotation_idx, env);
+            const anno_var = ModuleEnv.varFrom(annotation_idx);
+
+            // Instantiate a backup copy, used if the expr errors to allow
+            // places that reference this expr to use as if it did not error
+            const anno_var_backup = try self.instantiateVarPreserveRigids(anno_var, env, .use_last_var);
+
+            break :blk .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup };
+        },
+    };
 
     var does_fx = false; // Does this expression potentially perform any side effects?
 
@@ -2911,13 +2917,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
                     },
                     else => {
+                        does_fx = try self.checkExpr(seg_expr_idx, env, .no_expectation) or does_fx;
+                        const seg_var = ModuleEnv.varFrom(seg_expr_idx);
+
                         // Interpolated expressions must be of type Str
                         const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
                         const expected_str_var = try self.freshStr(env, seg_region);
-                        does_fx = try self.checkExpr(seg_expr_idx, env, .{ .expected = .{ .var_ = expected_str_var, .from_annotation = false } }) or does_fx;
 
-                        // Unify the segment's type with Str to produce a type error if it doesn't match
-                        const seg_var = ModuleEnv.varFrom(seg_expr_idx);
                         const unify_result = try self.unify(seg_var, expected_str_var, env);
                         if (!unify_result.isOk()) {
                             // Unification failed - mark as error
@@ -3355,10 +3361,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             if (mb_processing_def) |processing_def| {
                 switch (processing_def.status) {
                     .not_processed => {
-                        var sub_env = try self.env_pool.acquire(.generalized);
+                        var sub_env = try self.env_pool.acquire();
                         defer self.env_pool.release(sub_env);
 
+                        // Push through to top_level
+                        try sub_env.var_pool.pushRank();
+                        std.debug.assert(sub_env.rank() == .outermost);
+
+                        // Copy generalized and top_level to the new solver pool
+                        try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.generalized), .generalized);
+                        try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.outermost), .outermost);
+
                         try self.checkDef(processing_def.def_idx, &sub_env);
+                        std.debug.assert(sub_env.rank() == .outermost);
+
+                        // Copy generalized and top_level to the new solver pool
+                        try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.generalized), .generalized);
+                        try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.outermost), .outermost);
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
@@ -3421,7 +3440,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = stmt_result.does_fx or does_fx;
 
             // Check the final expression
-            does_fx = try self.checkExpr(block.final_expr, env, expected) or does_fx;
+            does_fx = try self.checkExpr(block.final_expr, env, .no_expectation) or does_fx;
 
             // If the block diverges (has a return/crash), use a flex var for the block's type
             // since the final expression is unreachable
@@ -3434,24 +3453,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // function //
         .e_lambda => |lambda| {
-            // Annotation-aware lambda type checking produces much better error
-            // messages, so first we have to determine if we have an expected
-            // type to validate against
-            const mb_expected_var: ?Var, const is_expected_from_anno: bool = blk: {
-                switch (expected) {
-                    .no_expectation => break :blk .{ null, false },
-                    .expected => |expected_type| {
-                        break :blk .{ expected_type.var_, expected_type.from_annotation };
-                    },
-                }
-            };
-
             // Then, even if we have an expected type, it may not actually be a function
-            const mb_expected_func: ?types_mod.Func = blk: {
-                if (mb_expected_var) |expected_var| {
+            const mb_anno_func: ?types_mod.Func = blk: {
+                if (mb_anno_vars) |anno_vars| {
                     // Here, we unwrap the function, following aliases, to get
                     // the actual function we want to check against
-                    var var_ = expected_var;
+                    var var_ = anno_vars.anno_var;
                     var guard = types_mod.debug.IterationGuard.init("checkExpr.lambda.unwrapExpectedFunc");
                     while (true) {
                         guard.tick();
@@ -3475,131 +3482,108 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 }
             };
 
-            {
-                // Enter the next rank
-                try env.var_pool.pushRank();
-                defer env.var_pool.popRank();
+            // Check the argument patterns
+            // This must happen *before* checking against the expected type so
+            // all the pattern types are inferred
+            const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
+            for (arg_pattern_idxs) |pattern_idx| {
+                try self.checkPattern(pattern_idx, env);
+            }
 
-                // IMPORTANT: expr_var must be added to the new rank, not the
-                // outer rank
-                try self.setVarRank(expr_var, env);
+            // Now, check if we have an expected function to validate against
+            if (mb_anno_func) |anno_func| {
+                const anno_func_args = self.types.sliceVars(anno_func.args);
 
-                // Check the argument patterns
-                // This must happen *before* checking against the expected type so
-                // all the pattern types are inferred
-                const arg_pattern_idxs = self.cir.store.slicePatterns(lambda.args);
-                for (arg_pattern_idxs) |pattern_idx| {
-                    try self.checkPattern(pattern_idx, env, .no_expectation);
-                }
+                // Next, check if the arguments arities match
+                if (anno_func_args.len == arg_pattern_idxs.len) {
+                    // If so, check each argument, passing in the expected type
 
-                // Now, check if we have an expected function to validate against
-                if (mb_expected_func) |expected_func| {
-                    const expected_func_args = self.types.sliceVars(expected_func.args);
+                    // First, find all the rigid variables in a the function's type
+                    // and unify the matching corresponding lambda arguments together.
+                    for (anno_func_args, 0..) |anno_arg_1, i| {
+                        const anno_resolved_1 = self.types.resolveVar(anno_arg_1);
 
-                    // Next, check if the arguments arities match
-                    if (expected_func_args.len == arg_pattern_idxs.len) {
-                        // If so, check each argument, passing in the expected type
+                        // The expected type is an annotation and as such,
+                        // should never contain a flex var. If it did, that
+                        // would indicate that the annotation is malformed
+                        // std.debug.assert(expected_resolved_1.desc.content != .flex);
 
-                        // First, find all the rigid variables in a the function's type
-                        // and unify the matching corresponding lambda arguments together.
-                        for (expected_func_args, 0..) |expected_arg_1, i| {
-                            const expected_resolved_1 = self.types.resolveVar(expected_arg_1);
+                        // Skip any concrete arguments
+                        if (anno_resolved_1.desc.content != .rigid) {
+                            continue;
+                        }
 
-                            // The expected type is an annotation and as such,
-                            // should never contain a flex var. If it did, that
-                            // would indicate that the annotation is malformed
-                            // std.debug.assert(expected_resolved_1.desc.content != .flex);
+                        // Look for other arguments with the same type variable
+                        for (anno_func_args[i + 1 ..], i + 1..) |anno_arg_2, j| for_blk: {
+                            const anno_resolved_2 = self.types.resolveVar(anno_arg_2);
+                            if (anno_resolved_1.var_ == anno_resolved_2.var_) {
+                                // These two argument indexes in the called *function's*
+                                // type have the same rigid variable! So, we unify
+                                // the corresponding *lambda args*
 
-                            // Skip any concrete arguments
-                            if (expected_resolved_1.desc.content != .rigid) {
-                                continue;
-                            }
+                                const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
+                                const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
 
-                            // Look for other arguments with the same type variable
-                            for (expected_func_args[i + 1 ..], i + 1..) |expected_arg_2, j| for_blk: {
-                                const expected_resolved_2 = self.types.resolveVar(expected_arg_2);
-                                if (expected_resolved_1.var_ == expected_resolved_2.var_) {
-                                    // These two argument indexes in the called *function's*
-                                    // type have the same rigid variable! So, we unify
-                                    // the corresponding *lambda args*
+                                const unify_result = try self.unify(arg_1, arg_2, env);
+                                if (unify_result.isProblem()) {
+                                    // Use the new error detail for bound type variable incompatibility
+                                    self.setProblemTypeMismatchDetail(unify_result.problem, .{
+                                        .incompatible_fn_args_bound_var = .{
+                                            .fn_name = self.enclosing_func_name,
+                                            .first_arg_var = arg_1,
+                                            .second_arg_var = arg_2,
+                                            .first_arg_index = @intCast(i),
+                                            .second_arg_index = @intCast(j),
+                                            .num_args = @intCast(arg_pattern_idxs.len),
+                                        },
+                                    });
 
-                                    const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
-                                    const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
-
-                                    const unify_result = try self.unify(arg_1, arg_2, env);
-                                    if (unify_result.isProblem()) {
-                                        // Use the new error detail for bound type variable incompatibility
-                                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                            .incompatible_fn_args_bound_var = .{
-                                                .fn_name = self.enclosing_func_name,
-                                                .first_arg_var = arg_1,
-                                                .second_arg_var = arg_2,
-                                                .first_arg_index = @intCast(i),
-                                                .second_arg_index = @intCast(j),
-                                                .num_args = @intCast(arg_pattern_idxs.len),
-                                            },
-                                        });
-
-                                        // Stop execution
-                                        _ = try self.unifyWith(expr_var, .err, env);
-                                        break :for_blk;
-                                    }
+                                    // Stop execution
+                                    _ = try self.unifyWith(expr_var, .err, env);
+                                    break :for_blk;
                                 }
                             }
                         }
-
-                        // Then, lastly, we unify the annotation types against the
-                        // actual type
-                        for (expected_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                            if (is_expected_from_anno) {
-                                _ = try self.unifyWithCtx(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .anno);
-                            } else {
-                                _ = try self.unify(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env);
-                            }
-                        }
-                    } else {
-                        // This means the expected type and the actual lambda have
-                        // an arity mismatch. This will be caught by the regular
-                        // expectation checking code at the bottom of this function
                     }
-                }
-                const arg_vars: []Var = @ptrCast(arg_pattern_idxs);
 
-                // Check the the body of the expr
-                // If we have an expected function, use that as the expr's expected type
-                // Also track the return type so `return` expressions can use it
-                const saved_return_type = self.enclosing_func_return_type;
-                if (mb_expected_func) |expected_func| {
-                    self.enclosing_func_return_type = expected_func.ret;
-                    does_fx = try self.checkExpr(lambda.body, env, .{
-                        .expected = .{ .var_ = expected_func.ret, .from_annotation = is_expected_from_anno },
-                    }) or does_fx;
+                    // Then, lastly, we unify the annotation types against the
+                    // actual type
+                    for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
+                        _ = try self.unifyWithCtx(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .anno);
+                    }
                 } else {
-                    // When no expected type, the body's type becomes the return type.
-                    // We need a fresh var so early returns can unify with it.
-                    const body_var = ModuleEnv.varFrom(lambda.body);
-                    self.enclosing_func_return_type = body_var;
-                    does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
+                    // This means the expected type and the actual lambda have
+                    // an arity mismatch. This will be caught by the regular
+                    // expectation checking code at the bottom of this function
                 }
-                self.enclosing_func_return_type = saved_return_type;
-                const body_var = ModuleEnv.varFrom(lambda.body);
+            }
 
-                // Unify all early returns with the body's return type.
-                // This ensures that `return x` has the same type as the implicit return.
-                try self.unifyEarlyReturns(lambda.body, body_var, env);
+            const arg_vars: []Var = @ptrCast(arg_pattern_idxs);
+            const body_var = ModuleEnv.varFrom(lambda.body);
 
-                // Create the function type
-                if (does_fx) {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
-                } else {
-                    _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
-                }
+            // Check the the body of the expr
+            // If we have an expected function, use that as the expr's expected type
+            // Also track the return type so `return` expressions can use it
+            const saved_return_type = self.enclosing_func_return_type;
+            if (mb_anno_func) |expected_func| {
+                self.enclosing_func_return_type = expected_func.ret;
+                does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
+                _ = try self.unifyWithCtx(expected_func.ret, body_var, env, .anno);
+            } else {
+                self.enclosing_func_return_type = body_var;
+                does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
+            }
+            self.enclosing_func_return_type = saved_return_type;
 
-                // This is a lambda, so we can generalize it
-                try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+            // Unify all early returns with the body's return type.
+            // This ensures that `return x` has the same type as the implicit return.
+            try self.unifyEarlyReturns(lambda.body, body_var, env);
 
-                // Check any accumulated static dispatch constraints
-                try self.checkDeferredStaticDispatchConstraints(env);
+            // Create the function type
+            if (does_fx) {
+                _ = try self.unifyWith(expr_var, try self.types.mkFuncEffectful(arg_vars, body_var), env);
+            } else {
+                _ = try self.unifyWith(expr_var, try self.types.mkFuncUnbound(arg_vars, body_var), env);
             }
 
             // Note that so far, we have not yet unified against the
@@ -3611,7 +3595,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
         },
         .e_closure => |closure| {
-            does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
+            does_fx = try self.checkExpr(closure.lambda_idx, env, .no_expectation) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
         },
         // function calling //
@@ -3952,7 +3936,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_for => |for_expr| {
             // Check the pattern
-            try self.checkPattern(for_expr.patt, env, .no_expectation);
+            try self.checkPattern(for_expr.patt, env);
             const for_ptrn_var: Var = ModuleEnv.varFrom(for_expr.patt);
 
             // Check the list expression
@@ -3988,30 +3972,24 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // This shouldn't happen since we always create e_anno_only with an annotation
                     try self.unifyWith(expr_var, .err, env);
                 },
-                .expected => |expected_type| {
-                    // Redirect expr_var to the annotation var so that lookups get the correct type
-                    _ = try self.unify(expr_var, expected_type.var_, env);
+                .expected => |_| {
+                    // The expr will be unified with the expected type below
+                    // expr_var is defaulty a flex var, so no action is need here
                 },
             }
         },
         .e_return => |ret| {
+            does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
+            const ret_var = ModuleEnv.varFrom(ret.expr);
+
             // Early return expression - check the inner expression against enclosing function's return type
             // If we're inside a function, use its return type. Otherwise fall back to expected.
-            const return_expected: Expected = if (self.enclosing_func_return_type) |ret_var|
-                .{ .expected = .{ .var_ = ret_var, .from_annotation = false } }
-            else
-                expected;
-            does_fx = try self.checkExpr(ret.expr, env, return_expected) or does_fx;
-            // e_return "never returns" - it exits the function, so it can unify with any expected type.
-            // This allows it to be used in if branches alongside other expressions.
-            switch (expected) {
-                .expected => |exp| {
-                    _ = try self.unify(expr_var, exp.var_, env);
-                },
-                .no_expectation => {
-                    // No expected type, leave expr_var as a flex var
-                },
+            if (self.enclosing_func_return_type) |enclosing_ret_var| {
+                _ = try self.unify(enclosing_ret_var, ret_var, env);
             }
+
+            // Note that we DO NOT unify the return type with the expr here.
+            // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
         },
         .e_hosted_lambda => {
             // For hosted lambda expressions, the type comes from the annotation.
@@ -4021,9 +3999,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // This shouldn't happen since hosted lambdas always have annotations
                     try self.unifyWith(expr_var, .err, env);
                 },
-                .expected => |expected_type| {
-                    // Redirect expr_var to the annotation var so that lookups get the correct type
-                    _ = try self.unify(expr_var, expected_type.var_, env);
+                .expected => |_| {
+                    // The expr will be unified with the expected type below
+                    // expr_var is defaulty a flex var, so no action is need here
                 },
             }
         },
@@ -4032,13 +4010,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // Check the body (which will be e_runtime_error or similar)
             does_fx = try self.checkExpr(ll.body, env, .no_expectation) or does_fx;
 
-            // The lambda's type comes from the annotation.
-            // Like e_anno_only, this should always have an annotation.
-            // The type will be unified with the expected type in the code below.
+            // For low level lambda expressions, the type comes from the annotation.
+            // This is similar to e_anno_only - the implementation is provided by the host.
             switch (expected) {
-                .no_expectation => unreachable,
-                .expected => {
-                    // The expr_var will be unified with the annotation var below
+                .no_expectation => {
+                    // This shouldn't happen since hosted lambdas always have annotations
+                    try self.unifyWith(expr_var, .err, env);
+                },
+                .expected => |_| {
+                    // The expr will be unified with the expected type below
+                    // expr_var is defaulty a flex var, so no action is need here
                 },
             }
         },
@@ -4103,20 +4084,26 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
     }
 
-    // If we were provided with an expected type, unify against it
-    switch (expected) {
-        .no_expectation => {},
-        .expected => |expected_type| {
-            if (expected_type.from_annotation) {
-                _ = try self.unifyWithCtx(expected_type.var_, expr_var, env, .anno);
-            } else {
-                _ = try self.unify(expected_type.var_, expr_var, env);
-            }
-        },
+    if (mb_anno_vars) |anno_vars| {
+        _ = try self.unifyWithCtx(anno_vars.anno_var, expr_var, env, .anno);
+
+        // TODO: Preserve type annotation type if expr errored
+
+    }
+
+    // Check any accumulated static dispatch constraints
+    try self.checkDeferredStaticDispatchConstraints(env);
+
+    // If this type of expr should be generalized, generalize it!
+    if (should_generalize) {
+        // Only generalize if this is a lambda expression (value restriction)
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
     }
 
     return does_fx;
 }
+
+const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
 
 // stmts //
 
@@ -4143,7 +4130,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
                 // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
+                try self.checkPattern(decl_stmt.pattern, env);
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
@@ -4156,36 +4143,40 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 };
                 defer self.enclosing_func_name = saved_func_name;
 
-                // Create placeholder for the annotation, if it exists
-                var mb_instantiated_anno_var: ?Var = null;
+                // Check if this expr is one that should be generalized
+                const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+
+                // // Create placeholder for the annotation, if it exists
+                // var mb_instantiated_anno_var: ?Var = null;
 
                 // Evaluate the rhs of the expression
                 {
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
+
+                    // If this type of expr should be generalized, push a new rank
+                    if (should_generalize) try env.var_pool.pushRank();
+                    defer if (should_generalize) env.var_pool.popRank();
 
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
-                            // Generate the annotation type var in-place
-                            try self.generateAnnotationType(annotation_idx, env);
-                            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                            // // Generate the annotation type var in-place
+                            // try self.generateAnnotationType(annotation_idx, env);
+                            // const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
-                            // Here we copy the annotation before we unify against it
-                            //
-                            // This is so if there's an error in the expr/ptrn, we can preserve
-                            // the annotation so other places that reference it still get the
-                            // type of the annotation.
-                            mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
-                                annotation_var,
-                                env,
-                                .use_last_var,
-                            );
+                            // // Here we copy the annotation before we unify against it
+                            // //
+                            // // This is so if there's an error in the expr/ptrn, we can preserve
+                            // // the annotation so other places that reference it still get the
+                            // // type of the annotation.
+                            // mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
+                            //     annotation_var,
+                            //     env,
+                            //     .use_last_var,
+                            // );
 
                             // Return the expectation
                             break :blk Expected{
-                                .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                                .expected = annotation_idx,
                             };
                         } else {
                             break :blk Expected.no_expectation;
@@ -4195,24 +4186,23 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
                     // Only generalize if this is a lambda expression (value restriction)
-                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
-
-                    // Check any accumulated static dispatch constraints
-                    try self.checkDeferredStaticDispatchConstraints(env);
+                    if (should_generalize) {
+                        try self.checkDeferredStaticDispatchConstraints(env);
+                        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+                    }
                 }
 
-                if (mb_instantiated_anno_var != null and
-                    self.types.resolveVar(decl_expr_var).desc.content == .err)
-                {
-                    // If there was an annotation AND the expr errored, then
-                    // unify the ptrn against the annotation
-                    const instantiated_anno_var = mb_instantiated_anno_var.?;
-                    _ = try self.unify(decl_pattern_var, instantiated_anno_var, env);
-                } else {
-                    // Otherwise, unify the ptrn and expr
-                    _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-                }
+                // if (mb_instantiated_anno_var != null and
+                //     self.types.resolveVar(decl_expr_var).desc.content == .err)
+                // {
+                //     // If there was an annotation AND the expr errored, then
+                //     // unify the ptrn against the annotation
+                //     const instantiated_anno_var = mb_instantiated_anno_var.?;
+                //     _ = try self.unify(decl_pattern_var, instantiated_anno_var, env);
+                // } else {
+                // Otherwise, unify the ptrn and expr
+                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
+                // }
 
                 // Unify the pattern with the expression
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
@@ -4220,7 +4210,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_decl_gen => |decl_stmt| {
                 // Generalized declarations (let-polymorphism) - handled same as s_decl for type checking
                 // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env, .no_expectation);
+                try self.checkPattern(decl_stmt.pattern, env);
                 const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
 
                 // Extract function name from the pattern (for better error messages)
@@ -4233,23 +4223,28 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     }
                 };
                 defer self.enclosing_func_name = saved_func_name;
+
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
+
+                // Check if this expr is one that should be generalized
+                const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+
                 {
-                    // Enter a new rank
-                    try env.var_pool.pushRank();
-                    defer env.var_pool.popRank();
+                    // If this type of expr should be generalized, push a new rank
+                    if (should_generalize) try env.var_pool.pushRank();
+                    defer if (should_generalize) env.var_pool.popRank();
 
                     // Check the annotation, if it exists
                     const expectation = blk: {
                         if (decl_stmt.anno) |annotation_idx| {
-                            // Generate the annotation type var in-place
-                            try self.generateAnnotationType(annotation_idx, env);
-                            const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                            // // Generate the annotation type var in-place
+                            // try self.generateAnnotationType(annotation_idx, env);
+                            // const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
                             // Return the expectation
                             break :blk Expected{
-                                .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                                .expected = annotation_idx,
                             };
                         } else {
                             break :blk Expected.no_expectation;
@@ -4259,11 +4254,10 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
                     // Only generalize if this is a lambda expression (value restriction)
-                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
-
-                    // Check any accumulated static dispatch constraints
-                    try self.checkDeferredStaticDispatchConstraints(env);
+                    if (should_generalize) {
+                        try self.checkDeferredStaticDispatchConstraints(env);
+                        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+                    }
                 }
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
@@ -4273,22 +4267,22 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             },
             .s_var => |var_stmt| {
                 // Check the pattern
-                try self.checkPattern(var_stmt.pattern_idx, env, .no_expectation);
+                try self.checkPattern(var_stmt.pattern_idx, env);
                 const var_pattern_var: Var = ModuleEnv.varFrom(var_stmt.pattern_idx);
 
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        // Generate the annotation type var in-place
-                        try self.generateAnnotationType(annotation_idx, env);
-                        const annotation_var = ModuleEnv.varFrom(annotation_idx);
+                        // // Generate the annotation type var in-place
+                        // try self.generateAnnotationType(annotation_idx, env);
+                        // const annotation_var = ModuleEnv.varFrom(annotation_idx);
 
-                        // Unify the pattern with the annotation
-                        _ = try self.unify(var_pattern_var, annotation_var, env);
+                        // // Unify the pattern with the annotation
+                        // _ = try self.unify(var_pattern_var, annotation_var, env);
 
                         // Return the expectation
                         break :blk Expected{
-                            .expected = .{ .var_ = annotation_var, .from_annotation = true },
+                            .expected = annotation_idx,
                         };
                     } else {
                         break :blk Expected.no_expectation;
@@ -4326,7 +4320,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the pattern
                 // for item in [1,2,3] {
                 //     ^^^^
-                try self.checkPattern(for_stmt.patt, env, .no_expectation);
+                try self.checkPattern(for_stmt.patt, env);
                 const for_ptrn_var: Var = ModuleEnv.varFrom(for_stmt.patt);
 
                 // Check the expr
@@ -4666,7 +4660,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-        try self.checkPattern(branch_ptrn.pattern, env, .no_expectation);
+        try self.checkPattern(branch_ptrn.pattern, env);
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
         const ptrn_result = try self.unify(cond_var, branch_ptrn_var, env);
@@ -4689,7 +4683,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
             const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
-            try self.checkPattern(branch_ptrn.pattern, env, .no_expectation);
+            try self.checkPattern(branch_ptrn.pattern, env);
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
@@ -4724,7 +4718,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
                     const other_branch_ptrn = self.cir.store.getMatchBranchPattern(other_branch_ptrn_idx);
-                    try self.checkPattern(other_branch_ptrn.pattern, env, .no_expectation);
+                    try self.checkPattern(other_branch_ptrn.pattern, env);
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
@@ -5276,7 +5270,8 @@ fn resolveVarFromExternal(
     }
 }
 
-/// Instantiate a variable, writing su
+/// Copy a variable from another module into this module
+/// The ranks of all variables copied will be generalized
 fn copyVar(self: *Self, other_module_var: Var, other_module_env: *const ModuleEnv, mb_region: ?Region) std.mem.Allocator.Error!Var {
     // First, reset state
     self.var_map.clearRetainingCapacity();
@@ -5434,12 +5429,11 @@ fn checkNominalTypeUsage(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
+    var next_deferred = try DeferredConstraintCheck.SafeList.initCapacity(self.gpa, 8);
+    defer next_deferred.deinit(self.gpa);
+
     var deferred_constraint_index: usize = 0;
-    while (deferred_constraint_index < deferred_constraint_len) : ({
-        deferred_constraint_index += 1;
-        deferred_constraint_len = env.deferred_static_dispatch_constraints.items.items.len;
-    }) {
+    while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
         const deferred_constraint = env.deferred_static_dispatch_constraints.items.items[deferred_constraint_index];
         const dispatcher_resolved = self.types.resolveVar(deferred_constraint.var_);
         const dispatcher_content = dispatcher_resolved.desc.content;
@@ -5603,10 +5597,22 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         std.debug.assert(processing_def.def_idx == def_idx);
                         switch (processing_def.status) {
                             .not_processed => {
-                                var sub_env = try self.env_pool.acquire(.generalized);
+                                var sub_env = try self.env_pool.acquire();
                                 defer self.env_pool.release(sub_env);
 
+                                try sub_env.var_pool.pushRank();
+                                std.debug.assert(sub_env.rank() == .outermost);
+
+                                // Copy generalized and top_level to the new solver pool
+                                // try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.generalized), .generalized);
+                                // try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.outermost), .outermost);
+
                                 try self.checkDef(def_idx, &sub_env);
+                                std.debug.assert(sub_env.rank() == .outermost);
+
+                                // Copy generalized and top_level to the new solver pool
+                                // try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.generalized), .generalized);
+                                // try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.outermost), .outermost);
                             },
                             .processing => {
                                 // Recursive reference during static dispatch resolution.
@@ -5620,7 +5626,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
                 // Copy the actual method from the dest module env to this module env
                 const real_method_var = if (is_this_module) blk: {
-                    break :blk try self.instantiateVar(def_var, env, .{ .explicit = region });
+                    if (self.types.resolveVar(def_var).desc.rank == .generalized)
+                        break :blk try self.instantiateVar(def_var, env, .{ .explicit = region })
+                    else
+                        break :blk def_var;
                 } else blk: {
                     // Copy the method from the other module's type store
                     const copied_var = try self.copyVar(def_var, original_env, region);
@@ -5728,6 +5737,10 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     );
                 }
             }
+        } else if (dispatcher_content == .flex) {
+            // If the thing we're dispatching is a flex, then hold onto the
+            // constraint so we can try again later.
+            _ = try next_deferred.append(self.gpa, deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
             // This handles function types, which do not support any methods
@@ -5763,6 +5776,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
     // Now that we've processed all constraints, reset the array
     env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
+    try env.deferred_static_dispatch_constraints.items.appendSlice(self.gpa, next_deferred.items.items);
 }
 
 /// Check if a structural type supports is_eq.
@@ -6020,20 +6034,20 @@ const EnvPool = struct {
     }
 
     /// Acquire an Env from the pool, or create a new one if none available
-    fn acquire(self: *EnvPool, at: Rank) std.mem.Allocator.Error!Env {
+    fn acquire(self: *EnvPool) std.mem.Allocator.Error!Env {
         const trace = tracy.trace(@src());
         defer trace.end();
 
         if (self.available.pop()) |env| {
             // Reset the env for reuse
             var reused_env = env;
-            reused_env.reset();
+            try reused_env.reset(.generalized);
             return reused_env;
         } else {
             // Otherwise init a new one and ensure there's room to put it back
             // into the pool when we're done using it
             try self.available.ensureUnusedCapacity(self.gpa, 1);
-            return try Env.init(self.gpa, at);
+            return try Env.init(self.gpa, .generalized);
         }
     }
 
@@ -6049,7 +6063,10 @@ const EnvPool = struct {
         defer trace.end();
 
         var releasable_env = env;
-        releasable_env.reset();
+        releasable_env.reset(.generalized) catch {
+            // If we can't add to the pool, just deinit this env
+            releasable_env.deinit(self.gpa);
+        };
         self.available.append(self.gpa, releasable_env) catch {
             // If we can't add to the pool, just deinit this env
             releasable_env.deinit(self.gpa);

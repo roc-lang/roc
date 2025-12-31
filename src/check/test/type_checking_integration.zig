@@ -22,8 +22,7 @@ test "check type - num - unbound" {
 test "check type - num - int suffix 1" {
     const source =
         \\{
-        \\  x : U8
-        \\  x = 10
+        \\  x = 10.U8
         \\
         \\  x
         \\}
@@ -34,8 +33,7 @@ test "check type - num - int suffix 1" {
 test "check type - num - int suffix 2" {
     const source =
         \\{
-        \\  x : I128
-        \\  x = 10
+        \\  x = 10.I128
         \\
         \\  x
         \\}
@@ -722,8 +720,6 @@ test "check type - def - polymorphic id 2" {
 }
 
 test "check type - def - out of order" {
-    // Currently errors out in czer
-
     const source =
         \\id_1 : x -> x
         \\id_1 = |x| id_2(x)
@@ -788,6 +784,172 @@ test "check type - polymorphic function function param should be constrained" {
         \\result = use_twice(id)
     ;
     // Number literal 42 used where Str is expected (function type unified from both calls)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// value restriction //
+
+test "check type - value restriction - out of order 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| {
+        \\  [x, y]
+        \\}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> List(U8)" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8, "x")
+        \\  _b = process(1.U8, Bool.False)
+        \\}
+        \\
+        \\process = |y, _z| {
+        \\  _blah = [x, y] # Force x and y to be the same type
+        \\  y
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8, _arg -> U8" },
+        },
+    );
+}
+
+test "check type - value restriction - curried 1" {
+    // Currently errors out in czer
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)("x")
+        \\  _b = process(1.U8)(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+test "check type - value restriction - curried 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  fn_a = process(1.U8)
+        \\  _a = fn_a("x")
+        \\
+        \\  fn_b = process(2.U8)
+        \\  _b = fn_b(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> (_arg -> List(U8))" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 3" {
+    // Currently errors out in czer
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  exec : A, I64 -> I64
+        \\  exec = |A, _| 10
+        \\}
+        \\
+        \\test = {
+        \\  _a = run_exec(A.A, "hello")
+        \\  _b = run_exec(A.A, Try.Ok("nice"))
+        \\}
+        \\
+        \\run_exec = |y, _z| {
+        \\  y.exec(x)
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "I64" },
+            .{ .def = "run_exec", .expected = "a, _arg -> b where [a.exec : a, I64 -> b]" },
+        },
+    );
+}
+
+test "check type - value restriction - should fail 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| { [x, y] }
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\  _b = process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - value restriction - should fail 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  process = |_a, y| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+        \\
+        \\test = {
+        \\  val = A.A
+        \\  _a = val.process(1.U8)
+        \\  _b = val.process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
@@ -2731,8 +2893,23 @@ fn checkTypesModule(
             return test_env.assertFirstTypeError(expected);
         },
     }
+}
 
-    return test_env.assertLastDefType(expected);
+const DefAndExpectation = struct {
+    def: []const u8,
+    expected: []const u8,
+};
+
+fn checkTypesModuleDefs(
+    comptime source_expr: []const u8,
+    comptime expectations: []const DefAndExpectation,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
+    defer test_env.deinit();
+
+    inline for (expectations) |expectation| {
+        try test_env.assertDefType(expectation.def, expectation.expected);
+    }
 }
 
 // helpers - expr //
