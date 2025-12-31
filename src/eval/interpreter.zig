@@ -14598,7 +14598,7 @@ pub const Interpreter = struct {
                                     // If we hit this, it means there's a bug in how we're structuring
                                     // the work stack (likely a nested evalWithExpectedType call that
                                     // shouldn't be nested).
-                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
+                                    self.triggerCrash("Internal error", false, roc_ops);
                                     return error.Crash;
                                 },
                                 .call_invoke_closure => |ci| {
@@ -15705,7 +15705,7 @@ pub const Interpreter = struct {
                             if (return_size > 0) {
                                 // Assertion: heap allocation for small temporary buffer should always succeed
                                 const temp_buffer = self.allocator.alloc(u8, return_size) catch {
-                                    self.triggerCrash("call_cleanup (early return): heap allocation failed for result preservation", false, roc_ops);
+                                    self.triggerCrash("Out of memory", false, roc_ops);
                                     return error.Crash;
                                 };
                                 defer self.allocator.free(temp_buffer);
@@ -15716,7 +15716,7 @@ pub const Interpreter = struct {
                                 // Assertion: stack allocation after restore should always succeed
                                 const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
                                 const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
-                                    self.triggerCrash("call_cleanup (early return): stack allocation failed after restore", false, roc_ops);
+                                    self.triggerCrash("Out of memory", false, roc_ops);
                                     return error.Crash;
                                 };
 
@@ -15796,7 +15796,7 @@ pub const Interpreter = struct {
                             // Copy to temporary heap buffer
                             // Assertion: heap allocation for small temporary buffer should always succeed
                             const temp_buffer = self.allocator.alloc(u8, result_size) catch {
-                                self.triggerCrash("call_cleanup: heap allocation failed for result preservation", false, roc_ops);
+                                self.triggerCrash("Out of memory", false, roc_ops);
                                 return error.Crash;
                             };
                             defer self.allocator.free(temp_buffer);
@@ -15810,7 +15810,7 @@ pub const Interpreter = struct {
                             // since we just freed more space than we're now requesting
                             const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
                             const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
-                                self.triggerCrash("call_cleanup: stack allocation failed after restore", false, roc_ops);
+                                self.triggerCrash("Out of memory", false, roc_ops);
                                 return error.Crash;
                             };
 
