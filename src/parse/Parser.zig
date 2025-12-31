@@ -3193,14 +3193,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             // Parse record fields, with support for record extension
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle record extension: { field: Type, ..ext }
+                    // Handle record extension: { field: Type, ..ext } or { field: Type, .. }
+                    const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent) {
                         // Parse the extension type variable
                         ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;
@@ -3231,14 +3236,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             // Parse tag union elements, with support for open union extension
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle open tag union extension: [Tag, ..ext]
+                    // Handle open tag union extension: [Tag, ..ext] or [Tag, ..]
+                    const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent) {
                         // Parse the extension type variable
                         open_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        open_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;

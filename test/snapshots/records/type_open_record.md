@@ -24,12 +24,14 @@ EndOfFile,
 			(anno-record-field (name "name")
 				(ty (name "Str")))
 			(anno-record-field (name "age")
-				(ty (name "U32"))))
+				(ty (name "U32")))
+			(ty-record-ext
+				(_)))
 		(ty (name "Str"))))
 ~~~
 # FORMATTED
 ~~~roc
-process_user! : { name : Str, age : U32 } => Str
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
