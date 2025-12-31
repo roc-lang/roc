@@ -312,4 +312,4 @@ To debug LLVM IR generation:
 
 ## Attribution
 
-The LLVM bitcode generation code has been adapted from the Zig compiler (copyright Zig contributors) under the MIT License. Source: https://github.com/ziglang/zig
+The LLVM bitcode generation code has been adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!

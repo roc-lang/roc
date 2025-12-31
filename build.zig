@@ -1814,7 +1814,6 @@ pub fn build(b: *std.Build) void {
     const test_filters = parsed_args.test_filters;
 
     // llvm configuration
-    const enable_llvm = true; // LLVM is always enabled
     // By default, use our bundled LLVM from roc-bootstrap. Users can opt-in to system LLVM
     // (e.g., for AFL++ fuzzing which requires system LLVM).
     const use_system_llvm = b.option(bool, "system-llvm", "Use system-installed LLVM instead of bundled LLVM (required for AFL++)") orelse false;
@@ -1973,7 +1972,7 @@ pub fn build(b: *std.Build) void {
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -2084,18 +2083,16 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
 
     // Add LLVM support to snapshot tool for dual-mode testing
-    if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-        snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-        snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
-        // Add llvm_compile module for LLVM compilation pipeline
-        snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
-            .root_source_file = b.path("src/llvm_compile/mod.zig"),
-        });
-    }
+    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+    snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+    snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+    try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
+    // Add llvm_compile module for LLVM compilation pipeline
+    snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
+        .root_source_file = b.path("src/llvm_compile/mod.zig"),
+    });
 
-    add_tracy(b, roc_modules.build_options, snapshot_exe, target, enable_llvm, flag_enable_tracy);
+    add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
     const playground_exe = b.addExecutable(.{
@@ -2295,17 +2292,15 @@ pub fn build(b: *std.Build) void {
         snapshot_test.step.dependOn(&write_compiled_builtins.step);
 
         // Add LLVM support for dual-mode testing
-        if (enable_llvm) {
-            const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-            snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-            snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-            try addStaticLlvmOptionsToModule(snapshot_test.root_module);
-            snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
-                .root_source_file = b.path("src/llvm_compile/mod.zig"),
-            });
-        }
+        const llvm_paths_test = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+        snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths_test.lib });
+        snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths_test.include });
+        try addStaticLlvmOptionsToModule(snapshot_test.root_module);
+        snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
+            .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        });
 
-        add_tracy(b, roc_modules.build_options, snapshot_test, target, enable_llvm, flag_enable_tracy);
+        add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
         if (run_args.len != 0) {
@@ -2606,7 +2601,6 @@ fn addMainExe(
     optimize: OptimizeMode,
     strip: bool,
     omit_frame_pointer: ?bool,
-    enable_llvm: bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
@@ -2804,19 +2798,16 @@ fn addMainExe(
     }
 
     const config = b.addOptions();
-    config.addOption(bool, "llvm", enable_llvm);
+    config.addOption(bool, "llvm", true);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
-    if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+    const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+    exe.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
+    exe.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    try addStaticLlvmOptionsToModule(exe.root_module);
 
-        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(exe.root_module);
-    }
-
-    add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
+    add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
     exe.linkLibrary(zstd.artifact("zstd"));
 
@@ -3031,7 +3022,7 @@ const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
     .{ "x86_64-linux-gnu", "x86_64_linux_musl" },
 });
 
-// The following is lifted from the zig compiler.
+// The following is adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     const cpp_cflags = exe_cflags ++ [_][]const u8{"-DNDEBUG=1"};
     mod.addCSourceFiles(.{

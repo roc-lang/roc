@@ -1,4 +1,6 @@
 //! LLVM bitcode reader for parsing and validating bitcode files.
+//!
+//! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
 const BitcodeReader = @This();
 
