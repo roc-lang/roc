@@ -5573,11 +5573,12 @@ pub fn canonicalizeExpr(
             // Create span from scratch branches
             const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
 
-            // Create the match expression
+            // Create the match expression (is_try_suffix = true since this comes from `?`)
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = true,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5973,6 +5974,7 @@ pub fn canonicalizeExpr(
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = false,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 

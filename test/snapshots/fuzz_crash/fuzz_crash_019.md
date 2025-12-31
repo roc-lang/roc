@@ -1056,7 +1056,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    _f
+    ok
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
