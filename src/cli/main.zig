@@ -615,8 +615,20 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocs.arena);
 
-    mainArgs(&allocs, args) catch {
-        // Error messages have already been printed by the individual functions.
+    mainArgs(&allocs, args) catch |err| {
+        // Handle OutOfMemory specially - it may not have been printed
+        switch (err) {
+            error.OutOfMemory => {
+                // Use std.debug.print to stderr since we don't have access to ctx.io here
+                std.debug.print("error: Out of memory during compilation. ", .{});
+                if (@sizeOf(usize) >= 8 and builtin.target.os.tag == .windows) {
+                    std.debug.print("Windows shared memory is limited to 1GB.\n", .{});
+                } else {
+                    std.debug.print("Try a smaller file or check system resources.\n", .{});
+                }
+            },
+            else => {}, // Other errors should already have printed messages
+        }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
