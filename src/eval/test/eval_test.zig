@@ -1814,6 +1814,31 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     , 15, .no_trace);
 }
 
+test "issue 8814: List.get with numeric literal on function parameter - regression" {
+    // Regression test for GitHub issue #8814: interpreter crash when calling
+    // list.get(0) on a list passed as a function parameter.
+    //
+    // The bug occurred because when collecting arguments for a static dispatch
+    // method call, the expected type for the numeric literal 0 wasn't being
+    // set from the method's signature (U64). This caused the interpreter to
+    // fail when trying to evaluate the numeric literal without a concrete type.
+    //
+    // The fix: extract expected parameter types from the method's function
+    // signature and use them when evaluating arguments. This allows numeric
+    // literals to correctly infer their concrete types (like U64 for List.get).
+    try runExpectStr(
+        \\{
+        \\    process = |args| {
+        \\        match args.get(0) {
+        \\            Ok(x) => x
+        \\            Err(_) => "error"
+        \\        }
+        \\    }
+        \\    process(["hello", "world"])
+        \\}
+    , "hello", .no_trace);
+}
+
 // TODO: Enable this test once cross-module type variable dispatch is fixed.
 // The issue is that the flex_type_context mapping needs to properly connect
 // the parameter's type variable to the type alias's type variable.
