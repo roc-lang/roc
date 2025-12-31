@@ -180,6 +180,8 @@ pub const PackageEnv = struct {
 
     // Build status
     remaining_modules: usize = 0,
+    /// ID of the root module (the module passed to buildRoot)
+    root_module_id: ?ModuleId = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -297,16 +299,18 @@ pub const PackageEnv = struct {
         self.additional_known_modules.deinit(self.gpa);
     }
 
-    /// Get the root module's env (first module added)
+    /// Get the root module's env (the module passed to buildRoot)
     pub fn getRootEnv(self: *PackageEnv) ?*ModuleEnv {
-        if (self.modules.items.len == 0) return null;
-        return if (self.modules.items[0].env) |*env| env else null;
+        const root_id = self.root_module_id orelse return null;
+        if (root_id >= self.modules.items.len) return null;
+        return if (self.modules.items[root_id].env) |*env| env else null;
     }
 
-    /// Get the root module state (first module added)
+    /// Get the root module state (the module passed to buildRoot)
     pub fn getRootModule(self: *PackageEnv) ?*ModuleState {
-        if (self.modules.items.len == 0) return null;
-        return &self.modules.items[0];
+        const root_id = self.root_module_id orelse return null;
+        if (root_id >= self.modules.items.len) return null;
+        return &self.modules.items[root_id];
     }
 
     fn internModuleName(self: *PackageEnv, name: []const u8) !ModuleId {
@@ -325,6 +329,8 @@ pub const PackageEnv = struct {
         const name = moduleNameFromPath(root_file_path);
         const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, root_file_path);
+        // Track which module is the root (for getRootEnv)
+        self.root_module_id = module_id;
         // root depth = 0
         try self.setDepthIfSmaller(module_id, 0);
         // Only increment remaining_modules if the root module is new (wasn't already scheduled)
@@ -979,7 +985,13 @@ pub const PackageEnv = struct {
         // Use the resolver to get the ACTUAL module env if available
         for (additional_known_modules) |km| {
             const module_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
+            // Extract base module name for qualified_type_ident (e.g., "Stdout" from "pf.Stdout")
+            // This is used for looking up methods in the module's exposed_items
+            const base_module_name = if (std.mem.lastIndexOfScalar(u8, km.qualified_name, '.')) |dot_idx|
+                km.qualified_name[dot_idx + 1 ..]
+            else
+                km.qualified_name;
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
             if (!module_envs_map.contains(module_ident)) {
                 // Try to get the actual module env using the resolver
                 const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
@@ -988,7 +1000,18 @@ pub const PackageEnv = struct {
                     }
                     break :blk builtin_module_env;
                 } else builtin_module_env;
-                try module_envs_map.put(module_ident, .{ .env = actual_env, .qualified_type_ident = qualified_ident });
+                // For platform type modules, set statement_idx so method lookups work correctly
+                const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
+                    // Look up the type in the module's exposed_items to get the actual node index
+                    const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
+                    const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
+                    break :stmt_blk @enumFromInt(type_node_idx);
+                } else null;
+                try module_envs_map.put(module_ident, .{
+                    .env = actual_env,
+                    .statement_idx = statement_idx,
+                    .qualified_type_ident = qualified_ident,
+                });
             }
         }
 
