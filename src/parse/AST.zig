@@ -2469,6 +2469,20 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
+    /// An integer with an explicit type annotation: `123.U64`
+    /// The type_token contains the `.U64` part (NoSpaceDotUpperIdent)
+    typed_int: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    /// A fractional number with an explicit type annotation: `3.14.Dec`
+    /// The type_token contains the `.Dec` part (NoSpaceDotUpperIdent)
+    typed_frac: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
     single_quote: struct {
         token: Token.Idx,
         region: TokenizedRegion,
@@ -2580,6 +2594,8 @@ pub const Expr = union(enum) {
             .ident => |e| e.region,
             .int => |e| e.region,
             .frac => |e| e.region,
+            .typed_int => |e| e.region,
+            .typed_frac => |e| e.region,
             .string => |e| e.region,
             .multiline_string => |e| e.region,
             .tag => |e| e.region,
@@ -2630,6 +2646,24 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_int => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_frac => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },

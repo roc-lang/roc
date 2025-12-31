@@ -137,7 +137,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 40;
+pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 18;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -496,6 +496,34 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
                     .has_suffix = node.data_3 != 0,
+                },
+            };
+        },
+        .expr_typed_int => {
+            // Unpack typed int: value in extra_data, type_name in data_1
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            return CIR.Expr{
+                .e_typed_int = .{
+                    .value = .{
+                        .bytes = @bitCast(value_as_i128),
+                        .kind = @enumFromInt(node.data_2),
+                    },
+                    .type_name = @bitCast(node.data_1),
+                },
+            };
+        },
+        .expr_typed_frac => {
+            // Unpack typed frac: value in extra_data, type_name in data_1
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            return CIR.Expr{
+                .e_typed_frac = .{
+                    .value = .{
+                        .bytes = @bitCast(value_as_i128),
+                        .kind = @enumFromInt(node.data_2),
+                    },
+                    .type_name = @bitCast(node.data_1),
                 },
             };
         },
@@ -1690,6 +1718,36 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @as(u32, @bitCast(@as(i32, e.value.numerator)));
             node.data_2 = @as(u32, e.value.denominator_power_of_ten);
             node.data_3 = @intFromBool(e.has_suffix);
+        },
+        .e_typed_int => |e| {
+            node.tag = .expr_typed_int;
+
+            // Store type_name in data_1, value kind in data_2, value in extra_data
+            node.data_1 = @bitCast(e.type_name);
+            node.data_2 = @intFromEnum(e.value.kind);
+
+            const extra_data_start = store.extra_data.len();
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                _ = try store.extra_data.append(store.gpa, word);
+            }
+            node.data_3 = @intCast(extra_data_start);
+        },
+        .e_typed_frac => |e| {
+            node.tag = .expr_typed_frac;
+
+            // Store type_name in data_1, value kind in data_2, value in extra_data
+            node.data_1 = @bitCast(e.type_name);
+            node.data_2 = @intFromEnum(e.value.kind);
+
+            const extra_data_start = store.extra_data.len();
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                _ = try store.extra_data.append(store.gpa, word);
+            }
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
