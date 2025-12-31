@@ -6157,9 +6157,29 @@ fn canonicalizeTagExpr(self: *Self, e: AST.TagExpr, mb_args: ?AST.Expr.Span, reg
                         .record => try self.env.addExpr(CIR.Expr{
                             .e_empty_record = .{},
                         }, region),
-                        // For tag/enum backing types, use the tag expression we already created
-                        .tag_union, .apply => tag_expr_idx,
-                        // For other backing types, use the tag expression as fallback
+                        // For tag union backing types like [Format], create a tag with the correct variant name
+                        .tag_union => |tu| blk: {
+                            const tags_slice = self.env.store.sliceFromSpan(CIR.TypeAnno.Idx, tu.tags.span);
+                            if (tags_slice.len == 1) {
+                                const first_tag_anno = self.env.store.getTypeAnno(tags_slice[0]);
+                                switch (first_tag_anno) {
+                                    .tag => |t| {
+                                        // Create tag with the actual variant name, not the nominal type name
+                                        break :blk try self.env.addExpr(CIR.Expr{
+                                            .e_tag = .{
+                                                .name = t.name,
+                                                .args = CIR.Expr.Span{ .span = DataSpan.empty() },
+                                            },
+                                        }, region);
+                                    },
+                                    else => break :blk tag_expr_idx,
+                                }
+                            }
+                            // Non-singleton tag unions - fall back to tag_expr_idx
+                            break :blk tag_expr_idx;
+                        },
+                        // For apply and other backing types, use the tag expression as fallback
+                        .apply => tag_expr_idx,
                         else => tag_expr_idx,
                     };
 

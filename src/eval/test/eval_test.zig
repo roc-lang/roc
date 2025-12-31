@@ -1817,22 +1817,14 @@ test "static dispatch: List.sum uses item.plus and item.default" {
 test "encode: Str.encode with local format type" {
     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
     // where Fmt is a local type defined in the test.
-    //
-    // Skip for now until direct method dispatch on polymorphic values is implemented.
-    // The new encode API uses format.encode_str(self) instead of Fmt : fmt; Fmt.encode_str(...)
-    // This requires additional interpreter support for dispatching methods on flex/rigid receivers.
-    if (true) return error.SkipZigTest;
     try runExpectListI64(
         \\{
         \\    Utf8Format := {}.{
-        \\        encode_str : Utf8Format, Str -> Try(List(U8), [])
-        \\        encode_str = |_fmt, s| Ok(Str.to_utf8(s))
+        \\        encode_str : Utf8Format, Str -> List(U8)
+        \\        encode_str = |_fmt, s| Str.to_utf8(s)
         \\    }
         \\    fmt = Utf8Format
-        \\    result = Str.encode("hi", fmt)
-        \\    bytes = when result is
-        \\        Ok(b) -> b
-        \\        Err(_) -> []
+        \\    bytes = Str.encode("hi", fmt)
         \\    List.map(bytes, |b| U8.to_i64(b))
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);

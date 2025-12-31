@@ -11659,8 +11659,18 @@ pub const Interpreter = struct {
                     // If expected type is flex or rigid (not concrete), fall through to create from CT
                     if (expected_resolved.desc.content == .flex or expected_resolved.desc.content == .rigid) {
                         // Expected type is polymorphic - need to create the nominal type from CT
+                        // First try the expression's type, then fall back to the type declaration's type
                         const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                        const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
+                        const ct_resolved = self.env.types.resolveVar(ct_var);
+
+                        // If the expression's type is err (e.g., for local types that weren't fully type-checked),
+                        // fall back to using the type declaration's type
+                        const effective_ct_var = if (ct_resolved.desc.content == .err)
+                            can.ModuleEnv.varFrom(nom.nominal_type_decl)
+                        else
+                            ct_var;
+
+                        const nominal_rt_var = try self.translateTypeVar(self.env, effective_ct_var);
                         const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
                         break :blk switch (nominal_resolved.desc.content) {
                             .structure => |st| switch (st) {
