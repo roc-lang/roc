@@ -8271,7 +8271,7 @@ pub const Interpreter = struct {
         // In that case, use the lambda expression's type instead which should have a proper function type.
         const def_var = can.ModuleEnv.varFrom(target_def_idx);
         const def_resolved_for_var = origin_env.types.resolveVar(def_var);
-        const rt_def_var: ?types.Var = blk: {
+        const rt_def_var: types.Var = blk: {
             if (def_resolved_for_var.desc.content == .structure) {
                 const flat = def_resolved_for_var.desc.content.structure;
                 switch (flat) {
@@ -8297,8 +8297,9 @@ pub const Interpreter = struct {
                     }
                 }
             }
-            // Fall back to null - let the expression evaluation infer the type
-            break :blk null;
+            // Method must have a function type - if we got here, something is wrong
+            self.triggerCrash("resolveMethodFunction: method has no function type", false, roc_ops);
+            return error.Crash;
         };
 
         // Evaluate the method's expression
@@ -9163,7 +9164,7 @@ pub const Interpreter = struct {
                         for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
                             const ct_tag_name_str = module.getIdent(ct_tag_name);
                             // Translate CT ident to RT ident space for comparison
-                            const rt_ct_tag_ident = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str)) catch continue;
+                            const rt_ct_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
 
                             // Find matching tag in RT type by ident index
                             for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
@@ -13134,15 +13135,8 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        var closure_layout = try self.getRuntimeLayout(rt_var);
-        if (closure_layout.tag != .closure) {
-            // For lambdas where the type wasn't properly inferred (e.g., methods on transparent
-            // type aliases without type annotations), create a closure layout directly.
-            // This can happen when the compile-time type is .err or .flex due to type inference
-            // issues with certain language constructs.
-            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
-            closure_layout = Layout.closure(empty_captures_idx);
-        }
+        const closure_layout = try self.getRuntimeLayout(rt_var);
+        std.debug.assert(closure_layout.tag == .closure);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
