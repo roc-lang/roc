@@ -952,7 +952,7 @@ The third pattern has this type:
 
 But all the previous patterns have this type: 
 
-    [Red, Blue, .._others2]
+    [Red, Blue, .._others]
 
 All patterns in an `match` must have compatible types.
 
@@ -979,7 +979,7 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 
 The function has the signature:
 
-    [Blue, Red, .._others2], _arg -> Error
+    [Blue, Red, .._others], _arg -> Error
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -1036,11 +1036,11 @@ This expression is used in an unexpected way:
 
 It has the type:
 
-    [Stdoline!(Error), .._others2]
+    [Stdoline!(Error), .._others]
 
 But the type annotation says it should have the type:
 
-    Try({  }, _d)
+    Try({  }, err)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2478,7 +2478,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, .._others2], _arg -> Error"))
+		(patt (type "[Red, Blue, .._others], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2515,7 +2515,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, Blue, .._others2], _arg -> Error"))
+		(expr (type "[Red, Blue, .._others], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

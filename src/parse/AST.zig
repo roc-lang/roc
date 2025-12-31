@@ -2128,7 +2128,8 @@ pub const TypeAnno = union(enum) {
     },
     tag_union: struct {
         tags: TypeAnno.Span,
-        open_anno: ?TypeAnno.Idx,
+        /// Extension for open tag unions
+        ext: TagUnionExt,
         region: TokenizedRegion,
     },
     tuple: struct {
@@ -2158,7 +2159,21 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+    /// Extension type for open tag unions
+    pub const TagUnionExt = union(enum) {
+        /// Closed tag union: `[A, B, C]`
+        closed,
+        /// Anonymous open tag union: `[A, B, ..]`
+        open,
+        /// Named open tag union: `[A, B, ..ext]`
+        named: TypeAnno.Idx,
+    };
+
+    pub const TagUnionRhs = packed struct {
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
+        tags_len: u30,
+    };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
@@ -2242,8 +2257,10 @@ pub const TypeAnno = union(enum) {
                 }
                 try tree.endNode(tags_begin, attrs2);
 
-                if (a.open_anno) |anno_idx| {
-                    try ast.store.getTypeAnno(anno_idx).pushToSExprTree(gpa, env, ast, tree);
+                if (a.ext == .named) {
+                    try ast.store.getTypeAnno(a.ext.named).pushToSExprTree(gpa, env, ast, tree);
+                } else if (a.ext == .open) {
+                    try tree.pushStaticAtom("..");
                 }
 
                 try tree.endNode(begin, attrs);

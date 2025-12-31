@@ -1958,9 +1958,9 @@ pub const Expr = union(enum) {
         branches: Branch.Span,
         /// Marks whether a match expression is exhaustive using a variable.
         exhaustive: TypeVar,
-        /// Whether this match was desugared from the `?` (try) operator.
-        /// Used to provide better error messages when the condition isn't a Try type.
-        is_try_desugar: bool,
+        /// Whether this match was desugared from the `?` (try suffix) operator.
+        /// When true, we need to verify the condition is actually a Try type.
+        is_try_suffix: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

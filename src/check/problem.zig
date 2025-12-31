@@ -165,6 +165,8 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+    non_exhaustive_match: NonExhaustiveMatch,
+    invalid_try_operator: InvalidTryOperator,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     invalid_nominal_record,
@@ -275,6 +277,12 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for when the `?` operator is used on a non-Try type.
+/// A Try type is a tag union with Ok and Err tags.
+pub const InvalidTryOperator = struct {
+    expr: CIR.Expr.Idx,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
@@ -480,6 +488,12 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_match_branches => |data| {
                             return self.buildIncompatibleMatchBranches(mismatch.types, data);
+                        },
+                        .non_exhaustive_match => |data| {
+                            return self.buildNonExhaustiveMatch(data);
+                        },
+                        .invalid_try_operator => |data| {
+                            return self.buildInvalidTryOperator(mismatch.types, data);
                         },
                         .invalid_bool_binop => |data| {
                             return self.buildInvalidBoolBinop(mismatch.types, data);
@@ -1302,6 +1316,138 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("To learn about tags, see ");
         try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
+
+        return report;
+    }
+
+    /// Build a report for non-exhaustive match
+    fn buildNonExhaustiveMatch(
+        self: *Self,
+        data: NonExhaustiveMatch,
+    ) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        // Add description
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression may not handle all possible values:");
+        try report.document.addLineBreak();
+
+        // Get the match expression region
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            match_region.start.offset,
+            match_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, match_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = match_region_info.start_line_idx + 1,
+            .start_column = match_region_info.start_col_idx + 1,
+            .end_line = match_region_info.end_line_idx + 1,
+            .end_column = match_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = match_region_info.start_line_idx + 1,
+                .start_column = match_region_info.start_col_idx + 1,
+                .end_line = match_region_info.end_line_idx + 1,
+                .end_column = match_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("The value being matched has an open type (can contain additional tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but none of the branches is a catch-all pattern like ");
+        try report.document.addAnnotated("_", .type_variable);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when the `?` operator is used on a non-Try type
+    fn buildInvalidTryOperator(
+        self: *Self,
+        types: TypePair,
+        data: InvalidTryOperator,
+    ) !Report {
+        var report = Report.init(self.gpa, "EXPECTED TRY TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned string for the actual type
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addText("The ");
+        try report.document.addAnnotated("?", .keyword);
+        try report.document.addText(" operator expects a ");
+        try report.document.addAnnotated("Try", .type_variable);
+        try report.document.addText(" type (a tag union containing ONLY ");
+        try report.document.addAnnotated("Ok", .type_variable);
+        try report.document.addText(" and ");
+        try report.document.addAnnotated("Err", .type_variable);
+        try report.document.addText(" tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but I found:");
+        try report.document.addLineBreak();
+
+        // Get the expression region
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.expr)));
+        const expr_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            expr_region.start.offset,
+            expr_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, expr_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = expr_region_info.start_line_idx + 1,
+            .start_column = expr_region_info.start_col_idx + 1,
+            .end_line = expr_region_info.end_line_idx + 1,
+            .end_column = expr_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = expr_region_info.start_line_idx + 1,
+                .start_column = expr_region_info.start_col_idx + 1,
+                .end_line = expr_region_info.end_line_idx + 1,
+                .end_column = expr_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("This expression has type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Tip: Maybe wrap a value using ");
+        try report.document.addAnnotated("Ok(value)", .type_variable);
+        try report.document.addText(" or ");
+        try report.document.addAnnotated("Err(value)", .type_variable);
+        try report.document.addText(".");
 
         return report;
     }
