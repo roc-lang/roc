@@ -614,6 +614,7 @@ fn transformBodyWithCaptures(
                     .cond = new_cond,
                     .branches = match.branches,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },

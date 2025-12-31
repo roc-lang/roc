@@ -549,6 +549,9 @@ const Formatter = struct {
                 }
             },
             .type_anno => |t| {
+                if (t.is_var) {
+                    try fmt.pushAll("var ");
+                }
                 try fmt.pushTokenText(t.name);
                 if (multiline and try fmt.flushCommentsAfter(t.name)) {
                     fmt.curr_indent += 1;
@@ -814,6 +817,68 @@ const Formatter = struct {
             try fmt.push(' ');
         }
         try fmt.push(braces.end());
+    }
+
+    /// Format a record type annotation with an extension (e.g., { name: Str, ..ext } or { name: Str, .. })
+    fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.Idx, record_region: AST.TokenizedRegion) anyerror!void {
+        const fields = fmt.ast.store.annoRecordFieldSlice(fields_span);
+        const record_multiline = fmt.ast.regionIsMultiline(record_region);
+        const record_indent = fmt.curr_indent;
+        defer {
+            fmt.curr_indent = record_indent;
+        }
+        try fmt.push('{');
+        if (fields.len == 0) {
+            // Just the extension, e.g. { .. } or { ..a }
+            try fmt.push(' ');
+        } else {
+            if (record_multiline) {
+                fmt.curr_indent += 1;
+            } else {
+                try fmt.push(' ');
+            }
+            for (fields, 0..) |field_idx, i| {
+                const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
+                if (record_multiline) {
+                    _ = try fmt.flushCommentsBefore(field_region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                _ = try @as(fn (*Formatter, AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion, Formatter.formatAnnoRecordField)(fmt, field_idx);
+                if (record_multiline) {
+                    try fmt.push(',');
+                } else if (i < (fields.len - 1)) {
+                    try fmt.pushAll(", ");
+                } else {
+                    // Last field before extension
+                    try fmt.pushAll(", ");
+                }
+            }
+        }
+        // Handle the record extension (..ext or ..)
+        const ext_region = fmt.nodeRegion(@intFromEnum(ext));
+        if (record_multiline) {
+            _ = try fmt.flushCommentsBefore(ext_region.start);
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+        const ext_anno = fmt.ast.store.getTypeAnno(ext);
+        try fmt.pushAll("..");
+        // Only output the extension type if it's not an anonymous underscore
+        switch (ext_anno) {
+            .underscore => {}, // Anonymous extension - just output ".."
+            else => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+        }
+        if (record_multiline) {
+            try fmt.push(',');
+            _ = try fmt.flushCommentsBefore(record_region.end - 1);
+            fmt.curr_indent -= 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        } else {
+            try fmt.push(' ');
+        }
+        try fmt.push('}');
     }
 
     fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
@@ -1988,19 +2053,25 @@ const Formatter = struct {
             },
             .record => |r| {
                 region = r.region;
-                try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                if (r.ext) |ext| {
+                    // Record with extension - handle specially
+                    try fmt.formatRecordWithExtension(r.fields, ext, region);
+                } else {
+                    // Regular record without extension - use formatCollection
+                    try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                }
             },
             .tag_union => |t| {
                 region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const has_open = t.open_anno != null;
+                const is_open = t.ext != .closed;
                 const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
                 const tag_indent = fmt.curr_indent;
                 defer {
                     fmt.curr_indent = tag_indent;
                 }
                 try fmt.push('[');
-                if (tags.len == 0 and !has_open) {
+                if (tags.len == 0 and !is_open) {
                     try fmt.push(']');
                 } else {
                     if (tag_multiline) {
@@ -2016,20 +2087,22 @@ const Formatter = struct {
                         _ = try fmt.formatTypeAnno(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
-                        } else if (i < (tags.len - 1) or has_open) {
+                        } else if (i < (tags.len - 1) or is_open) {
                             try fmt.pushAll(", ");
                         }
                     }
-                    // Handle the open extension (..others)
-                    if (t.open_anno) |open| {
-                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                    // Handle open tag unions - always format as just ".." (silently drop any named extension)
+                    if (is_open) {
+                        // If there was a named extension, use its region for comment flushing
+                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            if (open_region) |oreg| {
+                                _ = try fmt.flushCommentsBefore(oreg.start);
+                            }
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.pushAll("..");
-                        _ = try fmt.formatTypeAnno(open);
                         if (tag_multiline) {
                             try fmt.push(',');
                         }

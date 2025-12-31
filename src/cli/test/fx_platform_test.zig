@@ -266,7 +266,11 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "{ binary: 5, explicit_dec: 5, explicit_f32: 5, explicit_f64: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
         "99\n" ++
-        "\"12345.0\"\n";
+        "\"12345.0\"\n" ++
+        "\"Foo with 42 and hello\"\n" ++
+        "\"other color\"\n" ++
+        "\"A\"\n" ++
+        "\"other letter\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
     try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
@@ -1165,4 +1169,45 @@ test "external platform memory alignment regression" {
     defer allocator.free(run_result.stderr);
 
     try checkSuccess(run_result);
+}
+
+test "fx platform issue8826 app vs platform type mismatch" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8826
+    // The bug was that `roc check` reported "No errors found" when the app's main!
+    // signature didn't match the platform's requires. This happened because
+    // getRootEnv() was returning the wrong module (the first one added rather
+    // than the actual root module set in buildRoot).
+    const allocator = testing.allocator;
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            roc_binary_path,
+            "check",
+            "test/fx/issue8826_minimal.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // This file is expected to fail with a TYPE MISMATCH error because:
+    // - App has: main! : List(Str) => Try({}, [Exit(I32)])
+    // - Platform requires: main! : () => {}
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                // Expected to fail - check for type mismatch error message
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            } else {
+                std.debug.print("Expected type mismatch error but roc check succeeded\n", .{});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunTerminatedAbnormally;
+        },
+    }
 }

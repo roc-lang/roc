@@ -76,6 +76,15 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
+      - name: Install kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
+
+      - name: Parser Code Coverage
+        run: |
+          zig build coverage
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -257,7 +266,12 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          nix develop ./src/ -c zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}
+          # Only run coverage on Linux (kcov on macOS is too slow - uses LLDB)
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }} && zig build coverage"
+          else
+            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
+          fi
 
   zig-cross-compile:
     needs: check-once

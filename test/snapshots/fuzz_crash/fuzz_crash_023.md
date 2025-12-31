@@ -1026,7 +1026,7 @@ The fourth pattern has this type:
 
 But all the previous patterns have this type: 
 
-    [Red, ..[Blue, Green, .._others2]]
+    [Red, ..[Blue, Green, .._others]]
 
 All patterns in an `match` must have compatible types.
 
@@ -1053,7 +1053,7 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 
 The function has the signature:
 
-    [Red, ..[Blue, Green, .._others2]], _arg -> Error
+    [Red, ..[Blue, Green, .._others]], _arg -> Error
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
@@ -1081,7 +1081,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [Blue, .._others2]
+    [Blue, .._others]
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2807,7 +2807,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
@@ -2854,7 +2854,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, .._others2]], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "{}"))
