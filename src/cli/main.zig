@@ -381,7 +381,7 @@ fn renderTypeProblems(
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
 else if (builtin.target.os.tag == .windows)
-    512 * 1024 * 1024 // 512MB for Windows 64-bit
+    1024 * 1024 * 1024 // 1GB for Windows 64-bit
 else
     2 * 1024 * 1024 * 1024 * 1024; // 2TB for POSIX 64-bit
 
