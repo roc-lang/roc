@@ -1815,6 +1815,9 @@ pub fn build(b: *std.Build) void {
 
     // llvm configuration
     const enable_llvm = true; // LLVM is always enabled
+    // By default, use our bundled LLVM from roc-bootstrap. Users can opt-in to system LLVM
+    // (e.g., for AFL++ fuzzing which requires system LLVM).
+    const use_system_llvm = b.option(bool, "system-llvm", "Use system-installed LLVM instead of bundled LLVM (required for AFL++)") orelse false;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -1970,7 +1973,7 @@ pub fn build(b: *std.Build) void {
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -2082,7 +2085,7 @@ pub fn build(b: *std.Build) void {
 
     // Add LLVM support to snapshot tool for dual-mode testing
     if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return;
+        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
         snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
         try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
@@ -2293,7 +2296,7 @@ pub fn build(b: *std.Build) void {
 
         // Add LLVM support for dual-mode testing
         if (enable_llvm) {
-            const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return;
+            const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
             snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
             snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths.include });
             try addStaticLlvmOptionsToModule(snapshot_test.root_module);
@@ -2604,6 +2607,7 @@ fn addMainExe(
     strip: bool,
     omit_frame_pointer: ?bool,
     enable_llvm: bool,
+    use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
@@ -2805,7 +2809,7 @@ fn addMainExe(
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, user_llvm_path) orelse return null;
+        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
 
         exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
@@ -2951,12 +2955,21 @@ const LlvmPaths = struct {
 };
 
 /// Get LLVM library and include paths.
-/// If user_llvm_path is provided, use that. Otherwise, download from roc-bootstrap.
+/// Priority:
+/// 1. If user_llvm_path is provided, use that
+/// 2. If use_system_llvm is true, detect system LLVM via llvm-config
+/// 3. Otherwise, download from roc-bootstrap (default)
 fn llvmPaths(
     b: *std.Build,
     target: ResolvedTarget,
+    use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
 ) ?LlvmPaths {
+    if (use_system_llvm and user_llvm_path != null) {
+        std.log.err("-Dsystem-llvm and -Dllvm-path cannot both be specified", .{});
+        std.process.exit(1);
+    }
+
     if (user_llvm_path) |llvm_path| {
         // User specified a custom LLVM path
         return .{
@@ -2965,11 +2978,26 @@ fn llvmPaths(
         };
     }
 
-    // No user specified llvm. Go download it from roc-bootstrap.
+    if (use_system_llvm) {
+        // Detect system LLVM via llvm-config (required for AFL++)
+        const llvm_config_path = b.findProgram(&.{"llvm-config"}, &.{""}) catch {
+            std.log.err("Failed to find system llvm-config binary. Is LLVM installed?", .{});
+            std.process.exit(1);
+        };
+        const llvm_lib_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
+        const llvm_include_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--includedir" }), "\n");
+
+        return .{
+            .include = llvm_include_dir,
+            .lib = llvm_lib_dir,
+        };
+    }
+
+    // Default: download from roc-bootstrap
     const raw_triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
     if (!supported_deps_triples.has(raw_triple)) {
         std.log.err("Target triple({s}) not supported by roc-bootstrap.\n", .{raw_triple});
-        std.log.err("Please specify `-Dllvm-path` to provide a custom LLVM installation.\n", .{});
+        std.log.err("Please specify `-Dsystem-llvm` or `-Dllvm-path` to provide a custom LLVM installation.\n", .{});
         std.process.exit(1);
     }
     const triple = supported_deps_triples.get(raw_triple).?;
