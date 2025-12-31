@@ -1,6 +1,6 @@
 # META
 ~~~ini
-description=Constrained record type annotation
+description=Open record type annotation with named extension
 type=statement
 ~~~
 # SOURCE
