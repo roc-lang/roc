@@ -1880,3 +1880,20 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\}
     , 500500, .no_trace);
 }
+
+test "issue 8831: self-referential value definition should produce error, not crash" {
+    // Regression test for GitHub issue #8831
+    // A self-referential value definition like `a = a` should produce a
+    // compile-time error (ident_not_in_scope) instead of crashing at runtime
+    // with "e_lookup_local: definition not found in current scope".
+    //
+    // The fix is to detect during canonicalization that the RHS of a definition
+    // refers to a variable that is being defined in the current definition and
+    // hasn't been introduced to the scope yet.
+    try runExpectError(
+        \\{
+        \\    a = a
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
