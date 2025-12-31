@@ -169,6 +169,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:96:54:96:57
 DUPLICATE DEFINITION - fuzz_crash_019.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:30:97:32
+UNDEFINED VARIABLE - fuzz_crash_019.md:97:34:97:35
 UNDEFINED VARIABLE - fuzz_crash_019.md:98:2:98:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
@@ -666,6 +667,17 @@ Is there an `import` or `exposing` missing up-top?
 	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
 ```
 	                            ^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `t` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_019.md:97:34:97:35:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+	                                ^
 
 
 **UNDEFINED VARIABLE**

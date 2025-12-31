@@ -256,6 +256,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
 UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
+UNDEFINED VARIABLE - fuzz_crash_023.md:179:50:179:55
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
@@ -760,6 +761,17 @@ Is there an `import` or `exposing` missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `tuple` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**fuzz_crash_023.md:179:50:179:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
 
 
 **UNDEFINED VARIABLE**

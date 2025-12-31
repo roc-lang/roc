@@ -1897,3 +1897,16 @@ test "issue 8831: self-referential value definition should produce error, not cr
         \\}
     , error.Crash, .no_trace);
 }
+
+test "issue 8831: nested self-reference in list should also error" {
+    // Additional test for issue #8831
+    // Even nested self-references like `a = [a]` should error during canonicalization.
+    // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
+    // Only lambdas are allowed to self-reference (for recursive function calls).
+    try runExpectError(
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
