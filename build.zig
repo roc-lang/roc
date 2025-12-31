@@ -2662,6 +2662,15 @@ pub fn build(b: *std.Build) void {
         snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
 
+        // Add LLVM support for dual-mode testing
+        const llvm_paths_coverage = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+        snapshot_coverage_test.addLibraryPath(.{ .cwd_relative = llvm_paths_coverage.lib });
+        snapshot_coverage_test.addIncludePath(.{ .cwd_relative = llvm_paths_coverage.include });
+        try addStaticLlvmOptionsToModule(snapshot_coverage_test.root_module);
+        snapshot_coverage_test.root_module.addAnonymousImport("llvm_compile", .{
+            .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        });
+
         // Configure kcov execution - output to parser-snapshot-tests directory
         snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
             "kcov",
