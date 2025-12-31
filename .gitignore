@@ -145,3 +145,4 @@ src/snapshots/**/*.html
 .claude/settings.local.json
 
 *.bak
+kcov-output/

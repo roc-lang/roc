@@ -35,6 +35,9 @@ pub const AutoImportedType = struct {
     /// The fully qualified type identifier (e.g., "Builtin.Str" for Str, "Builtin.Num.U8" for U8)
     /// Used for looking up members like U8.to_i16 -> "Builtin.Num.U8.to_i16"
     qualified_type_ident: Ident.Idx,
+    /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
+    /// Used to determine the correct module name for auto-imports
+    is_package_qualified: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -4231,8 +4234,7 @@ pub fn canonicalizeExpr(
                                                 // Need to get or create the auto-import for the module
                                                 // For package-qualified imports (pf.Stdout), use the qualified name
                                                 // For builtin nested types (Bool, Str), use the parent module name
-                                                const is_qualified_import = std.mem.indexOfScalar(u8, type_text, '.') != null;
-                                                const actual_module_name = if (is_qualified_import) type_text else module_env.module_name;
+                                                const actual_module_name = if (auto_imported_type_env.is_package_qualified) type_text else module_env.module_name;
                                                 const import_idx = try self.getOrCreateAutoImport(actual_module_name);
 
                                                 // Create e_lookup_external expression
@@ -4300,30 +4302,28 @@ pub fn canonicalizeExpr(
                             // This is a module-qualified lookup
                             const module_text = self.env.getIdent(module_name);
 
+                            // Look up auto-imported type info once to avoid repeated map lookups
+                            const auto_imported_type_info: ?AutoImportedType = if (self.module_envs) |envs_map|
+                                envs_map.get(module_name)
+                            else
+                                null;
+
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
-                            const is_qualified = std.mem.indexOfScalar(u8, module_text, '.') != null;
-                            const lookup_module_name = if (is_qualified)
-                                module_text
-                            else if (self.module_envs) |envs_map| blk_lookup: {
-                                if (envs_map.get(module_name)) |auto_imported_type| {
-                                    break :blk_lookup auto_imported_type.env.module_name;
-                                } else {
-                                    break :blk_lookup module_text;
-                                }
-                            } else module_text;
+                            const lookup_module_name = if (auto_imported_type_info) |info|
+                                if (info.is_package_qualified) module_text else info.env.module_name
+                            else
+                                module_text;
 
                             // If not, create an auto-import
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
-                                if (self.module_envs) |envs_map| {
-                                    if (envs_map.get(module_name)) |auto_imported_type| {
-                                        // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
-                                        // For package-qualified imports (pf.Stdout), use the qualified name
-                                        const actual_module_name = if (is_qualified) module_text else auto_imported_type.env.module_name;
-                                        break :blk try self.getOrCreateAutoImport(actual_module_name);
-                                    }
+                                if (auto_imported_type_info) |info| {
+                                    // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
+                                    // For package-qualified imports (pf.Stdout), use the qualified name
+                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
+                                    break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
                                 // Module not imported in current scope
@@ -4340,58 +4340,44 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
-                            const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (envs_map.get(module_name)) |auto_imported_type| {
-                                    const module_env = auto_imported_type.env;
+                            const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
+                                const module_env = info.env;
 
-                                    // For auto-imported types with statement_idx (builtin types and platform modules),
-                                    // build the full qualified name using qualified_type_ident.
-                                    // For regular user module imports (statement_idx is null), use field_text directly.
-                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| name_blk: {
-                                        // Build the fully qualified member name using the type's qualified ident
-                                        // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
-                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
-                                        // Note: qualified_type_ident is always stored in the calling module's ident store
-                                        // (self.env), since Ident.Idx values are not transferable between stores.
-                                        const qualified_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                        break :name_blk self.env.getIdent(fully_qualified_idx);
-                                    } else field_text;
+                                // For auto-imported types with statement_idx (builtin types and platform modules),
+                                // build the full qualified name using qualified_type_ident.
+                                // For regular user module imports (statement_idx is null), use field_text directly.
+                                const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
+                                    // Build the fully qualified member name using the type's qualified ident
+                                    // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
+                                    // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    // Note: qualified_type_ident is always stored in the calling module's ident store
+                                    // (self.env), since Ident.Idx values are not transferable between stores.
+                                    const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    break :name_blk self.env.getIdent(fully_qualified_idx);
+                                } else field_text;
 
-                                    // Look up the associated item by its name
-                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                        // Identifier not found - just return null
-                                        // The error will be handled by the code below that checks target_node_idx_opt
-                                        break :blk null;
-                                    };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
-                                } else {
+                                // Look up the associated item by its name
+                                const qname_ident = module_env.common.findIdent(lookup_name) orelse {
+                                    // Identifier not found - just return null
+                                    // The error will be handled by the code below that checks target_node_idx_opt
                                     break :blk null;
-                                }
+                                };
+                                break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
                             const target_node_idx = target_node_idx_opt orelse {
                                 // The identifier doesn't exist in the module or isn't exposed
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
-                                const module_exists = if (self.module_envs) |envs_map|
-                                    envs_map.contains(module_name)
-                                else
-                                    false;
-
-                                if (!module_exists) {
+                                if (auto_imported_type_info == null) {
                                     // Module import failed, don't generate redundant error
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }
 
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                const is_auto_imported_type = if (self.module_envs) |envs_map|
-                                    envs_map.contains(module_name)
-                                else
-                                    false;
-
-                                const diagnostic = if (is_auto_imported_type)
+                                const diagnostic = if (auto_imported_type_info != null)
                                     Diagnostic{ .nested_value_not_found = .{
                                         .parent_name = module_name,
                                         .nested_name = ident,
@@ -5550,11 +5536,12 @@ pub fn canonicalizeExpr(
             // Create span from scratch branches
             const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
 
-            // Create the match expression
+            // Create the match expression (is_try_suffix = true since this comes from `?`)
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = true,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5950,6 +5937,7 @@ pub fn canonicalizeExpr(
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = false,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
