@@ -1040,7 +1040,7 @@ It has the type:
 
 But the type annotation says it should have the type:
 
-    Try({  }, _d)
+    Try({  }, err)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:

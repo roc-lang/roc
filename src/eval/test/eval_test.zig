@@ -1844,3 +1844,20 @@ test "static dispatch: List.sum uses item.plus and item.default" {
 // declarations which aren't supported by the expression-based eval test helpers.
 // The fix is in the interpreter (propagateFlexMappings for tag unions), so an
 // fx test is needed to exercise the full method dispatch path.
+
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    // Test that recursive closure calls don't leak stack memory.
+    // If stack memory is not properly restored after closure returns,
+    // deeply recursive functions will exhaust the interpreter's stack.
+    // The record allocation forces stack allocation on each call.
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
+}
