@@ -2733,7 +2733,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -2749,7 +2749,7 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, .._others])");
 }
 
 // record extension in type annotations //
@@ -2822,7 +2822,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, ..others])
+        \\Try(item, [OutOfBounds, .._others])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
@@ -2873,7 +2873,7 @@ test "check type - List.first method syntax should not create cyclic types" {
     // cyclic rigid var mappings in the TypeScope when building layouts.
     //
     // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, ..others]) with an open tag union,
+    // When the return type is Try(item, [ListWasEmpty, .._others]) with an open tag union,
     // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
     //
     // Method syntax: [1].first()
@@ -2884,11 +2884,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, ..others]) with item having from_numeral constraint
+    // Expected: Try(item, [ListWasEmpty, .._others]) with item having from_numeral constraint
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, ..others])
+        \\Try(item, [ListWasEmpty, .._others])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
