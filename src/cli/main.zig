@@ -366,26 +366,24 @@ fn renderTypeProblems(
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible without
-/// consuming physical memory or page file space because:
+/// On POSIX 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory because mmap with MAP_SHARED reserves virtual
+/// address space without backing it until pages are actually touched.
 ///
-/// - On Linux/macOS/BSD: mmap with MAP_SHARED reserves virtual address space without
-///   backing it with physical memory until pages are actually touched.
+/// On Windows 64-bit, we use 512MB. Windows has limitations on contiguous address
+/// space mappings - even with SEC_RESERVE for on-demand page commits, MapViewOfFile
+/// still needs to map the entire view into the address space, which fails for very
+/// large sizes like 2TB. Additionally, we use a fixed base address (SHARED_MEMORY_BASE_ADDR)
+/// to avoid ASLR issues between parent/child processes, which further limits the
+/// available contiguous address space.
 ///
-/// - On Windows: We use SEC_RESERVE when creating the file mapping, which reserves the
-///   virtual address space without committing physical memory or page file. Pages are then
-///   committed on-demand in SharedMemoryAllocator using VirtualAlloc(MEM_COMMIT) as memory
-///   is needed. Without SEC_RESERVE, CreateFileMapping would fail for large sizes because
-///   it would try to immediately reserve page file space for the entire mapping.
-///
-/// This large reservation ensures we never run out of space during type checking of large
-/// programs, while only actually consuming memory for pages that are used.
-///
-/// On 32-bit targets, we use 256MB since 2TB won't fit in the address space.
-const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    2 * 1024 * 1024 * 1024 * 1024 // 2TB for 64-bit targets
+/// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets
+else if (builtin.target.os.tag == .windows)
+    512 * 1024 * 1024 // 512MB for Windows 64-bit
 else
-    256 * 1024 * 1024; // 256MB for 32-bit targets
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for POSIX 64-bit
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
