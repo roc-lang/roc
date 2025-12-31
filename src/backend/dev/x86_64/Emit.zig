@@ -36,9 +36,7 @@ pub fn offset(self: *const Emit) u64 {
     return @intCast(self.buf.items.len);
 }
 
-// ============================================================================
 // REX prefix helpers
-// ============================================================================
 
 /// REX prefix byte layout: 0100WRXB
 const REX_BASE: u8 = 0b0100_0000;
@@ -60,18 +58,14 @@ fn emitRex(self: *Emit, width: RegisterWidth, reg: ?GeneralReg, rm: ?GeneralReg)
     }
 }
 
-// ============================================================================
 // ModR/M byte helpers
-// ============================================================================
 
 /// Build a ModR/M byte
 fn modRM(mod: u2, reg: u3, rm: u3) u8 {
     return (@as(u8, mod) << 6) | (@as(u8, reg) << 3) | rm;
 }
 
-// ============================================================================
 // Movement instructions
-// ============================================================================
 
 /// MOV reg, reg (64-bit)
 pub fn movRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
@@ -98,9 +92,7 @@ pub fn movRegImm32(self: *Emit, dst: GeneralReg, imm: i32) !void {
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
 }
 
-// ============================================================================
 // Arithmetic instructions
-// ============================================================================
 
 /// ADD reg, reg
 pub fn addRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
@@ -290,9 +282,7 @@ pub fn sarRegImm8(self: *Emit, width: RegisterWidth, reg: GeneralReg, imm: u8) !
     }
 }
 
-// ============================================================================
 // Control flow instructions
-// ============================================================================
 
 /// RET (return from procedure)
 pub fn ret(self: *Emit) !void {
@@ -310,10 +300,12 @@ pub fn callRelocated(self: *Emit, name: []const u8) !void {
     const call_offset = self.offset();
     try self.buf.append(self.allocator, 0xE8);
     try self.buf.appendSlice(self.allocator, &[4]u8{ 0, 0, 0, 0 }); // Placeholder
-    try self.relocs.append(self.allocator, .{ .linked_function = .{
-        .offset = call_offset + 1, // Offset of the rel32 operand
-        .name = name,
-    } });
+    try self.relocs.append(self.allocator, .{
+        .linked_function = .{
+            .offset = call_offset + 1, // Offset of the rel32 operand
+            .name = name,
+        },
+    });
 }
 
 /// JMP rel32 (relative jump)
@@ -386,9 +378,7 @@ pub fn setcc(self: *Emit, cond: Condition, reg: GeneralReg) !void {
     try self.buf.append(self.allocator, modRM(0b11, 0, reg.enc()));
 }
 
-// ============================================================================
 // Memory instructions
-// ============================================================================
 
 /// MOV reg, [base + disp32] (load from memory)
 pub fn movRegMem(self: *Emit, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
@@ -463,9 +453,7 @@ pub fn lea(self: *Emit, dst: GeneralReg, base: GeneralReg, disp: i32) !void {
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
 }
 
-// ============================================================================
 // Stack instructions
-// ============================================================================
 
 /// PUSH reg
 pub fn pushReg(self: *Emit, reg: GeneralReg) !void {
@@ -483,9 +471,7 @@ pub fn popReg(self: *Emit, reg: GeneralReg) !void {
     try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc()));
 }
 
-// ============================================================================
 // Floating-point instructions (SSE/SSE2)
-// ============================================================================
 
 /// Emit REX prefix for floating-point operations
 fn emitFloatRex(self: *Emit, reg: ?FloatReg, rm: ?FloatReg) !void {
@@ -754,9 +740,7 @@ pub fn cvtsd2ssRegReg(self: *Emit, dst: FloatReg, src: FloatReg) !void {
     try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "mov reg, reg" {
     var asm_buf = Emit.init(std.testing.allocator);

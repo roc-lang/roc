@@ -144,9 +144,7 @@ pub const Symbol = struct {
     is_external: bool,
 };
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "generate x86_64 linux object" {
     const allocator = std.testing.allocator;

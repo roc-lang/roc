@@ -164,9 +164,7 @@ pub fn CodeGen(
             return self.emit.buf.items.len;
         }
 
-        // =====================================================================
         // Register allocation (simple linear scan)
-        // =====================================================================
 
         /// Allocate a general-purpose register
         pub fn allocGeneral(self: *Self) ?GeneralReg {
@@ -194,9 +192,7 @@ pub fn CodeGen(
             self.free_float |= @as(u32, 1) << @intFromEnum(reg);
         }
 
-        // =====================================================================
         // Stack management
-        // =====================================================================
 
         /// Allocate space on the stack, returns offset from frame pointer
         pub fn allocStack(self: *Self, size: u32) i32 {
@@ -213,9 +209,7 @@ pub fn CodeGen(
             return (size + 15) & ~@as(u32, 15);
         }
 
-        // =====================================================================
         // Local variable management
-        // =====================================================================
 
         /// Bind a local variable to a location
         pub fn bindLocal(self: *Self, idx: u32, loc: ValueLoc) !void {
@@ -227,9 +221,7 @@ pub fn CodeGen(
             return self.locals.get(idx);
         }
 
-        // =====================================================================
         // Code emission helpers (architecture-independent interface)
-        // =====================================================================
 
         /// Emit function prologue
         pub fn emitPrologue(_: *Self) !void {
@@ -245,9 +237,7 @@ pub fn CodeGen(
     };
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "NumKind properties" {
     try std.testing.expect(NumKind.f32.isFloat());

@@ -43,9 +43,7 @@ fn emit32(self: *Emit, inst: u32) !void {
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(inst)));
 }
 
-// ============================================================================
 // Movement instructions
-// ============================================================================
 
 /// MOV reg, reg (register to register)
 /// This is an alias for ORR Xd, XZR, Xm (or ORR Wd, WZR, Wm for 32-bit)
@@ -123,9 +121,7 @@ pub fn movRegImm64(self: *Emit, dst: GeneralReg, imm: u64) !void {
     }
 }
 
-// ============================================================================
 // Arithmetic instructions
-// ============================================================================
 
 /// ADD reg, reg, reg
 pub fn addRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
@@ -363,9 +359,7 @@ pub fn asrRegRegImm(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Gen
     try self.emit32(inst);
 }
 
-// ============================================================================
 // Control flow instructions
-// ============================================================================
 
 /// RET (return to address in LR)
 pub fn ret(self: *Emit) !void {
@@ -501,9 +495,7 @@ pub fn cset(self: *Emit, width: RegisterWidth, dst: GeneralReg, cond: Condition)
     try self.csinc(width, dst, .ZRSP, .ZRSP, cond.invert());
 }
 
-// ============================================================================
 // Memory instructions
-// ============================================================================
 
 /// LDR (load register) with unsigned offset
 pub fn ldrRegMemUoff(self: *Emit, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, uoffset: u12) !void {
@@ -594,9 +586,7 @@ pub fn strbRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, uoffset: u12) 
     try self.emit32(inst);
 }
 
-// ============================================================================
 // Stack instructions
-// ============================================================================
 
 /// STP (store pair) - commonly used for pushing to stack
 pub fn stpPreIndex(self: *Emit, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
@@ -634,9 +624,7 @@ pub fn ldpPostIndex(self: *Emit, width: RegisterWidth, reg1: GeneralReg, reg2: G
     try self.emit32(inst);
 }
 
-// ============================================================================
 // Floating-point instructions
-// ============================================================================
 
 /// Float type for instruction encoding
 pub const FloatType = enum(u1) {
@@ -917,9 +905,7 @@ pub fn fstrRegMemUoff(self: *Emit, ftype: FloatType, src: FloatReg, base: Genera
     try self.emit32(inst);
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "mov reg, reg" {
     var asm_buf = Emit.init(std.testing.allocator);

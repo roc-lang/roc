@@ -96,17 +96,21 @@ pub fn isFloatCalleeSaved(reg: FloatReg) bool {
 /// Default free registers for allocation (ordered by preference)
 pub const DEFAULT_FREE_GENERAL_REGS = [_]GeneralReg{
     // Caller-saved first
-    .R11, .R10, .R9, .R8,
+    .R11, .R10, .R9,  .R8,
     .RDX, .RCX, .RAX,
     // Callee-saved last
-    .R15, .R14, .R13, .R12, .RDI, .RSI, .RBX,
+    .R15,
+    .R14, .R13, .R12, .RDI,
+    .RSI, .RBX,
 };
 
+/// Default order for allocating float registers (caller-saved first).
 pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
     // Caller-saved first
-    .XMM5, .XMM4, .XMM3, .XMM2, .XMM1, .XMM0,
+    .XMM5,  .XMM4,  .XMM3,  .XMM2,  .XMM1,  .XMM0,
     // Callee-saved last
-    .XMM15, .XMM14, .XMM13, .XMM12, .XMM11, .XMM10, .XMM9, .XMM8, .XMM7, .XMM6,
+    .XMM15, .XMM14, .XMM13, .XMM12, .XMM11, .XMM10,
+    .XMM9,  .XMM8,  .XMM7,  .XMM6,
 };
 
 /// Bitmask of caller-saved general registers (for fast allocation)

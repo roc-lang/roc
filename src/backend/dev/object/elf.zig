@@ -9,7 +9,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Relocation = @import("../Relocation.zig").Relocation;
 
 /// ELF file header constants
 const ELF = struct {
@@ -28,15 +27,12 @@ const ELF = struct {
     const EM_AARCH64 = 183;
 
     // Section header types
-    const SHT_NULL = 0;
     const SHT_PROGBITS = 1;
     const SHT_SYMTAB = 2;
     const SHT_STRTAB = 3;
     const SHT_RELA = 4;
-    const SHT_NOBITS = 8;
 
     // Section flags
-    const SHF_WRITE = 0x1;
     const SHF_ALLOC = 0x2;
     const SHF_EXECINSTR = 0x4;
     const SHF_INFO_LINK = 0x40;
@@ -48,20 +44,15 @@ const ELF = struct {
     // Symbol type
     const STT_NOTYPE = 0;
     const STT_FUNC = 2;
-    const STT_SECTION = 3;
 
     // Special section indices
     const SHN_UNDEF = 0;
-    const SHN_ABS = 0xfff1;
 
     // x86_64 relocation types
-    const R_X86_64_PC32 = 2;
     const R_X86_64_PLT32 = 4;
-    const R_X86_64_GOTPCREL = 9;
 
     // aarch64 relocation types
     const R_AARCH64_CALL26 = 283;
-    const R_AARCH64_JUMP26 = 282;
 };
 
 /// ELF64 file header (64 bytes)
@@ -495,9 +486,7 @@ fn alignUp(value: u64, alignment: u64) u64 {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "create minimal elf object" {
     var writer = try ElfWriter.init(std.testing.allocator, .x86_64);

@@ -59,8 +59,8 @@ pub const CALLEE_SAVED_GENERAL = [_]GeneralReg{
 
 /// Caller-saved floating-point registers
 pub const CALLER_SAVED_FLOAT = [_]FloatReg{
-    .XMM0,  .XMM1,  .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
-    .XMM8,  .XMM9,  .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
+    .XMM0, .XMM1, .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
+    .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
 };
 
 /// No shadow space required (unlike Windows)
@@ -90,13 +90,15 @@ pub fn isFloatCalleeSaved(_: FloatReg) bool {
 /// Put callee-saved regs last to minimize saves
 pub const DEFAULT_FREE_GENERAL_REGS = [_]GeneralReg{
     // Caller-saved first (no save/restore needed)
-    .R11, .R10, .R9, .R8,
+    .R11, .R10, .R9,  .R8,
     .RCX, .RDX, .RSI, .RDI,
     .RAX,
     // Callee-saved last (need save/restore)
-    .R15, .R14, .R13, .R12, .RBX,
+    .R15, .R14, .R13,
+    .R12, .RBX,
 };
 
+/// Default order for allocating float registers (all caller-saved in System V).
 pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
     .XMM15, .XMM14, .XMM13, .XMM12, .XMM11, .XMM10, .XMM9, .XMM8,
     .XMM7,  .XMM6,  .XMM5,  .XMM4,  .XMM3,  .XMM2,  .XMM1, .XMM0,

@@ -26,11 +26,7 @@ pub const Backend = @import("Backend.zig");
 pub fn DevBackend(
     comptime GeneralReg: type,
     comptime FloatReg: type,
-    comptime _Asm: type,
-    comptime _CC: type,
 ) type {
-    _ = _Asm;
-    _ = _CC;
     return struct {
         const Self = @This();
 
@@ -191,28 +187,25 @@ pub fn Storage(
     };
 }
 
-// Concrete backend instantiations for common targets
+/// Dev backend for x86_64 Linux using System V ABI.
 pub const X86_64LinuxBackend = DevBackend(
     x86_64.GeneralReg,
     x86_64.FloatReg,
-    x86_64.Emit,
-    x86_64.SystemV,
 );
 
-pub const X86_64MacBackend = X86_64LinuxBackend; // macOS uses System V ABI
+/// Dev backend for x86_64 macOS (uses System V ABI).
+pub const X86_64MacBackend = X86_64LinuxBackend;
 
+/// Dev backend for x86_64 Windows using Fastcall ABI.
 pub const X86_64WinBackend = DevBackend(
     x86_64.GeneralReg,
     x86_64.FloatReg,
-    x86_64.Emit,
-    x86_64.WindowsFastcall,
 );
 
+/// Dev backend for aarch64 using AAPCS64 calling convention.
 pub const AArch64Backend = DevBackend(
     aarch64.GeneralReg,
     aarch64.FloatReg,
-    aarch64.Emit,
-    aarch64.Call,
 );
 
 test "backend module imports" {

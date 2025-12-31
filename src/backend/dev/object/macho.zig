@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Relocation = @import("../Relocation.zig").Relocation;
 
 /// Mach-O constants
 const MachO = struct {
@@ -32,10 +31,8 @@ const MachO = struct {
     const LC_SEGMENT_64 = 0x19;
     const LC_SYMTAB = 0x2;
     const LC_DYSYMTAB = 0xb;
-    const LC_BUILD_VERSION = 0x32;
 
     // Section types
-    const S_REGULAR = 0x0;
     const S_ATTR_PURE_INSTRUCTIONS = 0x80000000;
     const S_ATTR_SOME_INSTRUCTIONS = 0x00000400;
 
@@ -46,13 +43,9 @@ const MachO = struct {
 
     // Relocation types (x86_64)
     const X86_64_RELOC_BRANCH = 2;
-    const X86_64_RELOC_SIGNED = 1;
 
     // Relocation types (arm64)
     const ARM64_RELOC_BRANCH26 = 2;
-
-    // Platform types
-    const PLATFORM_MACOS = 1;
 };
 
 /// Mach-O 64-bit header (32 bytes)
@@ -65,12 +58,6 @@ const MachHeader64 = extern struct {
     sizeofcmds: u32,
     flags: u32,
     reserved: u32,
-};
-
-/// Load command header
-const LoadCommand = extern struct {
-    cmd: u32,
-    cmdsize: u32,
 };
 
 /// 64-bit segment command (72 bytes)
@@ -464,9 +451,7 @@ pub const MachOWriter = struct {
     }
 };
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "create minimal macho object" {
     var writer = try MachOWriter.init(std.testing.allocator, .x86_64);

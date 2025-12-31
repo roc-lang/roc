@@ -65,7 +65,6 @@ pub const GeneralReg = enum(u5) {
         return @intFromEnum(self);
     }
 
-
     /// Get the 64-bit register name
     pub fn name64(self: GeneralReg) []const u8 {
         return switch (self) {
@@ -185,7 +184,6 @@ pub const FloatReg = enum(u5) {
     pub fn enc(self: FloatReg) u5 {
         return @intFromEnum(self);
     }
-
 
     /// Get the single-precision (32-bit float) register name
     pub fn nameS(self: FloatReg) []const u8 {

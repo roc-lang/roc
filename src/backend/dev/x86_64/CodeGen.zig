@@ -9,7 +9,6 @@ const Allocator = std.mem.Allocator;
 const Emit = @import("Emit.zig");
 const Registers = @import("Registers.zig");
 const SystemV = @import("SystemV.zig");
-const WindowsFastcall = @import("WindowsFastcall.zig");
 const Relocation = @import("../Relocation.zig").Relocation;
 const GenericCodeGen = @import("../CodeGen.zig");
 
@@ -70,9 +69,7 @@ pub const SystemVCodeGen = struct {
         return self.emit.buf.items.len;
     }
 
-    // =========================================================================
     // Register allocation
-    // =========================================================================
 
     pub fn allocGeneral(self: *Self) ?GeneralReg {
         if (self.free_general == 0) return null;
@@ -96,9 +93,7 @@ pub const SystemVCodeGen = struct {
         self.free_float |= @as(u32, 1) << @intFromEnum(reg);
     }
 
-    // =========================================================================
     // Stack management
-    // =========================================================================
 
     pub fn allocStack(self: *Self, size: u32) i32 {
         const aligned_size = (size + 7) & ~@as(u32, 7);
@@ -111,9 +106,7 @@ pub const SystemVCodeGen = struct {
         return (size + 15) & ~@as(u32, 15);
     }
 
-    // =========================================================================
     // Function prologue/epilogue
-    // =========================================================================
 
     /// Emit function prologue (called at start of function)
     pub fn emitPrologue(self: *Self) !void {
@@ -141,9 +134,7 @@ pub const SystemVCodeGen = struct {
         }
     }
 
-    // =========================================================================
     // Integer operations
-    // =========================================================================
 
     /// Emit integer addition: dst = a + b
     pub fn emitAdd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
@@ -177,9 +168,7 @@ pub const SystemVCodeGen = struct {
         try self.emit.negReg(width, dst);
     }
 
-    // =========================================================================
     // Comparison operations
-    // =========================================================================
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
     pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
@@ -189,9 +178,7 @@ pub const SystemVCodeGen = struct {
         try self.emit.movRegReg(.w32, dst, dst); // movzx is implied for 32-bit moves
     }
 
-    // =========================================================================
     // Floating-point operations
-    // =========================================================================
 
     /// Emit float64 addition: dst = a + b
     pub fn emitAddF64(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
@@ -225,9 +212,7 @@ pub const SystemVCodeGen = struct {
         try self.emit.divsdRegReg(dst, b);
     }
 
-    // =========================================================================
     // Memory operations
-    // =========================================================================
 
     /// Load from stack slot into register
     pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) !void {
@@ -249,9 +234,7 @@ pub const SystemVCodeGen = struct {
         try self.emit.movsdMemReg(.RBP, offset, src);
     }
 
-    // =========================================================================
     // Immediate loading
-    // =========================================================================
 
     /// Load immediate value into register
     pub fn emitLoadImm(self: *Self, dst: GeneralReg, value: i64) !void {
@@ -262,9 +245,7 @@ pub const SystemVCodeGen = struct {
         }
     }
 
-    // =========================================================================
     // Control flow
-    // =========================================================================
 
     /// Emit unconditional jump (returns patch location for fixup)
     pub fn emitJump(self: *Self) !usize {
@@ -300,9 +281,7 @@ pub const SystemVCodeGen = struct {
     }
 };
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "prologue and epilogue" {
     var cg = SystemVCodeGen.init(std.testing.allocator);

@@ -60,8 +60,8 @@ pub const INDIRECT_RESULT_REG: GeneralReg = .XR; // X8
 
 /// Caller-saved (volatile) general registers
 pub const CALLER_SAVED_GENERAL = [_]GeneralReg{
-    .X0,  .X1,  .X2,  .X3,  .X4,  .X5,  .X6,  .X7,
-    .XR,  .X9,  .X10, .X11, .X12, .X13, .X14, .X15,
+    .X0, .X1, .X2,  .X3,  .X4,  .X5,  .X6,  .X7,
+    .XR, .X9, .X10, .X11, .X12, .X13, .X14, .X15,
     .IP0, .IP1, // Intra-procedure-call scratch registers
 };
 
@@ -115,11 +115,14 @@ pub fn isFloatCalleeSaved(reg: FloatReg) bool {
 pub const DEFAULT_FREE_GENERAL_REGS = [_]GeneralReg{
     // Caller-saved first (no save/restore needed)
     .X15, .X14, .X13, .X12, .X11, .X10, .X9,
-    .X7,  .X6,  .X5,  .X4,  .X3,  .X2,  .X1,  .X0,
+    .X7,  .X6,  .X5,  .X4,  .X3,  .X2,  .X1,
+    .X0,
     // Callee-saved last (need save/restore)
-    .X28, .X27, .X26, .X25, .X24, .X23, .X22, .X21, .X20, .X19,
+     .X28, .X27, .X26, .X25, .X24, .X23,
+    .X22, .X21, .X20, .X19,
 };
 
+/// Default order for allocating float registers (caller-saved first).
 pub const DEFAULT_FREE_FLOAT_REGS = [_]FloatReg{
     // Caller-saved first
     .V31, .V30, .V29, .V28, .V27, .V26, .V25, .V24,
