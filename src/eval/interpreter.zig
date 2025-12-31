@@ -8217,13 +8217,13 @@ pub const Interpreter = struct {
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
         if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+            // Use the expression's type as the single source of truth for propagating
+            // type mappings. The expression's type always has the correct function type.
+            const expr_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+            const expr_resolved = origin_env.types.resolveVar(expr_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
+            if (expr_resolved.desc.content == .structure) {
+                const flat = expr_resolved.desc.content.structure;
                 switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
                         const param_vars = origin_env.types.sliceVars(fn_type.args);
@@ -8241,67 +8241,14 @@ pub const Interpreter = struct {
                     },
                     else => {},
                 }
-            } else if (def_resolved.desc.content == .flex or def_resolved.desc.content == .rigid or
-                def_resolved.desc.content == .err)
-            {
-                // For methods without type annotations, the def's type might be a flex/rigid var
-                // or even an error type. In this case, look at the lambda expression's type instead.
-                const expr = origin_env.store.getExpr(target_def.expr);
-                if (expr == .e_lambda) {
-                    const lambda_ct_var = can.ModuleEnv.varFrom(target_def.expr);
-                    const lambda_resolved = origin_env.types.resolveVar(lambda_ct_var);
-                    if (lambda_resolved.desc.content == .structure) {
-                        const flat = lambda_resolved.desc.content.structure;
-                        switch (flat) {
-                            .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
-                                const param_vars = origin_env.types.sliceVars(fn_type.args);
-                                if (param_vars.len > 0) {
-                                    try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
-                                }
-                                try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
-                            },
-                            else => {},
-                        }
-                    }
-                }
             }
         }
 
-        // Translate the def's type var to runtime.
-        // For methods without type annotations, the def's type might be flex/rigid/err.
-        // In that case, use the lambda expression's type instead which should have a proper function type.
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const def_resolved_for_var = origin_env.types.resolveVar(def_var);
-        const rt_def_var: types.Var = blk: {
-            if (def_resolved_for_var.desc.content == .structure) {
-                const flat = def_resolved_for_var.desc.content.structure;
-                switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => {
-                        // Type annotation provided - use def's type
-                        break :blk try self.translateTypeVar(@constCast(origin_env), def_var);
-                    },
-                    else => {},
-                }
-            }
-            // No annotation or non-function type - try to use lambda's type
-            const expr = origin_env.store.getExpr(target_def.expr);
-            if (expr == .e_lambda) {
-                const lambda_var = can.ModuleEnv.varFrom(target_def.expr);
-                const lambda_resolved = origin_env.types.resolveVar(lambda_var);
-                if (lambda_resolved.desc.content == .structure) {
-                    const flat = lambda_resolved.desc.content.structure;
-                    switch (flat) {
-                        .fn_pure, .fn_effectful, .fn_unbound => {
-                            break :blk try self.translateTypeVar(@constCast(origin_env), lambda_var);
-                        },
-                        else => {},
-                    }
-                }
-            }
-            // Method must have a function type - if we got here, something is wrong
-            self.triggerCrash("resolveMethodFunction: method has no function type", false, roc_ops);
-            return error.Crash;
-        };
+        // Translate the expression's type to runtime.
+        // The expression's type is the single source of truth for the function type,
+        // whether it's a lambda or a reference to another function.
+        const expr_var = can.ModuleEnv.varFrom(target_def.expr);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), expr_var);
 
         // Evaluate the method's expression
         const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
