@@ -416,6 +416,19 @@ pub const LlvmEvaluator = struct {
         const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
         eval_fn.setLinkage(.external, builder);
 
+        // Explicitly set the calling convention for the platform.
+        // Without this, LLVM may not know which C convention to use.
+        // On Windows x64, we need win64cc for correct argument passing (RCX for first arg).
+        // On System V x64, we need x86_64_sysvcc (RDI for first arg).
+        if (builtin.cpu.arch == .x86_64) {
+            if (builtin.os.tag == .windows) {
+                eval_fn.setCallConv(.win64cc, builder);
+            } else {
+                eval_fn.setCallConv(.x86_64_sysvcc, builder);
+            }
+        }
+        // Other architectures use the default ccc which maps correctly
+
         // Build function body
         var wip = try LlvmBuilder.WipFunction.init(builder, .{
             .function = eval_fn,
