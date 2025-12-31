@@ -169,7 +169,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:96:54:96:57
 DUPLICATE DEFINITION - fuzz_crash_019.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:30:97:32
-SELF-REFERENTIAL DEFINITION - fuzz_crash_019.md:97:34:97:35
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_019.md:97:34:97:35
 UNDEFINED VARIABLE - fuzz_crash_019.md:98:2:98:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
@@ -670,10 +670,10 @@ Is there an `import` or `exposing` missing up-top?
 	                            ^^
 
 
-**SELF-REFERENTIAL DEFINITION**
-The value `t` is defined in terms of itself, which would cause an infinite loop at runtime.
+**INVALID ASSIGNMENT TO ITSELF**
+The value `t` is assigned to itself, which would cause an infinite loop at runtime.
 
-Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being defined.
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
 
 **fuzz_crash_019.md:97:34:97:35:**
 ```roc

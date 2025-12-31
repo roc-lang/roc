@@ -556,7 +556,7 @@ pub const Diagnostic = union(enum) {
         return report;
     }
 
-    /// Build a report for "self-referential definition" diagnostic
+    /// Build a report for "self-referential assignment" diagnostic
     pub fn buildSelfReferentialDefinitionReport(
         allocator: Allocator,
         ident_name: []const u8,
@@ -565,14 +565,14 @@ pub const Diagnostic = union(enum) {
         source: []const u8,
         line_starts: []const u32,
     ) !Report {
-        var report = Report.init(allocator, "SELF-REFERENTIAL DEFINITION", .runtime_error);
+        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
         const owned_ident = try report.addOwnedString(ident_name);
         try report.document.addReflowingText("The value ");
         try report.document.addUnqualifiedSymbol(owned_ident);
-        try report.document.addReflowingText(" is defined in terms of itself, which would cause an infinite loop at runtime.");
+        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being defined.");
+        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
