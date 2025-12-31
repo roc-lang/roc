@@ -1242,6 +1242,9 @@ pub fn checkPlatformRequirements(
             const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
 
             // Extract flex name -> instantiated var mappings from the var_map.
+            // Only process flex vars that are declared in the for-clause type aliases.
+            // Other flex vars (like those from open tag union extensions `..others`)
+            // are polymorphic and don't need to be unified with app-provided aliases.
             var var_map_iter = self.var_map.iterator();
             while (var_map_iter.next()) |entry| {
                 const fresh_var = entry.value_ptr.*;
@@ -1251,30 +1254,26 @@ pub fn checkPlatformRequirements(
                     // type is instantiated any rigid in the platform
                     // required type become flex
                     .flex => |flex| {
-                        // Assert flex has name (flex var should come from platform rigid vars)
-                        std.debug.assert(flex.name != null);
-                        const flex_name = flex.name.?;
+                        // Named flex vars come from rigid vars or named extensions (like `.._others`).
+                        // Anonymous flex vars (from `..` syntax) have no name and are skipped.
+                        const flex_name = flex.name orelse continue;
 
-                        // Assert that this flex var ident is in the list of
-                        // rigid vars declared by the platform.
-                        if (builtin.mode == .Debug) {
-                            var found_in_required_aliases = false;
-                            for (type_aliases_slice) |alias| {
-                                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                                if (app_rigid_name == flex_name) {
-                                    found_in_required_aliases = true;
-                                    break;
-                                }
-                            }
-                            if (!found_in_required_aliases) {
-                                std.debug.panic("Expected type var with name {s} to be declared in platform required type aliases", .{
-                                    self.cir.getIdentText(flex_name),
-                                });
+                        // Check if this flex var is in the list of rigid vars declared
+                        // in the for-clause type aliases. If not, it's from an open tag
+                        // union extension (like `..others`) and doesn't need to be stored.
+                        var found_in_required_aliases = false;
+                        for (type_aliases_slice) |alias| {
+                            const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                            if (app_rigid_name == flex_name) {
+                                found_in_required_aliases = true;
+                                break;
                             }
                         }
 
-                        // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                        try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                        if (found_in_required_aliases) {
+                            // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
+                            try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                        }
                     },
                     else => {},
                 }
