@@ -169,8 +169,7 @@ UNDEFINED VARIABLE - fuzz_crash_019.md:96:54:96:57
 DUPLICATE DEFINITION - fuzz_crash_019.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_019.md:97:30:97:32
-UNDEFINED VARIABLE - fuzz_crash_019.md:97:34:97:35
-UNDEFINED VARIABLE - fuzz_crash_019.md:97:34:97:35
+SELF-REFERENTIAL DEFINITION - fuzz_crash_019.md:97:34:97:35
 UNDEFINED VARIABLE - fuzz_crash_019.md:98:2:98:3
 UNDEFINED VARIABLE - fuzz_crash_019.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_019.md:102:4:102:6
@@ -671,20 +670,10 @@ Is there an `import` or `exposing` missing up-top?
 	                            ^^
 
 
-**UNDEFINED VARIABLE**
-Nothing is named `t` in this scope.
-Is there an `import` or `exposing` missing up-top?
+**SELF-REFERENTIAL DEFINITION**
+The value `t` is defined in terms of itself, which would cause an infinite loop at runtime.
 
-**fuzz_crash_019.md:97:34:97:35:**
-```roc
-	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
-```
-	                                ^
-
-
-**UNDEFINED VARIABLE**
-Nothing is named `t` in this scope.
-Is there an `import` or `exposing` missing up-top?
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being defined.
 
 **fuzz_crash_019.md:97:34:97:35:**
 ```roc
@@ -1927,7 +1916,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-runtime-error (tag "ident_not_in_scope"))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))
