@@ -18,12 +18,13 @@
     in flake-utils.lib.eachSystem supportedSystems (system:
       let
         pkgs = import nixpkgs { inherit system; };
+        isLinux = pkgs.stdenv.isLinux;
 
         dependencies = (with pkgs; [
           zig
           zls
           git # for use in ci/zig_lints.sh
-        ]);
+        ]) ++ pkgs.lib.optionals isLinux [ pkgs.kcov ]; # kcov only available on Linux
 
         shellFunctions = ''
           buildcmd() {
@@ -41,8 +42,13 @@
           }
           export -f fmtcmd
 
+          covcmd() {
+            zig build coverage
+          }
+          export -f covcmd
+
           cicmd() {
-            zig build fmt && ./ci/zig_lints.sh && zig build && zig build snapshot && zig build test && zig build test-playground
+            zig build fmt && ./ci/zig_lints.sh && zig build && zig build snapshot && zig build test && zig build test-playground && zig build coverage
           }
           export -f cicmd
         '';
