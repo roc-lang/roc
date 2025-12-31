@@ -9971,6 +9971,33 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
 
+    // Check for invalid self-referential definitions (e.g., `a = a`)
+    // This is only valid if the RHS is a lambda/closure (for recursive functions).
+    // For non-function self-references, we need to emit an error.
+    //
+    // We only check if the IMMEDIATE expression is a self-reference (e.g., `a = a`).
+    // We don't recursively check subexpressions because:
+    // - `a = [a]` might reference an outer `a` (valid shadowing)
+    // - `a = foo(a)` might reference an outer `a`
+    // - Only the direct case `a = a` is guaranteed to be an error
+    if (self.isDirectSelfReference(expr.idx, pattern_idx)) {
+        // Get the identifier from the pattern for the error message
+        const pattern = self.env.store.getPattern(pattern_idx);
+        if (pattern == .assign) {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                .ident = pattern.assign.ident,
+                .region = region,
+            } });
+            // Create a declaration with the malformed expression
+            const stmt_idx = try self.env.addStatement(Statement{ .s_decl = .{
+                .pattern = pattern_idx,
+                .expr = malformed_idx,
+                .anno = mb_validated_anno,
+            } }, region);
+            return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+        }
+    }
+
     // Determine if we should generalize based on RHS
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
 
@@ -10003,6 +10030,24 @@ fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
         .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
 
         // Everything else should NOT be generalized
+        else => false,
+    };
+}
+
+/// Checks if an expression is a direct self-reference to the given pattern.
+/// A direct self-reference is when the expression is simply a lookup to the
+/// pattern being defined, like `a = a`.
+///
+/// This is conservative - it only catches the exact `a = a` case, not things like
+/// `a = a + 1` or `a = [a]`. Those cases might involve shadowing or could be
+/// caught by other means. The direct case is guaranteed to be an error though,
+/// and it's the case reported in issue #8831.
+fn isDirectSelfReference(self: *Self, expr_idx: Expr.Idx, defining_pattern_idx: Pattern.Idx) bool {
+    const expr = self.env.store.getExpr(expr_idx);
+    return switch (expr) {
+        // Direct self-reference: the expression is a lookup to the pattern being defined
+        .e_lookup_local => |lookup| lookup.pattern_idx == defining_pattern_idx,
+        // All other expressions are not direct self-references
         else => false,
     };
 }
