@@ -230,6 +230,7 @@ test "NodeStore round trip - Statement" {
             .name = rand_token_idx(),
             .anno = rand_idx(AST.TypeAnno.Idx),
             .where = rand_idx(AST.Collection.Idx),
+            .is_var = false,
             .region = rand_region(),
         },
     });

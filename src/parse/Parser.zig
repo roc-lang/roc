@@ -1505,6 +1505,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = name,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = true,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1557,6 +1558,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -1588,6 +1590,7 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .anno = anno,
                     .name = start,
                     .where = try self.parseWhereConstraint(),
+                    .is_var = false,
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
