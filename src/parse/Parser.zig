@@ -3231,23 +3231,20 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
         .OpenSquare => {
             self.advance(); // Advance past OpenSquare
             const scratch_top = self.store.scratchTypeAnnoTop();
-            var open_anno: ?AST.TypeAnno.Idx = null;
+            var ext: AST.TypeAnno.TagUnionExt = .closed;
 
             // Parse tag union elements, with support for open union extension
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle open tag union extension: [Tag, ..ext] or [Tag, ..]
-                    const double_dot_start = self.pos;
+                    // Handle open tag union extension: [Tag, ..ext] or [Tag, .._ext] or [Tag, ..]
                     self.advance(); // consume DoubleDot
 
-                    if (self.peek() == .LowerIdent) {
-                        // Parse the extension type variable
-                        open_anno = try self.parseTypeAnno(.looking_for_args);
+                    if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
+                        // Parse the named extension type variable
+                        ext = .{ .named = try self.parseTypeAnno(.looking_for_args) };
                     } else {
-                        // Anonymous extension (just ..) - create an underscore type annotation
-                        open_anno = try self.store.addTypeAnno(.{ .underscore = .{
-                            .region = .{ .start = double_dot_start, .end = self.pos },
-                        } });
+                        // Anonymous extension (just ..)
+                        ext = .open;
                     }
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
@@ -3267,7 +3264,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             const tags = try self.store.typeAnnoSpanFrom(scratch_top);
             anno = try self.store.addTypeAnno(.{ .tag_union = .{
                 .region = .{ .start = start, .end = self.pos },
-                .open_anno = open_anno,
+                .ext = ext,
                 .tags = tags,
             } });
         },
