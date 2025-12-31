@@ -3193,14 +3193,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             // Parse record fields, with support for record extension
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle record extension: { field: Type, ..ext }
+                    // Handle record extension: { field: Type, ..ext } or { field: Type, .. }
+                    const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent) {
                         // Parse the extension type variable
                         ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;

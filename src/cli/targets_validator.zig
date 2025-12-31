@@ -17,6 +17,7 @@ const RocTarget = target_mod.RocTarget;
 const TargetsConfig = target_mod.TargetsConfig;
 const TargetLinkSpec = target_mod.TargetLinkSpec;
 const LinkType = target_mod.LinkType;
+const LinkItem = target_mod.LinkItem;
 const Report = reporting.Report;
 const Severity = reporting.Severity;
 
@@ -210,7 +211,6 @@ fn validateTargetSpec(
         }
         if (has_files) {
             const expected_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ "targets", target_subdir });
-            defer allocator.free(expected_path);
             return .{ .missing_target_file = .{
                 .target = spec.target,
                 .link_type = link_type,
@@ -936,4 +936,50 @@ test "TargetsConfig.fromAST extracts targets configuration" {
 
     // Check exe targets
     try std.testing.expectEqual(@as(usize, 2), config.exe.len);
+}
+
+test "validateTargetFilesExist reports missing target file with valid path" {
+    const allocator = std.testing.allocator;
+
+    // Create a temporary directory structure
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Create a files directory but without the expected target subdirectory
+    tmp_dir.dir.makeDir("targets") catch {};
+
+    // Create a config that references a file that doesn't exist
+    const items: []const LinkItem = &.{
+        .{ .file_path = "host.o" },
+        .app,
+    };
+    const exe_specs: []const TargetLinkSpec = &.{
+        .{ .target = .x64mac, .items = items },
+    };
+
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = exe_specs,
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    // This should return a missing_target_file result with a valid expected_full_path
+    const result = try validateTargetFilesExist(allocator, config, tmp_dir.dir);
+
+    switch (result) {
+        .missing_target_file => |info| {
+            // The expected_full_path should be a valid string, not garbage
+            // If it's garbage due to use-after-free, this will likely fail or crash
+            try std.testing.expectEqualStrings("targets/x64mac", info.expected_full_path);
+            // Also check that it's still accessible after the function returns
+            try std.testing.expect(info.expected_full_path.len > 0);
+            // Clean up the allocated path
+            allocator.free(info.expected_full_path);
+        },
+        else => {
+            std.debug.print("Expected missing_target_file but got {}\n", .{result});
+            return error.UnexpectedResult;
+        },
+    }
 }

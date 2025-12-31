@@ -40,7 +40,6 @@ UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:1:1:1:1
 UNDERSCORE IN TYPE ALIAS - underscore_error_type.md:21:14:21:14
 MISSING METHOD - underscore_error_type.md:4:7:4:9
 TYPE MISMATCH - underscore_error_type.md:9:7:9:16
-TYPE MISMATCH - underscore_error_type.md:14:7:14:32
 TYPE MISMATCH - underscore_error_type.md:19:7:19:12
 TYPE MISMATCH - underscore_error_type.md:24:8:24:21
 # PROBLEMS
@@ -150,23 +149,6 @@ It has the type:
 But the type annotation says it should have the type:
 
     BadList
-
-**TYPE MISMATCH**
-This expression is used in an unexpected way:
-**underscore_error_type.md:14:7:14:32:**
-```roc
-baz = { field: "hi", other: 5 }
-```
-      ^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    { field: Str, other: a }
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
-But the type annotation says it should have the type:
-
-    BadRecord
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -415,7 +397,7 @@ quux = ("hello", 42)
 	(expressions
 		(expr (type "BadType"))
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "BadRecord"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

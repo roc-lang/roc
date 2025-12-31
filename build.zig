@@ -1008,6 +1008,243 @@ const CheckCliGlobalStdioStep = struct {
     };
 };
 
+/// Build step that parses kcov JSON output and prints coverage summary.
+/// Used by the `coverage` build step to report parser code coverage statistics.
+const CoverageSummaryStep = struct {
+    step: Step,
+    coverage_dir: []const u8,
+
+    fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
+        const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "coverage-summary",
+                .owner = b,
+                .makeFn = make,
+            }),
+            .coverage_dir = coverage_dir,
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        const allocator = b.allocator;
+        const self: *CoverageSummaryStep = @fieldParentPtr("step", step);
+
+        // Read kcov JSON output
+        // kcov creates a subdirectory named after the executable (e.g., snapshot_coverage/)
+        // which contains the coverage.json file
+        const json_path = try std.fmt.allocPrint(allocator, "{s}/kcov-merged/coverage.json", .{self.coverage_dir});
+        defer allocator.free(json_path);
+
+        const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE ERROR\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("Could not open coverage JSON at {s}: {}\n", .{ json_path, err });
+            std.debug.print("\nMake sure kcov is installed:\n", .{});
+            std.debug.print("  - Linux: apt install kcov\n", .{});
+            std.debug.print("  - macOS: brew install kcov\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return;
+        };
+        defer json_file.close();
+
+        const json_content = try json_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
+        defer allocator.free(json_content);
+
+        // Parse and summarize coverage
+        try parseCoverageJson(allocator, json_content);
+    }
+
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !void {
+        const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_content, .{}) catch |err| {
+            std.debug.print("Failed to parse coverage JSON: {}\n", .{err});
+            return;
+        };
+        defer parsed.deinit();
+
+        const root = parsed.value;
+
+        // Get totals from root level (these are integers)
+        const total_lines: u64 = blk: {
+            const val = root.object.get("total_lines") orelse break :blk 0;
+            if (val != .integer) break :blk 0;
+            break :blk @intCast(val.integer);
+        };
+        const covered_lines: u64 = blk: {
+            const val = root.object.get("covered_lines") orelse break :blk 0;
+            if (val != .integer) break :blk 0;
+            break :blk @intCast(val.integer);
+        };
+
+        // Collect uncovered files for the summary
+        var uncovered_files = std.ArrayList(UncoveredFile).empty;
+        defer {
+            for (uncovered_files.items) |uf| {
+                allocator.free(uf.file);
+            }
+            uncovered_files.deinit(allocator);
+        }
+
+        // kcov JSON format has "files" array with file coverage data
+        if (root.object.get("files")) |files_val| {
+            if (files_val == .array) {
+                for (files_val.array.items) |file_obj| {
+                    if (file_obj != .object) continue;
+
+                    const filename_val = file_obj.object.get("file") orelse continue;
+                    if (filename_val != .string) continue;
+                    const filename = filename_val.string;
+
+                    // Only include src/parse files
+                    if (std.mem.indexOf(u8, filename, "src/parse") == null) continue;
+
+                    // Skip test files
+                    if (std.mem.indexOf(u8, filename, "/test/") != null) continue;
+
+                    // Get coverage percentage (stored as string in kcov JSON)
+                    const percent_val = file_obj.object.get("percent_covered") orelse continue;
+                    if (percent_val != .string) continue;
+
+                    const covered_str = file_obj.object.get("covered_lines") orelse continue;
+                    const total_str = file_obj.object.get("total_lines") orelse continue;
+                    if (covered_str != .string or total_str != .string) continue;
+
+                    const file_covered = std.fmt.parseInt(u64, covered_str.string, 10) catch 0;
+                    const file_total = std.fmt.parseInt(u64, total_str.string, 10) catch 0;
+                    const file_uncovered = file_total - file_covered;
+
+                    if (file_uncovered > 0) {
+                        try uncovered_files.append(allocator, .{
+                            .file = try allocator.dupe(u8, filename),
+                            .uncovered_lines = file_uncovered,
+                            .total_lines = file_total,
+                            .percent = std.fmt.parseFloat(f64, percent_val.string) catch 0.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Print summary
+        const uncovered_lines = total_lines - covered_lines;
+        const percent = if (total_lines > 0)
+            @as(f64, @floatFromInt(covered_lines)) / @as(f64, @floatFromInt(total_lines)) * 100.0
+        else
+            0.0;
+
+        std.debug.print("\n", .{});
+        std.debug.print("=" ** 60 ++ "\n", .{});
+        std.debug.print("PARSER CODE COVERAGE SUMMARY\n", .{});
+        std.debug.print("=" ** 60 ++ "\n\n", .{});
+
+        std.debug.print("Total lines:     {d}\n", .{total_lines});
+        std.debug.print("Covered lines:   {d}\n", .{covered_lines});
+        std.debug.print("Uncovered lines: {d}\n", .{uncovered_lines});
+        std.debug.print("Coverage:        {d:.2}%\n\n", .{percent});
+
+        if (uncovered_files.items.len > 0) {
+            std.debug.print("Files with uncovered lines:\n", .{});
+
+            // Sort by uncovered lines (descending) for prioritization
+            std.mem.sort(UncoveredFile, uncovered_files.items, {}, struct {
+                fn lessThan(_: void, a: UncoveredFile, b: UncoveredFile) bool {
+                    return a.uncovered_lines > b.uncovered_lines; // Descending
+                }
+            }.lessThan);
+
+            for (uncovered_files.items) |uf| {
+                // Extract just the filename from the full path
+                const basename = std.fs.path.basename(uf.file);
+                std.debug.print("  {s}: {d:.1}% covered ({d}/{d} lines uncovered)\n", .{
+                    basename,
+                    uf.percent,
+                    uf.uncovered_lines,
+                    uf.total_lines,
+                });
+            }
+        }
+
+        std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
+        std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
+        std.debug.print("=" ** 60 ++ "\n", .{});
+    }
+
+    const UncoveredFile = struct {
+        file: []const u8,
+        uncovered_lines: u64,
+        total_lines: u64,
+        percent: f64,
+    };
+};
+
+/// Build step that checks if kcov is installed and fails with a helpful error if not.
+const CheckKcovStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *CheckKcovStep {
+        const self = b.allocator.create(CheckKcovStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "check-kcov",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+
+        // Try to find kcov in PATH
+        var child = std.process.Child.init(&.{ "which", "kcov" }, b.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Ignore;
+
+        const term = child.spawnAndWait() catch {
+            return printKcovError(step);
+        };
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return printKcovError(step);
+                }
+            },
+            else => {
+                return printKcovError(step);
+            },
+        }
+    }
+
+    fn printKcovError(step: *Step) !void {
+        std.debug.print("\n", .{});
+        std.debug.print("=" ** 70 ++ "\n", .{});
+        std.debug.print("KCOV NOT FOUND\n", .{});
+        std.debug.print("=" ** 70 ++ "\n\n", .{});
+        std.debug.print("The 'coverage' build step requires kcov to be installed.\n\n", .{});
+        std.debug.print("WHY WE USE KCOV:\n", .{});
+        std.debug.print("  kcov is a code coverage tool that uses DWARF debug information\n", .{});
+        std.debug.print("  to track which lines of code are executed during tests.\n", .{});
+        std.debug.print("  It works with Zig binaries without requiring special compiler flags.\n\n", .{});
+        std.debug.print("HOW TO INSTALL:\n", .{});
+        std.debug.print("  Linux (Debian/Ubuntu): sudo apt install kcov\n", .{});
+        std.debug.print("  Linux (Fedora):        sudo dnf install kcov\n", .{});
+        std.debug.print("  Linux (Arch):          sudo pacman -S kcov\n", .{});
+        std.debug.print("  macOS:                 brew install kcov\n\n", .{});
+        std.debug.print("After installing, run 'zig build coverage' again.\n", .{});
+        std.debug.print("=" ** 70 ++ "\n", .{});
+        return step.fail("kcov is required for code coverage. See installation instructions above.", .{});
+    }
+};
+
 fn checkFxPlatformTestCoverage(step: *Step) !void {
     const b = step.owner;
     std.debug.print("---- checking fx platform test coverage ----\n", .{});
@@ -1166,6 +1403,7 @@ const MiniCiStep = struct {
         try runSubBuild(step, "test-playground", "zig build test-playground");
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
         try runSubBuild(step, "test-cli", "zig build test-cli");
+        try runSubBuild(step, "coverage", "zig build coverage");
     }
 
     fn runZigLints(step: *Step) !void {
@@ -1787,6 +2025,7 @@ pub fn build(b: *std.Build) void {
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
+    const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
 
     // general configuration
     const target = blk: {
@@ -2401,6 +2640,124 @@ pub fn build(b: *std.Build) void {
 
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
     check_fmt_step.dependOn(&check_fmt.step);
+
+    // Parser code coverage with kcov
+    // Only supported on Linux and macOS (kcov doesn't work on Windows)
+    const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
+    if (is_coverage_supported and isNativeishOrMusl(target)) {
+        // Run snapshot tests with kcov to get parser coverage
+        // Snapshot tests actually parse real Roc code, giving meaningful coverage
+        const snapshot_coverage_test = b.addTest(.{
+            .name = "snapshot_coverage",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/snapshot_tool/main.zig"),
+                .target = target,
+                .optimize = .Debug, // Debug required for DWARF debug info
+                .link_libc = true,
+            }),
+        });
+
+        // Add all module dependencies (snapshot tool uses parse, can, check, etc.)
+        roc_modules.addAll(snapshot_coverage_test);
+        snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
+
+        // Configure kcov execution - output to parser-snapshot-tests directory
+        snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
+            "kcov",
+            "--include-path=src/parse",
+            "kcov-output/parser-snapshot-tests",
+            null, // Zig inserts test binary path here
+        });
+
+        // Also run parse module unit tests for additional coverage
+        const parse_unit_test = b.addTest(.{
+            .name = "parse_unit_coverage",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/parse/mod.zig"),
+                .target = target,
+                .optimize = .Debug, // Debug required for DWARF debug info
+            }),
+        });
+        roc_modules.addModuleDependencies(parse_unit_test, .parse);
+
+        // Configure kcov for parse unit tests - output to parser-unit-tests directory
+        parse_unit_test.setExecCmd(&[_]?[]const u8{
+            "kcov",
+            "--include-path=src/parse",
+            "kcov-output/parser-unit-tests",
+            null, // Zig inserts test binary path here
+        });
+
+        // Check that kcov is installed before attempting to run it
+        const check_kcov = CheckKcovStep.create(b);
+
+        // Create output directories before running kcov
+        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+        mkdir_step.step.dependOn(&check_kcov.step);
+
+        // Run snapshot tests first
+        const run_snapshot_coverage = b.addRunArtifact(snapshot_coverage_test);
+        run_snapshot_coverage.step.dependOn(&mkdir_step.step);
+
+        // Then run parse unit tests
+        const run_parse_coverage = b.addRunArtifact(parse_unit_test);
+        run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
+
+        // Merge coverage results into kcov-output/parser/
+        const merge_coverage = b.addSystemCommand(&.{
+            "kcov",
+            "--merge",
+            "kcov-output/parser",
+            "kcov-output/parser-snapshot-tests",
+            "kcov-output/parser-unit-tests",
+        });
+        merge_coverage.step.dependOn(&run_parse_coverage.step);
+
+        // Add coverage summary step that parses merged kcov JSON output
+        const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
+        summary_step.step.dependOn(&merge_coverage.step);
+
+        coverage_step.dependOn(&summary_step.step);
+
+        // Cross-compile for Windows to verify comptime branches compile
+        const windows_target = b.resolveTargetQuery(.{
+            .cpu_arch = .x86_64,
+            .os_tag = .windows,
+            .abi = .msvc,
+        });
+        const windows_parse_build = b.addTest(.{
+            .name = "parse_windows_comptime",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/parse/mod.zig"),
+                .target = windows_target,
+                .optimize = .Debug,
+            }),
+        });
+        roc_modules.addModuleDependencies(windows_parse_build, .parse);
+        // Just compile, don't run - verifies Windows comptime branches
+        coverage_step.dependOn(&windows_parse_build.step);
+    } else if (!is_coverage_supported) {
+        // On unsupported platforms, print a message
+        const unsupported_step = b.allocator.create(Step) catch @panic("OOM");
+        unsupported_step.* = Step.init(.{
+            .id = Step.Id.custom,
+            .name = "coverage-unsupported",
+            .owner = b,
+            .makeFn = struct {
+                fn make(_: *Step, _: Step.MakeOptions) !void {
+                    std.debug.print("\n", .{});
+                    std.debug.print("=" ** 60 ++ "\n", .{});
+                    std.debug.print("COVERAGE NOT SUPPORTED\n", .{});
+                    std.debug.print("=" ** 60 ++ "\n\n", .{});
+                    std.debug.print("kcov is only supported on Linux and macOS.\n", .{});
+                    std.debug.print("Current platform: {s}\n\n", .{@tagName(builtin.target.os.tag)});
+                    std.debug.print("=" ** 60 ++ "\n", .{});
+                }
+            }.make,
+        });
+        coverage_step.dependOn(unsupported_step);
+    }
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
     const is_windows = target.result.os.tag == .windows;

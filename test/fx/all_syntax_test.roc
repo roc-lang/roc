@@ -241,6 +241,36 @@ early_return = |arg| {
 
 my_concat = Str.concat
 
+# Tags can have multiple payloads
+multi_payload_tag : [Foo(I64, Str), Bar] -> Str
+multi_payload_tag = |tag| match tag {
+	Foo(num, name) => "Foo with ${num.to_str()} and ${name}"
+	Bar => "Just Bar"
+}
+
+# Mark a tag union as open using `..`.
+# This function accepts any tag union containing at least Red and Green.
+color_to_str : [Red, Green, ..] -> Str
+color_to_str = |color| match color {
+	Red => "red"
+	Green => "green"
+	_ => "other color"
+}
+
+# TODO: Closed tag unions with `..[]]` - syntax not implemented yet
+# str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
+
+# Type alias for an extensible tag union. You can use a type var (`others`) like so:
+Letters(others) : [A, B, ..others]
+
+# Use the type alias in a function signature. Pass `[C]` as `others`.
+letter_to_str : Letters([C]) -> Str
+letter_to_str = |letter| match letter {
+	A => "A"
+	B => "B"
+	_ => "other letter"
+}
+
 # If you want to define a function that works for any type that has a specific method, you can use `where`:
 stringify : a -> Str where [a.to_str : a -> Str]
 stringify = |value| value.to_str()
@@ -306,6 +336,17 @@ main! = || {
 	print!(early_return(Bool.False))
 
 	print!(stringify(12345))
+
+	# Tags with multiple payloads
+	print!(multi_payload_tag(Foo(42, "hello")))
+
+	# Open tag unions with `..`
+	# This function accepts [Red, Green, ..] so we can pass Blue too
+	print!(color_to_str(Blue))
+
+	# Type alias for extensible tag union
+	print!(letter_to_str(A))
+	print!(letter_to_str(C)) # C is not in [A, B] but we passed it in the signature of letter_to_str
 
 	# TODO Stdout.line!(readme);
 

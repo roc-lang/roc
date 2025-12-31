@@ -2375,7 +2375,14 @@ pub fn checkExhaustiveSketched(
                         };
                         const inner_missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
-                        if (inner_missing.len > 0) {
+                        // For arity-0 constructors with no matching rows, the specialized matrix
+                        // is empty with 0 columns, which returns empty inner_missing. But we still
+                        // need to report the constructor as missing.
+                        // Note: We skip the #Open synthetic tag (arity-0 with no name) - it represents
+                        // "possibly more constructors" and is handled by the union's has_flex_extension flag.
+                        const is_open_synthetic = alt.name.tag.isNone();
+                        const is_missing = inner_missing.len > 0 or (alt.arity == 0 and specialized.isEmpty() and !is_open_synthetic);
+                        if (is_missing) {
                             const missing_pattern = Pattern{ .ctor = .{
                                 .union_info = ctor_info.union_info,
                                 .tag_id = alt.tag_id,
