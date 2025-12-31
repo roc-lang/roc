@@ -1248,21 +1248,38 @@ pub const Store = struct {
                 }
                 skip_layout_computation = true;
             } else if (self.work.in_progress_vars.contains(current.var_)) {
-                // Cycle detection: this var is already being processed.
-                // If we're inside a List or Box container, we can safely return opaquePtr()
-                // since the recursive reference will be heap-allocated.
-                if (self.work.pending_containers.len > 0) {
-                    const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                    if (pending_item.container == .box or pending_item.container == .list) {
-                        // Recursive reference inside List/Box - use opaque pointer
-                        layout_idx = try self.insertLayout(Layout.opaquePtr());
-                        skip_layout_computation = true;
-                    } else {
-                        // Recursive reference outside of List/Box container - this is an error
-                        return LayoutError.TypeContainedMismatch;
+                // Cycle detection: this var is already being processed, indicating a recursive type.
+                //
+                // INVARIANT: Recursive types are only valid if there's a heap-allocating container
+                // (List or Box) somewhere in the recursion path. This breaks the infinite size that
+                // would otherwise result from direct recursion.
+                //
+                // We must check the ENTIRE container stack, not just the last container, because
+                // the recursive reference may be nested inside other structures. For example:
+                //   Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+                //   parse_block : ... => Try((List(Statement), U64), Str)
+                //
+                // When processing this, the container stack might be:
+                //   Try -> tuple -> List -> Statement -> tag_union -> ForLoop -> List -> Statement
+                //
+                // When we hit the recursive Statement reference, the last container is tag_union,
+                // but there IS a List container earlier in the stack, so the recursion is valid.
+                var inside_heap_container = false;
+                for (self.work.pending_containers.slice().items(.container)) |container| {
+                    if (container == .box or container == .list) {
+                        inside_heap_container = true;
+                        break;
                     }
+                }
+
+                if (inside_heap_container) {
+                    // Valid recursive reference - heap allocation breaks the infinite size
+                    layout_idx = try self.insertLayout(Layout.opaquePtr());
+                    skip_layout_computation = true;
                 } else {
-                    // Recursive reference with no containers - this is an error
+                    // Invalid: recursive type without heap allocation would have infinite size.
+                    // This is a type error - the user defined a directly recursive type without
+                    // wrapping it in List or Box.
                     return LayoutError.TypeContainedMismatch;
                 }
             } else if (current.desc.content == .structure) blk: {

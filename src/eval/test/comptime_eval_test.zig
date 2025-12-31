@@ -2583,6 +2583,28 @@ test "comptime eval - recursive nominal: command chain" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - recursive nominal inside Try with tuple (issue #8855)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8855
+    // A recursive nominal type used inside Try with a tuple caused TypeContainedMismatch
+    // because cycle detection only checked the last container, not the full stack.
+    const src =
+        \\Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+        \\
+        \\# This function signature triggers the bug: recursive nominal inside Try with tuple
+        \\parse_block : List(U8), U64, List(Statement) -> [Ok((List(Statement), U64)), Err(Str)]
+        \\parse_block = |_file, index, acc| Ok((acc, index))
+        \\
+        \\x = parse_block([], 0, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated); // parse_block and x
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "encode - custom format type with infallible encoding (empty error type)" {
     // Test that a custom format type can define an encode_str method that can't fail.
     // Using [] as the error type means encoding always succeeds.
