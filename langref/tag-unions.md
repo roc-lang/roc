@@ -74,6 +74,20 @@ to_str = |color| match color {
 }
 ```
 
+When you don't need to reference the extension type variable at all, you can use
+anonymous open unions by writing just `..` without a name:
+
+```roc
+process : [Count(U32), Custom(Str), ..] -> Str
+process = |result| match result {
+    Count(n) => n.to_str()
+    Custom(n_str) => n_str
+    _ => "unknown"
+}
+```
+
+This is equivalent to writing `.._` but is more concise.
+
 ### Closed Tag Unions
 
 It's very rare, but occasionally useful to restrict a tag union's ability to be extended:

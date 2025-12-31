@@ -1168,3 +1168,44 @@ test "external platform memory alignment regression" {
 
     try checkSuccess(run_result);
 }
+
+test "fx platform issue8826 app vs platform type mismatch" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8826
+    // The bug was that `roc check` reported "No errors found" when the app's main!
+    // signature didn't match the platform's requires. This happened because
+    // getRootEnv() was returning the wrong module (the first one added rather
+    // than the actual root module set in buildRoot).
+    const allocator = testing.allocator;
+
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            roc_binary_path,
+            "check",
+            "test/fx/issue8826_minimal.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // This file is expected to fail with a TYPE MISMATCH error because:
+    // - App has: main! : List(Str) => Try({}, [Exit(I32)])
+    // - Platform requires: main! : () => {}
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                // Expected to fail - check for type mismatch error message
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
+            } else {
+                std.debug.print("Expected type mismatch error but roc check succeeded\n", .{});
+                std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+                return error.UnexpectedSuccess;
+            }
+        },
+        else => {
+            std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
+            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+            return error.RunTerminatedAbnormally;
+        },
+    }
+}
