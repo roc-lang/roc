@@ -56,7 +56,6 @@ pub const Problem = union(enum) {
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     non_exhaustive_match: NonExhaustiveMatch,
-    try_operator_on_non_try: TryOperatorOnNonTry,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
     bug: Bug,
@@ -254,15 +253,6 @@ pub const NonExhaustiveMatch = struct {
     condition_snapshot: SnapshotContentIdx,
     /// Indices into the snapshot store's extra strings for missing pattern descriptions
     missing_patterns: []const ExtraStringIdx,
-};
-
-/// Problem data for when the `?` operator is used on a non-Try type.
-/// The `?` operator desugars to a match with Ok/Err patterns, so this error
-/// provides a more helpful message than "non-exhaustive match".
-pub const TryOperatorOnNonTry = struct {
-    match_expr: CIR.Expr.Idx,
-    /// Snapshot of the condition type for error messages
-    condition_snapshot: SnapshotContentIdx,
 };
 
 /// Problem data for a redundant pattern in a match
@@ -576,7 +566,6 @@ pub const ReportBuilder = struct {
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
-            .try_operator_on_non_try => |data| return self.buildTryOperatorOnNonTryReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
@@ -3213,55 +3202,6 @@ pub const ReportBuilder = struct {
         try report.document.addText("Hint: Add branches to handle these cases, or use ");
         try report.document.addAnnotated("_", .keyword);
         try report.document.addText(" to match anything.");
-
-        return report;
-    }
-
-    fn buildTryOperatorOnNonTryReport(self: *Self, data: TryOperatorOnNonTry) !Report {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("The ");
-        try report.document.addAnnotated("?", .keyword);
-        try report.document.addText(" operator expects a ");
-        try report.document.addAnnotated("Try", .type_variable);
-        try report.document.addText(" value (");
-        try report.document.addAnnotated("Ok(...)", .inline_code);
-        try report.document.addText(" or ");
-        try report.document.addAnnotated("Err(...)", .inline_code);
-        try report.document.addText("), but this expression has a different type:");
-        try report.document.addLineBreak();
-
-        // Add source region highlighting
-        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
-        const region_info = self.module_env.calcRegionInfo(match_region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        const condition_type = self.getFormattedString(data.condition_snapshot);
-        try report.document.addText("The expression has type:");
-        try report.document.addLineBreak();
-        try report.document.addText("        ");
-        try report.document.addAnnotated(condition_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addAnnotated("Hint:", .emphasized);
-        try report.document.addText(" The ");
-        try report.document.addAnnotated("?", .keyword);
-        try report.document.addText(" operator unwraps ");
-        try report.document.addAnnotated("Ok", .inline_code);
-        try report.document.addText(" values and returns early on ");
-        try report.document.addAnnotated("Err", .inline_code);
-        try report.document.addText(". Make sure your expression evaluates to a ");
-        try report.document.addAnnotated("Try", .type_variable);
-        try report.document.addText(" type.");
 
         return report;
     }

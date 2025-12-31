@@ -8,20 +8,22 @@ type=expr
 A?
 ~~~
 # EXPECTED
-TYPE MISMATCH - try_undefined_tag.md:1:1:1:3
+EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
 # PROBLEMS
-**TYPE MISMATCH**
-The `?` operator expects a _Try_ value (`Ok(...)` or `Err(...)`), but this expression has a different type:
-**try_undefined_tag.md:1:1:1:3:**
+**EXPECTED TRY TYPE**
+The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
+but I found:
+**try_undefined_tag.md:1:1:**
 ```roc
 A?
 ```
-^^
+^
 
-The expression has type:
-        _[A, Ok(_a), Err(_b), .._others]_
+This expression has type:
 
-**Hint:** The `?` operator unwraps `Ok` values and returns early on `Err`. Make sure your expression evaluates to a _Try_ type.
+_[A, Ok(_a), Err(_b), .._others]_
+
+Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
 
 # TOKENS
 ~~~zig
