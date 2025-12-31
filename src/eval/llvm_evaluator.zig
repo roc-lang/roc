@@ -29,6 +29,58 @@ const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
 
+/// Get the LLVM target triple for the current platform.
+/// This must match the triple that LLVM's GetDefaultTargetTriple() returns,
+/// or there will be calling convention mismatches when JIT-compiling.
+///
+/// Note: Zig on Windows uses GNU ABI (mingw), not MSVC!
+fn getLlvmTriple() []const u8 {
+    const arch = switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        .x86 => "i686",
+        .arm, .armeb => "arm",
+        .thumb, .thumbeb => "thumb",
+        .wasm32 => "wasm32",
+        .wasm64 => "wasm64",
+        .riscv32 => "riscv32",
+        .riscv64 => "riscv64",
+        else => "unknown",
+    };
+
+    const vendor_os = switch (builtin.os.tag) {
+        .windows => "-pc-windows",
+        .macos => "-apple-darwin",
+        .ios => "-apple-ios",
+        .linux => "-unknown-linux",
+        .freebsd => "-unknown-freebsd",
+        .openbsd => "-unknown-openbsd",
+        .netbsd => "-unknown-netbsd",
+        .freestanding => "-unknown-unknown",
+        .wasi => "-wasi",
+        else => "-unknown-unknown",
+    };
+
+    // ABI suffix - Zig's LLVM on Windows uses GNU (mingw), not MSVC!
+    const abi = switch (builtin.os.tag) {
+        .windows => "-gnu", // Zig uses mingw/GNU toolchain on Windows
+        .linux => switch (builtin.abi) {
+            .musleabihf => "-musleabihf",
+            .gnueabihf => "-gnueabihf",
+            .musleabi => "-musleabi",
+            .gnueabi => "-gnueabi",
+            .musl => "-musl",
+            .gnu => "-gnu",
+            .android => "-android",
+            else => "-gnu",
+        },
+        .freestanding, .wasi => "",
+        else => "", // macOS, iOS, BSDs don't need ABI suffix
+    };
+
+    return arch ++ vendor_os ++ abi;
+}
+
 /// LLVM-based evaluator for Roc expressions
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
@@ -127,15 +179,14 @@ pub const LlvmEvaluator = struct {
     /// Returns the bitcode and whether it's a float type (for printf formatting)
     /// The caller is responsible for freeing the bitcode via result.deinit()
     pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
-        // Create LLVM Builder without an explicit target triple.
-        // The ORC JIT will apply its own target configuration when compiling the bitcode.
-        // This avoids potential mismatches between the triple we specify and what the JIT expects.
-        // (e.g., we might say "x86_64-pc-windows-msvc" but JIT uses "x86_64-w64-windows-gnu")
+        // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
+        // The triple must match what LLVM's GetDefaultTargetTriple() returns on the host,
+        // otherwise calling convention mismatches will cause segfaults on Windows.
         var builder = LlvmBuilder.init(.{
             .allocator = self.allocator,
             .name = "roc_repl_eval",
             .target = &builtin.target,
-            // Note: triple intentionally omitted - let JIT apply its target settings
+            .triple = getLlvmTriple(),
         }) catch return error.OutOfMemory;
         defer builder.deinit();
 
