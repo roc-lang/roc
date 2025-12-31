@@ -612,3 +612,26 @@ test "roc test with nested list chunks does not panic on layout upgrade" {
         std.mem.indexOf(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 }
+
+test "roc check with mutable var reassignment in match branch does not panic" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Regression test for https://github.com/roc-lang/roc/issues/8848
+    // The bug caused a panic "trying to add var at rank 2, but current rank is 1"
+    // during type generalization when mutable variables ($var) were reassigned
+    // in nested scopes like match branches.
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/issue8848.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exited normally (not a crash/panic)
+    //    The code may have type errors since it uses undefined functions,
+    //    but the compiler should not panic.
+    try testing.expect(result.term == .Exited);
+
+    // 2. Stderr should not contain "panic" (no crash occurred)
+    const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic);
+}

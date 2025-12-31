@@ -1207,35 +1207,3 @@ test "fx platform issue8826 app vs platform type mismatch" {
         },
     }
 }
-
-test "fx platform issue8848 rank mismatch in generalize with var reassignment" {
-    // Regression test for https://github.com/roc-lang/roc/issues/8848
-    // The bug causes a panic "trying to add var at rank 2, but current rank is 1"
-    // during generalization when using mutable variables ($var) that are
-    // reassigned in nested scopes (like inside match branches).
-    const allocator = testing.allocator;
-
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &[_][]const u8{
-            roc_binary_path,
-            "check",
-            "test/fx/issue8848.roc",
-        },
-    });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // The compiler should not panic. Once the bug is fixed, the code may have
-    // type errors (since it's incomplete), but it should not crash.
-    switch (run_result.term) {
-        .Exited => {
-            // Any exit (success or error reporting) is fine - the bug is a crash
-        },
-        else => {
-            std.debug.print("Run terminated abnormally (likely a panic): {}\n", .{run_result.term});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.RunTerminatedAbnormally;
-        },
-    }
-}

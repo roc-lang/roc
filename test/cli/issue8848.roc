@@ -1,6 +1,7 @@
-app [main!] { pf: platform "./platform/main.roc" }
-
-import pf.Stdout
+# Regression test for https://github.com/roc-lang/roc/issues/8848
+# The bug causes a panic "trying to add var at rank 2, but current rank is 1"
+# during generalization when using mutable variables ($var) that are
+# reassigned in nested scopes (like inside match branches).
 
 ValueCombinationMethod := [
   Modulo,
@@ -33,7 +34,7 @@ parse_value = |file, result, possibilities| {
     (token, token_pos, $index) = get_next_token(file, $index)
     (value1, token2, token2_pos) = match (first_value, token) {
       (VariableReference(name), Ok(OpenBracketToken)) => {
-        # TODO
+        # This reassignment of $index inside the match branch triggers the bug
         (t2, t2_pos, $index) = get_next_token(file, $index)
         (FunctionCall({name, args: []}), t2, t2_pos)
       }
@@ -45,7 +46,6 @@ parse_value = |file, result, possibilities| {
     value : Value
     value = match value2 {
         CombinedValue({combination_method: combination_method2, value1: value2A, value2: value2B}) => {
-            # Combination method 1 is ran first
             CombinedValue({
                 combination_method: combination_method2,
                 value1: CombinedValue({
@@ -59,8 +59,4 @@ parse_value = |file, result, possibilities| {
         _ => CombinedValue({combination_method: combination_method1, value1, value2})
     }
     Ok((value, $index))
-}
-
-main! = |_args| {
-    Stdout.line!("ok")
 }
