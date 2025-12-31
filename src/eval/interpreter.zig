@@ -15704,7 +15704,7 @@ pub const Interpreter = struct {
                             if (return_size > 0) {
                                 // Assertion: heap allocation for small temporary buffer should always succeed
                                 const temp_buffer = self.allocator.alloc(u8, return_size) catch {
-                                    self.triggerCrash("Out of memory", false, roc_ops);
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                     return error.Crash;
                                 };
                                 defer self.allocator.free(temp_buffer);
@@ -15715,7 +15715,7 @@ pub const Interpreter = struct {
                                 // Assertion: stack allocation after restore should always succeed
                                 const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
                                 const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
-                                    self.triggerCrash("Out of memory", false, roc_ops);
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                     return error.Crash;
                                 };
 
@@ -15795,7 +15795,7 @@ pub const Interpreter = struct {
                             // Copy to temporary heap buffer
                             // Assertion: heap allocation for small temporary buffer should always succeed
                             const temp_buffer = self.allocator.alloc(u8, result_size) catch {
-                                self.triggerCrash("Out of memory", false, roc_ops);
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                 return error.Crash;
                             };
                             defer self.allocator.free(temp_buffer);
@@ -15809,7 +15809,7 @@ pub const Interpreter = struct {
                             // since we just freed more space than we're now requesting
                             const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
                             const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
-                                self.triggerCrash("Out of memory", false, roc_ops);
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                 return error.Crash;
                             };
 
