@@ -4436,13 +4436,10 @@ pub fn canonicalizeExpr(
                         // that's an invalid self-reference like `a = a` or `a = [a]`.
                         if (self.defining_pattern) |defining_pat_idx| {
                             if (found_pattern_idx == defining_pat_idx) {
-                                // Self-reference detected - emit error
-                                try self.env.pushDiagnostic(Diagnostic{ .ident_not_in_scope = .{
-                                    .ident = ident,
-                                    .region = region,
-                                } });
-                                // Return a malformed expression instead of crashing at runtime
-                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                // Self-reference detected (issue #8831) - emit error and return malformed expr.
+                                // Non-function values cannot reference themselves as that would cause
+                                // an infinite loop at runtime.
+                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
                                     .ident = ident,
                                     .region = region,
                                 } });
