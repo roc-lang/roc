@@ -1170,6 +1170,7 @@ pub const Interpreter = struct {
             .saved_rigid_subst = null,
             .saved_flex_type_context = null,
             .arg_rt_vars_to_free = null,
+            .saved_stack_ptr = self.stack_memory.next(),
         } } });
         try work_stack.push(.{ .eval_expr = .{
             .expr_idx = cmp_header.body_idx,
@@ -10311,6 +10312,9 @@ pub const Interpreter = struct {
             saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
+            /// Saved stack pointer to restore after call completes.
+            /// This ensures stack memory allocated during the function body is reclaimed.
+            saved_stack_ptr: *anyopaque,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -11190,6 +11194,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -11222,6 +11227,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -14696,8 +14702,7 @@ pub const Interpreter = struct {
                                     // If we hit this, it means there's a bug in how we're structuring
                                     // the work stack (likely a nested evalWithExpectedType call that
                                     // shouldn't be nested).
-                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
-                                    return error.Crash;
+                                    debugUnreachable(roc_ops, "early_return hit return_result without finding call_cleanup", @src());
                                 },
                                 .call_invoke_closure => |ci| {
                                     // Free resources if we're skipping a pending call invocation.
@@ -15734,6 +15739,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = cleanup_saved_rigid_subst,
                         .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
@@ -15757,7 +15763,7 @@ pub const Interpreter = struct {
                 if (self.early_return_value) |return_val_in| {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
-                    const return_val = return_val_in;
+                    var return_val = return_val_in;
 
                     // rt_var is already set by the return value's creation
 
@@ -15787,12 +15793,54 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
+                    // Restore stack memory (same logic as normal return)
+                    if (return_val.ptr) |return_ptr| {
+                        const return_addr = @intFromPtr(return_ptr);
+                        const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                        const current_addr = @intFromPtr(self.stack_memory.next());
+
+                        if (return_addr >= saved_addr and return_addr < current_addr) {
+                            const return_size = if (return_val.layout.tag == .closure)
+                                return_val.getTotalSize(&self.runtime_layout_store, roc_ops)
+                            else
+                                self.runtime_layout_store.layoutSize(return_val.layout);
+
+                            if (return_size > 0) {
+                                // Assertion: heap allocation for small temporary buffer should always succeed
+                                const temp_buffer = self.allocator.alloc(u8, return_size) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+                                defer self.allocator.free(temp_buffer);
+                                @memcpy(temp_buffer, @as([*]u8, @ptrCast(return_ptr))[0..return_size]);
+
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                                // Assertion: stack allocation after restore should always succeed
+                                const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
+                                const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+
+                                @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
+                                return_val.ptr = new_ptr;
+                            } else {
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+                            }
+                        } else {
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+
                     try value_stack.push(return_val);
                     return true;
                 }
 
                 // Normal return - result is on value stack
-                const result = value_stack.pop() orelse return error.Crash;
+                var result = value_stack.pop() orelse return error.Crash;
 
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
@@ -15830,6 +15878,62 @@ pub const Interpreter = struct {
                 self.env = cleanup.saved_env;
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                // Restore stack memory to reclaim intermediate allocations from the function body.
+                // If the result has data in the stack region being freed, we need to preserve it
+                // by copying to heap, restoring stack, allocating new stack space, and copying back.
+                if (result.ptr) |result_ptr| {
+                    const result_addr = @intFromPtr(result_ptr);
+                    const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                    const current_addr = @intFromPtr(self.stack_memory.next());
+
+                    // Check if result.ptr is in the region being freed (between saved and current)
+                    if (result_addr >= saved_addr and result_addr < current_addr) {
+                        // Result data is in the region being freed - preserve it
+                        const result_size = if (result.layout.tag == .closure)
+                            result.getTotalSize(&self.runtime_layout_store, roc_ops)
+                        else
+                            self.runtime_layout_store.layoutSize(result.layout);
+
+                        if (result_size > 0) {
+                            // Copy to temporary heap buffer
+                            // Assertion: heap allocation for small temporary buffer should always succeed
+                            const temp_buffer = self.allocator.alloc(u8, result_size) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+                            defer self.allocator.free(temp_buffer);
+                            @memcpy(temp_buffer, @as([*]u8, @ptrCast(result_ptr))[0..result_size]);
+
+                            // Restore stack to reclaim intermediate allocations
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                            // Allocate new space for result on restored stack
+                            // Assertion: stack allocation after restore should always succeed
+                            // since we just freed more space than we're now requesting
+                            const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+                            const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+
+                            // Copy data back from heap to new stack location
+                            @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..result_size], temp_buffer);
+
+                            // Update result to point to new location
+                            result.ptr = new_ptr;
+                        } else {
+                            // Zero-size result, just restore stack
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        // Result data is not in the freed region (already in caller's frame or heap)
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+                } else {
+                    // No pointer data to preserve, just restore stack
+                    self.stack_memory.restore(cleanup.saved_stack_ptr);
+                }
 
                 // rt_var is already set by the function's return value creation
                 try value_stack.push(result);
@@ -15944,6 +16048,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -16399,6 +16504,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -16603,6 +16709,7 @@ pub const Interpreter = struct {
                                                 .saved_rigid_subst = null,
                                                 .saved_flex_type_context = null,
                                                 .arg_rt_vars_to_free = null,
+                                                .saved_stack_ptr = self.stack_memory.next(),
                                             } } });
 
                                             const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
@@ -16957,6 +17064,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
@@ -17313,6 +17421,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = saved_rigid_subst,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -17442,6 +17551,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -17493,6 +17603,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -18041,6 +18152,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
                             .expr_idx = cmp_header.body_idx,
@@ -18123,6 +18235,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = cmp_header.body_idx,
