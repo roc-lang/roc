@@ -12433,16 +12433,38 @@ pub const Interpreter = struct {
 
                 // Check if the translated type is flex/rigid (unresolved)
                 const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
-                const is_flex_or_rigid = receiver_resolved.desc.content == .flex or receiver_resolved.desc.content == .rigid;
 
-                // For METHOD CALLS (args != null) with flex/rigid receiver type, default to Dec.
-                // This ensures numeric literals like `(-3.14).abs()` get proper type resolution.
+                // For METHOD CALLS (args != null) with flex/rigid receiver type that has from_numeral
+                // constraint, default to Dec. This ensures numeric literals like `(-3.14).abs()` get
+                // proper type resolution.
                 // For FIELD ACCESS (args == null), don't default to Dec - the receiver could be
                 // a record type that just hasn't been fully resolved at compile time.
                 // (Fix for GitHub issue #8647 - record field access was broken by Dec defaulting)
-                if (is_flex_or_rigid and dot_access.args != null) {
-                    const dec_content = try self.mkNumberTypeContentRuntime("Dec");
-                    receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
+                // IMPORTANT: Only default to Dec if the flex/rigid has from_numeral constraint.
+                // Other flex/rigid types (like polymorphic parameters with static dispatch constraints)
+                // should NOT be defaulted to Dec.
+                if (dot_access.args != null) {
+                    const has_from_numeral = switch (receiver_resolved.desc.content) {
+                        .flex => |flex| blk: {
+                            if (flex.constraints.isEmpty()) break :blk false;
+                            for (self.runtime_types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) break :blk true;
+                            }
+                            break :blk false;
+                        },
+                        .rigid => |rigid| blk: {
+                            if (rigid.constraints.isEmpty()) break :blk false;
+                            for (self.runtime_types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                if (constraint.origin == .from_numeral) break :blk true;
+                            }
+                            break :blk false;
+                        },
+                        else => false,
+                    };
+                    if (has_from_numeral) {
+                        const dec_content = try self.mkNumberTypeContentRuntime("Dec");
+                        receiver_rt_var = try self.runtime_types.freshFromContent(dec_content);
+                    }
                 }
 
                 // Schedule receiver evaluation on the same work_stack (not via nested evalWithExpectedType).
@@ -16700,6 +16722,26 @@ pub const Interpreter = struct {
                                     .origin = nom.origin_module,
                                     .ident = nom.ident.ident_idx,
                                 };
+                            }
+                        }
+                        // For flex/rigid with static dispatch constraints (like polymorphic parameters),
+                        // check if flex_type_context has a concrete type mapping
+                        if (self.flex_type_context.count() > 0) {
+                            var ctx_it = self.flex_type_context.iterator();
+                            while (ctx_it.next()) |entry| {
+                                const mapped_var = entry.value_ptr.*;
+                                const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                                if (mapped_resolved.desc.content == .structure) {
+                                    switch (mapped_resolved.desc.content.structure) {
+                                        .nominal_type => |nom| {
+                                            break :blk .{
+                                                .origin = nom.origin_module,
+                                                .ident = nom.ident.ident_idx,
+                                            };
+                                        },
+                                        else => {},
+                                    }
+                                }
                             }
                         }
                         break :blk null;
