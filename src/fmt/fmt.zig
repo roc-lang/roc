@@ -549,6 +549,9 @@ const Formatter = struct {
                 }
             },
             .type_anno => |t| {
+                if (t.is_var) {
+                    try fmt.pushAll("var ");
+                }
                 try fmt.pushTokenText(t.name);
                 if (multiline and try fmt.flushCommentsAfter(t.name)) {
                     fmt.curr_indent += 1;

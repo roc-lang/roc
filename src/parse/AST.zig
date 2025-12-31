@@ -935,6 +935,7 @@ pub const Statement = union(enum) {
         name: Token.Idx,
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
+        is_var: bool,
         region: TokenizedRegion,
     },
     malformed: struct {
