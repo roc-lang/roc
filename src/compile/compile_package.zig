@@ -1011,6 +1011,7 @@ pub const PackageEnv = struct {
                     .env = actual_env,
                     .statement_idx = statement_idx,
                     .qualified_type_ident = qualified_ident,
+                    .is_package_qualified = true,
                 });
             }
         }

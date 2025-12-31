@@ -274,6 +274,7 @@ test "NodeStore round trip - Expressions" {
             .cond = rand_idx(CIR.Expr.Idx),
             .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
+            .is_try_suffix = false,
         },
     });
     try expressions.append(gpa, CIR.Expr{
