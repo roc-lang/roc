@@ -626,10 +626,24 @@ test "roc check with mutable var reassignment in match branch does not panic" {
     defer gpa.free(result.stderr);
 
     // Verify that:
-    // 1. Command exited normally (not a crash/panic)
+    // 1. Command exited normally (not killed by a signal from a panic)
     //    The code may have type errors since it uses undefined functions,
-    //    but the compiler should not panic.
-    try testing.expect(result.term == .Exited);
+    //    but the compiler should not panic (which would cause SIGABRT).
+    switch (result.term) {
+        .Exited => {
+            // Normal exit - this is what we want
+        },
+        .Signal => |sig| {
+            std.debug.print("Process was killed by signal: {}\n", .{sig});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.ProcessKilledBySignal;
+        },
+        else => {
+            std.debug.print("Process terminated abnormally: {}\n", .{result.term});
+            std.debug.print("STDERR: {s}\n", .{result.stderr});
+            return error.AbnormalTermination;
+        },
+    }
 
     // 2. Stderr should not contain "panic" (no crash occurred)
     const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null;
