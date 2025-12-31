@@ -290,7 +290,7 @@ Maybe(t) : [
 ValueDestination : [
     # TODO: Add pattern matching
     Mutation((Str, Maybe(Type))),
-    Definition((Str, Maybe(Type))), # infer if it is a constant or mutable definition from wether there is an underscore at the end of the variable name
+    Definition((Str, Maybe(Type))), # infer if it is a constant or mutable definition from whether there is an underscore at the end of the variable name
 ]
 
 Operation : [
@@ -617,7 +617,7 @@ parse_function_def_args = |file, var $index, acc| {
 
 parse_function_definition : List(U8), U64 -> Try((FuncValue, U64), Str)
 parse_function_definition = |file, var $index| {
-    Stdout.line!("parsing functin def")
+    Stdout.line!("parsing function def")
     (token, token_pos, $index) = get_next_token(file, $index)
     match token {
         Ok(OpenBracketToken) => {}
@@ -627,7 +627,7 @@ parse_function_definition = |file, var $index| {
     (args, $index) = parse_function_def_args(file, $index, [])?
     Stdout.line!("getting next token")
     (token2, token2_pos, $index) = get_next_token(file, $index)
-    Stdout.line!("parsing functin return values")
+    Stdout.line!("parsing function return values")
     return_values : List((Str, Type))
     return_values = match token2 {
         Ok(OpenBraceToken) => []
