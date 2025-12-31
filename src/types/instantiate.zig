@@ -6,7 +6,6 @@
 
 const std = @import("std");
 const base = @import("base");
-const collections = @import("collections");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
 
@@ -23,7 +22,6 @@ const Record = types_mod.Record;
 const TagUnion = types_mod.TagUnion;
 const RecordField = types_mod.RecordField;
 const Tag = types_mod.Tag;
-const Num = types_mod.Num;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
@@ -182,11 +180,6 @@ pub const Instantiator = struct {
                 // Instantiate the structure recursively
                 const fresh_flat_type = try self.instantiateFlatType(flat_type);
                 break :blk Content{ .structure = fresh_flat_type };
-            },
-            .recursion_var => |rec_var| blk: {
-                // Instantiate the structure the recursion var points to
-                const fresh_structure = try self.instantiateVar(rec_var.structure);
-                break :blk Content{ .recursion_var = .{ .structure = fresh_structure, .name = rec_var.name } };
             },
             .err => Content.err,
         };

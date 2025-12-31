@@ -4,21 +4,11 @@
 //! allowing fast serialization and deserialization of ModuleEnv and CIR data.
 
 const std = @import("std");
-const Can = @import("can");
-const base = @import("base");
-const fs_mod = @import("fs");
-const types = @import("types");
-const parse = @import("parse");
 const can = @import("can");
 const collections = @import("collections");
 
-const TypeStore = types.Store;
-const SExprTree = base.SExprTree;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
-const Filesystem = fs_mod.Filesystem;
-const SafeList = collections.SafeList;
-const SafeStringHashMap = collections.SafeStringHashMap;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
@@ -174,12 +164,11 @@ pub const CacheModule = struct {
         // Get pointer to the serialized ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(@constCast(serialized_data.ptr))));
 
-        // Calculate the offset from the beginning of the serialized data
-        const buffer_start = @intFromPtr(serialized_data.ptr);
-        const offset = @as(i64, @intCast(buffer_start));
+        // Calculate the base address of the serialized data
+        const base_addr = @intFromPtr(serialized_data.ptr);
 
         // Deserialize the ModuleEnv
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserialize(offset, allocator, source, module_name);
+        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserialize(base_addr, allocator, source, module_name);
 
         return module_env_ptr;
     }

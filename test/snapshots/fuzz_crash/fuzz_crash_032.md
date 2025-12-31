@@ -336,7 +336,7 @@ olor = |color| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error -> Error")))
+		(patt (type "_arg -> tus")))
 	(type_decls
 		(alias (type "LocalStatus")
 			(ty-header (name "LocalStatus"))))

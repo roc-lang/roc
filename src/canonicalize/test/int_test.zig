@@ -12,11 +12,10 @@ const parse = @import("parse");
 const builtins = @import("builtins");
 const Can = @import("../Can.zig");
 const CIR = @import("../CIR.zig");
-const RocDec = builtins.dec.RocDec;
 const TestEnv = @import("TestEnv.zig").TestEnv;
 const ModuleEnv = @import("../ModuleEnv.zig");
 const parseIntWithUnderscores = Can.parseIntWithUnderscores;
-const Content = types.Content;
+const RocDec = builtins.dec.RocDec;
 
 fn getIntValue(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !i128 {
     const expr = module_env.store.getExpr(expr_idx);

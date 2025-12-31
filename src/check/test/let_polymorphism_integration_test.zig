@@ -1,18 +1,7 @@
 //! Integration tests for let-polymorphism that parse, canonicalize, and type-check
 //! actual code to ensure polymorphic values work correctly in practice.
 
-const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
-
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
-const testing = std.testing;
-const test_allocator = testing.allocator;
 
 test "direct polymorphic identity usage" {
     const source =
@@ -57,12 +46,19 @@ test "let-polymorphism with function composition" {
         \\    compose = |f, g| |x| f(g(x))
         \\    double = |x| x * 2
         \\    add_one = |x| x + 1
-        \\    num_compose = compose(double, add_one)
-        \\    result1 = num_compose(5)
-        \\    { result1 }
+        \\    compose(double, add_one)
         \\}
     ;
-    try typeCheck(source, "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]");
+    try typeCheck(
+        source,
+        \\a -> a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\    a.times : a, a -> a,
+        \\  ]
+        ,
+    );
 }
 
 test "polymorphic empty list" {
@@ -257,6 +253,7 @@ test "polymorphic pipe function" {
         \\{ num_result: a, str_result: b }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.times : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,

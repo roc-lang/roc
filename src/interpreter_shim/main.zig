@@ -196,7 +196,6 @@ const safe_memory = base.safe_memory;
 
 // Constants for shared memory layout
 const FIRST_ALLOC_OFFSET = 504; // 0x1f8 - First allocation starts at this offset
-const MODULE_ENV_OFFSET = 0x10; // 8 bytes for u64, 4 bytes for u32, 4 bytes padding
 
 // Header structure that matches the one in main.zig (multi-module format)
 // For embedded mode: parent_base_addr == 0
@@ -213,8 +212,6 @@ const Header = struct {
 
 // Import serialization types from the shared module
 const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
-const SerializedHeader = collections.SerializedHeader;
-const SerializedModuleInfo = collections.SerializedModuleInfo;
 
 /// Comprehensive error handling for the shim
 const ShimError = error{
@@ -242,14 +239,15 @@ export fn roc_entrypoint(entry_idx: u32, ops: *builtins.host_abi.RocOps, ret_ptr
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| {
-        // Only show this generic error if we haven't already crashed with a more specific message
-        // (errors like Crash and StackOverflow already triggered roc_crashed with details)
-        if (err != error.Crash and err != error.StackOverflow) {
+    evaluateFromSharedMemory(entry_idx, ops, ret_ptr, arg_ptr) catch |err| switch (err) {
+        // Errors like Crash and StackOverflow already triggered roc_crashed with details
+        error.Crash, error.StackOverflow => {},
+        // Show generic error for other cases
+        else => {
             var buf: [256]u8 = undefined;
             const msg2 = std.fmt.bufPrint(&buf, "Error evaluating: {s}", .{@errorName(err)}) catch "Error evaluating";
             ops.crash(msg2);
-        }
+        },
     };
 }
 
@@ -396,11 +394,12 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     traceDbg(roc_ops, "Evaluating entry_idx={d}, def_idx={d}, expr_idx={d}", .{ entry_idx, def_idx_raw, @intFromEnum(expr_idx) });
 
     // Evaluate the expression (with optional arguments)
-    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| {
-        if (err == error.TypeMismatch) {
+    interpreter.evaluateExpression(expr_idx, ret_ptr, roc_ops, arg_ptr) catch |err| switch (err) {
+        error.TypeMismatch => {
             roc_ops.crash("TypeMismatch from evaluateExpression");
-        }
-        return err;
+            return err;
+        },
+        else => return err,
     };
 }
 
@@ -653,9 +652,9 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
         const env_serialized: *ModuleEnv.Serialized = @ptrFromInt(env_serialized_addr);
 
         // Deserialize the ModuleEnv
-        // The offset parameter is the buffer base address - serialized offsets are relative to buffer start
+        // The base parameter is the buffer base address - serialized offsets are relative to buffer start
         env_ptrs[i] = env_serialized.deserialize(
-            @as(i64, @intCast(@intFromPtr(base_ptr))), // buffer base address as offset
+            @intFromPtr(base_ptr), // buffer base address
             allocator,
             source,
             module_name,

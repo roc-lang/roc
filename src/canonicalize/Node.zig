@@ -5,8 +5,6 @@
 //! therefore how it's data and main_token fields should
 //! be interpreted.
 
-const std = @import("std");
-const base = @import("base");
 const collections = @import("collections");
 
 data_1: u32,
@@ -34,6 +32,7 @@ pub const Tag = enum {
     statement_expect,
     statement_for,
     statement_while,
+    statement_break,
     statement_return,
     statement_import,
     statement_alias_decl,
@@ -217,4 +216,6 @@ pub const Tag = enum {
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,
     diag_if_expr_without_else,
+    diag_break_outside_loop,
+    diag_mutually_recursive_type_aliases,
 };

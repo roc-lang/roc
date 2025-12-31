@@ -38,7 +38,6 @@
 
 const std = @import("std");
 const compile = @import("compile");
-const reporting = @import("reporting");
 
 const BuildEnv = compile.BuildEnv;
 

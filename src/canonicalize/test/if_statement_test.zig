@@ -1,6 +1,5 @@
 //! Tests for if statements without else in statement position
 const std = @import("std");
-const CIR = @import("../CIR.zig");
 
 const testing = std.testing;
 

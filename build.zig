@@ -1356,6 +1356,7 @@ const MiniCiStep = struct {
         // mini CI pipeline.
         try runSubBuild(step, "fmt", "zig build fmt");
         try runZigLints(step);
+        try runTidy(step);
         try checkTestWiring(step);
         try runSubBuild(step, null, "zig build");
         try checkBuiltinRocFormatting(step);
@@ -1395,6 +1396,36 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("zig run ci/zig_lints.zig terminated abnormally", .{});
+            },
+        }
+    }
+
+    fn runTidy(step: *Step) !void {
+        const b = step.owner;
+        std.debug.print("---- minici: running tidy checks ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, "ci/tidy.zig");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail("Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.", .{});
+                }
+            },
+            else => {
+                return step.fail("zig run ci/tidy.zig terminated abnormally", .{});
             },
         }
     }
@@ -1536,6 +1567,53 @@ const MiniCiStep = struct {
             },
             else => {
                 return step.fail("zig run ci/check_test_wiring.zig terminated abnormally", .{});
+            },
+        }
+    }
+};
+
+const TidyStep = struct {
+    step: Step,
+
+    fn create(b: *std.Build) *TidyStep {
+        const self = b.allocator.create(TidyStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = Step.Id.custom,
+                .name = "tidy-inner",
+                .owner = b,
+                .makeFn = make,
+            }),
+        };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const b = step.owner;
+        std.debug.print("---- tidy: running code tidiness checks ----\n", .{});
+
+        var child_argv = std.ArrayList([]const u8).empty;
+        defer child_argv.deinit(b.allocator);
+
+        try child_argv.append(b.allocator, b.graph.zig_exe);
+        try child_argv.append(b.allocator, "run");
+        try child_argv.append(b.allocator, "ci/tidy.zig");
+
+        var child = std.process.Child.init(child_argv.items, b.allocator);
+        child.stdin_behavior = .Inherit;
+        child.stdout_behavior = .Inherit;
+        child.stderr_behavior = .Inherit;
+
+        const term = try child.spawnAndWait();
+
+        switch (term) {
+            .Exited => |code| {
+                if (code != 0) {
+                    return step.fail("Tidy checks failed. Run 'zig run ci/tidy.zig' to see details.", .{});
+                }
+            },
+            else => {
+                return step.fail("zig run ci/tidy.zig terminated abnormally", .{});
             },
         }
     }
@@ -1900,6 +1978,7 @@ pub fn build(b: *std.Build) void {
     const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const minici_step = b.step("minici", "Run a subset of CI build and test steps");
+    const tidy_step = b.step("tidy", "Run code tidiness checks (control chars, line length, etc.)");
     const checkfx_step = b.step("checkfx", "Check that every .roc file in test/fx has a corresponding test");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
@@ -2352,6 +2431,10 @@ pub fn build(b: *std.Build) void {
     const minici_inner = MiniCiStep.create(b);
     minici_step.dependOn(&minici_inner.step);
 
+    // Tidy step: run code tidiness checks
+    const tidy_inner = TidyStep.create(b);
+    tidy_step.dependOn(&tidy_inner.step);
+
     // Create and add module tests
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
@@ -2729,8 +2812,6 @@ pub fn build(b: *std.Build) void {
     }
 }
 
-const ModuleTest = modules.ModuleTest;
-
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     const builtin_roc_path = try b.build_root.join(b.allocator, &.{ "src", "build", "roc" });
     var builtin_roc_dir = try std.fs.openDirAbsolute(builtin_roc_path, .{ .iterate = true });
@@ -2748,35 +2829,6 @@ fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     }
 
     return roc_files.toOwnedSlice(b.allocator);
-}
-
-fn generateCompiledBuiltinsSource(b: *std.Build, roc_files: []const []const u8) ![]const u8 {
-    var builtins_source = std.ArrayList(u8).empty;
-    errdefer builtins_source.deinit(b.allocator);
-    const writer = builtins_source.writer(b.allocator);
-
-    for (roc_files) |roc_path| {
-        const roc_basename = std.fs.path.basename(roc_path);
-        const name_without_ext = roc_basename[0 .. roc_basename.len - 4];
-        // Use lowercase with underscore for the identifier
-        const lower_name = try std.ascii.allocLowerString(b.allocator, name_without_ext);
-
-        try writer.print("pub const {s}_bin = @embedFile(\"{s}.bin\");\n", .{
-            lower_name,
-            name_without_ext,
-        });
-
-        // Also embed the source .roc file
-        try writer.print("pub const {s}_source = @embedFile(\"{s}\");\n", .{
-            lower_name,
-            roc_basename,
-        });
-    }
-
-    // Also embed builtin_indices.bin
-    try writer.writeAll("pub const builtin_indices_bin = @embedFile(\"builtin_indices.bin\");\n");
-
-    return builtins_source.toOwnedSlice(b.allocator);
 }
 
 fn add_fuzz_target(

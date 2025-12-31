@@ -2,7 +2,6 @@
 //! Handles communication of shared memory info between parent and child processes
 
 const std = @import("std");
-const builtin = @import("builtin");
 const platform = @import("platform.zig");
 
 /// Information about shared memory file descriptor or handle

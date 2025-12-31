@@ -13,16 +13,13 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
 
 const CIR = @import("CIR.zig");
 const ModuleEnv = @import("ModuleEnv.zig");
 
-const Region = base.Region;
 const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
 const Pattern = CIR.Pattern;
 const Expr = CIR.Expr;
@@ -144,6 +141,14 @@ pub const Statement = union(enum) {
         cond: Expr.Idx,
         body: Expr.Idx,
     },
+    /// A early break from the nearest enclosing loop.
+    ///
+    /// Not valid at the top level of a module
+    ///
+    /// ```roc
+    /// break
+    /// ```
+    s_break: struct {},
     /// A early return of the enclosing function.
     ///
     /// Not valid at the top level of a module
@@ -341,6 +346,12 @@ pub const Statement = union(enum) {
                 try env.store.getExpr(s.cond).pushToSExprTree(env, tree, s.cond);
                 try env.store.getExpr(s.body).pushToSExprTree(env, tree, s.body);
 
+                try tree.endNode(begin, attrs);
+            },
+            .s_break => {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("s-break");
+                const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
             .s_return => |s| {

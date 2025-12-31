@@ -157,10 +157,10 @@ fn walkTree(allocator: Allocator, dir_path: []const u8, zig_files: *PathList) !v
 }
 
 fn checkSeparatorComments(allocator: Allocator, file_path: []const u8) ![]u8 {
-    const source = readSourceFile(allocator, file_path) catch |err| {
+    const source = readSourceFile(allocator, file_path) catch |err| switch (err) {
         // Skip files we can't read
-        if (err == error.FileNotFound) return try allocator.dupe(u8, "");
-        return err;
+        error.FileNotFound => return try allocator.dupe(u8, ""),
+        else => return err,
     };
     defer allocator.free(source);
 
@@ -230,10 +230,10 @@ fn isSeparatorComment(after_slashes: []const u8) bool {
 }
 
 fn checkPubDocComments(allocator: Allocator, file_path: []const u8) ![]u8 {
-    const source = readSourceFile(allocator, file_path) catch |err| {
+    const source = readSourceFile(allocator, file_path) catch |err| switch (err) {
         // Skip files we can't read
-        if (err == error.FileNotFound) return try allocator.dupe(u8, "");
-        return err;
+        error.FileNotFound => return try allocator.dupe(u8, ""),
+        else => return err,
     };
     defer allocator.free(source);
 
@@ -333,12 +333,10 @@ fn getNewZigFiles(allocator: Allocator) !PathList {
 }
 
 fn fileHasTopLevelComment(allocator: Allocator, file_path: []const u8) !bool {
-    const source = readSourceFile(allocator, file_path) catch |err| {
-        if (err == error.FileNotFound) {
-            // File was deleted but still shows in git diff - skip it
-            return true;
-        }
-        return err;
+    const source = readSourceFile(allocator, file_path) catch |err| switch (err) {
+        // File was deleted but still shows in git diff - skip it
+        error.FileNotFound => return true,
+        else => return err,
     };
     defer allocator.free(source);
 

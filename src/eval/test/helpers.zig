@@ -6,7 +6,6 @@ const base = @import("base");
 const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const eval_mod = @import("../mod.zig");
@@ -214,6 +213,43 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const diff = @abs(actual - expected_f64);
     if (diff > epsilon) {
         std.debug.print("Expected {d}, got {d}, diff {d}\n", .{ expected_f64, actual, diff });
+        return error.TestExpectedEqual;
+    }
+}
+
+/// Dec scale factor: 10^18 (18 decimal places)
+const dec_scale: i128 = 1_000_000_000_000_000_000;
+
+/// Helper function to run an expression and expect a Dec result from an integer.
+/// Automatically scales the expected value by 10^18 for Dec's fixed-point representation.
+pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    var test_env_instance = TestEnv.init(test_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    defer interpreter.deinit();
+
+    const enable_trace = should_trace == .trace;
+    if (enable_trace) {
+        interpreter.startTrace();
+    }
+    defer if (enable_trace) interpreter.endTrace();
+
+    const ops = test_env_instance.get_ops();
+    const result = try interpreter.eval(resources.expr_idx, ops);
+    const layout_cache = &interpreter.runtime_layout_store;
+    defer result.decref(layout_cache, ops);
+    defer interpreter.cleanupBindings(ops);
+
+    const actual_dec = result.asDec(ops);
+    const expected_dec = expected_int * dec_scale;
+    if (actual_dec.num != expected_dec) {
+        std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec, actual_dec.num });
         return error.TestExpectedEqual;
     }
 }

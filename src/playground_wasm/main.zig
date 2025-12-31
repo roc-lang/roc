@@ -23,7 +23,6 @@ const reporting = @import("reporting");
 const repl = @import("repl");
 const eval = @import("eval");
 const types = @import("types");
-const compile = @import("compile");
 const can = @import("can");
 const check = @import("check");
 const unbundle = @import("unbundle");
@@ -969,31 +968,31 @@ fn compileSource(source: []const u8) !CompilerStageData {
             const base_ptr = @intFromPtr(buffer.ptr);
 
             logDebug("loadCompiledModule: About to deserialize common\n", .{});
-            const common = serialized_ptr.common.deserialize(@as(i64, @intCast(base_ptr)), module_source).*;
+            const common = serialized_ptr.common.deserialize(base_ptr, module_source).*;
 
             logDebug("loadCompiledModule: Deserializing ModuleEnv fields\n", .{});
             module_env_ptr.* = ModuleEnv{
                 .gpa = gpa,
                 .common = common,
-                .types = serialized_ptr.types.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .types = serialized_ptr.types.deserialize(base_ptr, gpa).*,
                 .module_kind = serialized_ptr.module_kind.decode(),
                 .all_defs = serialized_ptr.all_defs,
                 .all_statements = serialized_ptr.all_statements,
                 .exports = serialized_ptr.exports,
-                .requires_types = serialized_ptr.requires_types.deserialize(@as(i64, @intCast(base_ptr))).*,
-                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
+                .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
                 .builtin_statements = serialized_ptr.builtin_statements,
-                .external_decls = serialized_ptr.external_decls.deserialize(@as(i64, @intCast(base_ptr))).*,
-                .imports = (try serialized_ptr.imports.deserialize(@as(i64, @intCast(base_ptr)), gpa)).*,
+                .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
+                .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
                 .module_name = module_name_param,
                 .module_name_idx = undefined, // Not used for deserialized modules
                 .diagnostics = serialized_ptr.diagnostics,
-                .store = serialized_ptr.store.deserialize(@as(i64, @intCast(base_ptr)), gpa).*,
+                .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
                 .evaluation_order = null,
                 .idents = ModuleEnv.CommonIdents.find(&common),
                 .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
                 .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-                .method_idents = serialized_ptr.method_idents.deserialize(@as(i64, @intCast(base_ptr))).*,
+                .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
                 .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
             };
             logDebug("loadCompiledModule: ModuleEnv deserialized successfully\n", .{});
@@ -1061,18 +1060,14 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
     czer.canonicalizeFile() catch |err| {
         logDebug("compileSource: canonicalizeFile failed: {}\n", .{err});
-        if (err == error.OutOfMemory) {
-            // If we're out of memory here, the state is likely unstable.
-            // Propagate this error up to halt compilation gracefully.
-            return err;
-        }
+        // If we're out of memory here, the state is likely unstable.
+        // Propagate this error up to halt compilation gracefully.
+        return err;
     };
 
     czer.validateForChecking() catch |err| {
         logDebug("compileSource: validateForChecking failed: {}\n", .{err});
-        if (err == error.OutOfMemory) {
-            return err;
-        }
+        return err;
     };
     logDebug("compileSource: Canonicalization complete\n", .{});
 
@@ -1108,13 +1103,11 @@ fn compileSource(source: []const u8) !CompilerStageData {
 
         solver.checkFile() catch |check_err| {
             logDebug("compileSource: checkFile failed: {}\n", .{check_err});
-            if (check_err == error.OutOfMemory) {
-                // OOM during type checking is critical.
-                // Deinit solver and propagate error.
-                solver.deinit();
-                result.solver = null; // Prevent double deinit in CompilerStageData.deinit
-                return check_err;
-            }
+            // OOM during type checking is critical.
+            // Deinit solver and propagate error.
+            solver.deinit();
+            result.solver = null; // Prevent double deinit in CompilerStageData.deinit
+            return check_err;
         };
         logDebug("compileSource: Type checking complete\n", .{});
 
@@ -1133,31 +1126,17 @@ fn compileSource(source: []const u8) !CompilerStageData {
         for (solver.problems.problems.items) |type_problem| {
             const report = report_builder.build(type_problem) catch |build_err| {
                 logDebug("compileSource: report_builder.build failed: {}\n", .{build_err});
-                if (build_err == error.OutOfMemory) return build_err;
-                continue;
+                return build_err;
             };
             result.type_reports.append(report) catch |append_err| {
                 logDebug("compileSource: append TYPE report failed: {}\n", .{append_err});
-                if (append_err == error.OutOfMemory) return append_err;
+                return append_err;
             };
         }
     }
 
     logDebug("compileSource: Compilation complete\n", .{});
     return result;
-}
-
-/// Helper to write a response with a u32 length prefix.
-fn writeResponseWithLength(response_buffer: []u8, json_payload: []const u8) ResponseWriteError!void {
-    if (response_buffer.len < @sizeOf(u32) + json_payload.len) {
-        return error.OutOfBufferSpace;
-    }
-
-    // Write length prefix (little-endian)
-    std.mem.writeInt(u32, response_buffer[0..@sizeOf(u32)], @intCast(json_payload.len), .little);
-
-    // Write JSON payload
-    @memcpy(response_buffer[@sizeOf(u32)..][0..json_payload.len], json_payload);
 }
 
 /// Writer that tracks bytes written and fails if buffer is exceeded.

@@ -1,26 +1,10 @@
 //! Tests for cross-module type checking functionality.
 
 const std = @import("std");
-const base = @import("base");
-const types_mod = @import("types");
-const can = @import("can");
 const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
-const CIR = can.CIR;
-const Var = types_mod.Var;
-const Content = types_mod.Content;
-const Ident = base.Ident;
 const testing = std.testing;
-const ModuleEnv = can.ModuleEnv;
-const problem = @import("../problem.zig");
-const snapshot = @import("../snapshot.zig");
-const occurs = @import("../occurs.zig");
-const ProblemStore = problem.Store;
-const SnapshotStore = snapshot.Store;
-const UnifierScratch = @import("../unify.zig").Scratch;
-const OccursScratch = occurs.Scratch;
-const unify = @import("../unify.zig").unify;
 
 test "cross-module - check type - monomorphic function passes" {
     const source_a =

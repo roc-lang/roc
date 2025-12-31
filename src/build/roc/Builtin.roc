@@ -32,13 +32,20 @@ Builtin :: [].{
 		release_excess_capacity : Str -> Str
 		to_utf8 : Str -> List(U8)
 		from_utf8_lossy : List(U8) -> Str
-		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..others])
+		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 }), ..])
 		split_on : Str, Str -> List(Str)
 		join_with : List(Str), Str -> Str
 
 		is_eq : Str, Str -> Bool
 
 		inspect : _val -> Str
+
+		# Encode a string using a format that provides encode_str
+		encode : Str, fmt -> Try(encoded, err)
+			where [fmt.encode_str : fmt, Str -> Try(encoded, err)]
+		encode = |self, format| {
+			format.encode_str(self)
+		}
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -70,14 +77,14 @@ Builtin :: [].{
 
 		append : List(a), a -> List(a)
 
-		first : List(item) -> Try(item, [ListWasEmpty, ..others])
+		first : List(item) -> Try(item, [ListWasEmpty, ..])
 		first = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
 			Try.Ok(list_get_unsafe(list, 0))
 		}
 
-		get : List(item), U64 -> Try(item, [OutOfBounds, ..others])
+		get : List(item), U64 -> Try(item, [OutOfBounds, ..])
 		get = |list, index| if index < List.len(list) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
@@ -188,7 +195,7 @@ Builtin :: [].{
 			True
 		}
 
-		last : List(item) -> Try(item, [ListWasEmpty, ..others])
+		last : List(item) -> Try(item, [ListWasEmpty, ..])
 		last = |list| if List.is_empty(list) {
 			Try.Err(ListWasEmpty)
 		} else {
@@ -245,6 +252,23 @@ Builtin :: [].{
 			$list
 		}
 
+		sum : List(item) -> item
+			where [item.plus : item, item -> item, item.default : item]
+		sum = |list| {
+			Item : item
+			List.fold(list, Item.default(), |acc, elem| acc + elem)
+		}
+
+		# Encode a list using a format that provides encode_list
+		encode : List(item), fmt -> Try(encoded, err)
+			where [
+				fmt.encode_list : fmt, List(item), (item, fmt -> Try(encoded, err)) -> Try(encoded, err),
+				item.encode : item, fmt -> Try(encoded, err),
+			]
+		encode = |self, format| {
+			format.encode_list(self, |elem, f| elem.encode(f))
+		}
+
 	}
 
 	Bool := [False, True].{
@@ -299,9 +323,21 @@ Builtin :: [].{
 			Ok(a) => Ok(transform(a))
 		}
 
+		map_ok! : Try(a, err), (a => b) => Try(b, err)
+		map_ok! = |try, transform!| match try {
+			Err(err) => Err(err)
+			Ok(a) => Ok(transform!(a))
+		}
+
 		map_err : Try(ok, a), (a -> b) -> Try(ok, b)
 		map_err = |try, transform| match try {
 			Err(a) => Err(transform(a))
+			Ok(ok) => Ok(ok)
+		}
+
+		map_err! : Try(ok, a), (a => b) => Try(ok, b)
+		map_err! = |try, transform!| match try {
+			Err(a) => Err(transform!(a))
 			Ok(ok) => Ok(ok)
 		}
 
@@ -363,6 +399,9 @@ Builtin :: [].{
 		}
 
 		U8 :: [].{
+			default : () -> U8
+			default = || 0u8
+
 			to_str : U8 -> Str
 			is_zero : U8 -> Bool
 			is_eq : U8, U8 -> Bool
@@ -384,9 +423,9 @@ Builtin :: [].{
 			shift_right_by : U8, U8 -> U8
 			shift_right_zf_by : U8, U8 -> U8
 
-			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U8, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(U8, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U8, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U8, [BadNumStr, ..])
 
 			# # List of integers beginning with this `U8` and ending with the other `U8`.
 			# # (Use [until] instead to end with the other `U8` minus one.)
@@ -402,7 +441,7 @@ Builtin :: [].{
 
 			# Conversions to signed integers (I8 is lossy, others are safe)
 			to_i8_wrap : U8 -> I8
-			to_i8_try : U8 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U8 -> Try(I8, [OutOfRange, ..])
 			to_i16 : U8 -> I16
 			to_i32 : U8 -> I32
 			to_i64 : U8 -> I64
@@ -421,6 +460,9 @@ Builtin :: [].{
 		}
 
 		I8 :: [].{
+			default : () -> I8
+			default = || 0i8
+
 			to_str : I8 -> Str
 			is_zero : I8 -> Bool
 			is_negative : I8 -> Bool
@@ -446,9 +488,21 @@ Builtin :: [].{
 			shift_right_by : I8, U8 -> I8
 			shift_right_zf_by : I8, U8 -> I8
 
-			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I8, [BadNumStr, ..others])
+			# # List of integers beginning with this `I8` and ending with the other `I8`.
+			# # (Use [until] instead to end with the other `I8` minus one.)
+			# # Returns an empty list if this `I8` is greater than the other.
+			to : I8, I8 -> List(I8)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `I8` and ending with the other `I8` minus one.
+			# # (Use [to] instead to end with the other `I8` exactly, instead of minus one.)
+			# # Returns an empty list if this `I8` is greater than or equal to the other.
+			until : I8, I8 -> List(I8)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(I8, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I8, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I8, [BadNumStr, ..])
 
 			# Conversions to signed integers (all safe widening)
 			to_i16 : I8 -> I16
@@ -458,15 +512,15 @@ Builtin :: [].{
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I8 -> U8
-			to_u8_try : I8 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I8 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I8 -> U16
-			to_u16_try : I8 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I8 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I8 -> U32
-			to_u32_try : I8 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I8 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I8 -> U64
-			to_u64_try : I8 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I8 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I8 -> U128
-			to_u128_try : I8 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I8 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I8 -> F32
@@ -475,6 +529,9 @@ Builtin :: [].{
 		}
 
 		U16 :: [].{
+			default : () -> U16
+			default = || 0u16
+
 			to_str : U16 -> Str
 			is_zero : U16 -> Bool
 			is_eq : U16, U16 -> Bool
@@ -496,22 +553,34 @@ Builtin :: [].{
 			shift_right_by : U16, U8 -> U16
 			shift_right_zf_by : U16, U8 -> U16
 
-			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U16, [BadNumStr, ..others])
+			# # List of integers beginning with this `U16` and ending with the other `U16`.
+			# # (Use [until] instead to end with the other `U16` minus one.)
+			# # Returns an empty list if this `U16` is greater than the other.
+			to : U16, U16 -> List(U16)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `U16` and ending with the other `U16` minus one.
+			# # (Use [to] instead to end with the other `U16` exactly, instead of minus one.)
+			# # Returns an empty list if this `U16` is greater than or equal to the other.
+			until : U16, U16 -> List(U16)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(U16, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U16, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U16, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U16 -> I8
-			to_i8_try : U16 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U16 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U16 -> I16
-			to_i16_try : U16 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U16 -> Try(I16, [OutOfRange, ..])
 			to_i32 : U16 -> I32
 			to_i64 : U16 -> I64
 			to_i128 : U16 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U16 -> U8
-			to_u8_try : U16 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U16 -> Try(U8, [OutOfRange, ..])
 			to_u32 : U16 -> U32
 			to_u64 : U16 -> U64
 			to_u128 : U16 -> U128
@@ -523,6 +592,9 @@ Builtin :: [].{
 		}
 
 		I16 :: [].{
+			default : () -> I16
+			default = || 0i16
+
 			to_str : I16 -> Str
 			is_zero : I16 -> Bool
 			is_negative : I16 -> Bool
@@ -548,28 +620,40 @@ Builtin :: [].{
 			shift_right_by : I16, U8 -> I16
 			shift_right_zf_by : I16, U8 -> I16
 
-			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I16, [BadNumStr, ..others])
+			# # List of integers beginning with this `I16` and ending with the other `I16`.
+			# # (Use [until] instead to end with the other `I16` minus one.)
+			# # Returns an empty list if this `I16` is greater than the other.
+			to : I16, I16 -> List(I16)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `I16` and ending with the other `I16` minus one.
+			# # (Use [to] instead to end with the other `I16` exactly, instead of minus one.)
+			# # Returns an empty list if this `I16` is greater than or equal to the other.
+			until : I16, I16 -> List(I16)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(I16, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I16, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I16, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I16 -> I8
-			to_i8_try : I16 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I16 -> Try(I8, [OutOfRange, ..])
 			to_i32 : I16 -> I32
 			to_i64 : I16 -> I64
 			to_i128 : I16 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I16 -> U8
-			to_u8_try : I16 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I16 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I16 -> U16
-			to_u16_try : I16 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I16 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I16 -> U32
-			to_u32_try : I16 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I16 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I16 -> U64
-			to_u64_try : I16 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I16 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I16 -> U128
-			to_u128_try : I16 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I16 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I16 -> F32
@@ -578,6 +662,9 @@ Builtin :: [].{
 		}
 
 		U32 :: [].{
+			default : () -> U32
+			default = || 0u32
+
 			to_str : U32 -> Str
 			is_zero : U32 -> Bool
 			is_eq : U32, U32 -> Bool
@@ -599,25 +686,37 @@ Builtin :: [].{
 			shift_right_by : U32, U8 -> U32
 			shift_right_zf_by : U32, U8 -> U32
 
-			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U32, [BadNumStr, ..others])
+			# # List of integers beginning with this `U32` and ending with the other `U32`.
+			# # (Use [until] instead to end with the other `U32` minus one.)
+			# # Returns an empty list if this `U32` is greater than the other.
+			to : U32, U32 -> List(U32)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `U32` and ending with the other `U32` minus one.
+			# # (Use [to] instead to end with the other `U32` exactly, instead of minus one.)
+			# # Returns an empty list if this `U32` is greater than or equal to the other.
+			until : U32, U32 -> List(U32)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(U32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U32, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U32 -> I8
-			to_i8_try : U32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U32 -> I16
-			to_i16_try : U32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U32 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U32 -> I32
-			to_i32_try : U32 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U32 -> Try(I32, [OutOfRange, ..])
 			to_i64 : U32 -> I64
 			to_i128 : U32 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U32 -> U8
-			to_u8_try : U32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U32 -> U16
-			to_u16_try : U32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U32 -> Try(U16, [OutOfRange, ..])
 			to_u64 : U32 -> U64
 			to_u128 : U32 -> U128
 
@@ -628,6 +727,9 @@ Builtin :: [].{
 		}
 
 		I32 :: [].{
+			default : () -> I32
+			default = || 0i32
+
 			to_str : I32 -> Str
 			is_zero : I32 -> Bool
 			is_negative : I32 -> Bool
@@ -653,29 +755,41 @@ Builtin :: [].{
 			shift_right_by : I32, U8 -> I32
 			shift_right_zf_by : I32, U8 -> I32
 
-			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I32, [BadNumStr, ..others])
+			# # List of integers beginning with this `I32` and ending with the other `I32`.
+			# # (Use [until] instead to end with the other `I32` minus one.)
+			# # Returns an empty list if this `I32` is greater than the other.
+			to : I32, I32 -> List(I32)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `I32` and ending with the other `I32` minus one.
+			# # (Use [to] instead to end with the other `I32` exactly, instead of minus one.)
+			# # Returns an empty list if this `I32` is greater than or equal to the other.
+			until : I32, I32 -> List(I32)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(I32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I32, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I32 -> I8
-			to_i8_try : I32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I32 -> I16
-			to_i16_try : I32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I32 -> Try(I16, [OutOfRange, ..])
 			to_i64 : I32 -> I64
 			to_i128 : I32 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I32 -> U8
-			to_u8_try : I32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I32 -> U16
-			to_u16_try : I32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I32 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I32 -> U32
-			to_u32_try : I32 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I32 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I32 -> U64
-			to_u64_try : I32 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I32 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I32 -> U128
-			to_u128_try : I32 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I32 -> F32
@@ -684,6 +798,9 @@ Builtin :: [].{
 		}
 
 		U64 :: [].{
+			default : () -> U64
+			default = || 0u64
+
 			to_str : U64 -> Str
 			is_zero : U64 -> Bool
 			is_eq : U64, U64 -> Bool
@@ -705,28 +822,40 @@ Builtin :: [].{
 			shift_right_by : U64, U8 -> U64
 			shift_right_zf_by : U64, U8 -> U64
 
-			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U64, [BadNumStr, ..others])
+			# # List of integers beginning with this `U64` and ending with the other `U64`.
+			# # (Use [until] instead to end with the other `U64` minus one.)
+			# # Returns an empty list if this `U64` is greater than the other.
+			to : U64, U64 -> List(U64)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `U64` and ending with the other `U64` minus one.
+			# # (Use [to] instead to end with the other `U64` exactly, instead of minus one.)
+			# # Returns an empty list if this `U64` is greater than or equal to the other.
+			until : U64, U64 -> List(U64)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(U64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U64, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U64 -> I8
-			to_i8_try : U64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U64 -> I16
-			to_i16_try : U64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U64 -> I32
-			to_i32_try : U64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U64 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : U64 -> I64
-			to_i64_try : U64 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : U64 -> Try(I64, [OutOfRange, ..])
 			to_i128 : U64 -> I128
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U64 -> U8
-			to_u8_try : U64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U64 -> U16
-			to_u16_try : U64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : U64 -> U32
-			to_u32_try : U64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : U64 -> Try(U32, [OutOfRange, ..])
 			to_u128 : U64 -> U128
 
 			# Conversions to floating point (all safe)
@@ -736,6 +865,9 @@ Builtin :: [].{
 		}
 
 		I64 :: [].{
+			default : () -> I64
+			default = || 0i64
+
 			to_str : I64 -> Str
 			is_zero : I64 -> Bool
 			is_negative : I64 -> Bool
@@ -761,30 +893,42 @@ Builtin :: [].{
 			shift_right_by : I64, U8 -> I64
 			shift_right_zf_by : I64, U8 -> I64
 
-			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I64, [BadNumStr, ..others])
+			# # List of integers beginning with this `I64` and ending with the other `I64`.
+			# # (Use [until] instead to end with the other `I64` minus one.)
+			# # Returns an empty list if this `I64` is greater than the other.
+			to : I64, I64 -> List(I64)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `I64` and ending with the other `I64` minus one.
+			# # (Use [to] instead to end with the other `I64` exactly, instead of minus one.)
+			# # Returns an empty list if this `I64` is greater than or equal to the other.
+			until : I64, I64 -> List(I64)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(I64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I64, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I64 -> I8
-			to_i8_try : I64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I64 -> I16
-			to_i16_try : I64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : I64 -> I32
-			to_i32_try : I64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : I64 -> Try(I32, [OutOfRange, ..])
 			to_i128 : I64 -> I128
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I64 -> U8
-			to_u8_try : I64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I64 -> U16
-			to_u16_try : I64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I64 -> U32
-			to_u32_try : I64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I64 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I64 -> U64
-			to_u64_try : I64 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I64 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I64 -> U128
-			to_u128_try : I64 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I64 -> F32
@@ -793,6 +937,9 @@ Builtin :: [].{
 		}
 
 		U128 :: [].{
+			default : () -> U128
+			default = || 0u128
+
 			to_str : U128 -> Str
 			is_zero : U128 -> Bool
 			is_eq : U128, U128 -> Bool
@@ -814,41 +961,56 @@ Builtin :: [].{
 			shift_right_by : U128, U8 -> U128
 			shift_right_zf_by : U128, U8 -> U128
 
-			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(U128, [BadNumStr, ..others])
+			# # List of integers beginning with this `U128` and ending with the other `U128`.
+			# # (Use [until] instead to end with the other `U128` minus one.)
+			# # Returns an empty list if this `U128` is greater than the other.
+			to : U128, U128 -> List(U128)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `U128` and ending with the other `U128` minus one.
+			# # (Use [to] instead to end with the other `U128` exactly, instead of minus one.)
+			# # Returns an empty list if this `U128` is greater than or equal to the other.
+			until : U128, U128 -> List(U128)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(U128, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(U128, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(U128, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : U128 -> I8
-			to_i8_try : U128 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : U128 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : U128 -> I16
-			to_i16_try : U128 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : U128 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : U128 -> I32
-			to_i32_try : U128 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : U128 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : U128 -> I64
-			to_i64_try : U128 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : U128 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : U128 -> I128
-			to_i128_try : U128 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : U128 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers
 			to_u8_wrap : U128 -> U8
-			to_u8_try : U128 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : U128 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : U128 -> U16
-			to_u16_try : U128 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : U128 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : U128 -> U32
-			to_u32_try : U128 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : U128 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : U128 -> U64
-			to_u64_try : U128 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : U128 -> Try(U64, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : U128 -> F32
 			to_f64 : U128 -> F64
 
 			# Conversion to Dec (can overflow)
-			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..others])
+			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
 		}
 
 		I128 :: [].{
+			default : () -> I128
+			default = || 0i128
+
 			to_str : I128 -> Str
 			is_zero : I128 -> Bool
 			is_negative : I128 -> Bool
@@ -874,41 +1036,56 @@ Builtin :: [].{
 			shift_right_by : I128, U8 -> I128
 			shift_right_zf_by : I128, U8 -> I128
 
-			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(I128, [BadNumStr, ..others])
+			# # List of integers beginning with this `I128` and ending with the other `I128`.
+			# # (Use [until] instead to end with the other `I128` minus one.)
+			# # Returns an empty list if this `I128` is greater than the other.
+			to : I128, I128 -> List(I128)
+			to = |start, end| range_to(start, end)
+
+			# # List of integers beginning with this `I128` and ending with the other `I128` minus one.
+			# # (Use [to] instead to end with the other `I128` exactly, instead of minus one.)
+			# # Returns an empty list if this `I128` is greater than or equal to the other.
+			until : I128, I128 -> List(I128)
+			until = |start, end| range_until(start, end)
+
+			from_int_digits : List(U8) -> Try(I128, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(I128, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(I128, [BadNumStr, ..])
 
 			# Conversions to signed integers
 			to_i8_wrap : I128 -> I8
-			to_i8_try : I128 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : I128 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : I128 -> I16
-			to_i16_try : I128 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : I128 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : I128 -> I32
-			to_i32_try : I128 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : I128 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : I128 -> I64
-			to_i64_try : I128 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : I128 -> Try(I64, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy for negative values)
 			to_u8_wrap : I128 -> U8
-			to_u8_try : I128 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : I128 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : I128 -> U16
-			to_u16_try : I128 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : I128 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : I128 -> U32
-			to_u32_try : I128 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : I128 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : I128 -> U64
-			to_u64_try : I128 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : I128 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : I128 -> U128
-			to_u128_try : I128 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : I128 -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (all safe)
 			to_f32 : I128 -> F32
 			to_f64 : I128 -> F64
 
 			# Conversion to Dec (can overflow)
-			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..others])
+			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
 		}
 
 		Dec :: [].{
+			default : () -> Dec
+			default = || 0.0dec
+
 			to_str : Dec -> Str
 			is_zero : Dec -> Bool
 			is_negative : Dec -> Bool
@@ -929,42 +1106,57 @@ Builtin :: [].{
 			rem_by : Dec, Dec -> Dec
 			abs_diff : Dec, Dec -> Dec
 
-			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(Dec, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(Dec, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(Dec, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(Dec, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(Dec, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
 			to_i8_wrap : Dec -> I8
-			to_i8_try : Dec -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : Dec -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : Dec -> I16
-			to_i16_try : Dec -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : Dec -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : Dec -> I32
-			to_i32_try : Dec -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : Dec -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : Dec -> I64
-			to_i64_try : Dec -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : Dec -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : Dec -> I128
-			to_i128_try : Dec -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : Dec -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncates fractional part)
 			to_u8_wrap : Dec -> U8
-			to_u8_try : Dec -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : Dec -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : Dec -> U16
-			to_u16_try : Dec -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : Dec -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : Dec -> U32
-			to_u32_try : Dec -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : Dec -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : Dec -> U64
-			to_u64_try : Dec -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : Dec -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : Dec -> U128
-			to_u128_try : Dec -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : Dec -> Try(U128, [OutOfRange, ..])
 
 			# Conversions to floating point (lossy - Dec has more precision)
 			to_f32_wrap : Dec -> F32
-			to_f32_try : Dec -> Try(F32, [OutOfRange, ..others])
+			to_f32_try : Dec -> Try(F32, [OutOfRange, ..])
 			to_f64 : Dec -> F64
+
+			# # List of decimals beginning with this `Dec` and ending with the other `Dec`.
+			# # (Use [until] instead to end with the other `Dec` minus one.)
+			# # Returns an empty list if this `Dec` is greater than the other.
+			to : Dec, Dec -> List(Dec)
+			to = |start, end| range_to(start, end)
+
+			# # List of decimals beginning with this `Dec` and ending with the other `Dec` minus one.
+			# # (Use [to] instead to end with the other `Dec` exactly, instead of minus one.)
+			# # Returns an empty list if this `Dec` is greater than or equal to the other.
+			until : Dec, Dec -> List(Dec)
+			until = |start, end| range_until(start, end)
 		}
 
 		F32 :: [].{
+			default : () -> F32
+			default = || 0.0f32
+
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
 			is_negative : F32 -> Bool
@@ -984,40 +1176,43 @@ Builtin :: [].{
 			rem_by : F32, F32 -> F32
 			abs_diff : F32, F32 -> F32
 
-			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(F32, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(F32, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F32, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(F32, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(F32, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F32 -> I8
-			to_i8_try : F32 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : F32 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : F32 -> I16
-			to_i16_try : F32 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : F32 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : F32 -> I32
-			to_i32_try : F32 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : F32 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : F32 -> I64
-			to_i64_try : F32 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : F32 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : F32 -> I128
-			to_i128_try : F32 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : F32 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 			to_u8_wrap : F32 -> U8
-			to_u8_try : F32 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : F32 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : F32 -> U16
-			to_u16_try : F32 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : F32 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : F32 -> U32
-			to_u32_try : F32 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : F32 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : F32 -> U64
-			to_u64_try : F32 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : F32 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : F32 -> U128
-			to_u128_try : F32 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : F32 -> Try(U128, [OutOfRange, ..])
 
 			# Conversion to F64 (safe widening)
 			to_f64 : F32 -> F64
 		}
 
 		F64 :: [].{
+			default : () -> F64
+			default = || 0.0f64
+
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool
 			is_negative : F64 -> Bool
@@ -1037,39 +1232,39 @@ Builtin :: [].{
 			rem_by : F64, F64 -> F64
 			abs_diff : F64, F64 -> F64
 
-			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..others])
-			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..others])
-			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..others])
-			from_str : Str -> Try(F64, [BadNumStr, ..others])
+			from_int_digits : List(U8) -> Try(F64, [OutOfRange, ..])
+			from_dec_digits : (List(U8), List(U8)) -> Try(F64, [OutOfRange, ..])
+			from_numeral : Numeral -> Try(F64, [InvalidNumeral(Str), ..])
+			from_str : Str -> Try(F64, [BadNumStr, ..])
 
 			# Conversions to signed integers (all lossy - truncation + range check)
 			to_i8_wrap : F64 -> I8
-			to_i8_try : F64 -> Try(I8, [OutOfRange, ..others])
+			to_i8_try : F64 -> Try(I8, [OutOfRange, ..])
 			to_i16_wrap : F64 -> I16
-			to_i16_try : F64 -> Try(I16, [OutOfRange, ..others])
+			to_i16_try : F64 -> Try(I16, [OutOfRange, ..])
 			to_i32_wrap : F64 -> I32
-			to_i32_try : F64 -> Try(I32, [OutOfRange, ..others])
+			to_i32_try : F64 -> Try(I32, [OutOfRange, ..])
 			to_i64_wrap : F64 -> I64
-			to_i64_try : F64 -> Try(I64, [OutOfRange, ..others])
+			to_i64_try : F64 -> Try(I64, [OutOfRange, ..])
 			to_i128_wrap : F64 -> I128
-			to_i128_try : F64 -> Try(I128, [OutOfRange, ..others])
+			to_i128_try : F64 -> Try(I128, [OutOfRange, ..])
 
 			# Conversions to unsigned integers (all lossy - truncation + range check)
 			to_u8_wrap : F64 -> U8
-			to_u8_try : F64 -> Try(U8, [OutOfRange, ..others])
+			to_u8_try : F64 -> Try(U8, [OutOfRange, ..])
 			to_u16_wrap : F64 -> U16
-			to_u16_try : F64 -> Try(U16, [OutOfRange, ..others])
+			to_u16_try : F64 -> Try(U16, [OutOfRange, ..])
 			to_u32_wrap : F64 -> U32
-			to_u32_try : F64 -> Try(U32, [OutOfRange, ..others])
+			to_u32_try : F64 -> Try(U32, [OutOfRange, ..])
 			to_u64_wrap : F64 -> U64
-			to_u64_try : F64 -> Try(U64, [OutOfRange, ..others])
+			to_u64_try : F64 -> Try(U64, [OutOfRange, ..])
 			to_u128_wrap : F64 -> U128
-			to_u128_try : F64 -> Try(U128, [OutOfRange, ..others])
+			to_u128_try : F64 -> Try(U128, [OutOfRange, ..])
 
 			# Conversion to F32 (lossy narrowing)
 			to_f32_wrap : F64 -> F32
 
-			to_f32_try : F64 -> Try(F32, [OutOfRange, ..others])
+			to_f32_try : F64 -> Try(F32, [OutOfRange, ..])
 			to_f32_try = |num| {
 				answer = f64_to_f32_try_unsafe(num)
 				if answer.success != 0 {

@@ -13,24 +13,14 @@ const debug = @import("debug.zig");
 
 const TypesStore = @import("store.zig").Store;
 const Allocator = std.mem.Allocator;
-const Desc = types_mod.Descriptor;
 const Var = types_mod.Var;
-const Content = types_mod.Content;
-const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const RecordField = types_mod.RecordField;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
-const VarSafeList = Var.SafeList;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const TagSafeMultiList = Tag.SafeMultiList;
-const Descriptor = types_mod.Descriptor;
-const TypeIdent = types_mod.TypeIdent;
 const Alias = types_mod.Alias;
 const FlatType = types_mod.FlatType;
 const NominalType = types_mod.NominalType;
 const Record = types_mod.Record;
-const Num = types_mod.Num;
 const Tuple = types_mod.Tuple;
 const Func = types_mod.Func;
 
@@ -396,10 +386,6 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                     _ = try writer.write(")");
                 }
             },
-            .recursion_var => |rec_var| {
-                // Write the recursion var by writing the structure it points to
-                try self.writeVar(writer, rec_var.structure, root_var);
-            },
             .err => {
                 _ = try writer.write("Error");
             },
@@ -744,12 +730,6 @@ fn writeTagUnion(self: *TypeWriter, writer: *ByteWrite, tag_union: TagUnion, roo
             try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
             _ = try writer.write("]");
         },
-        .recursion_var => {
-            if (has_tags) _ = try writer.write(", ");
-            _ = try writer.write("..");
-            try self.writeVarWithContext(writer, tag_union.ext, .TagUnionExtension, root_var);
-            _ = try writer.write("]");
-        },
     }
 }
 
@@ -765,6 +745,15 @@ fn writeTag(self: *TypeWriter, writer: *ByteWrite, tag: Tag, root_var: Var) std.
         }
         _ = try writer.write(")");
     }
+}
+
+/// Format a single tag and return the result as a string slice.
+/// The returned slice is only valid until the next call to any write method.
+pub fn writeTagGet(self: *TypeWriter, tag: Tag, root_var: Var) std.mem.Allocator.Error![]const u8 {
+    self.reset();
+    var writer = self.buf.writer();
+    try self.writeTag(&writer, tag, root_var);
+    return self.get();
 }
 
 /// Append a constraint with its dispatcher var to the list, if it doesn't already exist
@@ -887,10 +876,6 @@ fn countVar(self: *TypeWriter, search_var: Var, current_var: Var, count: *usize)
         },
         .structure => |flat_type| {
             try self.countVarInFlatType(search_var, flat_type, count);
-        },
-        .recursion_var => |rec_var| {
-            // Count the structure the recursion var points to
-            try self.countVar(search_var, rec_var.structure, count);
         },
         .err => {},
     }

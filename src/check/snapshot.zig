@@ -4,22 +4,28 @@ const std = @import("std");
 const base = @import("base");
 const collections = @import("collections");
 const types = @import("types");
-const can = @import("can");
 
 const Allocator = std.mem.Allocator;
-const ModuleEnv = can.ModuleEnv;
 const TypesStore = types.Store;
 const Ident = base.Ident;
 
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
+/// Index for extra strings stored in the snapshot store (e.g., formatted pattern strings)
+pub const ExtraStringIdx = enum(u32) {
+    _,
+
+    pub fn toInt(self: ExtraStringIdx) u32 {
+        return @intFromEnum(self);
+    }
+};
+
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
 const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
-const MkSafeMultiList = collections.SafeMultiList;
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {
@@ -27,16 +33,9 @@ pub const SnapshotContent = union(enum) {
     rigid: SnapshotRigid,
     alias: SnapshotAlias,
     structure: SnapshotFlatType,
-    recursion_var: SnapshotRecursionVar,
     /// A recursive type reference. Stores the name of the type variable if available.
     recursive: ?Ident.Idx,
     err,
-};
-
-/// A snapshotted recursion variable that points to its recursive structure.
-pub const SnapshotRecursionVar = struct {
-    structure: SnapshotContentIdx,
-    name: ?base.Ident.Idx,
 };
 
 /// A snapshotted flex (unbound) type variable with optional name and constraints.
@@ -129,6 +128,8 @@ pub const SnapshotTagUnion = struct {
 pub const SnapshotTag = struct {
     name: Ident.Idx,
     args: SnapshotContentIdxSafeList.Range,
+    /// Pre-formatted string representation of this tag (e.g., "TagName(a, b)")
+    formatted: []const u8,
 };
 
 /// A snapshotted static dispatch constraint for method resolution.
@@ -184,6 +185,9 @@ pub const Store = struct {
     /// Formatted type strings, indexed by SnapshotContentIdx
     formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
 
+    /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
+    extra_strings: std.ArrayListUnmanaged([]const u8),
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -198,6 +202,7 @@ pub const Store = struct {
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
             .formatted_strings = .{},
+            .extra_strings = .{},
         };
     }
 
@@ -208,6 +213,22 @@ pub const Store = struct {
             self.gpa.free(str.*);
         }
         self.formatted_strings.deinit(self.gpa);
+
+        // Free all extra strings
+        for (self.extra_strings.items) |str| {
+            self.gpa.free(str);
+        }
+        self.extra_strings.deinit(self.gpa);
+
+        // Free all formatted tag strings
+        const tags_len = self.tags.len();
+        if (tags_len > 0) {
+            const all_tags_range = SnapshotTagSafeList.Range{ .start = .first, .count = tags_len };
+            const tags_slice = self.tags.sliceRange(all_tags_range);
+            for (tags_slice.items(.formatted)) |formatted| {
+                self.gpa.free(formatted);
+            }
+        }
 
         self.contents.deinit(self.gpa);
         self.seen_vars.deinit();
@@ -224,6 +245,19 @@ pub const Store = struct {
     /// Get the pre-formatted string for a snapshot.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
         return self.formatted_strings.get(idx);
+    }
+
+    /// Store an extra string (e.g., formatted pattern) and return its index.
+    /// The string will be freed when the store is deinitialized.
+    pub fn storeExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
+        const idx: ExtraStringIdx = @enumFromInt(self.extra_strings.items.len);
+        try self.extra_strings.append(self.gpa, str);
+        return idx;
+    }
+
+    /// Get an extra string by index.
+    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
+        return self.extra_strings.items[idx.toInt()];
     }
 
     /// Deep copy a type variable for error reporting. This snapshots the type structure
@@ -253,7 +287,6 @@ pub const Store = struct {
             const recursive_name: ?Ident.Idx = switch (resolved.desc.content) {
                 .flex => |flex| flex.name,
                 .rigid => |rigid| rigid.name,
-                .recursion_var => |rec_var| rec_var.name,
                 .alias => |alias| alias.ident.ident_idx,
                 .structure => |flat_type| switch (flat_type) {
                     .nominal_type => |nominal| nominal.ident.ident_idx,
@@ -272,7 +305,7 @@ pub const Store = struct {
         try self.seen_vars.append(resolved.var_);
         defer _ = self.seen_vars.pop();
 
-        const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content);
+        const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content, var_);
 
         // Format this type and store the formatted string
         type_writer.reset();
@@ -328,24 +361,19 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyContent(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, content: Content) std.mem.Allocator.Error!SnapshotContentIdx {
+    fn deepCopyContent(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, var_: types.Var, content: Content, root_var: types.Var) std.mem.Allocator.Error!SnapshotContentIdx {
         const deep_content = switch (content) {
             .flex => |flex| SnapshotContent{ .flex = try self.deepCopyFlex(store, type_writer, var_, flex) },
             .rigid => |rigid| SnapshotContent{ .rigid = try self.deepCopyRigid(store, type_writer, rigid) },
             .alias => |alias| SnapshotContent{ .alias = try self.deepCopyAlias(store, type_writer, alias) },
-            .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type) },
-            .recursion_var => |rec_var| blk: {
-                // Snapshot the recursion var by snapshotting the structure it points to
-                const structure_snapshot = try self.deepCopyVarInternal(store, type_writer, rec_var.structure);
-                break :blk SnapshotContent{ .recursion_var = .{ .structure = structure_snapshot, .name = rec_var.name } };
-            },
+            .structure => |flat_type| SnapshotContent{ .structure = try self.deepCopyFlatType(store, type_writer, flat_type, root_var) },
             .err => SnapshotContent.err,
         };
 
         return try self.contents.append(self.gpa, deep_content);
     }
 
-    fn deepCopyFlatType(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, flat_type: types.FlatType) std.mem.Allocator.Error!SnapshotFlatType {
+    fn deepCopyFlatType(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, flat_type: types.FlatType, root_var: types.Var) std.mem.Allocator.Error!SnapshotFlatType {
         return switch (flat_type) {
             .tuple => |tuple| SnapshotFlatType{ .tuple = try self.deepCopyTuple(store, type_writer, tuple) },
             .nominal_type => |nominal_type| SnapshotFlatType{ .nominal_type = try self.deepCopyNominalType(store, type_writer, nominal_type) },
@@ -355,7 +383,7 @@ pub const Store = struct {
             .record => |record| SnapshotFlatType{ .record = try self.deepCopyRecord(store, type_writer, record) },
             .record_unbound => |fields| SnapshotFlatType{ .record_unbound = try self.deepCopyRecordFields(store, type_writer, fields) },
             .empty_record => SnapshotFlatType.empty_record,
-            .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, type_writer, tag_union) },
+            .tag_union => |tag_union| SnapshotFlatType{ .tag_union = try self.deepCopyTagUnion(store, type_writer, tag_union, root_var) },
             .empty_tag_union => SnapshotFlatType.empty_tag_union,
         };
     }
@@ -514,7 +542,7 @@ pub const Store = struct {
         };
     }
 
-    fn deepCopyTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, tag_union: types.TagUnion) std.mem.Allocator.Error!SnapshotTagUnion {
+    fn deepCopyTagUnion(self: *Self, store: *const TypesStore, type_writer: *TypeWriter, tag_union: types.TagUnion, root_var: types.Var) std.mem.Allocator.Error!SnapshotTagUnion {
         // Mark starting position in the scratch array for tags
         const tags_scratch_top = self.scratch_tags.top();
 
@@ -538,10 +566,15 @@ pub const Store = struct {
             const tag_args_range = try self.content_indexes.appendSlice(self.gpa, self.scratch_content.sliceFromStart(content_scratch_top));
             self.scratch_content.clearFrom(content_scratch_top);
 
+            // Format the tag using TypeWriter (uses correct Roc syntax like "TagName(a, b)")
+            const formatted_tag = try type_writer.writeTagGet(tag, root_var);
+            const formatted_owned = try self.gpa.dupe(u8, formatted_tag);
+
             // Create and append the snapshot tag to scratch
             const snapshot_tag = SnapshotTag{
                 .name = tag.name,
                 .args = tag_args_range,
+                .formatted = formatted_owned,
             };
 
             try self.scratch_tags.append(snapshot_tag);
@@ -580,84 +613,9 @@ pub const Store = struct {
         return self.contents.get(idx).*;
     }
 
-    /// Format a tag as a string, e.g. "TagName payload1 payload2"
-    /// Requires that all nested types have been pre-formatted via snapshotVarForError
-    pub fn formatTagString(self: *const Self, allocator: std.mem.Allocator, tag: SnapshotTag, idents: *const Ident.Store) ![]const u8 {
-        var result = std.array_list.Managed(u8).init(allocator);
-        errdefer result.deinit();
-
-        // Write tag name
-        const name = idents.getText(tag.name);
-        try result.appendSlice(name);
-
-        // Write payload arguments using pre-stored formatted strings
-        const args = self.content_indexes.sliceRange(tag.args);
-        for (args) |arg_idx| {
-            try result.append(' ');
-            const formatted = self.getFormattedString(arg_idx) orelse "<unknown type>";
-            try result.appendSlice(formatted);
-        }
-
-        return result.toOwnedSlice();
+    /// Get the pre-formatted string representation of a tag (e.g., "TagName(a, b)").
+    /// The tag was formatted using TypeWriter during snapshotting.
+    pub fn getFormattedTagString(tag: SnapshotTag) []const u8 {
+        return tag.formatted;
     }
 };
-
-// Tests
-
-test "formatTagString - gracefully handles missing formatted strings" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.initCapacity(gpa, 16);
-    defer store.deinit();
-
-    // Create a tag with an argument that doesn't have a formatted string
-    // This should use the "<unknown type>" fallback instead of crashing
-    const unknown_content_idx = try store.contents.append(gpa, .err);
-    const args_range = try store.content_indexes.appendSlice(gpa, &[_]SnapshotContentIdx{unknown_content_idx});
-
-    // Create an ident store for the tag name
-    var ident_store = try Ident.Store.initCapacity(gpa, 64);
-    defer ident_store.deinit(gpa);
-    const tag_name = try ident_store.insert(gpa, Ident.for_text("MyTag"));
-
-    const tag = SnapshotTag{
-        .name = tag_name,
-        .args = args_range,
-    };
-
-    // Format should succeed and include the fallback placeholder
-    const result = try store.formatTagString(gpa, tag, &ident_store);
-    defer gpa.free(result);
-
-    try std.testing.expectEqualStrings("MyTag <unknown type>", result);
-}
-
-test "formatTagString - uses stored formatted strings when available" {
-    const gpa = std.testing.allocator;
-
-    var store = try Store.initCapacity(gpa, 16);
-    defer store.deinit();
-
-    // Create a content index and store a formatted string for it
-    const content_idx = try store.contents.append(gpa, .err);
-    const formatted_str = try gpa.dupe(u8, "U64");
-    try store.formatted_strings.put(gpa, content_idx, formatted_str);
-
-    const args_range = try store.content_indexes.appendSlice(gpa, &[_]SnapshotContentIdx{content_idx});
-
-    // Create an ident store for the tag name
-    var ident_store = try Ident.Store.initCapacity(gpa, 64);
-    defer ident_store.deinit(gpa);
-    const tag_name = try ident_store.insert(gpa, Ident.for_text("Some"));
-
-    const tag = SnapshotTag{
-        .name = tag_name,
-        .args = args_range,
-    };
-
-    // Format should use the stored formatted string
-    const result = try store.formatTagString(gpa, tag, &ident_store);
-    defer gpa.free(result);
-
-    try std.testing.expectEqualStrings("Some U64", result);
-}

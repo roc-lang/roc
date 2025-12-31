@@ -9,48 +9,37 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const base = @import("base");
 const types = @import("types");
-const can = @import("can");
 const builtins = @import("builtins");
-const collections = @import("collections");
 const layout_mod = @import("layout");
 
 // Compile-time flag for refcount tracing - enabled via `zig build -Dtrace-refcount=true`
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 
-const CIR = can.CIR;
-const ModuleEnv = can.ModuleEnv;
 const Ident = base.Ident;
 const LayoutStore = layout_mod.Store;
 const Layout = layout_mod.Layout;
-const StringLiteral = base.StringLiteral;
 const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
-const LayoutTag = layout_mod.LayoutTag;
 const RocDec = builtins.dec.RocDec;
-const SExprTree = base.SExprTree;
 const Closure = layout_mod.Closure;
-const Expr = CIR.Expr;
 
 const StackValue = @This();
 
 // Internal helper functions for memory operations that don't need rt_var
 
-/// Helper for unreachable code paths that provides better error messages in debug mode
-fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builtin.SourceLocation) noreturn {
-    if (comptime builtin.mode == .Debug) {
-        var buf: [512]u8 = undefined;
-        const full_msg = std.fmt.bufPrint(&buf, "Internal error: {s} at {s}:{d}:{d}", .{
-            msg,
-            src.file,
-            src.line,
-            src.column,
-        }) catch msg;
-        if (roc_ops) |ops| {
-            ops.crash(full_msg);
-        }
-    }
-    unreachable;
+/// Read the discriminant for a tag union, handling single-tag unions which don't store one.
+fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache: *LayoutStore) usize {
+    std.debug.assert(layout.tag == .tag_union);
+    const tu_idx = layout.data.tag_union.idx;
+    const tu_data = layout_cache.getTagUnionData(tu_idx);
+    const variants = layout_cache.getTagUnionVariants(tu_data);
+    // Single-tag unions don't have discriminants, so don't try to read one.
+    if (variants.len == 1) return 0;
+    const disc_offset = layout_cache.getTagUnionDiscriminantOffset(tu_idx);
+    const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
+    std.debug.assert(discriminant < variants.len);
+    return discriminant;
 }
 
 /// Increment reference count for a value given its layout and pointer.
@@ -115,13 +104,10 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
@@ -145,7 +131,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const elem_layout = layout_cache.getLayout(layout.data.list);
         const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
         const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Decref elements when unique
         if (list_value.isUnique(ops)) {
@@ -190,7 +176,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const refcount_ptr: *isize = @as(*isize, @ptrFromInt(refcount_addr));
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
-            if (elem_layout.isRefcounted()) {
+            if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                 decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops);
             }
         }
@@ -284,13 +270,10 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .tag_union) {
         if (ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
         decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
         return;
@@ -428,7 +411,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         dest_list.* = src_list.*;
 
         const elem_layout = layout_cache.getLayout(self.layout.data.list);
-        const elements_refcounted = elem_layout.isRefcounted();
+        const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
         // Incref the list allocation. For seamless slices, this is the parent allocation,
         // not the bytes pointer (which points within the parent allocation).
@@ -570,13 +553,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
         @memcpy(dst, src);
 
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
-
+        const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
         if (comptime trace_refcount) {
@@ -1025,15 +1005,14 @@ pub const TagUnionAccessor = struct {
     /// Read the discriminant (tag index) from the tag union
     pub fn getDiscriminant(self: TagUnionAccessor) usize {
         const base_ptr: [*]const u8 = @ptrCast(self.base_value.ptr.?);
-        return self.tu_data.readDiscriminant(base_ptr);
+        // Use dynamic offset computation to handle recursive types correctly
+        return readTagUnionDiscriminant(self.base_value.layout, base_ptr, self.layout_cache);
     }
 
     /// Get the layout for a specific variant by discriminant
     pub fn getVariantLayout(self: *const TagUnionAccessor, discriminant: usize) Layout {
         const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
-        if (discriminant >= variants.len) {
-            return Layout.zst();
-        }
+        std.debug.assert(discriminant < variants.len);
         const variant = variants.get(discriminant);
         return self.layout_cache.getLayout(variant.payload_layout);
     }
@@ -1135,73 +1114,6 @@ fn storeListElementCount(list: *RocList, elements_refcounted: bool, roc_ops: *Ro
             const ptr = @as([*]usize, @ptrCast(@alignCast(source))) - 2;
             ptr[0] = list.length;
         }
-    }
-}
-
-fn copyListValueToPtr(
-    src: StackValue,
-    layout_cache: *LayoutStore,
-    dest_ptr: *anyopaque,
-    dest_layout: Layout,
-    roc_ops: *RocOps,
-) error{ TypeMismatch, NullStackPointer }!void {
-    // Verify dest_ptr alignment before @alignCast (debug builds only for performance)
-    if (comptime builtin.mode == .Debug) {
-        const dest_ptr_int = @intFromPtr(dest_ptr);
-        if (dest_ptr_int % @alignOf(RocList) != 0) {
-            var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] dest alignment error: 0x{x}", .{dest_ptr_int}) catch "[copyListValueToPtr] alignment error";
-            roc_ops.crash(msg);
-        }
-    }
-    var dest_list: *RocList = @ptrCast(@alignCast(dest_ptr));
-
-    switch (dest_layout.tag) {
-        .list_of_zst => {
-            if (src.layout.tag != .list_of_zst) return error.TypeMismatch;
-            if (src.ptr == null) {
-                dest_list.* = RocList.empty();
-                return;
-            }
-            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
-            if (comptime builtin.mode == .Debug) {
-                const src_ptr_int_zst = @intFromPtr(src.ptr.?);
-                if (src_ptr_int_zst % @alignOf(RocList) != 0) {
-                    var buf: [64]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src zst alignment error: 0x{x}", .{src_ptr_int_zst}) catch "[copyListValueToPtr] alignment error";
-                    roc_ops.crash(msg);
-                }
-            }
-            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
-            dest_list.* = src_list;
-            dest_list.incref(1, false);
-            return;
-        },
-        .list => {
-            if (src.ptr == null) {
-                dest_list.* = RocList.empty();
-                return;
-            }
-            if (src.layout.tag != .list) return error.TypeMismatch;
-            // Verify src.ptr alignment before @alignCast (debug builds only for performance)
-            if (comptime builtin.mode == .Debug) {
-                const src_ptr_int_list = @intFromPtr(src.ptr.?);
-                if (src_ptr_int_list % @alignOf(RocList) != 0) {
-                    var buf: [64]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "[copyListValueToPtr] src list alignment error: 0x{x}", .{src_ptr_int_list}) catch "[copyListValueToPtr] alignment error";
-                    roc_ops.crash(msg);
-                }
-            }
-            const src_list = @as(*const RocList, @ptrCast(@alignCast(src.ptr.?))).*;
-            dest_list.* = src_list;
-
-            const elem_layout = layout_cache.getLayout(dest_layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
-            dest_list.incref(1, elements_refcounted);
-            storeListElementCount(dest_list, elements_refcounted, roc_ops);
-            return;
-        },
-        else => return error.TypeMismatch,
     }
 }
 
@@ -1415,7 +1327,7 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
 
         if (self.layout.tag == .list) {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
             dest_list.incref(1, elements_refcounted, roc_ops);
             storeListElementCount(dest_list, elements_refcounted, roc_ops);
         } else {
@@ -1552,10 +1464,11 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
     if (self.layout.tag == .tag_union) {
         if (self.ptr == null) return;
-        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-        const discriminant = tu_data.readDiscriminant(base_ptr);
+        // Use dynamic offset computation to handle recursive types correctly
+        const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
 
+        const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
         std.debug.assert(discriminant < variants.len);
         const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
@@ -1663,7 +1576,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
             const element_width: usize = @intCast(layout_cache.layoutSize(elem_layout));
-            const elements_refcounted = elem_layout.isRefcounted();
+            const elements_refcounted = layout_cache.layoutContainsRefcounted(elem_layout);
 
             if (comptime trace_refcount) {
                 traceRefcount("DECREF list ptr=0x{x} len={} elems_rc={} unique={}", .{
@@ -1726,12 +1639,12 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 traceRefcount("DECREF box ptr=0x{x} rc={} elem_rc={}", .{
                     unmasked_ptr,
                     refcount_ptr.*,
-                    @intFromBool(elem_layout.isRefcounted()),
+                    @intFromBool(layout_cache.layoutContainsRefcounted(elem_layout)),
                 });
             }
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
-                if (elem_layout.isRefcounted()) {
+                if (layout_cache.layoutContainsRefcounted(elem_layout)) {
                     decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops);
                 }
             }
@@ -1785,13 +1698,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
         },
         .tag_union => {
             if (self.ptr == null) return;
-            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
-            const discriminant = tu_data.readDiscriminant(base_ptr);
-
+            const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
+            const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const variants = layout_cache.getTagUnionVariants(tu_data);
-            std.debug.assert(discriminant < variants.len);
-
             const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
             if (comptime trace_refcount) {

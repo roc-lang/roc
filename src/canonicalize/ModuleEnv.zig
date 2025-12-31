@@ -25,7 +25,6 @@ const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 const TypeStore = types_mod.Store;
 
@@ -536,17 +535,15 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
     const idents = try CommonIdents.insert(gpa, &common);
 
     // Use source-based heuristics for initial capacities
-    // Typical Roc code generates ~1 node per 20 bytes, ~1 type per 50 bytes
+    // Typical Roc code generates ~1 node per 20 bytes
     // Use generous minimums to avoid too many reallocations for small files
     const source_len = source.len;
     const node_capacity = @max(1024, @min(100_000, source_len / 20));
-    const type_capacity = @max(2048, @min(50_000, source_len / 50));
-    const var_capacity = @max(512, @min(10_000, source_len / 100));
 
     return Self{
         .gpa = gpa,
         .common = common,
-        .types = try TypeStore.initCapacity(gpa, type_capacity, var_capacity),
+        .types = try TypeStore.initFromSourceLen(gpa, source_len),
         .module_kind = .deprecated_module, // Placeholder - set to actual kind during header canonicalization
         .all_defs = .{ .span = .{ .start = 0, .len = 0 } },
         .all_statements = .{ .span = .{ .start = 0, .len = 0 } },
@@ -1949,6 +1946,81 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .break_outside_loop => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "BREAK OUTSIDE LOOP", .runtime_error);
+            try report.document.addReflowingText("The ");
+            try report.document.addAnnotated("break", .inline_code);
+            try report.document.addReflowingText(" statement can only be used inside loops like ");
+            try report.document.addAnnotated("while", .inline_code);
+            try report.document.addReflowingText(" or ");
+            try report.document.addAnnotated("for", .inline_code);
+            try report.document.addReflowingText(" to exit the loop early.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .mutually_recursive_type_aliases => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const other_type_name = self.getIdent(data.other_name);
+            const region_info = self.calcRegionInfo(data.region);
+            const other_region_info = self.calcRegionInfo(data.other_region);
+
+            var report = Report.init(allocator, "MUTUALLY RECURSIVE TYPE ALIASES", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            const owned_other_name = try report.addOwnedString(other_type_name);
+
+            try report.document.addReflowingText("The type alias ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" and ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" form a recursive cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This type is declared here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                other_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => unreachable, // All diagnostics must have explicit handlers
     };
 }
@@ -2051,9 +2123,10 @@ pub const Serialized = extern struct {
     }
 
     /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// The base_addr parameter is the base address of the serialized buffer in memory.
     pub fn deserialize(
         self: *Serialized,
-        offset: i64,
+        base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
@@ -2072,30 +2145,30 @@ pub const Serialized = extern struct {
         const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
 
         // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(offset, source).*;
+        const common = self.common.deserialize(base_addr, source).*;
 
         env.* = Self{
             .gpa = gpa,
             .common = common,
-            .types = self.types.deserialize(offset, gpa).*,
+            .types = self.types.deserialize(base_addr, gpa).*,
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(offset).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(offset).*,
+            .requires_types = self.requires_types.deserialize(base_addr).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(offset).*,
-            .imports = (try self.imports.deserialize(offset, gpa)).*,
+            .external_decls = self.external_decls.deserialize(base_addr).*,
+            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
             .module_name = module_name,
             .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(offset, gpa).*,
+            .store = self.store.deserialize(base_addr, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(offset).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(offset).*,
+            .method_idents = self.method_idents.deserialize(base_addr).*,
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
@@ -2161,21 +2234,6 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
             std.debug.panic(
                 "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
                 .{ cir_nodes, region_nodes },
-            );
-        }
-    }
-}
-
-/// Assert that nodes, regions and types are all in sync
-inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
-    if (builtin.mode == .Debug) {
-        const idx1_int = @intFromEnum(idx1);
-        const idx2_int = @intFromEnum(idx2);
-
-        if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
             );
         }
     }
@@ -2369,13 +2427,6 @@ pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []cons
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
-}
-
-/// Helper to format pattern index for s-expr output
-fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) SExpr {
-    var node = SExpr.init(gpa, "pid");
-    node.appendUnsignedInt(gpa, @intFromEnum(pattern_idx));
-    return node;
 }
 
 /// Helper function to generate the S-expression node for the entire module.

@@ -7,7 +7,6 @@ const reporting = @import("reporting");
 const Region = base.Region;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Document = reporting.Document;
 const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
@@ -250,6 +249,18 @@ pub const Diagnostic = union(enum) {
         suggested_name: Ident.Idx,
         region: Region,
     },
+    break_outside_loop: struct {
+        region: Region,
+    },
+    /// Two or more type aliases form a cycle where each references another.
+    /// This is not allowed because type aliases are transparent synonyms.
+    /// Use nominal types (:=) for recursive types.
+    mutually_recursive_type_aliases: struct {
+        name: Ident.Idx,
+        other_name: Ident.Idx,
+        region: Region,
+        other_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -316,6 +327,8 @@ pub const Diagnostic = union(enum) {
             .type_var_marked_unused => |d| d.region,
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
+            .break_outside_loop => |d| d.region,
+            .mutually_recursive_type_aliases => |d| d.region,
         };
     }
 

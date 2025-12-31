@@ -105,11 +105,11 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
 
 The tag is:
 
-    Pair a b
+    Pair(a, b)
 
 But the nominal type needs it to be:
 
-    Pair a a
+    Pair(a, a)
 
 # TOKENS
 ~~~zig
@@ -350,9 +350,9 @@ NO CHANGE
 		(patt (type "Pair(Str)"))
 		(patt (type "a, a -> Pair(a)"))
 		(patt (type "Pair(U8)"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "a, b -> Error")))
+		(patt (type "Pair(U8)"))
+		(patt (type "Pair(U64)"))
+		(patt (type "a, b -> Pair(a)")))
 	(type_decls
 		(nominal (type "Pair(a)")
 			(ty-header (name "Pair")

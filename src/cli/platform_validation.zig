@@ -19,8 +19,6 @@ pub const targets_validator = @import("targets_validator.zig");
 const TargetsConfig = target_mod.TargetsConfig;
 const RocTarget = target_mod.RocTarget;
 const LinkType = target_mod.LinkType;
-const LinkItem = target_mod.LinkItem;
-const TargetLinkSpec = target_mod.TargetLinkSpec;
 
 const is_windows = builtin.target.os.tag == .windows;
 

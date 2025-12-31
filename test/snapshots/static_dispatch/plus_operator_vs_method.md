@@ -24,7 +24,6 @@ result2 = a.plus(b)
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
-MISSING METHOD - plus_operator_vs_method.md:15:13:15:17
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -39,20 +38,6 @@ The value's type, which does not have a method named **plus**, is:
     MyType
 
 **Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**MISSING METHOD**
-This **plus** method is being called on a value whose type doesn't have that method:
-**plus_operator_vs_method.md:15:13:15:17:**
-```roc
-result2 = a.plus(b)
-```
-            ^^^^
-
-The value's type, which does not have a method named **plus**, is:
-
-    MyType
-
-**Hint:** For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
@@ -165,16 +150,16 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "MyType"))
-		(patt (type "MyType"))
 		(patt (type "Error"))
-		(patt (type "Error")))
+		(patt (type "Error"))
+		(patt (type "MyType"))
+		(patt (type "MyType")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
 	(expressions
-		(expr (type "MyType"))
-		(expr (type "MyType"))
+		(expr (type "Error"))
+		(expr (type "Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

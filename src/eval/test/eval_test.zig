@@ -7,7 +7,6 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const serialization = @import("serialization");
 const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");
@@ -24,6 +23,7 @@ const testing = std.testing;
 const test_allocator = testing.allocator;
 
 const runExpectI64 = helpers.runExpectI64;
+const runExpectIntDec = helpers.runExpectIntDec;
 const runExpectBool = helpers.runExpectBool;
 const runExpectError = helpers.runExpectError;
 const runExpectStr = helpers.runExpectStr;
@@ -822,7 +822,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = try deserialized_ptr.deserialize(@as(i64, @intCast(@intFromPtr(buffer.ptr))), gpa, source, "TestModule");
+        var deserialized_env = try deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
         // Free the imports map that was allocated during deserialization
         defer deserialized_env.imports.map.deinit(gpa);
 
@@ -1384,6 +1384,25 @@ test "List.with_capacity - append case" {
     );
 }
 
+// Tests for List.sum
+
+test "List.sum - basic case" {
+    // Sum of a list of integers (untyped literals default to Dec)
+    try runExpectIntDec("List.sum([1, 2, 3, 4])", 10, .no_trace);
+}
+
+test "List.sum - single element" {
+    try runExpectIntDec("List.sum([42])", 42, .no_trace);
+}
+
+test "List.sum - negative numbers" {
+    try runExpectIntDec("List.sum([-1, -2, 3, 4])", 4, .no_trace);
+}
+
+test "List.sum - larger list" {
+    try runExpectIntDec("List.sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])", 55, .no_trace);
+}
+
 // Bug regression tests - interpreter crash issues
 
 test "match with tag containing pattern-bound variable - regression" {
@@ -1630,4 +1649,209 @@ test "issue 8710: tag union with heap payload in tuple should not leak" {
         \\    list
         \\}
     , &[_]i64{ 1, 2, 3 }, .no_trace);
+}
+
+test "issue 8727: function returning closure that captures outer variable" {
+    // Regression test for GitHub issue #8727
+    // A function that returns a closure which captures a variable from its
+    // enclosing scope would crash with "e_lookup_local: definition not found".
+    // The issue was that capture field names are stored using runtime_layout_store
+    // idents, but lookups used module idents which have different indices.
+
+    // Simple case: function returns closure capturing its argument
+    try runExpectI64(
+        \\{
+        \\    make_adder = |n| |x| n + x
+        \\    add_ten = make_adder(10)
+        \\    add_ten(5)
+        \\}
+    , 15, .no_trace);
+
+    // Curried multiplication
+    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+
+    // Triple currying
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+}
+
+test "issue 8737: tag union with tuple payload containing tag union" {
+    // Regression test for GitHub issue #8737
+    // A tag union whose payload is a tuple containing another tag union as the first element
+    // would crash during pattern matching due to incorrect discriminant reading.
+    // The bug is specifically triggered when:
+    // 1. Outer tag union has a tuple payload
+    // 2. The tuple's first element is another tag union (with a payload)
+    // 3. The tuple has 2+ elements
+    // 4. Pattern matching is used on the outer tag union
+
+    // Test: Inner tag union inside tuple inside outer tag union (the bug trigger)
+    // The match branches force type inference to produce a 2-variant type
+    try runExpectI64(
+        \\{
+        \\    result = XYZ((QQQ(1u8), 3u64))
+        \\    match result {
+        \\        XYZ(_) => 42
+        \\        BBB => 0
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: basic ? operator with Ok" {
+    // The ? operator on Ok should unwrap the value
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Ok(42)) { Ok(v) => v, _ => 0 }
+        \\}
+    , 42, .no_trace);
+}
+
+test "early return: basic ? operator with Err" {
+    // The ? operator on Err should early return
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    match compute(Err({})) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in closure passed to List.map" {
+    // Regression test: early return from closure in List.map would crash
+    // with "call_invoke_closure: value_stack empty when popping function"
+    try runExpectI64(
+        \\{
+        \\    result = [Ok(1), Err({})].map(|x| Ok(x?))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in closure passed to List.fold" {
+    // Regression test: early return from closure in List.fold would crash
+    try runExpectI64(
+        \\{
+        \\    compute = |x| Ok(x?)
+        \\    result = List.fold([Ok(1), Err({})], [], |acc, x| List.append(acc, compute(x)))
+        \\    List.len(result)
+        \\}
+    , 2, .no_trace);
+}
+
+test "early return: ? in second argument of multi-arg call" {
+    // Regression test: early return in second arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |_a, b| b
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(42, compute(Err({}))) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "early return: ? in first argument of multi-arg call" {
+    // Regression test: early return in first arg corrupted value stack
+    try runExpectI64(
+        \\{
+        \\    my_func = |a, _b| a
+        \\    compute = |x| Ok(x?)
+        \\    match my_func(compute(Err({})), 42) { Ok(_) => 1, Err(_) => 0 }
+        \\}
+    , 0, .no_trace);
+}
+
+test "issue 8783: List.fold with match on tag union elements from pattern match" {
+    // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
+    // would fail with TypeMismatch in match_branches continuation.
+    try runExpectI64(
+        \\{
+        \\    elem = Element("div", [Text("hello")])
+        \\    children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\    count_child = |acc, child| match child { Text(_) => acc + 1, Element(_, _) => acc + 10 }
+        \\    List.fold(children, 0, count_child)
+        \\}
+    , 1, .no_trace);
+}
+
+test "issue 8821: List.get with records and pattern match on Try type" {
+    // Regression test for issue #8821
+    // Test List.get with a list of records, pattern matching on Try/Result,
+    // and accessing record fields from the matched value
+    try runExpectStr(
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(client) => client.name
+        \\        Err(_) => "missing"
+        \\    }
+        \\}
+    , "Alice", .no_trace);
+}
+
+test "encode: just convert string to utf8" {
+    // Simple test: convert string to utf8 and back
+    try runExpectStr(
+        \\{
+        \\    bytes = Str.to_utf8("hello")
+        \\    Str.from_utf8_lossy(bytes)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "static dispatch: List.sum uses item.plus and item.default" {
+    // Test that static dispatch works with List.sum
+    // List.sum requires: item.plus : item, item -> item, item.default : item
+    // This demonstrates the static dispatch pattern that Encode uses
+    try runExpectI64(
+        \\{
+        \\    list : List(I64)
+        \\    list = [1i64, 2i64, 3i64, 4i64, 5i64]
+        \\    List.sum(list)
+        \\}
+    , 15, .no_trace);
+}
+
+// TODO: Enable this test once cross-module type variable dispatch is fixed.
+// The issue is that the flex_type_context mapping needs to properly connect
+// the parameter's type variable to the type alias's type variable.
+// test "encode: Str.encode with local format type" {
+//     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
+//     // where Fmt is a local type defined in the test.
+//     // This exercises the flex_type_context propagation in type_var_dispatch_invoke.
+//     try runExpectListI64(
+//         \\{
+//         \\    # Define a local format type that converts strings to UTF-8
+//         \\    Utf8Format := {}.{
+//         \\        encode_str : Utf8Format, Str -> List(U8)
+//         \\        encode_str = |_fmt, s| Str.to_utf8(s)
+//         \\    }
+//         \\
+//         \\    fmt : Utf8Format
+//         \\    fmt = {}
+//         \\
+//         \\    # The result is List(U8) but we cast it to List(I64) for the test helper
+//         \\    bytes = Str.encode("hi", fmt)
+//         \\    List.map(bytes, |b| U8.to_i64(b))
+//         \\}
+//     , &[_]i64{ 104, 105 }, .no_trace);
+// }
+
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    // Test that recursive closure calls don't leak stack memory.
+    // If stack memory is not properly restored after closure returns,
+    // deeply recursive functions will exhaust the interpreter's stack.
+    // The record allocation forces stack allocation on each call.
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
 }

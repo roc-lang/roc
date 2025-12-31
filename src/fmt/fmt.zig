@@ -1,7 +1,6 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
-const base = @import("base");
 const parse = @import("parse");
 const collections = @import("collections");
 const can = @import("can");
@@ -13,15 +12,10 @@ const builtin = @import("builtin");
 
 const ModuleEnv = can.ModuleEnv;
 const Token = tokenize.Token;
-const Parser = parse.Parser;
 const AST = parse.AST;
-const Node = parse.Node;
-const NodeStore = parse.NodeStore;
 const SafeList = collections.SafeList;
-const CommonEnv = base.CommonEnv;
 
 const tokenize = parse.tokenize;
-const fatal = collections.utils.fatal;
 
 const is_windows = builtin.target.os.tag == .windows;
 
@@ -79,22 +73,24 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
             if (entry.kind == .file) {
                 if (formatFilePath(gpa, entry.dir, entry.basename, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
                     success_count += 1;
-                } else |err| {
-                    if (err != error.NotRocFile) {
+                } else |err| switch (err) {
+                    error.NotRocFile => {},
+                    else => {
                         try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
                         failed_count += 1;
-                    }
+                    },
                 }
             }
         }
     } else |_| {
         if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null)) |_| {
             success_count += 1;
-        } else |err| {
-            if (err != error.NotRocFile) {
+        } else |err| switch (err) {
+            error.NotRocFile => {},
+            else => {
                 try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
                 failed_count += 1;
-            }
+            },
         }
     }
 
@@ -553,6 +549,9 @@ const Formatter = struct {
                 }
             },
             .type_anno => |t| {
+                if (t.is_var) {
+                    try fmt.pushAll("var ");
+                }
                 try fmt.pushTokenText(t.name);
                 if (multiline and try fmt.flushCommentsAfter(t.name)) {
                     fmt.curr_indent += 1;
@@ -674,6 +673,9 @@ const Formatter = struct {
                 }
                 _ = try fmt.formatExpr(r.expr);
             },
+            .@"break" => |_| {
+                try fmt.pushAll("break");
+            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -733,7 +735,7 @@ const Formatter = struct {
             fmt.curr_indent = curr_indent;
         }
         if (qualifier) |q| {
-            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident });
+            const multiline = fmt.ast.regionIsMultiline(AST.TokenizedRegion{ .start = q, .end = ident + 1 });
             try fmt.pushTokenText(q);
             if (multiline and try fmt.flushCommentsAfter(q)) {
                 fmt.curr_indent += 1;
@@ -1882,10 +1884,6 @@ const Formatter = struct {
         switch (clause) {
             .mod_method => |c| {
                 // Format as: a.method : Type
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -1942,10 +1940,6 @@ const Formatter = struct {
             },
             .mod_alias => |c| {
                 // Format as: a.TypeAlias
-                if (multiline and try fmt.flushCommentsBefore(c.var_tok)) {
-                    fmt.curr_indent = start_indent + 1;
-                    try fmt.pushIndent();
-                }
                 try fmt.pushTokenText(c.var_tok);
                 if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
                     fmt.curr_indent = start_indent;
@@ -2002,14 +1996,14 @@ const Formatter = struct {
             .tag_union => |t| {
                 region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const has_open = t.open_anno != null;
+                const is_open = t.ext != .closed;
                 const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
                 const tag_indent = fmt.curr_indent;
                 defer {
                     fmt.curr_indent = tag_indent;
                 }
                 try fmt.push('[');
-                if (tags.len == 0 and !has_open) {
+                if (tags.len == 0 and !is_open) {
                     try fmt.push(']');
                 } else {
                     if (tag_multiline) {
@@ -2025,20 +2019,22 @@ const Formatter = struct {
                         _ = try fmt.formatTypeAnno(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
-                        } else if (i < (tags.len - 1) or has_open) {
+                        } else if (i < (tags.len - 1) or is_open) {
                             try fmt.pushAll(", ");
                         }
                     }
-                    // Handle the open extension (..others)
-                    if (t.open_anno) |open| {
-                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                    // Handle open tag unions - always format as just ".." (silently drop any named extension)
+                    if (is_open) {
+                        // If there was a named extension, use its region for comment flushing
+                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            if (open_region) |oreg| {
+                                _ = try fmt.flushCommentsBefore(oreg.start);
+                            }
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.pushAll("..");
-                        _ = try fmt.formatTypeAnno(open);
                         if (tag_multiline) {
                             try fmt.push(',');
                         }
@@ -2162,7 +2158,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -2198,7 +2195,8 @@ const Formatter = struct {
                 }
                 try fmt.push('#');
                 const comment_text = between_text[comment_start..comment_end];
-                if (comment_text.len > 0 and comment_text[0] != ' ') {
+                // Add space after # unless next char is space or # (preserves ## doc comments and ### separators)
+                if (comment_text.len > 0 and comment_text[0] != ' ' and comment_text[0] != '#') {
                     try fmt.push(' ');
                 }
                 try fmt.pushAll(comment_text);
@@ -2275,11 +2273,6 @@ const Formatter = struct {
         const first_region = fmt.ast.store.nodes.items.items(.region)[first];
         const last_region = fmt.ast.store.nodes.items.items(.region)[last];
         return first_region.spanAcross(last_region);
-    }
-
-    fn displayRegion(fmt: *Formatter, region: AST.TokenizedRegion) void {
-        const tags = fmt.ast.tokens.tokens.items(.tag);
-        return std.debug.print("[{s}@{d}...{s}@{d}]\n", .{ @tagName(tags[region.start]), region.start, @tagName(tags[region.end - 1]), region.end - 1 });
     }
 
     fn nodeWillBeMultiline(fmt: *Formatter, comptime T: type, item: T) bool {
