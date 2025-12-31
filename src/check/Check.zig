@@ -1254,7 +1254,8 @@ pub fn checkPlatformRequirements(
                     // type is instantiated any rigid in the platform
                     // required type become flex
                     .flex => |flex| {
-                        // Flex var should have a name (it came from a rigid var in the platform)
+                        // Named flex vars come from rigid vars or named extensions (like `.._others`).
+                        // Anonymous flex vars (from `..` syntax) have no name and are skipped.
                         const flex_name = flex.name orelse continue;
 
                         // Check if this flex var is in the list of rigid vars declared

@@ -2127,11 +2127,8 @@ pub const TypeAnno = union(enum) {
     },
     tag_union: struct {
         tags: TypeAnno.Span,
-        /// The extension type variable for open tag unions (e.g., `ext` in `[A, ..ext]`).
-        /// Null if closed or anonymously open.
-        open_anno: ?TypeAnno.Idx,
-        /// True if this is an open tag union (has `..` syntax), even if anonymous.
-        is_open: bool,
+        /// Extension for open tag unions
+        ext: TagUnionExt,
         region: TokenizedRegion,
     },
     tuple: struct {
@@ -2161,11 +2158,19 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
+    /// Extension type for open tag unions
+    pub const TagUnionExt = union(enum) {
+        /// Closed tag union: `[A, B, C]`
+        closed,
+        /// Anonymous open tag union: `[A, B, ..]`
+        open,
+        /// Named open tag union: `[A, B, ..ext]`
+        named: TypeAnno.Idx,
+    };
+
     pub const TagUnionRhs = packed struct {
-        /// True if this is an open tag union (has `..` syntax)
-        is_open: u1,
-        /// True if there's a named extension variable (need to read extra data)
-        has_open_anno: u1,
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
         tags_len: u30,
     };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
@@ -2251,8 +2256,10 @@ pub const TypeAnno = union(enum) {
                 }
                 try tree.endNode(tags_begin, attrs2);
 
-                if (a.open_anno) |anno_idx| {
-                    try ast.store.getTypeAnno(anno_idx).pushToSExprTree(gpa, env, ast, tree);
+                if (a.ext == .named) {
+                    try ast.store.getTypeAnno(a.ext.named).pushToSExprTree(gpa, env, ast, tree);
+                } else if (a.ext == .open) {
+                    try tree.pushStaticAtom("..");
                 }
 
                 try tree.endNode(begin, attrs);

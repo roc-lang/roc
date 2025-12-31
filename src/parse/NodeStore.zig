@@ -972,15 +972,18 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
 
-            // Track both is_open (has .. syntax) and has_open_anno (named extension variable)
-            const has_open_anno = tu.open_anno != null;
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext_kind: u2 = switch (tu.ext) {
+                .closed => 0,
+                .open => 1,
+                .named => 2,
+            };
             const rhs = AST.TypeAnno.TagUnionRhs{
-                .is_open = if (tu.is_open) 1 else 0,
-                .has_open_anno = if (has_open_anno) 1 else 0,
+                .ext_kind = ext_kind,
                 .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
-            if (tu.open_anno) |a| {
-                try store.extra_data.append(store.gpa, @intFromEnum(a));
+            if (tu.ext == .named) {
+                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
             }
 
             node.data.lhs = data_start;
@@ -1927,12 +1930,17 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const tags_len = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
 
-            const open_anno = if (rhs.has_open_anno == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
+                0 => .closed,
+                1 => .open,
+                2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
+                3 => unreachable,
+            };
 
             return .{ .tag_union = .{
                 .region = node.region,
-                .open_anno = open_anno,
-                .is_open = rhs.is_open == 1,
+                .ext = ext,
                 .tags = .{ .span = .{
                     .start = tags_start,
                     .len = tags_len,

@@ -407,8 +407,7 @@ test "NodeStore round trip - TypeAnno" {
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .open_anno = rand_idx(AST.TypeAnno.Idx),
-            .is_open = false,
+            .ext = .{ .named = rand_idx(AST.TypeAnno.Idx) },
             .tags = AST.TypeAnno.Span{ .span = rand_span() },
             .region = rand_region(),
         },

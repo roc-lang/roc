@@ -866,9 +866,9 @@ fn collectTypeReferencesFromAST(
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
                 try self.collectTypeReferencesFromAST(tag_idx, refs);
             }
-            // Also check the open annotation if present
-            if (tag_union.open_anno) |open_idx| {
-                try self.collectTypeReferencesFromAST(open_idx, refs);
+            // Also check the named extension if present
+            if (tag_union.ext == .named) {
+                try self.collectTypeReferencesFromAST(tag_union.ext.named, refs);
             }
         },
         .tuple => |tuple| {
@@ -3145,12 +3145,12 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
         // Canonicalize the type annotation for this entrypoint
         //
-        // We use type_decl_anno context to catch undeclared type variables.
-        // However, open tag union extensions (like `..others`) are allowed to
-        // introduce new type variables via the in_tag_union_extension flag.
-        // Type variables from the for-clause (e.g., `model` in `[Model : model]`)
-        // are already in scope from the processing above.
-        var type_anno_ctx = TypeAnnoCtx.init(.type_decl_anno);
+        // We use for_clause_anno context which allows:
+        // - Type variables from the for-clause (e.g., `model` in `[Model : model]`) - already in scope
+        // - Anonymous open unions (`..`) - become underscore type annotations
+        // - Underscore-prefixed type vars (e.g., `_others`) - allowed without for-clause declaration
+        // But disallows regular undeclared type variables.
+        var type_anno_ctx = TypeAnnoCtx.init(.for_clause_anno);
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env
@@ -7934,7 +7934,14 @@ const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
 
-    const TypeAnnoCtxType = enum(u1) { type_decl_anno, inline_anno };
+    const TypeAnnoCtxType = enum(u2) {
+        /// Regular type declarations - no new type vars can be introduced
+        type_decl_anno,
+        /// Platform requires for-clause - allows `_`-prefixed type vars (like `_others` in open unions)
+        for_clause_anno,
+        /// Inline annotations - any type var can be introduced
+        inline_anno,
+    };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
         return .{ .type = typ, .found_underscore = false };
@@ -7942,6 +7949,15 @@ const TypeAnnoCtx = struct {
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
         return self.type == .type_decl_anno and self.found_underscore;
+    }
+
+    /// Returns true if new type variables can be introduced in this context
+    pub fn canIntroduceTypeVar(self: TypeAnnoCtx, is_ignored: bool) bool {
+        return switch (self.type) {
+            .type_decl_anno => false,
+            .for_clause_anno => is_ignored,
+            .inline_anno => true,
+        };
     }
 };
 
@@ -7977,12 +7993,11 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    // In inline annotations, new type variables can always be introduced.
-                    // In type declarations, new type variables can only be introduced if
-                    // they're marked as ignored (start with underscore, e.g., `_others`),
-                    // indicating they're intentionally unused and don't need to be declared
-                    // in a for-clause.
-                    const can_introduce = type_anno_ctx.type == .inline_anno or name_ident.attributes.ignored;
+                    // Whether new type variables can be introduced depends on context:
+                    // - type_decl_anno: no new vars allowed
+                    // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
+                    // - inline_anno: any new var allowed
+                    const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
                         // Track this type variable for underscore validation
@@ -8036,10 +8051,11 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    // In inline annotations, new type variables can always be introduced.
-                    // In type declarations, new type variables can only be introduced if
-                    // they're marked as ignored (start with underscore, e.g., `_others`).
-                    const can_introduce = type_anno_ctx.type == .inline_anno or name_ident.attributes.ignored;
+                    // Whether new type variables can be introduced depends on context:
+                    // - type_decl_anno: no new vars allowed
+                    // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
+                    // - inline_anno: any new var allowed
+                    const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
                     if (can_introduce) {
                         // Track this type variable for underscore validation
@@ -8635,14 +8651,18 @@ fn canonicalizeTypeAnnoTagUnion(
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
 
-    // Canonicalize the ext, if it exists, or create anonymous ext for open unions
-    const mb_ext_anno: ?TypeAnno.Idx = if (tag_union.open_anno) |open_idx| blk: {
-        // Named extension like `..ext`
-        break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
-    } else if (tag_union.is_open) blk: {
-        // Anonymous open union `..` - create an anonymous underscore (inferred) type
-        break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
-    } else null;
+    // Canonicalize the ext based on extension type
+    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
+        .closed => null,
+        .open => blk: {
+            // Anonymous open union `..` - create an anonymous underscore (inferred) type
+            break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
+        },
+        .named => |open_idx| blk: {
+            // Named extension like `..ext`
+            break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
+        },
+    };
 
     return try self.env.addTypeAnno(.{ .tag_union = .{
         .tags = tag_anno_idxs,
@@ -10252,9 +10272,9 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
                 try self.extractTypeVarIdentsFromASTAnno(tag_idx, idents_start_idx);
             }
-            // Extract type variable from open extension if present
-            if (tag_union.open_anno) |open_idx| {
-                try self.extractTypeVarIdentsFromASTAnno(open_idx, idents_start_idx);
+            // Extract type variable from named extension if present
+            if (tag_union.ext == .named) {
+                try self.extractTypeVarIdentsFromASTAnno(tag_union.ext.named, idents_start_idx);
             }
         },
         .ty, .underscore, .malformed => {
@@ -10328,8 +10348,8 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
                     return region;
                 }
             }
-            if (tag_union.open_anno) |open_idx| {
-                return self.getTypeVarRegionFromAST(open_idx, target_ident);
+            if (tag_union.ext == .named) {
+                return self.getTypeVarRegionFromAST(tag_union.ext.named, target_ident);
             }
             return null;
         },
@@ -11096,7 +11116,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 break :blk new_anno_idx;
                             },
                             // Otherwise, this is malformed
-                            .type_decl_anno => {
+                            .type_decl_anno, .for_clause_anno => {
                                 break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
                                     .name = var_ident,
                                     .region = region,
@@ -11179,7 +11199,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 break :blk new_anno_idx;
                             },
                             // Otherwise, this is malformed
-                            .type_decl_anno => {
+                            .type_decl_anno, .for_clause_anno => {
                                 break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
                                     .name = var_ident,
                                     .region = region,
