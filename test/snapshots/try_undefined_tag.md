@@ -8,9 +8,9 @@ type=expr
 A?
 ~~~
 # EXPECTED
-TRY OPERATOR TYPE MISMATCH - try_undefined_tag.md:1:1:1:3
+TYPE MISMATCH - try_undefined_tag.md:1:1:1:3
 # PROBLEMS
-**TRY OPERATOR TYPE MISMATCH**
+**TYPE MISMATCH**
 The `?` operator expects a _Try_ value (`Ok(...)` or `Err(...)`), but this expression has a different type:
 **try_undefined_tag.md:1:1:1:3:**
 ```roc

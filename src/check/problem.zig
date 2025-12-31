@@ -3072,7 +3072,7 @@ pub const ReportBuilder = struct {
     }
 
     fn buildTryOperatorOnNonTryReport(self: *Self, data: TryOperatorOnNonTry) !Report {
-        var report = Report.init(self.gpa, "TRY OPERATOR TYPE MISMATCH", .runtime_error);
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
         errdefer report.deinit();
 
         try report.document.addText("The ");
