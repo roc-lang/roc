@@ -8672,14 +8672,7 @@ pub const Interpreter = struct {
 
         // Apply rigid variable substitution if this is a rigid variable.
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
-        // Use a limit to detect cycles that can form due to unification happening after rigid_subst entries are added.
-        var rigid_count: u32 = 0;
         while (resolved.desc.content == .rigid) {
-            rigid_count += 1;
-            if (rigid_count >= 100) {
-                // Cycle detected - stop following substitutions and use the current resolved var
-                break;
-            }
             const rigid_name = resolved.desc.content.rigid.name;
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
                 resolved = self.runtime_types.resolveVar(substituted_var);
@@ -12189,30 +12182,10 @@ pub const Interpreter = struct {
                 else
                     func_rt_var_orig;
 
-                // If we instantiated AND there are actual substitutions, update rigid_subst and empty_scope.
-                // Skip this block entirely if subst_map is empty (no rigid vars to substitute).
-                if (should_instantiate and subst_map.count() > 0) {
-                    const setup_trace = tracy.traceNamed(@src(), "sched.call.instantiate_setup");
-                    defer setup_trace.end();
-
-                    // Ensure we have at least one scope level
-                    if (self.empty_scope.scopes.items.len == 0) {
-                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                    }
-                    const scope = &self.empty_scope.scopes.items[0];
-
-                    var subst_iter = subst_map.iterator();
-                    while (subst_iter.next()) |entry| {
-                        // Skip if it would create a cycle in rigid_subst
-                        if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
-                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
-                        // Also add to empty_scope so layout store finds the mapping
-                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-                    // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
-                    // poly_context_generation increments when flex_type_context changes, which invalidates
-                    // stale layout cache entries. No explicit @memset needed.
-                }
+                // NOTE: We delay adding subst_map entries to rigid_subst until AFTER unification
+                // in prepareCallWithFuncVar. Unification can redirect fresh flex vars back to their
+                // source rigids, which would make our entries cyclic. By waiting until after unification,
+                // we can check for cycles and avoid adding problematic entries.
 
                 // Seed flex_type_context from any already-bound local lookups in the argument list.
                 //
@@ -12275,10 +12248,14 @@ pub const Interpreter = struct {
                     const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
 
                     // Apply substitution if this argument is a rigid variable that was instantiated
+                    // Use subst_map for the current call's substitutions (not yet in rigid_subst),
+                    // and fall back to rigid_subst for outer call substitutions.
                     if (should_instantiate) {
                         const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
                         if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                            if (subst_map.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_vars[i] = substituted_arg;
+                            } else if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
                                 arg_rt_vars[i] = substituted_arg;
                             } else {
                                 arg_rt_vars[i] = arg_rt_var;
@@ -12318,6 +12295,34 @@ pub const Interpreter = struct {
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
                 } else call_ret_rt_var;
+
+                // NOW add subst_map entries to rigid_subst (after unification is complete).
+                // Only add entries that don't form cycles - unification may have redirected
+                // fresh flex vars back to their source rigids.
+                if (should_instantiate and subst_map.count() > 0) {
+                    // Ensure we have at least one scope level
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        const source = entry.key_ptr.*;
+                        const target = entry.value_ptr.*;
+                        // Check if unification made this entry cyclic
+                        const resolved_target = self.runtime_types.resolveVar(target);
+                        if (resolved_target.var_ == source) {
+                            // Skip - this entry would create a cycle
+                            continue;
+                        }
+                        // Also check the full cycle detection
+                        if (self.wouldCreateRigidSubstCycle(source, target)) continue;
+                        try self.rigid_subst.put(source, target);
+                        // Also add to empty_scope so layout store finds the mapping
+                        try scope.put(source, target);
+                    }
+                }
 
                 // Schedule: first evaluate function, then collect args, then invoke
                 // Push invoke continuation (to be executed after all args collected)
