@@ -209,7 +209,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
-SELF-REFERENTIAL DEFINITION - fuzz_crash_027.md:132:50:132:55
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_027.md:132:50:132:55
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
@@ -726,10 +726,10 @@ Is there an `import` or `exposing` missing up-top?
 	                                        ^^^^^^
 
 
-**SELF-REFERENTIAL DEFINITION**
-The value `tuple` is defined in terms of itself, which would cause an infinite loop at runtime.
+**INVALID ASSIGNMENT TO ITSELF**
+The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
 
-Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being defined.
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
 
 **fuzz_crash_027.md:132:50:132:55:**
 ```roc
