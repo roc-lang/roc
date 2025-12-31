@@ -1829,3 +1829,20 @@ test "encode: Str.encode with local format type" {
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);
 }
+
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    // Test that recursive closure calls don't leak stack memory.
+    // If stack memory is not properly restored after closure returns,
+    // deeply recursive functions will exhaust the interpreter's stack.
+    // The record allocation forces stack allocation on each call.
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
+}

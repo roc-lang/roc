@@ -1460,6 +1460,7 @@ fn generateDispatchMatch(
             .cond = closure_var_expr,
             .branches = branches_span,
             .exhaustive = exhaustive_var,
+            .is_try_suffix = false,
         },
     }, base.Region.zero());
 }
@@ -1593,6 +1594,7 @@ fn generateLambdaSetDispatchMatch(
             .cond = closure_var_expr,
             .branches = branches_span,
             .exhaustive = exhaustive_var,
+            .is_try_suffix = false,
         },
     }, base.Region.zero());
 }
@@ -2463,6 +2465,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                     .cond = new_cond,
                     .branches = new_branches_span,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },

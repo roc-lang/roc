@@ -978,13 +978,18 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
 
-            var rhs = AST.TypeAnno.TagUnionRhs{
-                .open = 0,
-                .tags_len = @as(u31, @intCast(tu.tags.span.len)),
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext_kind: u2 = switch (tu.ext) {
+                .closed => 0,
+                .open => 1,
+                .named => 2,
             };
-            if (tu.open_anno) |a| {
-                rhs.open = 1;
-                try store.extra_data.append(store.gpa, @intFromEnum(a));
+            const rhs = AST.TypeAnno.TagUnionRhs{
+                .ext_kind = ext_kind,
+                .tags_len = @as(u30, @intCast(tu.tags.span.len)),
+            };
+            if (tu.ext == .named) {
+                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
             }
 
             node.data.lhs = data_start;
@@ -1934,11 +1939,17 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const tags_len = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
 
-            const open_anno = if (rhs.open == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
+                0 => .closed,
+                1 => .open,
+                2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
+                3 => unreachable,
+            };
 
             return .{ .tag_union = .{
                 .region = node.region,
-                .open_anno = open_anno,
+                .ext = ext,
                 .tags = .{ .span = .{
                     .start = tags_start,
                     .len = tags_len,
