@@ -8231,15 +8231,75 @@ pub const Interpreter = struct {
                             // Propagate mappings from the concrete receiver to this type
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
+                        // Also propagate mappings to the return type. This is needed when the
+                        // return type has type variables that should match the parameter's type
+                        // variables but may be represented as separate variables in the type store
+                        // after serialization. For example, identity : Iter(s) -> Iter(s) needs
+                        // both the parameter and return type's `s` to be mapped.
+                        try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
                     },
                     else => {},
+                }
+            } else if (def_resolved.desc.content == .flex or def_resolved.desc.content == .rigid or
+                def_resolved.desc.content == .err)
+            {
+                // For methods without type annotations, the def's type might be a flex/rigid var
+                // or even an error type. In this case, look at the lambda expression's type instead.
+                const expr = origin_env.store.getExpr(target_def.expr);
+                if (expr == .e_lambda) {
+                    const lambda_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+                    const lambda_resolved = origin_env.types.resolveVar(lambda_ct_var);
+                    if (lambda_resolved.desc.content == .structure) {
+                        const flat = lambda_resolved.desc.content.structure;
+                        switch (flat) {
+                            .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
+                                const param_vars = origin_env.types.sliceVars(fn_type.args);
+                                if (param_vars.len > 0) {
+                                    try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
+                                }
+                                try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
+                            },
+                            else => {},
+                        }
+                    }
                 }
             }
         }
 
-        // Translate the def's type var to runtime
+        // Translate the def's type var to runtime.
+        // For methods without type annotations, the def's type might be flex/rigid/err.
+        // In that case, use the lambda expression's type instead which should have a proper function type.
         const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        const def_resolved_for_var = origin_env.types.resolveVar(def_var);
+        const rt_def_var: ?types.Var = blk: {
+            if (def_resolved_for_var.desc.content == .structure) {
+                const flat = def_resolved_for_var.desc.content.structure;
+                switch (flat) {
+                    .fn_pure, .fn_effectful, .fn_unbound => {
+                        // Type annotation provided - use def's type
+                        break :blk try self.translateTypeVar(@constCast(origin_env), def_var);
+                    },
+                    else => {},
+                }
+            }
+            // No annotation or non-function type - try to use lambda's type
+            const expr = origin_env.store.getExpr(target_def.expr);
+            if (expr == .e_lambda) {
+                const lambda_var = can.ModuleEnv.varFrom(target_def.expr);
+                const lambda_resolved = origin_env.types.resolveVar(lambda_var);
+                if (lambda_resolved.desc.content == .structure) {
+                    const flat = lambda_resolved.desc.content.structure;
+                    switch (flat) {
+                        .fn_pure, .fn_effectful, .fn_unbound => {
+                            break :blk try self.translateTypeVar(@constCast(origin_env), lambda_var);
+                        },
+                        else => {},
+                    }
+                }
+            }
+            // Fall back to null - let the expression evaluation infer the type
+            break :blk null;
+        };
 
         // Evaluate the method's expression
         const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
@@ -9067,9 +9127,59 @@ pub const Interpreter = struct {
                     // Function type propagation is complex - skip for now
                     // The main use case we need is nominal types like `Num a`
                 },
-                .tag_union => {
-                    // Tag union propagation is complex - skip for now
-                    // This case is less common for the numeric range use case we're fixing
+                .tag_union => |ct_tu| {
+                    // For tag unions, match tags by name and propagate argument type mappings.
+                    // This is needed for methods on tag unions with type parameters, e.g.:
+                    // Iter(s) :: [It(s)].{ identity = |It(s_)| It(s_) }
+                    // When called with Iter(I64), we need to map s -> I64.
+                    //
+                    // The RT type might be a tag union directly, or it might be a nominal type
+                    // wrapping a tag union. We need to handle both cases.
+                    const rt_tu_opt: ?types.TagUnion = blk: {
+                        if (rt_resolved.desc.content == .structure) {
+                            switch (rt_resolved.desc.content.structure) {
+                                .tag_union => |tu| break :blk tu,
+                                .nominal_type => |nom| {
+                                    // Unwrap nominal to get backing type
+                                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure and
+                                        backing_resolved.desc.content.structure == .tag_union)
+                                    {
+                                        break :blk backing_resolved.desc.content.structure.tag_union;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (rt_tu_opt) |rt_tu| {
+                        const ct_tags = module.types.getTagsSlice(ct_tu.tags);
+                        const rt_tags = self.runtime_types.getTagsSlice(rt_tu.tags);
+
+                        // Match tags by name and propagate argument mappings
+                        for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
+                            const ct_tag_name_str = module.getIdent(ct_tag_name);
+                            // Translate CT ident to RT ident space for comparison
+                            const rt_ct_tag_ident = self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str)) catch continue;
+
+                            // Find matching tag in RT type by ident index
+                            for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
+                                if (rt_ct_tag_ident == rt_tag_name) {
+                                    // Found matching tag - propagate argument mappings
+                                    const ct_args = module.types.sliceVars(ct_tag_args);
+                                    const rt_args = self.runtime_types.sliceVars(rt_tag_args);
+                                    const min_args = @min(ct_args.len, rt_args.len);
+                                    for (0..min_args) |i| {
+                                        try self.propagateFlexMappings(module, ct_args[i], rt_args[i]);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 },
                 .record => {
                     // Record propagation is complex - skip for now
@@ -13012,7 +13122,7 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
         lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
-        roc_ops: *RocOps,
+        _: *RocOps,
     ) Error!StackValue {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -13024,10 +13134,14 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
+        var closure_layout = try self.getRuntimeLayout(rt_var);
         if (closure_layout.tag != .closure) {
-            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
-            return error.Crash;
+            // For lambdas where the type wasn't properly inferred (e.g., methods on transparent
+            // type aliases without type annotations), create a closure layout directly.
+            // This can happen when the compile-time type is .err or .flex due to type inference
+            // issues with certain language constructs.
+            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            closure_layout = Layout.closure(empty_captures_idx);
         }
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
@@ -16829,9 +16943,21 @@ pub const Interpreter = struct {
 
                     try self.active_closures.append(method_func);
 
-                    // Use patternMatchesBind to properly bind nested patterns (e.g., nominal patterns
-                    // like `|Widget.Content(s)|` need to bind `s`, not just the outer pattern).
-                    const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+                    // Propagate flex mappings BEFORE translation. This is critical for methods on
+                    // tag unions with type parameters: the translation needs the mappings to
+                    // resolve type variables to concrete types based on the receiver's actual type.
+                    // For example, in `identity = |It(s_)| It(s_)`, the pattern type `[It(s)]`
+                    // needs `s` mapped to the receiver's type argument (e.g., I64).
+                    const param_pattern_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, param_pattern_ct_var, da.receiver_rt_var);
+
+                    // Also propagate to the body expression's type for complete coverage
+                    const body_ct_var = can.ModuleEnv.varFrom(closure_header.body_idx);
+                    try self.propagateFlexMappings(self.env, body_ct_var, da.receiver_rt_var);
+
+                    // Now translate the pattern type with the mappings in place
+                    const receiver_param_rt_var = try self.translateTypeVar(self.env, param_pattern_ct_var);
+
                     if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
@@ -16854,9 +16980,13 @@ pub const Interpreter = struct {
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
                     } } });
+                    // Use null for expected_rt_var to let the body expression's type be inferred
+                    // from the compile-time type with flex_type_context mappings. This avoids issues
+                    // where effective_ret_var (from the function's return type) might be a flex type
+                    // that isn't properly connected to the concrete receiver type.
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = effective_ret_var,
+                        .expected_rt_var = null,
                     } });
                     return true;
                 }

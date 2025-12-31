@@ -253,6 +253,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Child is Text: hello",
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
     },
+    .{
+        .roc_file = "test/fx/tag_union_attached_method.roc",
+        .io_spec = "1>ok",
+        .description = "Regression test: attached methods on tag union type aliases work (issue #8637)",
+    },
 };
 
 /// Get the total number of IO spec tests
