@@ -2583,6 +2583,61 @@ test "comptime eval - recursive nominal: command chain" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" {
+    // Regression test for issue #8795: recursive opaque types where the recursion
+    // goes through a tuple field would crash with "increfDataPtrC: ptr not aligned"
+    // because tuple elements weren't being auto-boxed for recursive types.
+    const src =
+        \\Type := [Name(Str), Array((U64, Type))]
+        \\
+        \\inner = Type.Name("hello")
+        \\outer = Type.Array((0, inner))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: recursion through record field" {
+    // Test case: recursive type where the recursion goes through a record field
+    const src =
+        \\Type := [Leaf, Node({ value: Str, child: Type })]
+        \\
+        \\inner = Type.Leaf
+        \\outer = Type.Node({ value: "hello", child: inner })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: deeply nested record recursion" {
+    // Test deeper nesting to ensure refcounting works correctly
+    const src =
+        \\Type := [Leaf(Str), Node({ value: Str, child: Type })]
+        \\
+        \\leaf = Type.Leaf("deep")
+        \\level1 = Type.Node({ value: "level1", child: leaf })
+        \\level2 = Type.Node({ value: "level2", child: level1 })
+        \\level3 = Type.Node({ value: "level3", child: level2 })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "encode - custom format type with infallible encoding (empty error type)" {
     // Test that a custom format type can define an encode_str method that can't fail.
     // Using [] as the error type means encoding always succeeds.
