@@ -1840,10 +1840,8 @@ test "static dispatch: List.sum uses item.plus and item.default" {
 // }
 
 // NOTE: Test for issue 8637 (attached methods on tag union type aliases) is in
-// test/fx/tag_union_attached_method.roc. This requires module-level type alias
-// declarations which aren't supported by the expression-based eval test helpers.
-// The fix is in the interpreter (propagateFlexMappings for tag unions), so an
-// fx test is needed to exercise the full method dispatch path.
+// comptime_eval_test.zig. This requires module-level type alias declarations
+// which aren't supported by the expression-based eval test helpers.
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
     // Test that recursive closure calls don't leak stack memory.

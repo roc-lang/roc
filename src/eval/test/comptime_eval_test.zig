@@ -2607,3 +2607,30 @@ test "encode - custom format type with infallible encoding (empty error type)" {
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
+    // Regression test for GitHub issue #8637
+    // Methods attached to transparent tag union type aliases with type parameters
+    // should work. The bug was that propagateFlexMappings wasn't handling tag unions,
+    // so type parameters weren't being mapped to concrete runtime types.
+    const src =
+        \\Iter(s) :: [It(s)].{
+        \\    identity : Iter(s) -> Iter(s)
+        \\    identity = |It(s_)| It(s_)
+        \\}
+        \\
+        \\count : Iter({})
+        \\count = It({})
+        \\
+        \\result = count.identity()
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // All declarations should evaluate without crashes
+    try testing.expect(summary.evaluated >= 3);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
