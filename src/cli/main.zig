@@ -363,8 +363,13 @@ fn renderTypeProblems(
 /// We pick a large number because we can't resize this without messing up the
 /// child process. It's just virtual address space though, not physical memory.
 /// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
+///
+/// Note: We use 2GB to handle worst-case memory fragmentation during type checking.
+/// The SharedMemoryAllocator is a bump allocator that can't free memory, so growing
+/// arrays repeatedly can waste significant space. 2GB provides enough headroom for
+/// large source files with complex types.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
+    2 * 1024 * 1024 * 1024 // 2GB for 64-bit targets
 else
     256 * 1024 * 1024; // 256MB for 32-bit targets
 
@@ -2144,7 +2149,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations
+    // (scratch arrays, hashmaps, etc). SharedMemoryAllocator is a bump allocator
+    // that never frees, which causes OOM on large files.
+    var app_checker = try Check.init(ctx.gpa, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -2705,7 +2714,9 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations.
+    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();

@@ -246,10 +246,60 @@ fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[
     }
 }
 
-fn resize(_: *anyopaque, buf: []u8, _: std.mem.Alignment, new_len: usize, _: usize) bool {
-    // Simple bump allocator doesn't support resize
-    // Could be implemented by checking if this is the last allocation
-    return new_len <= buf.len;
+fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, _: usize) bool {
+    const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
+    const buf_ptr = @intFromPtr(buf.ptr);
+    const base = @intFromPtr(self.base_ptr);
+
+    // Check if this is the last allocation by seeing if buf ends at the current offset
+    const buf_end = buf_ptr + buf.len;
+    const current_offset = self.offset.load(.monotonic);
+    const current_end = base + current_offset;
+
+    if (buf_end == current_end) {
+        // This is the last allocation, we can resize in place
+        if (new_len <= buf.len) {
+            // Shrinking - just update the offset
+            const shrink_amount = buf.len - new_len;
+            _ = self.offset.fetchSub(shrink_amount, .monotonic);
+            return true;
+        } else {
+            // Growing - check if we have room
+            const grow_amount = new_len - buf.len;
+            const new_end_offset = current_offset + grow_amount;
+            if (new_end_offset <= self.total_size) {
+                // We have room, extend in place using compare-and-swap
+                while (true) {
+                    const old_offset = self.offset.load(.monotonic);
+                    const old_end = base + old_offset;
+                    if (buf_end != old_end) {
+                        // Another allocation happened, can't resize in place
+                        return false;
+                    }
+                    if (self.offset.cmpxchgWeak(
+                        old_offset,
+                        old_offset + grow_amount,
+                        .monotonic,
+                        .monotonic,
+                    ) == null) {
+                        return true;
+                    }
+                    // CAS failed, retry
+                }
+            }
+        }
+    }
+
+    // Shrinking is always safe for any allocation
+    if (new_len <= buf.len) {
+        // For non-last allocations, just report success for shrinking
+        // The extra space becomes wasted, but that's unavoidable
+        _ = alignment; // Suppress unused warning
+        return true;
+    }
+
+    // Can't grow a non-last allocation
+    return false;
 }
 
 fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
@@ -257,8 +307,12 @@ fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
     // Memory is only freed when the entire region is unmapped
 }
 
-fn remap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?[*]u8 {
-    // Simple bump allocator doesn't support remapping
+fn remap(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, return_address: usize) ?[*]u8 {
+    // Try to resize in place first
+    if (resize(ctx, buf, alignment, new_len, return_address)) {
+        return buf.ptr;
+    }
+    // Can't remap - caller will allocate new, copy, and free (which is a no-op)
     return null;
 }
 
