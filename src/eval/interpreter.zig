@@ -14509,6 +14509,50 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
+
+                        // Check if this field value is a recursive tag_union that needs boxing.
+                        // A tag_union is recursive if any of its variant payloads contains
+                        // a Box pointing to this same tag_union.
+                        const field_layout = field_values[i].layout;
+                        if (field_layout.tag == .tag_union) {
+                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            var needs_boxing = false;
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    needs_boxing = true;
+                                    break;
+                                }
+                            }
+
+                            if (needs_boxing) {
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because we detected needs_boxing=true above,
+                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
+                                // searches the same layouts and must find the same Box.
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
+                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
+                                field_values[i] = boxed;
+                            }
+                        }
                     }
 
                     // Handle base record if extension exists
