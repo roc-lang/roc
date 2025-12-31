@@ -249,6 +249,7 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
 UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
 UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
 UNDEFINED VARIABLE - syntax_grab_bag.md:179:50:179:55
+UNDEFINED VARIABLE - syntax_grab_bag.md:179:50:179:55
 UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
@@ -664,6 +665,17 @@ Is there an `import` or `exposing` missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**UNDEFINED VARIABLE**
+Nothing is named `tuple` in this scope.
+Is there an `import` or `exposing` missing up-top?
+
+**syntax_grab_bag.md:179:50:179:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2163,8 +2175,7 @@ NO CHANGE
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "ident_not_in_scope"))))
 								(e-list
 									(elems
 										(e-num (value "1"))

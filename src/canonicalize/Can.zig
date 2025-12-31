@@ -110,6 +110,10 @@ processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
 /// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
+/// The pattern being defined in the current non-lambda assignment (if any).
+/// Used to detect self-referential definitions like `a = a` or `a = [a]`.
+/// This is null when we're inside a lambda (where self-references are valid for recursion).
+defining_pattern: ?Pattern.Idx = null,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -4427,6 +4431,25 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
+                        // Check for self-reference outside of lambda (issue #8831).
+                        // If we're defining a non-lambda pattern and this lookup references it,
+                        // that's an invalid self-reference like `a = a` or `a = [a]`.
+                        if (self.defining_pattern) |defining_pat_idx| {
+                            if (found_pattern_idx == defining_pat_idx) {
+                                // Self-reference detected - emit error
+                                try self.env.pushDiagnostic(Diagnostic{ .ident_not_in_scope = .{
+                                    .ident = ident,
+                                    .region = region,
+                                } });
+                                // Return a malformed expression instead of crashing at runtime
+                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                                    .ident = ident,
+                                    .region = region,
+                                } });
+                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                            }
+                        }
+
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
@@ -10004,29 +10027,22 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } });
     };
 
+    // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
+    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    const ast_body_expr = self.parse_ir.store.getExpr(d.body);
+    const is_lambda = ast_body_expr == .lambda;
+
+    // Save and set defining_pattern for self-reference detection (issue #8831)
+    const saved_defining_pattern = self.defining_pattern;
+    if (!is_lambda) {
+        self.defining_pattern = pattern_idx;
+    }
+
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
 
-    // Check for self-references outside of lambdas (issue #8831).
-    // In Roc, only lambdas can self-reference (for recursion). Expressions like
-    // `a = a` or `a = [a]` are invalid because `a` hasn't been defined yet.
-    // After canonicalization, any reference to the just-introduced variable
-    // becomes an e_lookup_local pointing to pattern_idx. We detect this and
-    // report an error instead of letting it crash at runtime.
-    if (self.findSelfReferenceOutsideLambda(expr.idx, pattern_idx)) |self_ref_region| {
-        // Get the identifier from the pattern for the error message
-        const pattern = self.env.store.getPattern(pattern_idx);
-        const ident = switch (pattern) {
-            .assign => |a| a.ident,
-            else => null,
-        };
-        if (ident) |ident_idx| {
-            try self.env.pushDiagnostic(Diagnostic{ .ident_not_in_scope = .{
-                .ident = ident_idx,
-                .region = self_ref_region,
-            } });
-        }
-    }
+    // Restore defining_pattern
+    self.defining_pattern = saved_defining_pattern;
 
     // Determine if we should generalize based on RHS
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
@@ -10061,193 +10077,6 @@ fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
 
         // Everything else should NOT be generalized
         else => false,
-    };
-}
-
-/// Checks if an expression contains a self-reference to the given pattern index,
-/// excluding references inside lambdas (which are valid for recursive function calls).
-/// Returns the region of the self-reference if found, or null if not found.
-fn findSelfReferenceOutsideLambda(self: *const Self, expr_idx: Expr.Idx, pattern_idx: Pattern.Idx) ?Region {
-    const expr = self.env.store.getExpr(expr_idx);
-    return switch (expr) {
-        // Direct self-reference - this is what we're looking for
-        .e_lookup_local => |lookup| {
-            if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(pattern_idx)) {
-                return self.env.store.getExprRegion(expr_idx);
-            }
-            return null;
-        },
-
-        // Lambdas and closures: don't recurse into them - self-references are valid for recursion
-        .e_closure, .e_lambda, .e_hosted_lambda, .e_low_level_lambda => null,
-
-        // Expressions with sub-expressions that need to be checked recursively
-        .e_list => |list| {
-            for (self.env.store.sliceExpr(list.elems)) |elem_idx| {
-                if (self.findSelfReferenceOutsideLambda(elem_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_tuple => |tuple| {
-            for (self.env.store.sliceExpr(tuple.elems)) |elem_idx| {
-                if (self.findSelfReferenceOutsideLambda(elem_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_str => |str| {
-            for (self.env.store.sliceExpr(str.span)) |seg_idx| {
-                if (self.findSelfReferenceOutsideLambda(seg_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_tag => |tag| {
-            for (self.env.store.sliceExpr(tag.args)) |arg_idx| {
-                if (self.findSelfReferenceOutsideLambda(arg_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_call => |call| {
-            if (self.findSelfReferenceOutsideLambda(call.func, pattern_idx)) |region| {
-                return region;
-            }
-            for (self.env.store.sliceExpr(call.args)) |arg_idx| {
-                if (self.findSelfReferenceOutsideLambda(arg_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_record => |record| {
-            for (self.env.store.sliceRecordFields(record.fields)) |field_idx| {
-                const field = self.env.store.getRecordField(field_idx);
-                if (self.findSelfReferenceOutsideLambda(field.value, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            if (record.ext) |ext_idx| {
-                if (self.findSelfReferenceOutsideLambda(ext_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-        .e_if => |if_expr| {
-            for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                const branch = self.env.store.getIfBranch(branch_idx);
-                if (self.findSelfReferenceOutsideLambda(branch.cond, pattern_idx)) |region| {
-                    return region;
-                }
-                if (self.findSelfReferenceOutsideLambda(branch.body, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            if (self.findSelfReferenceOutsideLambda(if_expr.final_else, pattern_idx)) |region| {
-                return region;
-            }
-            return null;
-        },
-        .e_match => |match| {
-            if (self.findSelfReferenceOutsideLambda(match.cond, pattern_idx)) |region| {
-                return region;
-            }
-            for (self.env.store.sliceMatchBranches(match.branches)) |branch_idx| {
-                const branch = self.env.store.getMatchBranch(branch_idx);
-                if (self.findSelfReferenceOutsideLambda(branch.value, pattern_idx)) |region| {
-                    return region;
-                }
-                if (branch.guard) |guard_idx| {
-                    if (self.findSelfReferenceOutsideLambda(guard_idx, pattern_idx)) |region| {
-                        return region;
-                    }
-                }
-            }
-            return null;
-        },
-        .e_block => |block| {
-            // Note: We don't recurse into block statements because any shadowing
-            // inside the block would create a new binding that doesn't reference our pattern
-            if (self.findSelfReferenceOutsideLambda(block.final_expr, pattern_idx)) |region| {
-                return region;
-            }
-            return null;
-        },
-        .e_binop => |binop| {
-            if (self.findSelfReferenceOutsideLambda(binop.lhs, pattern_idx)) |region| {
-                return region;
-            }
-            if (self.findSelfReferenceOutsideLambda(binop.rhs, pattern_idx)) |region| {
-                return region;
-            }
-            return null;
-        },
-        .e_unary_minus => |unary| {
-            return self.findSelfReferenceOutsideLambda(unary.expr, pattern_idx);
-        },
-        .e_unary_not => |unary| {
-            return self.findSelfReferenceOutsideLambda(unary.expr, pattern_idx);
-        },
-        .e_dot_access => |dot| {
-            if (self.findSelfReferenceOutsideLambda(dot.receiver, pattern_idx)) |region| {
-                return region;
-            }
-            if (dot.args) |args| {
-                for (self.env.store.sliceExpr(args)) |arg_idx| {
-                    if (self.findSelfReferenceOutsideLambda(arg_idx, pattern_idx)) |region| {
-                        return region;
-                    }
-                }
-            }
-            return null;
-        },
-        .e_dbg => |dbg| {
-            return self.findSelfReferenceOutsideLambda(dbg.expr, pattern_idx);
-        },
-        .e_expect => |expect| {
-            return self.findSelfReferenceOutsideLambda(expect.body, pattern_idx);
-        },
-        .e_return => |ret| {
-            return self.findSelfReferenceOutsideLambda(ret.expr, pattern_idx);
-        },
-        .e_for => |for_expr| {
-            if (self.findSelfReferenceOutsideLambda(for_expr.expr, pattern_idx)) |region| {
-                return region;
-            }
-            if (self.findSelfReferenceOutsideLambda(for_expr.body, pattern_idx)) |region| {
-                return region;
-            }
-            return null;
-        },
-        .e_nominal => |nominal| {
-            return self.findSelfReferenceOutsideLambda(nominal.backing_expr, pattern_idx);
-        },
-        .e_nominal_external => |nominal| {
-            return self.findSelfReferenceOutsideLambda(nominal.backing_expr, pattern_idx);
-        },
-        .e_type_var_dispatch => |dispatch| {
-            for (self.env.store.sliceExpr(dispatch.args)) |arg_idx| {
-                if (self.findSelfReferenceOutsideLambda(arg_idx, pattern_idx)) |region| {
-                    return region;
-                }
-            }
-            return null;
-        },
-
-        // Leaf expressions that cannot contain self-references
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => null,
-        .e_str_segment => null,
-        .e_lookup_external, .e_lookup_required => null,
-        .e_empty_list, .e_empty_record => null,
-        .e_zero_argument_tag => null,
-        .e_crash, .e_runtime_error => null,
-        .e_ellipsis, .e_anno_only => null,
     };
 }
 
