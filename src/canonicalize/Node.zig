@@ -63,6 +63,8 @@ pub const Tag = enum {
     expr_frac_f64,
     expr_dec,
     expr_dec_small,
+    expr_typed_int,
+    expr_typed_frac,
     expr_tag,
     expr_nominal,
     expr_nominal_external,

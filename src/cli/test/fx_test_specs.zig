@@ -258,6 +258,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Bool.encode(True): true|1>U64.encode(42): 42|1>Done",
         .description = "Primitive types have encode methods for static dispatch (issue #8853)",
     },
+    .{
+        .roc_file = "test/fx/issue8866.roc",
+        .io_spec = "1>Done: 2",
+        .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
+    },
 };
 
 /// Get the total number of IO spec tests
