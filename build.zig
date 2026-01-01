@@ -2558,10 +2558,6 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
-        // Install test artifacts to known locations (this forces them to be compiled)
-        const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
-        const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
-
         // Create output directories before running kcov
         const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
 
@@ -2575,20 +2571,18 @@ pub fn build(b: *std.Build) void {
         }
 
         // Run kcov with the snapshot test binary
-        // Use installed path and explicit dependency to ensure binary is built
+        // Use addFileArg with getEmittedBin() to properly add both path and dependency
         const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
         run_snapshot_coverage.addArg("--include-path=src/parse");
         run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
-        run_snapshot_coverage.addArg(b.fmt("{s}/bin/snapshot_coverage", .{@as([]const u8, b.install_path)}));
-        run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
+        run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
         // Run kcov with the parse unit test binary
         const run_parse_coverage = b.addRunArtifact(kcov_exe);
         run_parse_coverage.addArg("--include-path=src/parse");
         run_parse_coverage.addArg("kcov-output/parser-unit-tests");
-        run_parse_coverage.addArg(b.fmt("{s}/bin/parse_unit_coverage", .{@as([]const u8, b.install_path)}));
-        run_parse_coverage.step.dependOn(&install_parse_test.step);
+        run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
