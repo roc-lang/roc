@@ -2611,33 +2611,8 @@ pub fn build(b: *std.Build) void {
         else
             target; // macOS doesn't have this issue
 
-        // Run snapshot tests with kcov to get parser coverage
-        // Snapshot tests actually parse real Roc code, giving meaningful coverage
-        const snapshot_coverage_test = b.addTest(.{
-            .name = "snapshot_coverage",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/snapshot_tool/main.zig"),
-                .target = coverage_target,
-                .optimize = .Debug, // Debug required for DWARF debug info
-                .link_libc = true,
-            }),
-        });
-
-        // Add all module dependencies (snapshot tool uses parse, can, check, etc.)
-        roc_modules.addAll(snapshot_coverage_test);
-        snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-        snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
-
-        // Configure kcov execution - output to parser-snapshot-tests directory
-        // Use ./src/parse path format like TigerBeetle does with --include-path=./src
-        snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
-            "kcov",
-            "--include-path=./src/parse",
-            "kcov-output/parser-snapshot-tests",
-            null, // Zig inserts test binary path here
-        });
-
-        // Also run parse module unit tests for additional coverage
+        // Build parse unit tests for coverage
+        // TigerBeetle approach: build binary first, then run kcov on it
         const parse_unit_test = b.addTest(.{
             .name = "parse_unit_coverage",
             .root_module = b.createModule(.{
@@ -2648,43 +2623,28 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
-        // Configure kcov for parse unit tests - output to parser-unit-tests directory
-        // Use ./src/parse path format like TigerBeetle does with --include-path=./src
-        parse_unit_test.setExecCmd(&[_]?[]const u8{
-            "kcov",
-            "--include-path=./src/parse",
-            "kcov-output/parser-unit-tests",
-            null, // Zig inserts test binary path here
-        });
-
         // Check that kcov is installed before attempting to run it
         const check_kcov = CheckKcovStep.create(b);
 
         // Create output directories before running kcov
-        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser" });
         mkdir_step.step.dependOn(&check_kcov.step);
+        mkdir_step.step.dependOn(&parse_unit_test.step); // Make sure binary is built first
 
-        // Run snapshot tests first
-        const run_snapshot_coverage = b.addRunArtifact(snapshot_coverage_test);
-        run_snapshot_coverage.step.dependOn(&mkdir_step.step);
-
-        // Then run parse unit tests
-        const run_parse_coverage = b.addRunArtifact(parse_unit_test);
-        run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
-
-        // Merge coverage results into kcov-output/parser/
-        const merge_coverage = b.addSystemCommand(&.{
+        // Run kcov on the pre-built test binary (TigerBeetle approach)
+        // This is the key difference: run kcov as system command, not setExecCmd
+        // kcov --include-path=./src output_dir binary_path
+        const run_kcov = b.addSystemCommand(&.{
             "kcov",
-            "--merge",
+            "--include-path=./src/parse",
             "kcov-output/parser",
-            "kcov-output/parser-snapshot-tests",
-            "kcov-output/parser-unit-tests",
         });
-        merge_coverage.step.dependOn(&run_parse_coverage.step);
+        run_kcov.addArtifactArg(parse_unit_test);
+        run_kcov.step.dependOn(&mkdir_step.step);
 
-        // Add coverage summary step that parses merged kcov JSON output
+        // Add coverage summary step that parses kcov JSON output
         const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
-        summary_step.step.dependOn(&merge_coverage.step);
+        summary_step.step.dependOn(&run_kcov.step);
 
         coverage_step.dependOn(&summary_step.step);
 
