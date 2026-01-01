@@ -2561,12 +2561,18 @@ pub fn build(b: *std.Build) void {
 
             const kcov_exe = kcov_dep.artifact("kcov");
 
-            // Install kcov to a predictable location too
+            // Install ALL artifacts to zig-out/bin/ for predictable paths
+            // This ensures the binaries are built and placed where kcov can find them
             const install_kcov = b.addInstallArtifact(kcov_exe, .{});
+            const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
+            const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
 
             // Create output directories before running kcov
+            // Depend on ALL install steps to ensure everything is built and installed first
             const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
             mkdir_step.step.dependOn(&install_kcov.step);
+            mkdir_step.step.dependOn(&install_snapshot_test.step);
+            mkdir_step.step.dependOn(&install_parse_test.step);
 
             // On macOS, kcov needs to be codesigned to use task_for_pid
             if (target.result.os.tag == .macos) {
@@ -2578,24 +2584,26 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov with the snapshot test binary
-            // Use addFileArg with getEmittedBin() for proper dependency tracking
-            const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
-            run_snapshot_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-snapshot-tests" });
-            run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
-            run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
+            // Run kcov with installed paths - we depend on mkdir_step which depends on install steps
+            const run_snapshot_coverage = b.addSystemCommand(&.{
+                "zig-out/bin/kcov",
+                "--include-path=src/parse",
+                "kcov-output/parser-snapshot-tests",
+                "zig-out/bin/snapshot_coverage",
+            });
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
-            // Run kcov with the parse unit test binary
-            const run_parse_coverage = b.addRunArtifact(kcov_exe);
-            run_parse_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-unit-tests" });
-            run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
-            run_parse_coverage.step.dependOn(&parse_unit_test.step);
+            const run_parse_coverage = b.addSystemCommand(&.{
+                "zig-out/bin/kcov",
+                "--include-path=src/parse",
+                "kcov-output/parser-unit-tests",
+                "zig-out/bin/parse_unit_coverage",
+            });
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
-            // Merge coverage results into kcov-output/parser/ using built kcov
-            const merge_coverage = b.addRunArtifact(kcov_exe);
-            merge_coverage.addArgs(&.{
+            // Merge coverage results into kcov-output/parser/
+            const merge_coverage = b.addSystemCommand(&.{
+                "zig-out/bin/kcov",
                 "--merge",
                 "kcov-output/parser",
                 "kcov-output/parser-snapshot-tests",
