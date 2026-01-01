@@ -2614,27 +2614,29 @@ pub fn build(b: *std.Build) void {
             const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
             summary_step.step.dependOn(&merge_coverage.step);
 
+            // Cross-compile for Windows to verify comptime branches compile
+            // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
+            // dependencies added outside the lazy block prevent those inside from executing
+            const windows_target = b.resolveTargetQuery(.{
+                .cpu_arch = .x86_64,
+                .os_tag = .windows,
+                .abi = .msvc,
+            });
+            const windows_parse_build = b.addTest(.{
+                .name = "parse_windows_comptime",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/parse/mod.zig"),
+                    .target = windows_target,
+                    .optimize = .Debug,
+                }),
+            });
+            roc_modules.addModuleDependencies(windows_parse_build, .parse);
+            // Just compile, don't run - verifies Windows comptime branches
+            coverage_step.dependOn(&windows_parse_build.step);
+
             // Hook up coverage_step to the summary step
             coverage_step.dependOn(&summary_step.step);
         }
-
-        // Cross-compile for Windows to verify comptime branches compile
-        const windows_target = b.resolveTargetQuery(.{
-            .cpu_arch = .x86_64,
-            .os_tag = .windows,
-            .abi = .msvc,
-        });
-        const windows_parse_build = b.addTest(.{
-            .name = "parse_windows_comptime",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/parse/mod.zig"),
-                .target = windows_target,
-                .optimize = .Debug,
-            }),
-        });
-        roc_modules.addModuleDependencies(windows_parse_build, .parse);
-        // Just compile, don't run - verifies Windows comptime branches
-        coverage_step.dependOn(&windows_parse_build.step);
     } else if (!is_coverage_supported) {
         // On unsupported platforms, print a message
         const unsupported_step = b.allocator.create(Step) catch @panic("OOM");
