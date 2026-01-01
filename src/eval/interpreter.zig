@@ -2390,6 +2390,14 @@ pub const Interpreter = struct {
                         }
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
+                        // Special case: Bool should render as just "True" or "False", not "Bool.True"
+                        // Check if this is the Builtin.Bool type
+                        const is_builtin_bool = nom.origin_module == self.env.idents.builtin_module and
+                            (nom.ident.ident_idx == self.env.idents.bool or
+                                nom.ident.ident_idx == self.env.idents.bool_type);
+                        if (is_builtin_bool) {
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
                         // Nominal types render as "TypeName.InnerValue"
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
                         const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
@@ -6726,43 +6734,17 @@ pub const Interpreter = struct {
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
-        const bool_decl_idx = self.builtins.bool_stmt;
-
-        // Get the statement from the Bool module
-        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
-
-        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
-        const ct_var = switch (bool_stmt) {
-            .s_nominal_decl => blk: {
-                // The type of the declaration is the nominal type, but we want its backing
-                const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
-                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
-                if (nom_resolved.desc.content == .structure) {
-                    if (nom_resolved.desc.content.structure == .nominal_type) {
-                        const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
-                        break :blk backing_var;
-                    }
-                }
-                break :blk nom_var;
-            },
-            else => can.ModuleEnv.varFrom(bool_decl_idx),
-        };
+        // We need the nominal type itself (not the backing type) so that method dispatch
+        // can look up methods like encode, etc.
+        const ct_var = can.ModuleEnv.varFrom(self.builtins.bool_stmt);
 
         // Use bool_env to translate since bool_stmt is from the Bool module
         // Cast away const - translateTypeVar doesn't actually mutate the module
         const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
-        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-        const backing_rt_var = switch (nominal_resolved.desc.content) {
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                .tag_union => nominal_rt_var,
-                else => nominal_rt_var,
-            },
-            else => nominal_rt_var,
-        };
-        self.canonical_bool_rt_var = backing_rt_var;
-        return backing_rt_var;
+        // Return the nominal type, not the backing type - method dispatch needs the nominal
+        // type to look up methods like encode, etc.
+        self.canonical_bool_rt_var = nominal_rt_var;
+        return nominal_rt_var;
     }
 
     pub fn getCanonicalStrRuntimeVar(self: *Interpreter) !types.Var {
@@ -8524,64 +8506,6 @@ pub const Interpreter = struct {
                 return try self.runtime_types.fresh();
             },
         };
-    }
-
-    /// Check if a tag_union content represents the Bool backing type.
-    /// Bool's backing type is [False, True] - exactly two tags with no payloads.
-    fn isBoolBackingTagUnion(self: *Interpreter, tag_union: types.TagUnion) bool {
-        // Bool has exactly 2 tags
-        if (tag_union.tags.len() != 2) return false;
-
-        const tags_slice = self.runtime_types.getTagsSlice(tag_union.tags);
-        const names = tags_slice.items(.name);
-        const args = tags_slice.items(.args);
-
-        // Check that both tags have no arguments
-        for (args) |arg_range| {
-            if (arg_range.len() != 0) return false;
-        }
-
-        // Check that we have exactly True and False tags (order may vary)
-        // Use runtime_layout_store.env.idents for consistency with tag names in runtime types
-        // (runtime types use runtime_layout_store.env's ident store for tag names)
-        const true_tag = self.runtime_layout_store.env.idents.true_tag;
-        const false_tag = self.runtime_layout_store.env.idents.false_tag;
-
-        const has_true = names[0] == true_tag or names[1] == true_tag;
-        const has_false = names[0] == false_tag or names[1] == false_tag;
-
-        return has_true and has_false;
-    }
-
-    /// Create Bool nominal type content for runtime types.
-    /// Used by method dispatch to get the Bool nominal type when we have a Bool value
-    /// but the compile-time type is flex/rigid.
-    fn mkBoolTypeContentRuntime(self: *Interpreter) !types.Content {
-        // Use root_env.idents for consistent module reference
-        const origin_module_id = self.root_env.idents.builtin_module;
-
-        // Use fully-qualified type name "Builtin.Bool"
-        const type_name_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text("Builtin.Bool"));
-        const type_ident = types.TypeIdent{
-            .ident_idx = type_name_ident,
-        };
-
-        // Bool's backing is [False, True] tag union
-        // For method dispatch, we just need a valid backing var - the exact structure
-        // doesn't matter as long as the nominal type ident is correct
-        const empty_tag_union_content = types.Content{ .structure = .empty_tag_union };
-        const backing_var = try self.runtime_types.freshFromContent(empty_tag_union_content);
-
-        // Bool has no type arguments
-        const no_type_args: []const types.Var = &.{};
-
-        return try self.runtime_types.mkNominal(
-            type_ident,
-            backing_var,
-            no_type_args,
-            origin_module_id,
-            true, // Bool is opaque
-        );
     }
 
     /// Create nominal number type content for runtime types (e.g., Dec, I64, F64)
@@ -16732,46 +16656,7 @@ pub const Interpreter = struct {
                             }
                             break :blk null;
                         },
-                        .tag_union => |tu| blk: {
-                            // Check if this is a Bool value (tag_union [False, True])
-                            // Bool has its rt_var set to backing type, so we need to detect it here
-                            if (self.isBoolBackingTagUnion(tu)) {
-                                // This is a Bool value - create the Bool nominal type for method dispatch
-                                const bool_content = try self.mkBoolTypeContentRuntime();
-                                const nom = bool_content.structure.nominal_type;
-                                break :blk .{
-                                    .origin = nom.origin_module,
-                                    .ident = nom.ident.ident_idx,
-                                };
-                            }
-                            // Structural types have implicit is_eq - handle directly
-                            if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
-                                // Evaluate the RHS argument
-                                const rhs_expr_idx = arg_exprs[0];
-                                const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
-                                defer rhs_value.decref(&self.runtime_layout_store, roc_ops);
-
-                                // Use structural equality
-                                const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
-                                const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
-                                const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
-                                    receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    switch (err) {
-                                        error.NotImplemented => {
-                                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                            return error.Crash;
-                                        },
-                                        else => return err,
-                                    }
-                                };
-                                receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                const result_val = try self.makeBoolValue(result);
-                                try value_stack.push(result_val);
-                                return true;
-                            }
-                            break :blk null;
-                        },
-                        .tuple, .empty_record, .empty_tag_union => blk: {
+                        .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Structural types have implicit is_eq - handle directly
                             if (da.field_name == self.root_env.idents.is_eq and arg_exprs.len == 1) {
                                 // Evaluate the RHS argument
@@ -16856,19 +16741,6 @@ pub const Interpreter = struct {
                                         .ident = nom.ident.ident_idx,
                                     };
                                 },
-                                .tag_union => |tu| {
-                                    // Check if this is a Bool value (tag_union with False/True)
-                                    // by checking the tag union has exactly True and False tags
-                                    if (self.isBoolBackingTagUnion(tu)) {
-                                        // This is a Bool value - create the Bool nominal type
-                                        const bool_content = try self.mkBoolTypeContentRuntime();
-                                        const nom = bool_content.structure.nominal_type;
-                                        break :blk .{
-                                            .origin = nom.origin_module,
-                                            .ident = nom.ident.ident_idx,
-                                        };
-                                    }
-                                },
                                 else => {},
                             }
                         }
@@ -16878,8 +16750,6 @@ pub const Interpreter = struct {
                             const scalar_tag = receiver_value.layout.data.scalar.tag;
                             if (scalar_tag == .int) {
                                 const int_info = receiver_value.layout.data.scalar.data.int;
-                                // Note: Bool has u8 layout but is handled above via tag_union check.
-                                // If we reach here with u8, it's a numeric U8, not Bool.
                                 const type_name: []const u8 = switch (int_info) {
                                     .i8 => "I8",
                                     .i16 => "I16",

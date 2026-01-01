@@ -95,6 +95,9 @@ pub const Store = struct {
     f32_ident: ?Ident.Idx,
     f64_ident: ?Ident.Idx,
     dec_ident: ?Ident.Idx,
+    bool_ident: ?Ident.Idx,
+    // Identifier for unqualified "Bool" in the Builtin module
+    bool_plain_ident: ?Ident.Idx,
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
@@ -198,6 +201,8 @@ pub const Store = struct {
             .f32_ident = env.idents.f32_type,
             .f64_ident = env.idents.f64_type,
             .dec_ident = env.idents.dec_type,
+            .bool_ident = env.idents.bool_type,
+            .bool_plain_ident = env.idents.bool,
         };
     }
 
@@ -1340,6 +1345,24 @@ pub const Store = struct {
                             if (is_builtin_str) {
                                 // This is Builtin.Str - use string layout
                                 break :flat_type Layout.str();
+                            }
+
+                            // Special-case Builtin.Bool: it has a tag union backing type [False, True],
+                            // but should have u8 layout.
+                            const is_builtin_bool = blk: {
+                                if (self.bool_ident) |bool_id| {
+                                    if (nominal_type.ident.ident_idx == bool_id) break :blk true;
+                                }
+                                if (nominal_type.origin_module == self.env.idents.builtin_module) {
+                                    if (self.bool_plain_ident) |plain_bool| {
+                                        if (nominal_type.ident.ident_idx == plain_bool) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
+                            if (is_builtin_bool) {
+                                // This is Builtin.Bool - use bool layout (u8)
+                                break :flat_type Layout.boolType();
                             }
 
                             // Special handling for Builtin.Box
