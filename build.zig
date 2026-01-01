@@ -2559,9 +2559,14 @@ pub fn build(b: *std.Build) void {
         const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
         const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
 
-        // Always make coverage_step depend on test installations
-        coverage_step.dependOn(&install_snapshot_test.step);
-        coverage_step.dependOn(&install_parse_test.step);
+        // Create a named step for building the coverage tests
+        // This provides a top-level entry point that Zig's build system will recognize
+        const build_tests_step = b.step("build-coverage-tests", "Build the coverage test binaries");
+        build_tests_step.dependOn(&install_snapshot_test.step);
+        build_tests_step.dependOn(&install_parse_test.step);
+
+        // Make coverage_step depend on this named step
+        coverage_step.dependOn(build_tests_step);
 
         // Get the kcov dependency and build it from source
         // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
