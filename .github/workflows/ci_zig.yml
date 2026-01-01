@@ -76,10 +76,24 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
-      - name: Install kcov
+      - name: Install kcov build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y kcov
+          sudo apt-get install -y libcurl4-openssl-dev libdwarf-dev zlib1g-dev pkg-config libelf-dev
+          # Ubuntu's libdwarf-dev doesn't include a pkg-config file, so create one
+          sudo tee /usr/lib/x86_64-linux-gnu/pkgconfig/libdwarf.pc << 'EOF'
+          prefix=/usr
+          exec_prefix=${prefix}
+          libdir=${prefix}/lib/x86_64-linux-gnu
+          includedir=${prefix}/include
+
+          Name: libdwarf
+          Description: DWARF debugging information library
+          Version: 0.4.2
+          Libs: -L${libdir} -ldwarf
+          Cflags: -I${includedir}
+          Requires: libelf
+          EOF
 
       - name: Parser Code Coverage
         run: |
