@@ -97,8 +97,6 @@ jobs:
 
       - name: Parser Code Coverage
         run: |
-          # Clear any stale cache that might interfere with lazy dependency handling
-          rm -rf .zig-cache
           zig build coverage
 
   zig-tests:
