@@ -10376,6 +10376,9 @@ pub const Interpreter = struct {
             receiver_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
+            /// Expected parameter types from the method signature (excluding receiver).
+            /// Used to provide correct expected types for arguments like numeric literals.
+            expected_arg_rt_vars: ?[]const types.Var,
         };
 
         /// Type var dispatch - collect arguments for a static method call on a type variable.
@@ -17075,17 +17078,86 @@ pub const Interpreter = struct {
                 try value_stack.push(receiver_value);
                 try value_stack.push(method_func);
 
+                // Extract expected argument types from the method's function signature.
+                // This is critical for type inference of polymorphic literals like numeric 0 in list.get(0).
+                // We get the parameter types from the method signature and use them as expected types,
+                // but only when they are concrete types (not flex/rigid type variables).
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const method_source_env = closure_header.source_env;
+                const method_lambda_rt_var = try self.translateTypeVar(@constCast(method_source_env), method_lambda_ct_var);
+
+                // Extract parameter types from the method signature (excluding receiver).
+                // We need to handle different resolved type cases explicitly.
+                const expected_arg_rt_vars: ?[]const types.Var = blk: {
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+                    const func_info: ?types.Func = switch (method_resolved.desc.content) {
+                        .structure => method_resolved.desc.content.unwrapFunc(),
+                        // Polymorphic method - type variable doesn't provide concrete param types
+                        .flex, .rigid => break :blk null,
+                        .alias => |alias| inner: {
+                            // Follow alias to get the underlying function type
+                            const backing = self.runtime_types.getAliasBackingVar(alias);
+                            const backing_resolved = self.runtime_types.resolveVar(backing);
+                            switch (backing_resolved.desc.content) {
+                                .structure => break :inner backing_resolved.desc.content.unwrapFunc(),
+                                // Polymorphic backing - no concrete param types
+                                .flex, .rigid => break :blk null,
+                                // Nested alias shouldn't happen after resolveVar
+                                .alias => unreachable,
+                                .err => unreachable,
+                            }
+                        },
+                        .err => unreachable, // Method type should never be error
+                    };
+                    // Methods are functions - structure content should unwrap to a function
+                    const fi = func_info orelse unreachable;
+                    const method_params = self.runtime_types.sliceVars(fi.args);
+
+                    // Return the parameters after the receiver as expected types for args
+                    if (method_params.len > 1) {
+                        break :blk method_params[1..];
+                    } else {
+                        break :blk null;
+                    }
+                };
+
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                     .method_name = da.field_name,
                     .collected_count = 0,
                     .remaining_args = arg_exprs,
                     .receiver_rt_var = da.receiver_rt_var,
                     .expr_idx = da.expr_idx,
+                    .expected_arg_rt_vars = expected_arg_rt_vars,
                 } } });
 
-                // Start evaluating first arg
-                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                // Start evaluating first arg with expected type from method signature.
+                // For concrete types (like U64 in List.get), use the method's parameter type -
+                // this is essential for numeric literal inference.
+                // For type variables (like `state` in List.fold_rev), use the argument's own type -
+                // type variables don't constrain numeric literals and the argument's type is correct.
+                const first_arg_rt_var = blk: {
+                    if (expected_arg_rt_vars != null and expected_arg_rt_vars.?.len > 0) {
+                        const expected = expected_arg_rt_vars.?[0];
+                        const resolved = self.runtime_types.resolveVar(expected);
+                        switch (resolved.desc.content) {
+                            .structure => break :blk expected, // Concrete type - use it
+                            .flex, .rigid => {}, // Type variable - fall through to use argument's type
+                            .alias => {
+                                // Follow alias to check underlying type
+                                const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                const backing_resolved = self.runtime_types.resolveVar(backing);
+                                if (backing_resolved.desc.content == .structure) {
+                                    break :blk expected;
+                                }
+                                // Otherwise fall through
+                            },
+                            .err => unreachable, // Method parameter types should never be error
+                        }
+                    }
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    break :blk try self.translateTypeVar(self.env, first_arg_ct_var);
+                };
 
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
@@ -17100,17 +17172,44 @@ pub const Interpreter = struct {
                 // Stack: [receiver, method_func, arg0, arg1, ...]
                 if (dac.remaining_args.len > 1) {
                     // More arguments to evaluate
+                    // Advance expected_arg_rt_vars to skip the current argument we just collected
+                    const next_expected_arg_rt_vars: ?[]const types.Var = if (dac.expected_arg_rt_vars) |vars|
+                        (if (vars.len > 1) vars[1..] else null)
+                    else
+                        null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                         .method_name = dac.method_name,
                         .collected_count = dac.collected_count + 1,
                         .remaining_args = dac.remaining_args[1..],
                         .receiver_rt_var = dac.receiver_rt_var,
                         .expr_idx = dac.expr_idx,
+                        .expected_arg_rt_vars = next_expected_arg_rt_vars,
                     } } });
 
-                    // Translate argument type
-                    const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
-                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    // Use expected type from method signature.
+                    // For concrete types (like U64), use the method's parameter type.
+                    // For type variables (flex/rigid), use the argument's own type.
+                    const next_arg_rt_var = blk: {
+                        if (next_expected_arg_rt_vars != null and next_expected_arg_rt_vars.?.len > 0) {
+                            const expected = next_expected_arg_rt_vars.?[0];
+                            const resolved = self.runtime_types.resolveVar(expected);
+                            switch (resolved.desc.content) {
+                                .structure => break :blk expected,
+                                .flex, .rigid => {},
+                                .alias => {
+                                    const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure) {
+                                        break :blk expected;
+                                    }
+                                },
+                                .err => unreachable,
+                            }
+                        }
+                        const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
+                        break :blk try self.translateTypeVar(self.env, next_arg_ct_var);
+                    };
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = dac.remaining_args[1],
                         .expected_rt_var = next_arg_rt_var,
