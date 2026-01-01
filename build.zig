@@ -2597,12 +2597,14 @@ pub fn build(b: *std.Build) void {
         const parse_test_path = "zig-out/bin/parse_unit_coverage";
 
         // Run kcov with the snapshot test binary
+        // Add both compile step dependency AND mkdir dependency to ensure the test is built
         const run_snapshot_coverage = b.addSystemCommand(&.{
             kcov_path,
             "--include-path=src/parse",
             "kcov-output/parser-snapshot-tests",
             snapshot_test_path,
         });
+        run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
         // Run kcov with the parse unit test binary
@@ -2612,6 +2614,7 @@ pub fn build(b: *std.Build) void {
             "kcov-output/parser-unit-tests",
             parse_test_path,
         });
+        run_parse_coverage.step.dependOn(&parse_unit_test.step);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
