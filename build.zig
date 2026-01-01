@@ -2637,11 +2637,18 @@ pub fn build(b: *std.Build) void {
             check_debug_info.step.dependOn(&install_snapshot_test.step);
 
             // Run kcov using installed binary paths
-            // No filtering - let's see what files kcov finds in the debug info
+            // Add --verify and --debug for diagnostic output
             const run_snapshot_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "kcov-output/parser-snapshot-tests",
-                "zig-out/bin/snapshot_coverage",
+                "sh",
+                "-c",
+                "echo '=== Running kcov with debug/verify ===' && " ++
+                    "zig-out/bin/kcov --verify --debug=7 " ++
+                    "kcov-output/parser-snapshot-tests " ++
+                    "zig-out/bin/snapshot_coverage 2>&1 | grep -E '(parse|Parse|src/|Source|DWARF|error|Error)' | head -50 || true && " ++
+                    "echo '=== kcov completed ===' && " ++
+                    "zig-out/bin/kcov " ++
+                    "kcov-output/parser-snapshot-tests " ++
+                    "zig-out/bin/snapshot_coverage",
             });
             run_snapshot_coverage.setCwd(b.path("."));
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
