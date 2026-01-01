@@ -2571,23 +2571,19 @@ pub fn build(b: *std.Build) void {
         }
 
         // Run kcov with the snapshot test binary
-        // Force the test to be installed first, then run kcov on it
-        b.installArtifact(snapshot_coverage_test);
+        // Use addArtifactArg which adds both the path and the step dependency
         const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
         run_snapshot_coverage.addArg("--include-path=src/parse");
         run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
-        run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
+        run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
-        run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
 
         // Run kcov with the parse unit test binary
-        b.installArtifact(parse_unit_test);
         const run_parse_coverage = b.addRunArtifact(kcov_exe);
         run_parse_coverage.addArg("--include-path=src/parse");
         run_parse_coverage.addArg("kcov-output/parser-unit-tests");
-        run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
+        run_parse_coverage.addArtifactArg(parse_unit_test);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
-        run_parse_coverage.step.dependOn(&parse_unit_test.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
         const merge_coverage = b.addRunArtifact(kcov_exe);
@@ -2601,6 +2597,9 @@ pub fn build(b: *std.Build) void {
         const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
         summary_step.step.dependOn(&merge_coverage.step);
 
+        // Make coverage_step directly depend on test compilations to ensure they're built
+        coverage_step.dependOn(&snapshot_coverage_test.step);
+        coverage_step.dependOn(&parse_unit_test.step);
         coverage_step.dependOn(&summary_step.step);
 
         // Cross-compile for Windows to verify comptime branches compile
