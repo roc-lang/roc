@@ -366,26 +366,25 @@ fn renderTypeProblems(
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On POSIX 64-bit targets, we reserve 8GB of virtual address space. This is possible
-/// without consuming physical memory because mmap with MAP_SHARED reserves virtual
-/// address space without backing it until pages are actually touched. We use 8GB
-/// instead of larger values to ensure compatibility with valgrind and other tools
-/// that have virtual address space limitations.
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory:
+/// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
+///   it until pages are actually touched.
+/// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
+///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
 ///
-/// On Windows 64-bit, we use 1GB. Windows has limitations on contiguous address
-/// space mappings - even with SEC_RESERVE for on-demand page commits, MapViewOfFile
-/// still needs to map the entire view into the address space, which fails for very
-/// large sizes. Additionally, we use a fixed base address (SHARED_MEMORY_BASE_ADDR)
-/// to avoid ASLR issues between parent/child processes, which further limits the
-/// available contiguous address space.
+/// We previously used smaller sizes (8GB POSIX, 1GB Windows) because Windows used a
+/// fixed base address (0x10000000) to avoid ASLR issues between parent/child processes.
+/// This limited contiguous address space availability. However, the interpreter_shim
+/// already has pointer relocation logic that handles different base addresses, so we
+/// now let the OS choose the best address for large mappings (SHARED_MEMORY_BASE_ADDR
+/// is null), enabling much larger reserved sizes.
 ///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
-else if (builtin.target.os.tag == .windows)
-    1024 * 1024 * 1024 // 1GB for Windows 64-bit
 else
-    8 * 1024 * 1024 * 1024; // 8GB for POSIX 64-bit
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
