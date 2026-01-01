@@ -2558,6 +2558,10 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
+        // Install test artifacts to known locations (this forces them to be compiled)
+        const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
+        const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
+
         // Create output directories before running kcov
         const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
 
@@ -2571,18 +2575,20 @@ pub fn build(b: *std.Build) void {
         }
 
         // Run kcov with the snapshot test binary
-        // Use addArtifactArg which adds both the path and the step dependency
+        // Use installed path and explicit dependency to ensure binary is built
         const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
         run_snapshot_coverage.addArg("--include-path=src/parse");
         run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
-        run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
+        run_snapshot_coverage.addArg(b.fmt("{s}/bin/snapshot_coverage", .{@as([]const u8, b.install_path)}));
+        run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
         // Run kcov with the parse unit test binary
         const run_parse_coverage = b.addRunArtifact(kcov_exe);
         run_parse_coverage.addArg("--include-path=src/parse");
         run_parse_coverage.addArg("kcov-output/parser-unit-tests");
-        run_parse_coverage.addArtifactArg(parse_unit_test);
+        run_parse_coverage.addArg(b.fmt("{s}/bin/parse_unit_coverage", .{@as([]const u8, b.install_path)}));
+        run_parse_coverage.step.dependOn(&install_parse_test.step);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
@@ -2597,9 +2603,7 @@ pub fn build(b: *std.Build) void {
         const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
         summary_step.step.dependOn(&merge_coverage.step);
 
-        // Make coverage_step directly depend on test compilations to ensure they're built
-        coverage_step.dependOn(&snapshot_coverage_test.step);
-        coverage_step.dependOn(&parse_unit_test.step);
+        // Hook up coverage_step to the summary step (which chains back through kcov runs to install steps)
         coverage_step.dependOn(&summary_step.step);
 
         // Cross-compile for Windows to verify comptime branches compile
