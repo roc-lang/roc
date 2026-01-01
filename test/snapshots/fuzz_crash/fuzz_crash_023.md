@@ -256,6 +256,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:40:178:41
 UNRECOGNIZED SYNTAX - fuzz_crash_023.md:178:45:178:46
 MALFORMED TYPE - fuzz_crash_023.md:178:52:178:71
 UNDEFINED VARIABLE - fuzz_crash_023.md:179:42:179:48
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_023.md:179:50:179:55
 UNDEFINED VARIABLE - fuzz_crash_023.md:183:3:183:7
 UNDEFINED VARIABLE - fuzz_crash_023.md:185:4:185:10
 UNDEFINED VARIABLE - fuzz_crash_023.md:188:22:188:25
@@ -760,6 +761,18 @@ Is there an `import` or `exposing` missing up-top?
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
 ```
 	                                        ^^^^^^
+
+
+**INVALID ASSIGNMENT TO ITSELF**
+The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
+
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+
+**fuzz_crash_023.md:179:50:179:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
 
 
 **UNDEFINED VARIABLE**
@@ -2472,8 +2485,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))
