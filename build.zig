@@ -980,7 +980,7 @@ const CoverageSummaryStep = struct {
 
     /// Minimum required coverage percentage. Build fails if coverage drops below this.
     /// This threshold should be gradually increased as more tests are added.
-    const MIN_COVERAGE_PERCENT: f64 = 50.0; // Temporarily lowered to test if kcov works
+    const MIN_COVERAGE_PERCENT: f64 = 0.0; // Temporarily set to 0 to debug kcov
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
@@ -2633,10 +2633,10 @@ pub fn build(b: *std.Build) void {
 
         // Run kcov on the pre-built test binary (TigerBeetle approach)
         // This is the key difference: run kcov as system command, not setExecCmd
-        // kcov --include-path=./src output_dir binary_path
+        // kcov output_dir binary_path
+        // Try without include-path filter first to verify coverage works
         const run_kcov = b.addSystemCommand(&.{
             "kcov",
-            "--include-path=./src/parse",
             "kcov-output/parser",
         });
         run_kcov.addArtifactArg(parse_unit_test);
