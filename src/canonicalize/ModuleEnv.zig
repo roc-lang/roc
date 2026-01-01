@@ -123,6 +123,7 @@ pub const CommonIdents = extern struct {
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
+    bool: Ident.Idx,
     u8: Ident.Idx,
     u16: Ident.Idx,
     u32: Ident.Idx,
@@ -154,6 +155,7 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
     before_dot: Ident.Idx,
@@ -214,6 +216,7 @@ pub const CommonIdents = extern struct {
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
+            .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
             .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
             .u16 = try common.insertIdent(gpa, Ident.for_text("U16")),
             .u32 = try common.insertIdent(gpa, Ident.for_text("U32")),
@@ -243,6 +246,7 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
             .provided_by_compiler = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler")),
@@ -304,6 +308,7 @@ pub const CommonIdents = extern struct {
             .box = common.findIdent("Box") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
+            .bool = common.findIdent("Bool") orelse unreachable,
             .u8 = common.findIdent("U8") orelse unreachable,
             .u16 = common.findIdent("U16") orelse unreachable,
             .u32 = common.findIdent("U32") orelse unreachable,
@@ -333,6 +338,7 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
             .provided_by_compiler = common.findIdent("ProvidedByCompiler") orelse unreachable,
