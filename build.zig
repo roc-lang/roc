@@ -1027,18 +1027,16 @@ const CoverageSummaryStep = struct {
         // Parse and summarize coverage
         const result = try parseCoverageJson(allocator, json_content);
 
-        // Skip enforcement if kcov didn't capture any data
-        // This happens when kcov version is incompatible with the binary format
+        // Fail if kcov didn't capture any data - this indicates a problem with kcov
         if (result.total_lines == 0) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            std.debug.print("COVERAGE DATA NOT CAPTURED\n", .{});
+            std.debug.print("COVERAGE ERROR: NO DATA CAPTURED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
             std.debug.print("kcov reported 0 total lines - coverage data was not captured.\n", .{});
-            std.debug.print("This may be due to kcov version incompatibility with Zig binaries.\n", .{});
-            std.debug.print("Skipping coverage enforcement.\n\n", .{});
+            std.debug.print("This indicates a problem with kcov or the binary format.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return;
+            return step.fail("kcov failed to capture coverage data (0 total lines)", .{});
         }
 
         // Enforce minimum coverage threshold
