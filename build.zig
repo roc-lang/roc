@@ -2596,16 +2596,18 @@ pub fn build(b: *std.Build) void {
             }
 
             // Run kcov with the snapshot test binary
-            // Use addRunArtifact to properly express kcov dependency
+            // Use addFileArg with getEmittedBin() for proper dependency tracking
             const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
             run_snapshot_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-snapshot-tests" });
-            run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
+            run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
+            run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
             // Run kcov with the parse unit test binary
             const run_parse_coverage = b.addRunArtifact(kcov_exe);
             run_parse_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-unit-tests" });
-            run_parse_coverage.addArtifactArg(parse_unit_test);
+            run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
+            run_parse_coverage.step.dependOn(&parse_unit_test.step);
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
             // Merge coverage results into kcov-output/parser/ using built kcov
