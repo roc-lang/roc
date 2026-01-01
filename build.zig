@@ -2584,7 +2584,8 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov with installed paths - we depend on mkdir_step which depends on install steps
+            // Run kcov with installed paths
+            // Add DIRECT dependencies on install steps (transitive through mkdir_step wasn't enough)
             const run_snapshot_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
                 "--include-path=src/parse",
@@ -2592,6 +2593,8 @@ pub fn build(b: *std.Build) void {
                 "zig-out/bin/snapshot_coverage",
             });
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
+            run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
+            run_snapshot_coverage.step.dependOn(&install_kcov.step);
 
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
@@ -2600,6 +2603,7 @@ pub fn build(b: *std.Build) void {
                 "zig-out/bin/parse_unit_coverage",
             });
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
+            run_parse_coverage.step.dependOn(&install_parse_test.step);
 
             // Merge coverage results into kcov-output/parser/
             const merge_coverage = b.addSystemCommand(&.{
@@ -2617,6 +2621,11 @@ pub fn build(b: *std.Build) void {
 
             // Hook up coverage_step to the summary step
             coverage_step.dependOn(&summary_step.step);
+
+            // Also add direct dependencies on install steps as a backup
+            coverage_step.dependOn(&install_snapshot_test.step);
+            coverage_step.dependOn(&install_parse_test.step);
+            coverage_step.dependOn(&install_kcov.step);
         }
 
         // Cross-compile for Windows to verify comptime branches compile
