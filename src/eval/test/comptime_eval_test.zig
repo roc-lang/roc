@@ -2602,6 +2602,22 @@ test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" 
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - nested nominal in tuple causes alignment crash (issue #8874)" {
+    // Regression test for issue #8874: nested nominal types (like Try) inside tuples
+    // caused "increfDataPtrC: ptr not aligned" crashes. The bug occurred when
+    // accessing the payload of an outer Try containing a tuple with an inner Try.
+    const src =
+        \\result : Try((Try(Str, Str), U64), Str) = Ok((Ok("todo"), 3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "comptime eval - recursive nominal: recursion through record field" {
     // Test case: recursive type where the recursion goes through a record field
     const src =

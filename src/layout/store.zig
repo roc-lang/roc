@@ -1326,34 +1326,42 @@ pub const Store = struct {
                 };
 
                 if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
-                    // This nominal type is already being processed - we have a cycle.
-                    // Mark it as truly recursive so we know to box its values.
-                    progress.is_recursive = true;
-                    // Use the cached placeholder index for the nominal.
-                    // The placeholder will be updated with the real layout once
-                    // the nominal's backing type is fully computed.
-                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
-                        // We have a placeholder - but we need to check if we're inside a List/Box.
-                        // If we are, we can use the placeholder index directly since the List/Box
-                        // will reference it by index, and it will be updated later.
-                        // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                layout_idx = cached_idx;
-                                skip_layout_computation = true;
-                                break :blk;
+                    // Check if this is truly a recursive reference (same var as the in-progress nominal)
+                    // or just a different instantiation of the same nominal type with different type args.
+                    // For example, Try(Str, Str) inside Try((Try(Str, Str), U64), Str) are different
+                    // instantiations with different vars - not a recursive reference.
+                    if (current.var_ == progress.nominal_var) {
+                        // This IS a true recursive reference - the type refers to itself.
+                        // Mark it as truly recursive so we know to box its values.
+                        progress.is_recursive = true;
+                        // Use the cached placeholder index for the nominal.
+                        // The placeholder will be updated with the real layout once
+                        // the nominal's backing type is fully computed.
+                        if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                            // We have a placeholder - but we need to check if we're inside a List/Box.
+                            // If we are, we can use the placeholder index directly since the List/Box
+                            // will reference it by index, and it will be updated later.
+                            // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
+                            if (self.work.pending_containers.len > 0) {
+                                const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                                if (pending_item.container == .box or pending_item.container == .list) {
+                                    layout_idx = cached_idx;
+                                    skip_layout_computation = true;
+                                    break :blk;
+                                }
                             }
+                            // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
+                            // The placeholder will be updated by the time we need the actual layout.
+                            layout_idx = cached_idx;
+                            skip_layout_computation = true;
+                            break :blk;
                         }
-                        // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
-                        // The placeholder will be updated by the time we need the actual layout.
-                        layout_idx = cached_idx;
-                        skip_layout_computation = true;
-                        break :blk;
-                    }
 
-                    // No cached placeholder - this is an error
-                    return LayoutError.TypeContainedMismatch;
+                        // No cached placeholder - this is an error
+                        return LayoutError.TypeContainedMismatch;
+                    }
+                    // Different var means different instantiation - not a recursive reference.
+                    // Fall through to normal processing.
                 }
             }
 

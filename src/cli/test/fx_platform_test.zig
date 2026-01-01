@@ -1211,3 +1211,23 @@ test "fx platform issue8826 app vs platform type mismatch" {
         },
     }
 }
+
+test "fx platform issue8874 opaque nested try alignment crash" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8874
+    // The bug was that a nested Try type with opaques caused a memory alignment crash:
+    // "increfDataPtrC: ORIGINAL ptr=0x6f646f74 is not 8-byte aligned"
+    // This occurred with code like:
+    //   Value := [UInt(U64)]
+    //   parse_value : () -> Try((Try(TokenContents, Str), Value), Str)
+    //   parse_value = || { Ok((Ok(IdentToken("todo")), UInt(3))) }
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/issue8874.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // Verify the expected output contains the inspected result
+    try testing.expect(std.mem.indexOf(u8, run_result.stdout, "parsed:") != null);
+}
