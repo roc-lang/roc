@@ -2634,12 +2634,17 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov using installed binary paths
             // Using string paths because artifact dependencies don't work reliably in lazy blocks
-            // Use absolute path for include-path since kcov is picky about path matching
+            // Exclude Zig stdlib paths - kcov crashes on assembly files from musl libc
+            // The exclude patterns MUST be before include patterns to take effect
             const run_snapshot_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
-                "--skip-solibs", // Skip system libraries that kcov can't handle
-                "--include-pattern=src/", // Include only project source files
-                "--exclude-pattern=.cache", // Exclude any cache directories
+                "--skip-solibs",
+                "--exclude-pattern=/lib/libc/",
+                "--exclude-pattern=/lib/std/",
+                "--exclude-pattern=/lib/c/",
+                "--exclude-pattern=/lib/compiler_rt/",
+                "--exclude-pattern=.cache",
+                "--include-pattern=src/",
                 "kcov-output/parser-snapshot-tests",
                 "zig-out/bin/snapshot_coverage",
             });
@@ -2651,9 +2656,13 @@ pub fn build(b: *std.Build) void {
 
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
-                "--skip-solibs", // Skip system libraries that kcov can't handle
-                "--include-pattern=src/", // Include only project source files
-                "--exclude-pattern=.cache", // Exclude any cache directories
+                "--skip-solibs",
+                "--exclude-pattern=/lib/libc/",
+                "--exclude-pattern=/lib/std/",
+                "--exclude-pattern=/lib/c/",
+                "--exclude-pattern=/lib/compiler_rt/",
+                "--exclude-pattern=.cache",
+                "--include-pattern=src/",
                 "kcov-output/parser-unit-tests",
                 "zig-out/bin/parse_unit_coverage",
             });
