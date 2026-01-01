@@ -1617,7 +1617,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Note: All paths use arena allocator so no manual freeing is needed.
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
+    else if (base.url.isSafeUrl(platform_spec)) blk: {
         // URL platform - resolve to cached package path
         const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
@@ -3020,7 +3020,7 @@ fn compileAndSerializeModulesForEmbedding(
     // Resolve platform path
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(ctx.gpa, &[_][]const u8{ app_dir, platform_spec })
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
+    else if (base.url.isSafeUrl(platform_spec)) blk: {
         const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
             error.OutOfMemory => return error.OutOfMemory,
@@ -4239,9 +4239,9 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     std.log.debug("Platform spec: {s}", .{platform_spec});
 
     // Resolve platform path - errors are recorded in context and propagate up
-    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://"))
+    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or
+        std.mem.startsWith(u8, platform_spec, "../") or
+        base.url.isSafeUrl(platform_spec))
         try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
     else
         null;
