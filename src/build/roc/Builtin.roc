@@ -1329,22 +1329,6 @@ Builtin :: [].{
 		err : List(U8) -> { result : Try(val, DecodeErr), rest : List(U8) }
 		err = |remaining| { result: Try.Err(DecodeErr.TooShort), rest: remaining }
 	}
-
-	# A simple newline-separated string format for testing decoding
-	LineFmt := [LineFmt].{
-		# Constructor - use the LineFmt tag as the format value
-		line_fmt : LineFmt
-		line_fmt = LineFmt
-
-		# Decoder for Str - converts all bytes to string
-		string_decoder : Decode.Decoder(Str, LineFmt)
-		string_decoder = Decode.custom(|bytes, _fmt|
-			match Str.from_utf8(bytes) {
-				Ok(s) => Decode.ok(s, [])
-				Err(_) => Decode.err(bytes)
-			}
-		)
-	}
 }
 
 range_to = |var $current, end| {

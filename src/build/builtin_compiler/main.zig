@@ -1370,7 +1370,6 @@ pub fn main() !void {
     const decode_type_idx = try findTypeDeclaration(builtin_env, "Decode");
     const decode_err_type_idx = try findNestedTypeDeclaration(builtin_env, "Decode", "DecodeErr");
     const decoder_type_idx = try findNestedTypeDeclaration(builtin_env, "Decode", "Decoder");
-    const line_fmt_type_idx = try findTypeDeclaration(builtin_env, "LineFmt");
 
     // Look up idents for each type
     // All types use fully-qualified names for consistent member lookup
@@ -1405,7 +1404,6 @@ pub fn main() !void {
     const decode_ident = builtin_env.common.findIdent("Builtin.Decode") orelse unreachable;
     const decode_err_ident = builtin_env.common.findIdent("Builtin.Decode.DecodeErr") orelse unreachable;
     const decoder_ident = builtin_env.common.findIdent("Builtin.Decode.Decoder") orelse unreachable;
-    const line_fmt_ident = builtin_env.common.findIdent("Builtin.LineFmt") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
     // Note: These types are already in exposed_items from canonicalization, we just set their node indices
@@ -1435,7 +1433,6 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, decode_ident, @intCast(@intFromEnum(decode_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, decode_err_ident, @intCast(@intFromEnum(decode_err_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, decoder_ident, @intCast(@intFromEnum(decoder_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, line_fmt_ident, @intCast(@intFromEnum(line_fmt_type_idx)));
 
     // Create output directory
     try std.fs.cwd().makePath("zig-out/builtins");
@@ -1496,11 +1493,9 @@ pub fn main() !void {
         .decode_type = decode_type_idx,
         .decode_err_type = decode_err_type_idx,
         .decoder_type = decoder_type_idx,
-        .line_fmt_type = line_fmt_type_idx,
         .decode_ident = decode_ident,
         .decode_err_ident = decode_err_ident,
         .decoder_ident = decoder_ident,
-        .line_fmt_ident = line_fmt_ident,
     };
 
     // Validate that BuiltinIndices contains all type declarations under Builtin

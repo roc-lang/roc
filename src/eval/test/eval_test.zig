@@ -1839,21 +1839,17 @@ test "Decode: simple inline decoder with Str.from_utf8" {
     , "hello", .no_trace);
 }
 
-test "Decode: access LineFmt.line_fmt" {
-    // Test that we can access LineFmt.line_fmt without crashing
+test "Decode: custom decoder with simple format" {
+    // Test using a custom decoder with a simple unit format
     try runExpectBool(
         \\{
-        \\    _fmt = LineFmt.line_fmt
-        \\    Bool.True
-        \\}
-    , true, .no_trace);
-}
-
-test "Decode: can access LineFmt.string_decoder value" {
-    // First, verify we can access the decoder without crashing
-    try runExpectBool(
-        \\{
-        \\    _decoder = LineFmt.string_decoder
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
+        \\    _decoder = string_decoder
         \\    Bool.True
         \\}
     , true, .no_trace);
@@ -1879,35 +1875,53 @@ test "Decode: inline decoder via from_bytes_partial" {
     , "hello", .no_trace);
 }
 
-test "Decode: LineFmt.string_decoder - just get result" {
-    // First check what from_bytes_partial returns
+test "Decode: string_decoder with unit format - just get result" {
+    // Test using from_bytes_partial with a unit format
     try runExpectBool(
         \\{
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    _result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    _result = Decode.from_bytes_partial(bytes, {}, string_decoder)
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: LineFmt.string_decoder - access result.result" {
+test "Decode: string_decoder with unit format - access result.result" {
     // Check if we can access result.result
     try runExpectBool(
         \\{
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
         \\    _r = result.result
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: LineFmt.string_decoder - match on result.result" {
+test "Decode: string_decoder with unit format - match on result.result" {
     // Check if we can match on result.result
     try runExpectBool(
         \\{
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1916,12 +1930,18 @@ test "Decode: LineFmt.string_decoder - match on result.result" {
     , true, .no_trace);
 }
 
-test "Decode: LineFmt.string_decoder - extract Ok payload ignoring it" {
+test "Decode: string_decoder with unit format - extract Ok payload ignoring it" {
     // Check if we can extract Ok payload (but ignore it)
     try runExpectBool(
         \\{
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
         \\    match result.result {
         \\        Ok(_s) => Bool.True
         \\        Err(_) => Bool.False
@@ -1930,12 +1950,18 @@ test "Decode: LineFmt.string_decoder - extract Ok payload ignoring it" {
     , true, .no_trace);
 }
 
-test "Decode: LineFmt.string_decoder decodes hello" {
-    // Check if the issue is returning the payload
+test "Decode: string_decoder with unit format decodes hello" {
+    // Test that string decoder properly decodes and returns the payload
     try runExpectStr(
         \\{
+        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"

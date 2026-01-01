@@ -313,7 +313,6 @@ pub fn populateModuleEnvs(
         .{ "Numeral", builtin_indices.numeral_type, builtin_indices.numeral_ident },
         // Decode module types
         .{ "Decode", builtin_indices.decode_type, builtin_indices.decode_ident },
-        .{ "LineFmt", builtin_indices.line_fmt_type, builtin_indices.line_fmt_ident },
     };
 
     inline for (builtin_types) |type_info| {

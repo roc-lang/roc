@@ -63,7 +63,6 @@ pub const BuiltinIndices = struct {
     decode_type: Statement.Idx,
     decode_err_type: Statement.Idx,
     decoder_type: Statement.Idx,
-    line_fmt_type: Statement.Idx,
 
     // Ident indices - simple unqualified names (e.g., "Bool", "U8")
     bool_ident: Ident.Idx,
@@ -95,7 +94,6 @@ pub const BuiltinIndices = struct {
     decode_ident: Ident.Idx,
     decode_err_ident: Ident.Idx,
     decoder_ident: Ident.Idx,
-    line_fmt_ident: Ident.Idx,
 
     /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
     /// This allows direct ident comparison instead of string comparison for type identification.
