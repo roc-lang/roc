@@ -8199,13 +8199,13 @@ pub const Interpreter = struct {
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
         if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+            // Use the expression's type as the single source of truth for propagating
+            // type mappings. The expression's type always has the correct function type.
+            const expr_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+            const expr_resolved = origin_env.types.resolveVar(expr_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
+            if (expr_resolved.desc.content == .structure) {
+                const flat = expr_resolved.desc.content.structure;
                 switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
                         const param_vars = origin_env.types.sliceVars(fn_type.args);
@@ -8214,15 +8214,23 @@ pub const Interpreter = struct {
                             // Propagate mappings from the concrete receiver to this type
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
+                        // Also propagate mappings to the return type. This is needed when the
+                        // return type has type variables that should match the parameter's type
+                        // variables but may be represented as separate variables in the type store
+                        // after serialization. For example, identity : Iter(s) -> Iter(s) needs
+                        // both the parameter and return type's `s` to be mapped.
+                        try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
                     },
                     else => {},
                 }
             }
         }
 
-        // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        // Translate the expression's type to runtime.
+        // The expression's type is the single source of truth for the function type,
+        // whether it's a lambda or a reference to another function.
+        const expr_var = can.ModuleEnv.varFrom(target_def.expr);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), expr_var);
 
         // Evaluate the method's expression
         const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
@@ -9050,9 +9058,59 @@ pub const Interpreter = struct {
                     // Function type propagation is complex - skip for now
                     // The main use case we need is nominal types like `Num a`
                 },
-                .tag_union => {
-                    // Tag union propagation is complex - skip for now
-                    // This case is less common for the numeric range use case we're fixing
+                .tag_union => |ct_tu| {
+                    // For tag unions, match tags by name and propagate argument type mappings.
+                    // This is needed for methods on tag unions with type parameters, e.g.:
+                    // Iter(s) :: [It(s)].{ identity = |It(s_)| It(s_) }
+                    // When called with Iter(I64), we need to map s -> I64.
+                    //
+                    // The RT type might be a tag union directly, or it might be a nominal type
+                    // wrapping a tag union. We need to handle both cases.
+                    const rt_tu_opt: ?types.TagUnion = blk: {
+                        if (rt_resolved.desc.content == .structure) {
+                            switch (rt_resolved.desc.content.structure) {
+                                .tag_union => |tu| break :blk tu,
+                                .nominal_type => |nom| {
+                                    // Unwrap nominal to get backing type
+                                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure and
+                                        backing_resolved.desc.content.structure == .tag_union)
+                                    {
+                                        break :blk backing_resolved.desc.content.structure.tag_union;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (rt_tu_opt) |rt_tu| {
+                        const ct_tags = module.types.getTagsSlice(ct_tu.tags);
+                        const rt_tags = self.runtime_types.getTagsSlice(rt_tu.tags);
+
+                        // Match tags by name and propagate argument mappings
+                        for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
+                            const ct_tag_name_str = module.getIdent(ct_tag_name);
+                            // Translate CT ident to RT ident space for comparison
+                            const rt_ct_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
+
+                            // Find matching tag in RT type by ident index
+                            for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
+                                if (rt_ct_tag_ident == rt_tag_name) {
+                                    // Found matching tag - propagate argument mappings
+                                    const ct_args = module.types.sliceVars(ct_tag_args);
+                                    const rt_args = self.runtime_types.sliceVars(rt_tag_args);
+                                    const min_args = @min(ct_args.len, rt_args.len);
+                                    for (0..min_args) |i| {
+                                        try self.propagateFlexMappings(module, ct_args[i], rt_args[i]);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 },
                 .record => {
                     // Record propagation is complex - skip for now
@@ -13003,7 +13061,7 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
         lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
-        roc_ops: *RocOps,
+        _: *RocOps,
     ) Error!StackValue {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -13016,10 +13074,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const closure_layout = try self.getRuntimeLayout(rt_var);
-        if (closure_layout.tag != .closure) {
-            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
-            return error.Crash;
-        }
+        std.debug.assert(closure_layout.tag == .closure);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -17040,9 +17095,21 @@ pub const Interpreter = struct {
 
                     try self.active_closures.append(method_func);
 
-                    // Use patternMatchesBind to properly bind nested patterns (e.g., nominal patterns
-                    // like `|Widget.Content(s)|` need to bind `s`, not just the outer pattern).
-                    const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+                    // Propagate flex mappings BEFORE translation. This is critical for methods on
+                    // tag unions with type parameters: the translation needs the mappings to
+                    // resolve type variables to concrete types based on the receiver's actual type.
+                    // For example, in `identity = |It(s_)| It(s_)`, the pattern type `[It(s)]`
+                    // needs `s` mapped to the receiver's type argument (e.g., I64).
+                    const param_pattern_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, param_pattern_ct_var, da.receiver_rt_var);
+
+                    // Also propagate to the body expression's type for complete coverage
+                    const body_ct_var = can.ModuleEnv.varFrom(closure_header.body_idx);
+                    try self.propagateFlexMappings(self.env, body_ct_var, da.receiver_rt_var);
+
+                    // Now translate the pattern type with the mappings in place
+                    const receiver_param_rt_var = try self.translateTypeVar(self.env, param_pattern_ct_var);
+
                     if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
