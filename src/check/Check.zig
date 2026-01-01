@@ -4823,27 +4823,19 @@ fn checkBinopExpr(
     does_fx = try self.checkExpr(binop.rhs, env, .no_expectation) or does_fx;
 
     switch (binop.op) {
-        .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => {
-            // Based on the binop we're processing, get the binop ident and the
-            // return var. For numeric ops, the return type is the lhs type (the
-            // receiver). For comparison ops, return type is Bool.
+        .add, .sub, .mul, .div, .rem, .div_trunc => {
+            // For numeric binops, lhs and rhs can have different types.
+            // This allows e.g. Duration * I64 -> Duration.
+            // The return type is the lhs (receiver) type.
             const method_name, const ret_var =
                 switch (binop.op) {
-                    // For num binops, the return type is the lhs (receiver) type
                     .add => .{ self.cir.idents.plus, lhs_var },
                     .sub => .{ self.cir.idents.minus, lhs_var },
                     .mul => .{ self.cir.idents.times, lhs_var },
                     .div => .{ self.cir.idents.div_by, lhs_var },
                     .div_trunc => .{ self.cir.idents.div_trunc_by, lhs_var },
                     .rem => .{ self.cir.idents.rem_by, lhs_var },
-                    // For eq/ord binops, we assert that the return type is a Bool
-                    .lt => .{ self.cir.idents.is_lt, try self.freshBool(env, expr_region) },
-                    .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
-                    .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
-                    .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
-                    .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
-                    // These branches are impossible, due to the outer switch
-                    .ne, .@"and", .@"or" => unreachable,
+                    else => unreachable,
                 };
 
             // Create the binop static dispatch function on lhs, rhs -> ret
@@ -4860,10 +4852,48 @@ fn checkBinopExpr(
             // Set the expression to redirect to the return type
             _ = try self.unify(expr_var, ret_var, env);
         },
+        .lt, .gt, .le, .ge, .eq => {
+            // For comparison binops, both operands must have the same type.
+            // This is required for semantic correctness (comparing apples to apples).
+            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            // If unification failed, short-circuit and set the expression to error
+            if (!arg_unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
+
+            const arg_var = lhs_var;
+
+            // For eq/ord binops, we assert that the return type is a Bool
+            const method_name, const ret_var =
+                switch (binop.op) {
+                    .lt => .{ self.cir.idents.is_lt, try self.freshBool(env, expr_region) },
+                    .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
+                    .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
+                    .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
+                    .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
+                    else => unreachable,
+                };
+
+            // Create the binop static dispatch function on arg, arg -> ret
+            // (both args have the same type since we unified them above)
+            try self.mkBinopConstraint(
+                arg_var,
+                arg_var,
+                ret_var,
+                method_name,
+                env,
+                expr_region,
+            );
+
+            // Set the expression to redirect to the return type
+            _ = try self.unify(expr_var, ret_var, env);
+        },
         .ne => {
             // `a != b` desugars to `a.is_eq(b).not()`.
             //
-            // a.is_eq(b) : lhs, rhs -> y
+            // a.is_eq(b) : arg, arg -> y
             // y.not() : y -> y
             //
             // Currently, we require `y` to be a `Bool`. This is more
@@ -4871,13 +4901,24 @@ fn checkBinopExpr(
             // may revisit this in the future, but relaxing the restriction
             // should be a non-breaking change.
 
+            // For comparison binops, both operands must have the same type.
+            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            // If unification failed, short-circuit and set the expression to error
+            if (!arg_unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
+
+            const arg_var = lhs_var;
+
             // Get the eq method + ret var
             const eq_method_name = self.cir.idents.is_eq;
             const eq_ret_var = try self.freshBool(env, expr_region);
 
-            // Create the eq static dispatch function on lhs, rhs -> eq_ret
-            // This function attaches the dispatch fn to the lhs (receiver)
-            try self.mkBinopConstraint(lhs_var, rhs_var, eq_ret_var, eq_method_name, env, expr_region);
+            // Create the eq static dispatch function on arg, arg -> eq_ret
+            // (both args have the same type since we unified them above)
+            try self.mkBinopConstraint(arg_var, arg_var, eq_ret_var, eq_method_name, env, expr_region);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;

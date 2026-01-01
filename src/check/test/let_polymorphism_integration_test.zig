@@ -53,9 +53,10 @@ test "let-polymorphism with function composition" {
         source,
         \\a -> a
         \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
-        \\    a.times : a, a -> a,
+        \\    a.plus : a, c -> a,
+        \\    a.times : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -253,8 +254,9 @@ test "polymorphic pipe function" {
         \\{ num_result: a, str_result: b }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.times : a, a -> a,
+        \\    a.times : a, c -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
