@@ -18,13 +18,17 @@ EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
-(e-binop (op "|>")
-	(e-binop (op "|>")
-		(e-int (raw "1"))
-		(e-apply
-			(e-ident (raw "add"))
-			(e-int (raw "2"))))
-	(e-apply
-		(e-ident (raw "mul"))
-		(e-int (raw "3"))))
+(e-int (raw "1"))
+~~~
+# FORMATTED
+~~~roc
+1
+~~~
+# CANONICALIZE
+~~~clojure
+(e-num (value "1"))
+~~~
+# TYPES
+~~~clojure
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]"))
 ~~~
