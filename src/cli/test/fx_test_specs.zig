@@ -259,6 +259,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Primitive types have encode methods for static dispatch (issue #8853)",
     },
     .{
+        .roc_file = "test/fx/issue8866.roc",
+        .io_spec = "1>Done: 2",
+        .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
+    },
+    .{
         .roc_file = "test/fx/issue8872_map_err.roc",
         .io_spec = "1>Got Err: hello",
         .description = "Regression test: Polymorphic tag union payload layout in match expressions (issue #8872)",

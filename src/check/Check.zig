@@ -3026,6 +3026,74 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 });
             }
         },
+        .e_typed_int => |typed_num| {
+            // Typed integer literal like 123.U64
+            // Create from_numeral constraint and unify with the explicit type
+            const num_literal_info = switch (typed_num.value.kind) {
+                .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
+                .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
+            };
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents = self.cir.getIdentStoreConst();
+            const type_name = idents.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
+        },
+        .e_typed_frac => |typed_num| {
+            // Typed fractional literal like 3.14.Dec
+            // The value is stored as scaled i128 (like Dec)
+            const num_literal_info = types_mod.NumeralInfo.fromI128(
+                typed_num.value.toI128(),
+                typed_num.value.toI128() < 0,
+                true, // is_fractional
+                expr_region,
+            );
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents_frac = self.cir.getIdentStoreConst();
+            const type_name = idents_frac.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
+        },
         // list //
         .e_empty_list => {
             // Create a nominal List with a fresh unbound element type
