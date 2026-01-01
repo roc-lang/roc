@@ -2559,84 +2559,80 @@ pub fn build(b: *std.Build) void {
         const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
         const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
 
+        // Always make coverage_step depend on test installations
+        coverage_step.dependOn(&install_snapshot_test.step);
+        coverage_step.dependOn(&install_parse_test.step);
+
         // Get the kcov dependency and build it from source
         // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
         // lazyDependency returns null on the first pass; Zig will re-run build() after fetching
-        const kcov_dep = b.lazyDependency("kcov", .{}) orelse {
-            // On first pass, kcov isn't available yet. Still set up coverage_step
-            // to depend on the test installation so they're ready when kcov is fetched.
-            coverage_step.dependOn(&install_snapshot_test.step);
-            coverage_step.dependOn(&install_parse_test.step);
-            return;
-        };
-        const kcov_exe = kcov_dep.artifact("kcov");
+        if (b.lazyDependency("kcov", .{})) |kcov_dep| {
+            const kcov_exe = kcov_dep.artifact("kcov");
 
-        // Install kcov to a predictable location too
-        const install_kcov = b.addInstallArtifact(kcov_exe, .{});
+            // Install kcov to a predictable location too
+            const install_kcov = b.addInstallArtifact(kcov_exe, .{});
+            coverage_step.dependOn(&install_kcov.step);
 
-        // Create output directories before running kcov
-        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
-        // Ensure tests and kcov are installed before we try to run them
-        mkdir_step.step.dependOn(&install_snapshot_test.step);
-        mkdir_step.step.dependOn(&install_parse_test.step);
-        mkdir_step.step.dependOn(&install_kcov.step);
+            // Create output directories before running kcov
+            const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+            // Ensure tests and kcov are installed before we try to run them
+            mkdir_step.step.dependOn(&install_snapshot_test.step);
+            mkdir_step.step.dependOn(&install_parse_test.step);
+            mkdir_step.step.dependOn(&install_kcov.step);
 
-        // On macOS, kcov needs to be codesigned to use task_for_pid
-        if (target.result.os.tag == .macos) {
-            const codesign = b.addSystemCommand(&.{"codesign"});
-            codesign.addArgs(&.{ "-s", "-", "--entitlements" });
-            codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
-            codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
-            codesign.step.dependOn(&install_kcov.step);
-            mkdir_step.step.dependOn(&codesign.step);
+            // On macOS, kcov needs to be codesigned to use task_for_pid
+            if (target.result.os.tag == .macos) {
+                const codesign = b.addSystemCommand(&.{"codesign"});
+                codesign.addArgs(&.{ "-s", "-", "--entitlements" });
+                codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
+                codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
+                codesign.step.dependOn(&install_kcov.step);
+                mkdir_step.step.dependOn(&codesign.step);
+            }
+
+            // Use installed paths (strings) instead of LazyPath to avoid dependency issues
+            const kcov_path = "zig-out/bin/kcov";
+            const snapshot_test_path = "zig-out/bin/snapshot_coverage";
+            const parse_test_path = "zig-out/bin/parse_unit_coverage";
+
+            // Run kcov with the snapshot test binary
+            // Add both compile step dependency AND mkdir dependency to ensure the test is built
+            const run_snapshot_coverage = b.addSystemCommand(&.{
+                kcov_path,
+                "--include-path=src/parse",
+                "kcov-output/parser-snapshot-tests",
+                snapshot_test_path,
+            });
+            run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
+            run_snapshot_coverage.step.dependOn(&mkdir_step.step);
+
+            // Run kcov with the parse unit test binary
+            const run_parse_coverage = b.addSystemCommand(&.{
+                kcov_path,
+                "--include-path=src/parse",
+                "kcov-output/parser-unit-tests",
+                parse_test_path,
+            });
+            run_parse_coverage.step.dependOn(&parse_unit_test.step);
+            run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
+
+            // Merge coverage results into kcov-output/parser/ using built kcov
+            const merge_coverage = b.addSystemCommand(&.{
+                kcov_path,
+                "--merge",
+                "kcov-output/parser",
+                "kcov-output/parser-snapshot-tests",
+                "kcov-output/parser-unit-tests",
+            });
+            merge_coverage.step.dependOn(&run_parse_coverage.step);
+
+            // Add coverage summary step that parses merged kcov JSON output
+            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
+            summary_step.step.dependOn(&merge_coverage.step);
+
+            // Hook up coverage_step to the summary step
+            coverage_step.dependOn(&summary_step.step);
         }
-
-        // Use installed paths (strings) instead of LazyPath to avoid dependency issues
-        const kcov_path = "zig-out/bin/kcov";
-        const snapshot_test_path = "zig-out/bin/snapshot_coverage";
-        const parse_test_path = "zig-out/bin/parse_unit_coverage";
-
-        // Run kcov with the snapshot test binary
-        // Add both compile step dependency AND mkdir dependency to ensure the test is built
-        const run_snapshot_coverage = b.addSystemCommand(&.{
-            kcov_path,
-            "--include-path=src/parse",
-            "kcov-output/parser-snapshot-tests",
-            snapshot_test_path,
-        });
-        run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
-        run_snapshot_coverage.step.dependOn(&mkdir_step.step);
-
-        // Run kcov with the parse unit test binary
-        const run_parse_coverage = b.addSystemCommand(&.{
-            kcov_path,
-            "--include-path=src/parse",
-            "kcov-output/parser-unit-tests",
-            parse_test_path,
-        });
-        run_parse_coverage.step.dependOn(&parse_unit_test.step);
-        run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
-
-        // Merge coverage results into kcov-output/parser/ using built kcov
-        const merge_coverage = b.addSystemCommand(&.{
-            kcov_path,
-            "--merge",
-            "kcov-output/parser",
-            "kcov-output/parser-snapshot-tests",
-            "kcov-output/parser-unit-tests",
-        });
-        merge_coverage.step.dependOn(&run_parse_coverage.step);
-
-        // Add coverage summary step that parses merged kcov JSON output
-        const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
-        summary_step.step.dependOn(&merge_coverage.step);
-
-        // Hook up coverage_step to the summary step and also to install steps directly
-        // This ensures the install steps are definitely in the dependency graph
-        coverage_step.dependOn(&install_snapshot_test.step);
-        coverage_step.dependOn(&install_parse_test.step);
-        coverage_step.dependOn(&install_kcov.step);
-        coverage_step.dependOn(&summary_step.step);
 
         // Cross-compile for Windows to verify comptime branches compile
         const windows_target = b.resolveTargetQuery(.{
