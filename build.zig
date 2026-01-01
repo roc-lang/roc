@@ -2524,65 +2524,48 @@ pub fn build(b: *std.Build) void {
     // Only supported on Linux and macOS (kcov doesn't work on Windows)
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
-        // Create test artifacts FIRST, before checking for kcov dependency
-        // This ensures they exist in the build graph regardless of lazy dependency state
-
-        // Run snapshot tests with kcov to get parser coverage
-        // Snapshot tests actually parse real Roc code, giving meaningful coverage
-        const snapshot_coverage_test = b.addTest(.{
-            .name = "snapshot_coverage",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/snapshot_tool/main.zig"),
-                .target = target,
-                .optimize = .Debug, // Debug required for DWARF debug info
-                .link_libc = true,
-            }),
-        });
-
-        // Add all module dependencies (snapshot tool uses parse, can, check, etc.)
-        roc_modules.addAll(snapshot_coverage_test);
-        snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-        snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
-
-        // Also run parse module unit tests for additional coverage
-        const parse_unit_test = b.addTest(.{
-            .name = "parse_unit_coverage",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/parse/mod.zig"),
-                .target = target,
-                .optimize = .Debug, // Debug required for DWARF debug info
-            }),
-        });
-        roc_modules.addModuleDependencies(parse_unit_test, .parse);
-
-        // Install test artifacts to zig-out/bin/ so we can use predictable paths
-        const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
-        const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
-
-        // Create a named step for building the coverage tests
-        // This provides a top-level entry point that Zig's build system will recognize
-        const build_tests_step = b.step("build-coverage-tests", "Build the coverage test binaries");
-        build_tests_step.dependOn(&install_snapshot_test.step);
-        build_tests_step.dependOn(&install_parse_test.step);
-
-        // Make coverage_step depend on this named step
-        coverage_step.dependOn(build_tests_step);
-
         // Get the kcov dependency and build it from source
         // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
         // lazyDependency returns null on the first pass; Zig will re-run build() after fetching
+        // ALL coverage-related artifacts must be created inside this block to ensure proper
+        // dependency tracking when the lazy dependency is resolved.
         if (b.lazyDependency("kcov", .{})) |kcov_dep| {
+            // Create test artifacts INSIDE the lazy block to ensure proper dependency resolution
+            // Run snapshot tests with kcov to get parser coverage
+            // Snapshot tests actually parse real Roc code, giving meaningful coverage
+            const snapshot_coverage_test = b.addTest(.{
+                .name = "snapshot_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/snapshot_tool/main.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                    .link_libc = true,
+                }),
+            });
+
+            // Add all module dependencies (snapshot tool uses parse, can, check, etc.)
+            roc_modules.addAll(snapshot_coverage_test);
+            snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
+
+            // Also run parse module unit tests for additional coverage
+            const parse_unit_test = b.addTest(.{
+                .name = "parse_unit_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/parse/mod.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                }),
+            });
+            roc_modules.addModuleDependencies(parse_unit_test, .parse);
+
             const kcov_exe = kcov_dep.artifact("kcov");
 
             // Install kcov to a predictable location too
             const install_kcov = b.addInstallArtifact(kcov_exe, .{});
-            coverage_step.dependOn(&install_kcov.step);
 
             // Create output directories before running kcov
             const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
-            // Ensure tests and kcov are installed before we try to run them
-            mkdir_step.step.dependOn(&install_snapshot_test.step);
-            mkdir_step.step.dependOn(&install_parse_test.step);
             mkdir_step.step.dependOn(&install_kcov.step);
 
             // On macOS, kcov needs to be codesigned to use task_for_pid
