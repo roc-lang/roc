@@ -1326,11 +1326,22 @@ pub const Store = struct {
                 };
 
                 if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
-                    // Check if this is truly a recursive reference (same var as the in-progress nominal)
-                    // or just a different instantiation of the same nominal type with different type args.
-                    // For example, Try(Str, Str) inside Try((Try(Str, Str), U64), Str) are different
-                    // instantiations with different vars - not a recursive reference.
-                    if (current.var_ == progress.nominal_var) {
+                    // Check if this is truly a recursive reference by comparing type arguments.
+                    // A recursive reference has the same type arguments (or none).
+                    // Different instantiations (like Try(Str, Str) inside Try((Try(Str, Str), U64), Str))
+                    // have different type arguments and should not be treated as recursive.
+                    const current_type_args = self.types_store.sliceNominalArgs(nominal_type);
+                    const same_type_args = argsMatch: {
+                        if (current_type_args.len != progress.type_args.len) break :argsMatch false;
+                        // Compare each type arg by resolving and checking if they point to the same type
+                        for (current_type_args, progress.type_args) |curr_arg, prog_arg| {
+                            const curr_resolved = self.types_store.resolveVar(curr_arg);
+                            const prog_resolved = self.types_store.resolveVar(prog_arg);
+                            if (curr_resolved.var_ != prog_resolved.var_) break :argsMatch false;
+                        }
+                        break :argsMatch true;
+                    };
+                    if (same_type_args) {
                         // This IS a true recursive reference - the type refers to itself.
                         // Mark it as truly recursive so we know to box its values.
                         progress.is_recursive = true;
@@ -1554,10 +1565,13 @@ pub const Store = struct {
                             try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
 
                             // Mark this nominal type as in-progress.
-                            // Store both the nominal var (for cache lookup) and backing var (to know when to update).
+                            // Store the nominal var, backing var, and type args.
+                            // Type args are needed to distinguish different instantiations.
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
+                                .type_args = type_args,
                             });
 
                             // From a layout perspective, nominal types are identical to type aliases:

@@ -45,6 +45,10 @@ pub const Work = struct {
     pub const NominalProgress = struct {
         nominal_var: types.Var,
         backing_var: types.Var,
+        /// The type arguments of this nominal (as a slice of vars).
+        /// Used to distinguish different instantiations of the same nominal type.
+        /// e.g., Try(Str, Str) vs Try((Try(Str, Str), U64), Str) have different type args.
+        type_args: []types.Var,
         /// True if a recursive cycle was detected while processing this nominal type.
         /// This is set when we encounter the same nominal type during its own processing.
         is_recursive: bool = false,
