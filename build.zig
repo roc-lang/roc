@@ -978,6 +978,15 @@ const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
 
+    /// Minimum required coverage percentage. Build fails if coverage drops below this.
+    /// This threshold should be gradually increased as more tests are added.
+    const MIN_COVERAGE_PERCENT: f64 = 84.0;
+
+    const CoverageResult = struct {
+        percent: f64,
+        total_lines: u64,
+    };
+
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
         self.* = .{
@@ -1021,13 +1030,45 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        try parseCoverageJson(allocator, json_content);
+        const result = try parseCoverageJson(allocator, json_content);
+
+        // FAIL if kcov didn't capture any data - this is a bug, not something to skip
+        if (result.total_lines == 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE ERROR: NO DATA CAPTURED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("kcov reported 0 total lines.\n", .{});
+            std.debug.print("This means kcov failed to capture coverage data.\n", .{});
+            std.debug.print("Check that kcov is working correctly with Zig binaries.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return step.fail("kcov failed to capture coverage data (0 total lines)", .{});
+        }
+
+        // Enforce minimum coverage threshold
+        if (result.percent < MIN_COVERAGE_PERCENT) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE CHECK FAILED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
+        }
+
+        std.debug.print("\n", .{});
+        std.debug.print("=" ** 60 ++ "\n", .{});
+        std.debug.print("COVERAGE CHECK PASSED\n", .{});
+        std.debug.print("=" ** 60 ++ "\n\n", .{});
+        std.debug.print("Parser coverage is {d:.2}% (minimum: {d:.2}%)\n\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+        std.debug.print("=" ** 60 ++ "\n", .{});
     }
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !void {
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
         const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_content, .{}) catch |err| {
             std.debug.print("Failed to parse coverage JSON: {}\n", .{err});
-            return;
+            return .{ .percent = 0.0, .total_lines = 0 };
         };
         defer parsed.deinit();
 
@@ -1136,6 +1177,8 @@ const CoverageSummaryStep = struct {
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
         std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
+
+        return .{ .percent = percent, .total_lines = total_lines };
     }
 
     const UncoveredFile = struct {
