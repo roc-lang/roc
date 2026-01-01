@@ -2578,26 +2578,28 @@ pub fn build(b: *std.Build) void {
             mkdir_step.step.dependOn(build_cov_tests);
 
             // On macOS, kcov needs to be codesigned to use task_for_pid
-            // We must codesign the INSTALLED binary (zig-out/bin/kcov) because
-            // addRunArtifact uses the installed path when an install step exists.
+            // Codesign the cache binary since we run directly from getEmittedBin()
             if (target.result.os.tag == .macos) {
                 const codesign = b.addSystemCommand(&.{"codesign"});
                 codesign.addArgs(&.{ "-s", "-", "--entitlements" });
                 codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
-                codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
-                codesign.step.dependOn(&install_kcov.step);
+                codesign.addArg("-f");
+                codesign.addFileArg(kcov_exe.getEmittedBin());
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov using addRunArtifact which properly tracks dependencies
+            // Run kcov using addRunArtifact for kcov and addFileArg for test binaries
+            // addFileArg with getEmittedBin() adds proper compile dependencies
             const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
-            run_snapshot_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-snapshot-tests" });
-            run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
+            run_snapshot_coverage.addArg("--include-path=src/parse");
+            run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
+            run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
             const run_parse_coverage = b.addRunArtifact(kcov_exe);
-            run_parse_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-unit-tests" });
-            run_parse_coverage.addArtifactArg(parse_unit_test);
+            run_parse_coverage.addArg("--include-path=src/parse");
+            run_parse_coverage.addArg("kcov-output/parser-unit-tests");
+            run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
             // Merge coverage results into kcov-output/parser/
