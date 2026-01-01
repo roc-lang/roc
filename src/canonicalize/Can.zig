@@ -52,6 +52,9 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
+/// Track whether we're inside an expect block.
+/// When true, the ? operator crashes on Err instead of returning early.
+in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
@@ -2379,6 +2382,11 @@ pub fn canonicalizeFile(
             .expect => |e| {
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+
+                // Track that we're inside an expect so ? operator crashes on Err
+                const was_in_expect = self.in_expect;
+                self.in_expect = true;
+                defer self.in_expect = was_in_expect;
 
                 // Canonicalize the expect expression
                 const can_expect = try self.canonicalizeExpr(e.body) orelse {
@@ -5515,36 +5523,45 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
                 const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-                // Create the branch body: return Err(#err)
-                // First, create lookup for #err
-                const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                    .pattern_idx = err_assign_pattern_idx,
-                } }, region);
-                // Mark the pattern as used
-                try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+                // Create the branch body
+                const branch_value_idx = if (self.in_expect) blk: {
+                    // Inside an expect: crash with a message instead of returning
+                    // This makes the expect fail when ? encounters an Err
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
+                        .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
+                    } }, region);
+                } else blk: {
+                    // Normal case: return Err(#err)
+                    // First, create lookup for #err
+                    const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                        .pattern_idx = err_assign_pattern_idx,
+                    } }, region);
+                    // Mark the pattern as used
+                    try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                // Create Err(#err) tag expression
-                const err_tag_args_start = self.env.store.scratchExprTop();
-                try self.env.store.addScratchExpr(err_lookup_idx);
-                const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+                    // Create Err(#err) tag expression
+                    const err_tag_args_start = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(err_lookup_idx);
+                    const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_tag_args_span,
-                    },
-                }, region);
+                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_tag_args_span,
+                        },
+                    }, region);
 
-                // Create return Err(#err) expression
-                const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
-                    .expr = err_tag_expr_idx,
-                } }, region);
+                    // Create return Err(#err) expression
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
+                        .expr = err_tag_expr_idx,
+                    } }, region);
+                };
 
                 // Create the Err branch
                 const err_branch_idx = try self.env.addMatchBranch(
                     Expr.Match.Branch{
                         .patterns = err_branch_pat_span,
-                        .value = return_expr_idx,
+                        .value = branch_value_idx,
                         .guard = null,
                         .redundant = try self.env.types.fresh(),
                     },
@@ -9265,6 +9282,11 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .expect => |e_| {
             const region = self.parse_ir.tokenizedRegionToRegion(e_.region);
+
+            // Track that we're inside an expect so ? operator crashes on Err
+            const was_in_expect = self.in_expect;
+            self.in_expect = true;
+            defer self.in_expect = was_in_expect;
 
             // Canonicalize the expect expression
             const expr = try self.canonicalizeExprOrMalformed(e_.body);
