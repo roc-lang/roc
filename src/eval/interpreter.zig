@@ -14937,8 +14937,14 @@ pub const Interpreter = struct {
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
                             const expected_payload_size = disc_offset; // payload is before discriminant
-                            // Apply fix when expected payload is very small but actual is larger
-                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            // Get the variant's expected payload layout
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_variant_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+                            // Apply fix when:
+                            // 1. expected payload is very small but actual is larger, OR
+                            // 2. expected variant layout is ZST but actual payload is not ZST
+                            const needs_fix = (expected_payload_size <= 1 and arg_size > expected_payload_size) or
+                                (expected_variant_layout.tag == .zst and values[0].layout.tag != .zst);
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
