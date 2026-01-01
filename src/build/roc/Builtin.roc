@@ -1258,6 +1258,76 @@ Builtin :: [].{
 			}
 		}
 	}
+
+	# Decode module for deserializing bytes into Roc values
+	# Uses static dispatch via where clauses instead of abilities
+	Decode :: {}.{
+		# Decode error type
+		DecodeErr := [TooShort].{
+			is_eq : DecodeErr, DecodeErr -> Bool
+			is_eq = |_a, _b| Bool.True
+		}
+
+		# A decoder function type - takes bytes and format, returns decode result
+		# The decode result is a record: { result : Try(val, DecodeErr), rest : List(U8) }
+		Decoder(val, fmt) := [
+			MkDecoder((List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) }))
+		].{
+			# Unwrap and run the decoder
+			run : Decoder(val, fmt), List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) }
+			run = |self, bytes, format| match self {
+				Decoder.MkDecoder(decode_fn) => decode_fn(bytes, format)
+			}
+		}
+
+		# Create a custom decoder from a function
+		custom : (List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) }) -> Decoder(val, fmt)
+		custom = |decode_fn| Decoder.MkDecoder(decode_fn)
+
+		# Decode bytes using a decoder and format
+		from_bytes_partial : List(U8), fmt, Decoder(val, fmt) -> { result : Try(val, DecodeErr), rest : List(U8) }
+		from_bytes_partial = |bytes, format, decoder| {
+			Decoder.run(decoder, bytes, format)
+		}
+
+		# Decode bytes and return Result - fails if there are leftover bytes
+		from_bytes : List(U8), fmt, Decoder(val, fmt) -> Try(val, [Leftover(List(U8)), DecodeErr(DecodeErr)])
+		from_bytes = |bytes, format, decoder| {
+			decode_result = from_bytes_partial(bytes, format, decoder)
+			if List.is_empty(decode_result.rest) {
+				match decode_result.result {
+					Ok(val) => Ok(val)
+					Err(e) => Err(DecodeErr(e))
+				}
+			} else {
+				Err(Leftover(decode_result.rest))
+			}
+		}
+
+		# Helper to create a successful decode result
+		ok : val, List(U8) -> { result : Try(val, DecodeErr), rest : List(U8) }
+		ok = |value, remaining| { result: Try.Ok(value), rest: remaining }
+
+		# Helper to create a failed decode result
+		err : List(U8) -> { result : Try(val, DecodeErr), rest : List(U8) }
+		err = |remaining| { result: Try.Err(DecodeErr.TooShort), rest: remaining }
+	}
+
+	# A simple newline-separated string format for testing decoding
+	LineFmt := [LineFmt].{
+		# Constructor - use the LineFmt tag as the format value
+		line_fmt : LineFmt
+		line_fmt = LineFmt
+
+		# Decoder for Str - converts all bytes to string
+		string_decoder : Decode.Decoder(Str, LineFmt)
+		string_decoder = Decode.custom(|bytes, _fmt|
+			match Str.from_utf8(bytes) {
+				Ok(s) => Decode.ok(s, [])
+				Err(_) => Decode.err(bytes)
+			}
+		)
+	}
 }
 
 range_to = |var $current, end| {

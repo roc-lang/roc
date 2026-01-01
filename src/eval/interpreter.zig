@@ -954,8 +954,13 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = layout_val.alignment(target_usize);
         if (layout_val.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            // Check bounds before accessing - builtin closures may have out-of-bounds indices
+            const idx_as_usize = @intFromEnum(layout_val.data.closure.captures_layout_idx);
+            const layout_count = self.runtime_layout_store.layouts.len();
+            if (idx_as_usize < layout_count) {
+                const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+                alignment = alignment.max(captures_layout.alignment(target_usize));
+            }
         }
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
@@ -983,8 +988,13 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
         if (src.layout.tag == .closure) {
-            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            // Check bounds before accessing - builtin closures may have out-of-bounds indices
+            const idx_as_usize = @intFromEnum(src.layout.data.closure.captures_layout_idx);
+            const layout_count = self.runtime_layout_store.layouts.len();
+            if (idx_as_usize < layout_count) {
+                const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+                alignment = alignment.max(captures_layout.alignment(target_usize));
+            }
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         // Preserve rt_var for constant folding
@@ -7401,6 +7411,7 @@ pub const Interpreter = struct {
                     const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
+
                     const effective_layout = blk: {
                         // First try: if arg is a rigid with a substitution, use substituted type's layout
                         if (arg_resolved.desc.content == .rigid) {
@@ -7411,6 +7422,12 @@ pub const Interpreter = struct {
                         // Second try: compute layout directly from arg_var
                         // This handles concrete types like opaque Item returned from polymorphic functions
                         if (self.getRuntimeLayout(arg_var)) |computed_layout| {
+                            // If computed layout is ZST but variant_layout is not, prefer variant_layout.
+                            // This happens with polymorphic types where the type variable isn't resolved
+                            // but the actual layout in the tag union is concrete.
+                            if (computed_layout.tag == .zst and variant_layout.tag != .zst) {
+                                break :blk variant_layout;
+                            }
                             break :blk computed_layout;
                         } else |_| {}
                         // Fallback to variant_layout
@@ -7876,6 +7893,7 @@ pub const Interpreter = struct {
             .assign => |_| {
                 // Bind entire value to this pattern
                 const copied = try self.pushCopy(value, roc_ops);
+                // std.debug.print("DEBUG patternMatchesBind assign: copied.layout.tag={s}\n", .{@tagName(copied.layout.tag)});
                 // pushCopy preserves rt_var from value
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
@@ -10694,6 +10712,7 @@ pub const Interpreter = struct {
                     if (!should_continue) {
                         // return_result continuation signals completion
                         if (value_stack.pop()) |val| {
+                            // // std.debug.print("DEBUG eval returning: layout.tag={s}\n", .{@tagName(val.layout.tag)});
                             return val;
                         } else {
                             self.triggerCrash("eval: value_stack empty after return_result", false, roc_ops);
@@ -13236,6 +13255,11 @@ pub const Interpreter = struct {
                 closure_idx -= 1;
                 const cls_val = self.active_closures.items[closure_idx];
                 if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                    // Check bounds before accessing - builtin closures may have out-of-bounds indices
+                    const idx_as_usize = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
+                    const layout_count = self.runtime_layout_store.layouts.len();
+                    if (idx_as_usize >= layout_count) continue;
+
                     const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                     const header_sz = @sizeOf(layout.Closure);
                     const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
@@ -13383,7 +13407,9 @@ pub const Interpreter = struct {
                         }
                     }
                 }
+                // std.debug.print("DEBUG evalLookupLocal: found binding with layout.tag={s}\n", .{@tagName(b.value.layout.tag)});
                 const copy_result = try self.pushCopy(b.value, roc_ops);
+                // std.debug.print("DEBUG evalLookupLocal: copy_result.layout.tag={s}\n", .{@tagName(copy_result.layout.tag)});
                 return copy_result;
             }
         }
@@ -13399,6 +13425,11 @@ pub const Interpreter = struct {
                     closure_idx -= 1;
                     const cls_val = self.active_closures.items[closure_idx];
                     if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
+                        // Check bounds before accessing - builtin closures may have out-of-bounds indices
+                        const idx_as_usize = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
+                        const layout_count = self.runtime_layout_store.layouts.len();
+                        if (idx_as_usize >= layout_count) continue;
+
                         const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
                         const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
                         const has_real_captures = (lambda_expr == .e_closure);
@@ -14811,6 +14842,16 @@ pub const Interpreter = struct {
                                 for (values) |val| {
                                     val.decref(&self.runtime_layout_store, roc_ops);
                                 }
+                                // CRITICAL: Preserve tag_union layout for pattern matching.
+                                // The tuple memory layout is compatible with tag_union since both
+                                // have payload at offset 0. Create a new tag_union layout that
+                                // matches the actual payload size so pattern matching works correctly.
+                                const new_tu_layout = try self.runtime_layout_store.createTagUnionLayout(
+                                    values[0].layout,
+                                    tu_data.discriminant_size,
+                                    tc.tag_index,
+                                );
+                                proper_dest.layout = new_tu_layout;
                                 try value_stack.push(proper_dest);
                                 return true;
                             }

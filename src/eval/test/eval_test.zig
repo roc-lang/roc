@@ -1761,3 +1761,186 @@ test "early return: ? in first argument of multi-arg call" {
         \\}
     , 0, .no_trace);
 }
+
+// ============================================================================
+// Decode module tests - testing the new static dispatch based Decode builtin
+// ============================================================================
+
+
+test "Decode: create Decode.ok result - check result is Ok" {
+    // Test that we can call Decode.ok and the result is an Ok
+    try runExpectBool(
+        \\{
+        \\    result = Decode.ok(42i64, [])
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: create Decode.ok result - extract value" {
+    // Test that we can extract the value from Decode.ok
+    try runExpectI64(
+        \\{
+        \\    result = Decode.ok(42i64, [])
+        \\    match result.result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "Decode: create Decode.err result" {
+    // Test that we can call Decode.err
+    try runExpectBool(
+        \\{
+        \\    result = Decode.err([1u8, 2u8, 3u8])
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , false, .no_trace);
+}
+
+test "Decode: call Decode.custom and use from_bytes_partial" {
+    // Test calling Decode.custom and running with from_bytes_partial
+    try runExpectI64(
+        \\{
+        \\    decoder = Decode.custom(|bytes, _fmt| Decode.ok(42i64, bytes))
+        \\    result = Decode.from_bytes_partial([1u8, 2u8], {}, decoder)
+        \\    match result.result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "Decode: simple inline decoder with Str.from_utf8" {
+    // Test a simple inline decoder that converts all bytes to string
+    try runExpectStr(
+        \\{
+        \\    decoder = Decode.custom(|bytes, _fmt| {
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    })
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, {}, decoder)
+        \\    match result.result {
+        \\        Ok(s) => s
+        \\        Err(_) => "error"
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "Decode: access LineFmt.line_fmt" {
+    // Test that we can access LineFmt.line_fmt without crashing
+    try runExpectBool(
+        \\{
+        \\    _fmt = LineFmt.line_fmt
+        \\    Bool.True
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: can access LineFmt.string_decoder value" {
+    // First, verify we can access the decoder without crashing
+    try runExpectBool(
+        \\{
+        \\    _decoder = LineFmt.string_decoder
+        \\    Bool.True
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: inline decoder via from_bytes_partial" {
+    // Test using from_bytes_partial with an inline decoder (same as LineFmt.string_decoder logic)
+    try runExpectStr(
+        \\{
+        \\    decoder = Decode.custom(|bytes, _fmt| {
+        \\        match Str.from_utf8(bytes) {
+        \\            Ok(s) => Decode.ok(s, [])
+        \\            Err(_) => Decode.err(bytes)
+        \\        }
+        \\    })
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, {}, decoder)
+        \\    match result.result {
+        \\        Ok(s) => s
+        \\        Err(_) => "error"
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "Decode: LineFmt.string_decoder - just get result" {
+    // First check what from_bytes_partial returns
+    try runExpectBool(
+        \\{
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    _result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    Bool.True
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: LineFmt.string_decoder - access result.result" {
+    // Check if we can access result.result
+    try runExpectBool(
+        \\{
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    _r = result.result
+        \\    Bool.True
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: LineFmt.string_decoder - match on result.result" {
+    // Check if we can match on result.result
+    try runExpectBool(
+        \\{
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: LineFmt.string_decoder - extract Ok payload ignoring it" {
+    // Check if we can extract Ok payload (but ignore it)
+    try runExpectBool(
+        \\{
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    match result.result {
+        \\        Ok(_s) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "Decode: LineFmt.string_decoder decodes hello" {
+    // Check if the issue is returning the payload
+    try runExpectStr(
+        \\{
+        \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
+        \\    result = Decode.from_bytes_partial(bytes, LineFmt.line_fmt, LineFmt.string_decoder)
+        \\    match result.result {
+        \\        Ok(s) => s
+        \\        Err(_) => "error"
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}

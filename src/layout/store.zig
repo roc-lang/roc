@@ -403,6 +403,61 @@ pub const Store = struct {
         return try self.insertLayout(tuple_layout);
     }
 
+    /// Create a tag union layout with a payload at a specific variant index.
+    /// Used when we need to create a properly-sized tag union at runtime,
+    /// e.g., when polymorphic types resolve to different sizes than expected.
+    /// The tag_index parameter specifies which variant slot gets the payload.
+    pub fn createTagUnionLayout(self: *Self, payload_layout: Layout, discriminant_size: u8, tag_index: usize) std.mem.Allocator.Error!Layout {
+        const trace = tracy.traceNamed(@src(), "layoutStore.createTagUnionLayout");
+        defer trace.end();
+
+        // Store variant layouts - ZST for slots before tag_index, then payload
+        const payload_idx = try self.insertLayout(payload_layout);
+        const zst_idx = try self.ensureZstLayout();
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+        const num_variants = tag_index + 1;
+
+        for (0..num_variants) |i| {
+            if (i == tag_index) {
+                _ = try self.tag_union_variants.append(self.env.gpa, .{ .payload_layout = payload_idx });
+            } else {
+                _ = try self.tag_union_variants.append(self.env.gpa, .{ .payload_layout = zst_idx });
+            }
+        }
+
+        // Calculate sizes and alignment
+        const payload_size = self.layoutSize(payload_layout);
+        const payload_alignment = payload_layout.alignment(self.targetUsize());
+        const discriminant_alignment: std.mem.Alignment = switch (discriminant_size) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            else => .@"1",
+        };
+
+        // Discriminant follows payload (aligned)
+        const discriminant_offset: u16 = @intCast(std.mem.alignForward(u32, payload_size, @intCast(discriminant_alignment.toByteUnits())));
+        const total_size_unaligned = discriminant_offset + discriminant_size;
+
+        // Align total size to tag union alignment
+        const tag_union_alignment = payload_alignment.max(discriminant_alignment);
+        const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
+
+        // Store TagUnionData
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.env.gpa, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(num_variants),
+            },
+        });
+
+        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+    }
+
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
         return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
     }

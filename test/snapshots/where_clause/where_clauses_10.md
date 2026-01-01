@@ -14,13 +14,32 @@ decode_things # After member name
 				[a.Decode]
 ~~~
 # EXPECTED
-MODULE NOT FOUND - where_clauses_10.md:1:1:1:32
+DUPLICATE DEFINITION - where_clauses_10.md:1:1:1:32
+TYPE NOT EXPOSED - where_clauses_10.md:1:1:1:32
 UNSUPPORTED WHERE CLAUSE - where_clauses_10.md:7:6:7:14
 # PROBLEMS
-**MODULE NOT FOUND**
-The module `Decode` was not found in this Roc project.
+**DUPLICATE DEFINITION**
+The name `Decode` is being redeclared in this scope.
 
-You're attempting to use this module here:
+The redeclaration is here:
+**where_clauses_10.md:1:1:1:32:**
+```roc
+import Decode exposing [Decode]
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+But `Decode` was already defined here:
+**where_clauses_10.md:1:1:1:1:**
+```roc
+import Decode exposing [Decode]
+```
+^
+
+
+**TYPE NOT EXPOSED**
+The type `Decode` is not exposed by the module `Decode`.
+
+You're attempting to use this type here:
 **where_clauses_10.md:1:1:1:32:**
 ```roc
 import Decode exposing [Decode]
