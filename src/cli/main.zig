@@ -366,7 +366,7 @@ fn renderTypeProblems(
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// On 64-bit targets, we reserve large virtual address spaces. This is possible
 /// without consuming physical memory:
 /// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
 ///   it until pages are actually touched.
@@ -380,11 +380,16 @@ fn renderTypeProblems(
 /// now let the OS choose the best address for large mappings (SHARED_MEMORY_BASE_ADDR
 /// is null), enabling much larger reserved sizes.
 ///
+/// Windows gets 2TB since it has no valgrind-like tool constraints. POSIX uses 64GB
+/// which is large enough for most codebases while still working under valgrind.
+///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
+else if (builtin.target.os.tag == .windows)
+    2 * 1024 * 1024 * 1024 * 1024 // 2TB for Windows 64-bit
 else
-    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+    64 * 1024 * 1024 * 1024; // 64GB for POSIX 64-bit (valgrind-compatible)
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
