@@ -17,8 +17,6 @@ const RocDbg = @import("host_abi.zig").RocDbg;
 const RocExpectFailed = @import("host_abi.zig").RocExpectFailed;
 const RocCrashed = @import("host_abi.zig").RocCrashed;
 
-const DEBUG_TESTING_ALLOC = false;
-
 /// Performs a pointer cast with debug-mode alignment verification.
 ///
 /// In debug builds, verifies that the pointer is properly aligned for the target type

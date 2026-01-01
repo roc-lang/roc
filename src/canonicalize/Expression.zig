@@ -23,7 +23,6 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const collections = @import("collections");
 const builtins = @import("builtins");
 
 const ModuleEnv = @import("ModuleEnv.zig");
@@ -35,7 +34,6 @@ const DataSpan = base.DataSpan;
 const CalledVia = base.CalledVia;
 const Ident = base.Ident;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const RocDec = builtins.dec.RocDec;
 const TypeVar = types.Var;
 
@@ -126,6 +124,7 @@ pub const Expr = union(enum) {
     e_lookup_external: struct {
         module_idx: CIR.Import.Idx,
         target_node_idx: u16,
+        ident_idx: Ident.Idx,
         region: Region,
     },
     /// Lookup of a required identifier from the platform's `requires` clause.
@@ -397,13 +396,13 @@ pub const Expr = union(enum) {
     /// This is created when the user writes `Thing.method(args)` inside a function body
     /// where `Thing` is a type variable alias introduced by a statement like `Thing : thing`.
     ///
-    /// The actual function to call is resolved during type-checking once the type variable
+    /// The actual function to call is resolved during monomorphization once the type variable
     /// is unified with a concrete type. For example, if `thing` resolves to `List(a)`,
     /// then `Thing.len(x)` becomes `List.len(x)`.
     ///
     /// ```roc
-    /// default_value : |thing| thing where thing implements Default
-    /// default_value = |thing|
+    /// # Static dispatch: method is resolved based on concrete type at monomorphization time
+    /// call_default = |thing|
     ///     Thing : thing
     ///     Thing.default()  # Calls List.default, Bool.default, etc. based on concrete type
     /// ```
@@ -1176,6 +1175,9 @@ pub const Expr = union(enum) {
     pub const Closure = struct {
         lambda_idx: Expr.Idx, // An index pointing to an `e_lambda` expression
         captures: Expr.Capture.Span,
+        /// The unique tag name for this closure (e.g., "#1_addX").
+        /// Used for lambda set tracking in the type system.
+        tag_name: Ident.Idx,
     };
 
     /// A pure lambda expression, with no captures. This represents the
@@ -1956,6 +1958,9 @@ pub const Expr = union(enum) {
         branches: Branch.Span,
         /// Marks whether a match expression is exhaustive using a variable.
         exhaustive: TypeVar,
+        /// Whether this match was desugared from the `?` (try suffix) operator.
+        /// When true, we need to verify the condition is actually a Try type.
+        is_try_suffix: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

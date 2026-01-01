@@ -41,36 +41,26 @@
 //! subsequent unification runs.
 
 const std = @import("std");
-const builtin = @import("builtin");
 const base = @import("base");
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
-const copy_import = @import("copy_import.zig");
-const Check = @import("check").Check;
 
 const problem_mod = @import("problem.zig");
 const occurs = @import("occurs.zig");
 const snapshot_mod = @import("snapshot.zig");
 
 const ModuleEnv = can.ModuleEnv;
-const AutoImportedType = can.Can.AutoImportedType;
-const CIR = can.CIR;
 
-const Region = base.Region;
 const Ident = base.Ident;
 const MkSafeList = collections.SafeList;
 
-const SmallStringInterner = collections.SmallStringInterner;
-
-const Slot = types_mod.Slot;
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
-const Desc = types_mod.Descriptor;
 const Rank = types_mod.Rank;
 const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
@@ -79,11 +69,8 @@ const Content = types_mod.Content;
 const Alias = types_mod.Alias;
 const NominalType = types_mod.NominalType;
 const FlatType = types_mod.FlatType;
-const Builtin = types_mod.Builtin;
 const Tuple = types_mod.Tuple;
-const Num = types_mod.Num;
 const Func = types_mod.Func;
-const Record = types_mod.Record;
 const RecordField = types_mod.RecordField;
 const TwoRecordFields = types_mod.TwoRecordFields;
 const TagUnion = types_mod.TagUnion;
@@ -95,14 +82,12 @@ const TwoStaticDispatchConstraints = types_mod.TwoStaticDispatchConstraints;
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const RecordFieldSafeList = RecordField.SafeList;
-const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
 const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
 const TagSafeList = Tag.SafeList;
 const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
-const ProblemStore = problem_mod.Store;
 
 /// The result of unification
 pub const Result = union(enum) {
@@ -756,6 +741,28 @@ const Unifier = struct {
                             return error.TypeMismatch;
                         }
                     },
+                    .record => |b_record| {
+                        // Try to unify nominal record (a) with anonymous record (b)
+                        try self.unifyRecordWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_record.fields, .{ .ext = b_record.ext }, .a_is_nominal);
+                    },
+                    .record_unbound => |b_fields| {
+                        // Try to unify nominal record (a) with anonymous unbound record (b)
+                        try self.unifyRecordWithNominal(vars, a_type, a_backing_var, a_backing_resolved, b_fields, .unbound, .a_is_nominal);
+                    },
+                    .empty_record => {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!a_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
+                        if (a_backing_resolved.desc.content == .structure and
+                            a_backing_resolved.desc.content.structure == .empty_record)
+                        {
+                            self.merge(vars, vars.a.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -842,6 +849,21 @@ const Unifier = struct {
                             .unbound,
                         );
                     },
+                    .nominal_type => |b_type| {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Try to unify anonymous record (a) with nominal record (b)
+                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                        if (b_backing_resolved.desc.content == .err) {
+                            self.merge(vars, vars.a.desc.content);
+                            return;
+                        }
+                        try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -873,6 +895,21 @@ const Unifier = struct {
                             .unbound,
                         );
                     },
+                    .nominal_type => |b_type| {
+                        // If this nominal is opaque and we're not in the origin module, error
+                        if (!b_type.canLiftInner(self.module_env.module_name_idx)) {
+                            return error.TypeMismatch;
+                        }
+
+                        // Try to unify anonymous unbound record (a) with nominal record (b)
+                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                        if (b_backing_resolved.desc.content == .err) {
+                            self.merge(vars, vars.a.desc.content);
+                            return;
+                        }
+                        try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_fields, .unbound, .b_is_nominal);
+                    },
                     else => return error.TypeMismatch,
                 }
             },
@@ -893,6 +930,26 @@ const Unifier = struct {
                             // Both are empty, merge as empty_record
                             self.merge(vars, Content{ .structure = .empty_record });
                         } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .nominal_type => |b_type| {
+                        // Try to unify empty record (a) with nominal record (b)
+                        const b_backing_var = self.types_store.getNominalBackingVar(b_type);
+                        const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
+                        if (b_backing_resolved.desc.content == .err) {
+                            self.merge(vars, vars.a.desc.content);
+                            return;
+                        }
+
+                        // Check if the nominal's backing is also an empty record
+                        if (b_backing_resolved.desc.content == .structure and
+                            b_backing_resolved.desc.content.structure == .empty_record)
+                        {
+                            // Both are empty, unify with the nominal
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            // Nominal has a non-empty backing, can't unify
                             return error.TypeMismatch;
                         }
                     },
@@ -985,7 +1042,9 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Early merge so self-referential types don't infinitely recurse
+        // Merge BEFORE recursing into children to enable cycle detection.
+        // If we encounter these same vars again during recursion, checkVarsEquiv
+        // will see they're now equivalent and skip, preventing infinite recursion.
         self.merge(vars, vars.b.desc.content);
 
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
@@ -1127,6 +1186,81 @@ const Unifier = struct {
 
         // If we get here, unification succeeded!
         // Merge to the NOMINAL type (not the tag union)
+        // This is the key: the nominal type "wins"
+        switch (direction) {
+            .a_is_nominal => {
+                // Merge to a (which is the nominal)
+                self.merge(vars, vars.a.desc.content);
+            },
+            .b_is_nominal => {
+                // Merge to b (which is the nominal)
+                self.merge(vars, vars.b.desc.content);
+            },
+        }
+    }
+
+    fn unifyRecordWithNominal(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        nominal_type: NominalType,
+        _: Var, // nominal_backing_var - unused for records
+        nominal_backing_resolved: ResolvedVarDesc,
+        anon_record_fields: RecordField.SafeMultiList.Range,
+        anon_record_ext: RecordExt,
+        direction: NominalDirection,
+    ) Error!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // If this nominal is opaque and we're not in the origin module, error
+        if (!nominal_type.canLiftInner(self.module_env.module_name_idx)) {
+            return error.TypeMismatch;
+        }
+
+        // Check if the nominal's backing type is a record (including empty)
+        const nominal_backing_content = nominal_backing_resolved.desc.content;
+        if (nominal_backing_content != .structure) {
+            return error.TypeMismatch;
+        }
+
+        const nominal_backing_flat = nominal_backing_content.structure;
+
+        // Handle empty record case
+        if (nominal_backing_flat == .empty_record) {
+            // The nominal's backing is an empty record {}
+            // The anon record should also be empty for unification to succeed
+            if (anon_record_fields.len() == 0) {
+                // Both are empty - merge to the NOMINAL type
+                switch (direction) {
+                    .a_is_nominal => self.merge(vars, vars.a.desc.content),
+                    .b_is_nominal => self.merge(vars, vars.b.desc.content),
+                }
+                return;
+            } else {
+                // Anon has fields but nominal is empty
+                return error.TypeMismatch;
+            }
+        }
+
+        if (nominal_backing_flat != .record) {
+            // Nominal's backing is not a record (could be tag union, tuple, etc.)
+            // Cannot unify anonymous record with non-record nominal
+            return error.TypeMismatch;
+        }
+
+        const nominal_backing_record = nominal_backing_flat.record;
+
+        // Unify the record fields
+        try self.unifyTwoRecords(
+            vars,
+            anon_record_fields,
+            anon_record_ext,
+            nominal_backing_record.fields,
+            .{ .ext = nominal_backing_record.ext },
+        );
+
+        // If we get here, unification succeeded!
+        // Merge to the NOMINAL type (not the record)
         // This is the key: the nominal type "wins"
         switch (direction) {
             .a_is_nominal => {
@@ -1721,7 +1855,15 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Unwrap all fields for tag unions, erroring on invalid ext var
+        // Merge BEFORE recursing into tag arguments to enable cycle detection.
+        // If we encounter these same vars again during recursion (e.g., in a
+        // self-referential tag union like [A a] where a is the tag union),
+        // checkVarsEquiv will see they're now equivalent and skip.
+        // We'll update the merged content at the end with the final tag union.
+        self.merge(vars, vars.b.desc.content);
+
+        // First, unwrap all fields for tag unions, erroring if we encounter an
+        // invalid record ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 

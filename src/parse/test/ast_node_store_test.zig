@@ -3,12 +3,7 @@
 const std = @import("std");
 const testing = std.testing;
 const base = @import("base");
-const types = @import("types");
-const parse = @import("parse");
-const builtins = @import("builtins");
 
-const RocDec = builtins.RocDec;
-const Node = @import("../Node.zig");
 const NodeStore = @import("../NodeStore.zig");
 const AST = @import("../AST.zig");
 
@@ -22,11 +17,6 @@ fn rand_idx(comptime T: type) T {
 /// Generate a random token index.
 fn rand_token_idx() AST.Token.Idx {
     return rand.random().int(u32);
-}
-
-/// Generate a random identifier index.
-fn rand_ident_idx() base.Ident.Idx {
-    return @bitCast(rand.random().int(u32));
 }
 
 /// Helper to create a `TokenizedRegion` from raw start and end positions.
@@ -240,6 +230,7 @@ test "NodeStore round trip - Statement" {
             .name = rand_token_idx(),
             .anno = rand_idx(AST.TypeAnno.Idx),
             .where = rand_idx(AST.Collection.Idx),
+            .is_var = false,
             .region = rand_region(),
         },
     });
@@ -417,7 +408,7 @@ test "NodeStore round trip - TypeAnno" {
     });
     try ty_annos.append(gpa, AST.TypeAnno{
         .tag_union = .{
-            .open_anno = rand_idx(AST.TypeAnno.Idx),
+            .ext = .{ .named = rand_idx(AST.TypeAnno.Idx) },
             .tags = AST.TypeAnno.Span{ .span = rand_span() },
             .region = rand_region(),
         },

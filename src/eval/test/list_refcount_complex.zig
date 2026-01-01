@@ -8,9 +8,7 @@
 //!
 //! Each test should pass with correct refcounting (no leaks, no corruption)
 
-const std = @import("std");
 const helpers = @import("helpers.zig");
-const testing = std.testing;
 
 const runExpectI64 = helpers.runExpectI64;
 const runExpectStr = helpers.runExpectStr;

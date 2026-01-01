@@ -2,19 +2,9 @@
 //! actual code to ensure polymorphic values work correctly in practice.
 
 const std = @import("std");
-const base = @import("base");
-const parse = @import("parse");
-const can = @import("can");
-const types_mod = @import("types");
-const problem_mod = @import("../problem.zig");
-const Check = @import("../Check.zig");
 const TestEnv = @import("./TestEnv.zig");
 
-const Can = can.Can;
-const ModuleEnv = can.ModuleEnv;
-const CanonicalizedExpr = can.Can.CanonicalizedExpr;
 const testing = std.testing;
-const test_allocator = testing.allocator;
 
 // primitives - nums //
 
@@ -1355,6 +1345,9 @@ test "check type - patterns frac 3" {
 }
 
 test "check type - patterns list" {
+    // The pattern [_a, .. as b] is redundant because [.. as b, _a] already matches
+    // all non-empty lists. Both patterns match lists with 1+ elements, just extracting
+    // different parts (first vs last element).
     const source =
         \\{
         \\  x = ["a", "b", "c"]
@@ -1366,7 +1359,7 @@ test "check type - patterns list" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .pass, "List(Str)");
+    try checkTypesExpr(source, .fail, "REDUNDANT PATTERN");
 }
 
 test "check type - patterns record" {
@@ -2740,7 +2733,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others2])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -2756,7 +2749,7 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, .._others])");
 }
 
 // record extension in type annotations //
@@ -2829,7 +2822,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, ..others])
+        \\Try(item, [OutOfBounds, .._others])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
@@ -2880,7 +2873,7 @@ test "check type - List.first method syntax should not create cyclic types" {
     // cyclic rigid var mappings in the TypeScope when building layouts.
     //
     // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, ..others]) with an open tag union,
+    // When the return type is Try(item, [ListWasEmpty, .._others]) with an open tag union,
     // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
     //
     // Method syntax: [1].first()
@@ -2891,12 +2884,53 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, ..others]) with item having from_numeral constraint
+    // Expected: Try(item, [ListWasEmpty, .._others]) with item having from_numeral constraint
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, ..others])
+        \\Try(item, [ListWasEmpty, .._others])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
+        ,
+    );
+}
+
+test "check type - lambda capturing top-level constant with plus - mono_pure_lambda case" {
+    // This test verifies the type inference for the mono_pure_lambda snapshot.
+    // The result of add_one(5) should be a numeric type with from_numeral and plus constraints,
+    // NOT Bool.
+    const source =
+        \\one = 1
+        \\add_one = |x| x + one
+        \\result = add_one(5)
+    ;
+    // Expected: result should have numeric type with from_numeral and plus constraints
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "result" } },
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
+        ,
+    );
+}
+
+test "check type - simple function call should have return type" {
+    // Simpler test: directly call a lambda to verify the call expression gets the right type
+    const source =
+        \\add_one = |x| x + 1
+        \\result = add_one(5)
+    ;
+    // Both add_one and result should have numeric types with from_numeral and plus constraints
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "result" } },
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
+        \\  ]
         ,
     );
 }
@@ -2909,7 +2943,7 @@ test "check type - range inferred" {
         \\  if end < $current {
         \\    return []
         \\  }
-        \\  
+        \\
         \\  var $answer = List.with_capacity(((end - $current) + 1).to_u64())
         \\  while $current <= end {
         \\    $answer = $answer.append($current)

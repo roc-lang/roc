@@ -250,6 +250,7 @@ test "NodeStore round trip - Expressions" {
         .e_lookup_external = .{
             .module_idx = rand_idx_u16(CIR.Import.Idx),
             .target_node_idx = rand.random().int(u16),
+            .ident_idx = rand_ident_idx(),
             .region = rand_region(),
         },
     });
@@ -273,6 +274,7 @@ test "NodeStore round trip - Expressions" {
             .cond = rand_idx(CIR.Expr.Idx),
             .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
+            .is_try_suffix = false,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -328,6 +330,7 @@ test "NodeStore round trip - Expressions" {
         .e_closure = .{
             .lambda_idx = rand_idx(CIR.Expr.Idx),
             .captures = CIR.Expr.Capture.Span{ .span = rand_span() },
+            .tag_name = rand_ident_idx(),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -480,6 +483,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .ident_not_in_scope = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .self_referential_definition = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
@@ -868,6 +878,15 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .break_outside_loop = .{
             .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .mutually_recursive_type_aliases = .{
+            .name = rand_ident_idx(),
+            .other_name = rand_ident_idx(),
+            .region = rand_region(),
+            .other_region = rand_region(),
         },
     });
 

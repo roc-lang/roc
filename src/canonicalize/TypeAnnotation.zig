@@ -4,24 +4,14 @@
 
 const std = @import("std");
 const base = @import("base");
-const types = @import("types");
-const builtins = @import("builtins");
-const collections = @import("collections");
 
 const ModuleEnv = @import("ModuleEnv.zig");
 const CIR = @import("CIR.zig");
 const Diagnostic = @import("Diagnostic.zig");
-const Region = base.Region;
-const StringLiteral = base.StringLiteral;
 const Ident = base.Ident;
 const DataSpan = base.DataSpan;
-const SExpr = base.SExpr;
 const SExprTree = base.SExprTree;
-const TypeVar = types.Var;
-const Expr = CIR.Expr;
 const Statement = CIR.Statement;
-const IntValue = CIR.IntValue;
-const RocDec = builtins.RocDec;
 
 /// Canonical representation of type annotations in Roc.
 ///

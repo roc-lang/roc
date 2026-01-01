@@ -31,7 +31,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-process_user! : { name : Str, age : U32 } => Str
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure

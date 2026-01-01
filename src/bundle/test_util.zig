@@ -1,7 +1,5 @@
 //! Common test utilities for bundle tests
 
-const std = @import("std");
-
 /// Iterator for file paths used in tests
 pub const FilePathIterator = struct {
     paths: []const []const u8,

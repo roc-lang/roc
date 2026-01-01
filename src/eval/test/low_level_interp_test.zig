@@ -9,14 +9,11 @@ const parse = @import("parse");
 const base = @import("base");
 const can = @import("can");
 const check = @import("check");
-const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
 
 const ComptimeEvaluator = @import("../comptime_evaluator.zig").ComptimeEvaluator;
 const BuiltinTypes = @import("../builtins.zig").BuiltinTypes;
 const builtin_loading = @import("../builtin_loading.zig");
-const Interpreter = @import("../interpreter.zig").Interpreter;
-const helpers = @import("helpers.zig");
 
 const Can = can.Can;
 const Check = check.Check;
@@ -2911,6 +2908,8 @@ test "e_low_level_lambda - I64.mod_by with zero result" {
 // variable in polymorphic contexts, leading to the wrong layout being used
 // for the return value (should be empty record {}).
 test "issue 8750: dbg in polymorphic debug function with List.len" {
+    std.debug.print("Ignore the dbg prints to stderr below, they are expected.\n", .{});
+
     const src =
         \\debug = |v| {
         \\    dbg v

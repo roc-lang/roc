@@ -7,7 +7,6 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
-const serialization = @import("serialization");
 const compiled_builtins = @import("compiled_builtins");
 
 const helpers = @import("helpers.zig");
@@ -1943,4 +1942,129 @@ test "Decode: LineFmt.string_decoder decodes hello" {
         \\    }
         \\}
     , "hello", .no_trace);
+}
+
+test "issue 8783: List.fold with match on tag union elements from pattern match" {
+    // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
+    // would fail with TypeMismatch in match_branches continuation.
+    try runExpectI64(
+        \\{
+        \\    elem = Element("div", [Text("hello")])
+        \\    children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\    count_child = |acc, child| match child { Text(_) => acc + 1, Element(_, _) => acc + 10 }
+        \\    List.fold(children, 0, count_child)
+        \\}
+    , 1, .no_trace);
+}
+
+test "issue 8821: List.get with records and pattern match on Try type" {
+    // Regression test for issue #8821
+    // Test List.get with a list of records, pattern matching on Try/Result,
+    // and accessing record fields from the matched value
+    try runExpectStr(
+        \\{
+        \\    clients : List({ id : U64, name : Str })
+        \\    clients = [{ id: 1, name: "Alice" }]
+        \\
+        \\    match List.get(clients, 0) {
+        \\        Ok(client) => client.name
+        \\        Err(_) => "missing"
+        \\    }
+        \\}
+    , "Alice", .no_trace);
+}
+
+test "encode: just convert string to utf8" {
+    // Simple test: convert string to utf8 and back
+    try runExpectStr(
+        \\{
+        \\    bytes = Str.to_utf8("hello")
+        \\    Str.from_utf8_lossy(bytes)
+        \\}
+    , "hello", .no_trace);
+}
+
+test "static dispatch: List.sum uses item.plus and item.default" {
+    // Test that static dispatch works with List.sum
+    // List.sum requires: item.plus : item, item -> item, item.default : item
+    // This demonstrates the static dispatch pattern that Encode uses
+    try runExpectI64(
+        \\{
+        \\    list : List(I64)
+        \\    list = [1i64, 2i64, 3i64, 4i64, 5i64]
+        \\    List.sum(list)
+        \\}
+    , 15, .no_trace);
+}
+
+// TODO: Enable this test once cross-module type variable dispatch is fixed.
+// The issue is that the flex_type_context mapping needs to properly connect
+// the parameter's type variable to the type alias's type variable.
+// test "encode: Str.encode with local format type" {
+//     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
+//     // where Fmt is a local type defined in the test.
+//     // This exercises the flex_type_context propagation in type_var_dispatch_invoke.
+//     try runExpectListI64(
+//         \\{
+//         \\    # Define a local format type that converts strings to UTF-8
+//         \\    Utf8Format := {}.{
+//         \\        encode_str : Utf8Format, Str -> List(U8)
+//         \\        encode_str = |_fmt, s| Str.to_utf8(s)
+//         \\    }
+//         \\
+//         \\    fmt : Utf8Format
+//         \\    fmt = {}
+//         \\
+//         \\    # The result is List(U8) but we cast it to List(I64) for the test helper
+//         \\    bytes = Str.encode("hi", fmt)
+//         \\    List.map(bytes, |b| U8.to_i64(b))
+//         \\}
+//     , &[_]i64{ 104, 105 }, .no_trace);
+// }
+
+test "issue 8831: self-referential value definition should produce error, not crash" {
+    // Regression test for GitHub issue #8831
+    // A self-referential value definition like `a = a` should produce a
+    // compile-time error (ident_not_in_scope) instead of crashing at runtime
+    // with "e_lookup_local: definition not found in current scope".
+    //
+    // The fix is to detect during canonicalization that the RHS of a definition
+    // refers to a variable that is being defined in the current definition and
+    // hasn't been introduced to the scope yet.
+    try runExpectError(
+        \\{
+        \\    a = a
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "issue 8831: nested self-reference in list should also error" {
+    // Additional test for issue #8831
+    // Even nested self-references like `a = [a]` should error during canonicalization.
+    // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
+    // Only lambdas are allowed to self-reference (for recursive function calls).
+    try runExpectError(
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    // Test that recursive closure calls don't leak stack memory.
+    // If stack memory is not properly restored after closure returns,
+    // deeply recursive functions will exhaust the interpreter's stack.
+    // The record allocation forces stack allocation on each call.
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
 }

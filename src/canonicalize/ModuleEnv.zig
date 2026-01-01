@@ -25,7 +25,6 @@ const StringLiteral = base.StringLiteral;
 const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 const TypeStore = types_mod.Store;
 
@@ -690,6 +689,31 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addKeyword("exposing");
             try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .self_referential_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The value ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -1971,6 +1995,57 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .mutually_recursive_type_aliases => |data| blk: {
+            const type_name = self.getIdent(data.name);
+            const other_type_name = self.getIdent(data.other_name);
+            const region_info = self.calcRegionInfo(data.region);
+            const other_region_info = self.calcRegionInfo(data.other_region);
+
+            var report = Report.init(allocator, "MUTUALLY RECURSIVE TYPE ALIASES", .runtime_error);
+            const owned_type_name = try report.addOwnedString(type_name);
+            const owned_other_name = try report.addOwnedString(other_type_name);
+
+            try report.document.addReflowingText("The type alias ");
+            try report.document.addType(owned_type_name);
+            try report.document.addReflowingText(" and ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" form a recursive cycle.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type aliases are transparent synonyms and cannot be mutually recursive. ");
+            try report.document.addReflowingText("If you need recursive types, use nominal types (");
+            try report.document.addAnnotated(":=", .inline_code);
+            try report.document.addReflowingText(") instead.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("This type is declared here:");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("And it references ");
+            try report.document.addType(owned_other_name);
+            try report.document.addReflowingText(" declared here:");
+            try report.document.addLineBreak();
+            try report.document.addSourceRegion(
+                other_region_info,
+                .dimmed,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         else => unreachable, // All diagnostics must have explicit handlers
     };
 }
@@ -2189,21 +2264,6 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
     }
 }
 
-/// Assert that nodes, regions and types are all in sync
-inline fn debugAssertIdxsEql(comptime desc: []const u8, idx1: anytype, idx2: anytype) void {
-    if (builtin.mode == .Debug) {
-        const idx1_int = @intFromEnum(idx1);
-        const idx2_int = @intFromEnum(idx2);
-
-        if (idx1_int != idx2_int) {
-            std.debug.panic(
-                "{s} idxs out of sync: {} != {}\n",
-                .{ desc, idx1_int, idx2_int },
-            );
-        }
-    }
-}
-
 /// Add a new expression to the node store.
 /// This function asserts that the nodes and regions are in sync.
 pub fn addDef(self: *Self, expr: CIR.Def, region: Region) std.mem.Allocator.Error!CIR.Def.Idx {
@@ -2392,13 +2452,6 @@ pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []cons
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
-}
-
-/// Helper to format pattern index for s-expr output
-fn formatPatternIdxNode(gpa: std.mem.Allocator, pattern_idx: CIR.Pattern.Idx) SExpr {
-    var node = SExpr.init(gpa, "pid");
-    node.appendUnsignedInt(gpa, @intFromEnum(pattern_idx));
-    return node;
 }
 
 /// Helper function to generate the S-expression node for the entire module.

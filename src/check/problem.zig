@@ -3,11 +3,9 @@
 const std = @import("std");
 const base = @import("base");
 const tracy = @import("tracy");
-const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
 const reporting = @import("reporting");
-const Check = @import("Check.zig");
 
 const snapshot = @import("snapshot.zig");
 
@@ -17,20 +15,15 @@ const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 
 const Report = reporting.Report;
-const Document = reporting.Document;
 const UnderlineRegion = reporting.UnderlineRegion;
 const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
-const SourceRegion = reporting.SourceRegion;
 
-const TypesStore = types_mod.Store;
 const Ident = base.Ident;
 
-const MkSafeMultiList = collections.SafeMultiList;
-
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
+const ExtraStringIdx = snapshot.ExtraStringIdx;
 
 const Var = types_mod.Var;
-const Content = types_mod.Content;
 
 /// Returns singular form if count is 1, plural form otherwise.
 /// Usage: pluralize(count, "argument", "arguments")
@@ -62,6 +55,9 @@ pub const Problem = union(enum) {
     comptime_crash: ComptimeCrash,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
+    non_exhaustive_match: NonExhaustiveMatch,
+    redundant_pattern: RedundantPattern,
+    unmatchable_pattern: UnmatchablePattern,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -168,6 +164,8 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+    non_exhaustive_match: NonExhaustiveMatch,
+    invalid_try_operator: InvalidTryOperator,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     invalid_nominal_record,
@@ -246,6 +244,35 @@ pub const IncompatibleMatchBranches = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for a non-exhaustive match expression
+pub const NonExhaustiveMatch = struct {
+    match_expr: CIR.Expr.Idx,
+    /// Snapshot of the condition type for error messages
+    condition_snapshot: SnapshotContentIdx,
+    /// Indices into the snapshot store's extra strings for missing pattern descriptions
+    missing_patterns: []const ExtraStringIdx,
+};
+
+/// Problem data for a redundant pattern in a match
+pub const RedundantPattern = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for an unmatchable pattern (pattern on uninhabited type)
+pub const UnmatchablePattern = struct {
+    match_expr: CIR.Expr.Idx,
+    num_branches: u32,
+    problem_branch_index: u32,
+};
+
+/// Problem data for when the `?` operator is used on a non-Try type.
+/// A Try type is a tag union with Ok and Err tags.
+pub const InvalidTryOperator = struct {
+    expr: CIR.Expr.Idx,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
@@ -452,6 +479,12 @@ pub const ReportBuilder = struct {
                         .incompatible_match_branches => |data| {
                             return self.buildIncompatibleMatchBranches(mismatch.types, data);
                         },
+                        .non_exhaustive_match => |data| {
+                            return self.buildNonExhaustiveMatch(data);
+                        },
+                        .invalid_try_operator => |data| {
+                            return self.buildInvalidTryOperator(mismatch.types, data);
+                        },
                         .invalid_bool_binop => |data| {
                             return self.buildInvalidBoolBinop(mismatch.types, data);
                         },
@@ -532,6 +565,9 @@ pub const ReportBuilder = struct {
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
+            .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
+            .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
+            .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -1269,6 +1305,138 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("To learn about tags, see ");
         try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
+
+        return report;
+    }
+
+    /// Build a report for non-exhaustive match
+    fn buildNonExhaustiveMatch(
+        self: *Self,
+        data: NonExhaustiveMatch,
+    ) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        // Add description
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression may not handle all possible values:");
+        try report.document.addLineBreak();
+
+        // Get the match expression region
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            match_region.start.offset,
+            match_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, match_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = match_region_info.start_line_idx + 1,
+            .start_column = match_region_info.start_col_idx + 1,
+            .end_line = match_region_info.end_line_idx + 1,
+            .end_column = match_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = match_region_info.start_line_idx + 1,
+                .start_column = match_region_info.start_col_idx + 1,
+                .end_line = match_region_info.end_line_idx + 1,
+                .end_column = match_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("The value being matched has an open type (can contain additional tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but none of the branches is a catch-all pattern like ");
+        try report.document.addAnnotated("_", .type_variable);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when the `?` operator is used on a non-Try type
+    fn buildInvalidTryOperator(
+        self: *Self,
+        types: TypePair,
+        data: InvalidTryOperator,
+    ) !Report {
+        var report = Report.init(self.gpa, "EXPECTED TRY TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned string for the actual type
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addText("The ");
+        try report.document.addAnnotated("?", .keyword);
+        try report.document.addText(" operator expects a ");
+        try report.document.addAnnotated("Try", .type_variable);
+        try report.document.addText(" type (a tag union containing ONLY ");
+        try report.document.addAnnotated("Ok", .type_variable);
+        try report.document.addText(" and ");
+        try report.document.addAnnotated("Err", .type_variable);
+        try report.document.addText(" tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but I found:");
+        try report.document.addLineBreak();
+
+        // Get the expression region
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.expr)));
+        const expr_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            expr_region.start.offset,
+            expr_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, expr_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = expr_region_info.start_line_idx + 1,
+            .start_column = expr_region_info.start_col_idx + 1,
+            .end_line = expr_region_info.end_line_idx + 1,
+            .end_column = expr_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = expr_region_info.start_line_idx + 1,
+                .start_column = expr_region_info.start_col_idx + 1,
+                .end_line = expr_region_info.end_line_idx + 1,
+                .end_column = expr_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("This expression has type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Tip: Maybe wrap a value using ");
+        try report.document.addAnnotated("Ok(value)", .type_variable);
+        try report.document.addText(" or ");
+        try report.document.addAnnotated("Err(value)", .type_variable);
+        try report.document.addText(".");
 
         return report;
     }
@@ -2098,11 +2266,7 @@ pub const ReportBuilder = struct {
         const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
         const region_info = self.module_env.calcRegionInfo(region.*);
 
-        try report.document.addReflowingText("This expression uses ");
-        try report.document.addAnnotated("==", .emphasized);
-        try report.document.addReflowingText(" or ");
-        try report.document.addAnnotated("!=", .emphasized);
-        try report.document.addReflowingText(" on a type that doesn't support equality:");
+        try report.document.addReflowingText("This expression is doing an equality check on a type that doesn't support equality:");
         try report.document.addLineBreak();
 
         try report.document.addSourceRegion(
@@ -2233,6 +2397,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             const field_names = fields.items(.name);
             const field_contents = fields.items(.content);
@@ -2247,9 +2412,11 @@ pub const ReportBuilder = struct {
                     try report.document.addText(": ");
                     try report.document.addAnnotated(field_type_str, .type_variable);
                     try report.document.addLineBreak();
+
+                    // Explain WHY this field doesn't support equality
+                    _ = try self.explainWhyNoEquality(report, field_content_idx, "        ");
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Anonymous records only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2282,6 +2449,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
@@ -2294,9 +2462,11 @@ pub const ReportBuilder = struct {
                     try report.document.addText(": ");
                     try report.document.addAnnotated(elem_type_str, .type_variable);
                     try report.document.addLineBreak();
+
+                    // Explain WHY this element doesn't support equality
+                    _ = try self.explainWhyNoEquality(report, elem_content_idx, "        ");
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tuples only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2333,6 +2503,7 @@ pub const ReportBuilder = struct {
             try report.document.addAnnotated("is_eq", .emphasized);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
+            try report.document.addLineBreak();
 
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
@@ -2364,9 +2535,15 @@ pub const ReportBuilder = struct {
                         try report.document.addText(")");
                     }
                     try report.document.addLineBreak();
+
+                    // Explain WHY each problematic payload doesn't support equality
+                    for (args) |arg_content_idx| {
+                        if (!self.snapshotSupportsEquality(arg_content_idx)) {
+                            _ = try self.explainWhyNoEquality(report, arg_content_idx, "        ");
+                        }
+                    }
                 }
             }
-            try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tag unions only have an ");
             try report.document.addAnnotated("is_eq", .emphasized);
@@ -2413,7 +2590,16 @@ pub const ReportBuilder = struct {
                     }
                     return true;
                 },
-                // Other types (nominal, box, etc.) assumed to support equality
+                // Nominal types: check the backing type (first element in vars)
+                .nominal_type => |nominal| {
+                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    if (vars.len > 0) {
+                        // First var is the backing type
+                        return self.snapshotSupportsEquality(vars[0]);
+                    }
+                    return true;
+                },
+                // Other types (box, etc.) assumed to support equality
                 else => true,
             },
             // Aliases: check the underlying type
@@ -2421,6 +2607,122 @@ pub const ReportBuilder = struct {
             // Other types (flex, rigid, recursive, err) assumed to support equality
             else => true,
         };
+    }
+
+    /// Explain why a type doesn't support equality, adding the explanation to the report.
+    /// Returns true if an explanation was added.
+    fn explainWhyNoEquality(self: *Self, report: *Report, content_idx: snapshot.SnapshotContentIdx, indent: []const u8) !bool {
+        const content = self.snapshots.getContent(content_idx);
+        switch (content) {
+            .structure => |s| switch (s) {
+                .fn_pure, .fn_effectful, .fn_unbound => {
+                    try report.document.addText(indent);
+                    try report.document.addReflowingText("Function equality is not supported.");
+                    try report.document.addLineBreak();
+                    return true;
+                },
+                .record => |record| {
+                    const fields = self.snapshots.sliceRecordFields(record.fields);
+                    const field_names = fields.items(.name);
+                    const field_contents = fields.items(.content);
+                    for (field_names, field_contents) |name, field_content| {
+                        if (!self.snapshotSupportsEquality(field_content)) {
+                            const field_name = self.can_ir.getIdentText(name);
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("The ");
+                            try report.document.addAnnotated(field_name, .emphasized);
+                            try report.document.addReflowingText(" field doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, field_content, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                .tuple => |tuple| {
+                    const elems = self.snapshots.sliceVars(tuple.elems);
+                    for (elems, 0..) |elem_content, i| {
+                        if (!self.snapshotSupportsEquality(elem_content)) {
+                            var buf: [20]u8 = undefined;
+                            const index_str = std.fmt.bufPrint(&buf, "{}", .{i}) catch "?";
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("Element ");
+                            try report.document.addAnnotated(index_str, .emphasized);
+                            try report.document.addReflowingText(" doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, elem_content, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                .tag_union => |tag_union| {
+                    const tags_slice = self.snapshots.sliceTags(tag_union.tags);
+                    const tag_names = tags_slice.items(.name);
+                    const tag_args_list = tags_slice.items(.args);
+                    for (tag_names, tag_args_list) |name, tag_args| {
+                        const args = self.snapshots.sliceVars(tag_args);
+                        for (args, 0..) |arg_content, i| {
+                            if (!self.snapshotSupportsEquality(arg_content)) {
+                                const tag_name = self.can_ir.getIdentText(name);
+                                try report.document.addText(indent);
+                                try report.document.addReflowingText("The ");
+                                try report.document.addAnnotated(tag_name, .emphasized);
+                                if (args.len > 1) {
+                                    var buf: [32]u8 = undefined;
+                                    const payload_str = std.fmt.bufPrint(&buf, " tag's payload {}", .{i}) catch " tag's payload";
+                                    try report.document.addReflowingText(payload_str);
+                                } else {
+                                    try report.document.addReflowingText(" tag's payload");
+                                }
+                                try report.document.addReflowingText(" doesn't support equality:");
+                                try report.document.addLineBreak();
+                                // Recurse with more indent
+                                var deeper_indent_buf: [64]u8 = undefined;
+                                const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                                _ = try self.explainWhyNoEquality(report, arg_content, deeper_indent);
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                },
+                .nominal_type => |nominal| {
+                    const vars = self.snapshots.sliceVars(nominal.vars);
+                    if (vars.len > 0) {
+                        const backing = vars[0];
+                        if (!self.snapshotSupportsEquality(backing)) {
+                            const nominal_name = self.can_ir.getIdentText(nominal.ident.ident_idx);
+                            try report.document.addText(indent);
+                            try report.document.addReflowingText("The ");
+                            try report.document.addAnnotated(nominal_name, .emphasized);
+                            try report.document.addReflowingText(" type's backing structure doesn't support equality:");
+                            try report.document.addLineBreak();
+                            // Recurse with more indent
+                            var deeper_indent_buf: [64]u8 = undefined;
+                            const deeper_indent = std.fmt.bufPrint(&deeper_indent_buf, "{s}    ", .{indent}) catch indent;
+                            _ = try self.explainWhyNoEquality(report, backing, deeper_indent);
+                            return true;
+                        }
+                    }
+                    return false;
+                },
+                else => return false,
+            },
+            .alias => |alias| {
+                if (!self.snapshotSupportsEquality(alias.backing)) {
+                    return try self.explainWhyNoEquality(report, alias.backing, indent);
+                }
+                return false;
+            },
+            else => return false,
+        }
     }
 
     // number problems //
@@ -2856,6 +3158,120 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    fn buildNonExhaustiveMatchReport(self: *Self, data: NonExhaustiveMatch) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression doesn't cover all possible cases:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        const condition_type = self.getFormattedString(data.condition_snapshot);
+        try report.document.addText("The value being matched on has type:");
+        try report.document.addLineBreak();
+        try report.document.addText("        ");
+        try report.document.addAnnotated(condition_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Missing patterns:");
+        try report.document.addLineBreak();
+
+        for (data.missing_patterns) |pattern_idx| {
+            const pattern = self.snapshots.getExtraString(pattern_idx);
+            const owned_pattern = try report.addOwnedString(pattern);
+            try report.document.addText("    ");
+            try report.document.addCodeBlock(owned_pattern);
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addLineBreak();
+        try report.document.addText("Hint: Add branches to handle these cases, or use ");
+        try report.document.addAnnotated("_", .keyword);
+        try report.document.addText(" to match anything.");
+
+        return report;
+    }
+
+    fn buildRedundantPatternReport(self: *Self, data: RedundantPattern) !Report {
+        var report = Report.init(self.gpa, "REDUNDANT PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" is redundant:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern can never match because earlier patterns already ");
+        try report.document.addText("cover all the values it would match.");
+
+        return report;
+    }
+
+    fn buildUnmatchablePatternReport(self: *Self, data: UnmatchablePattern) !Report {
+        var report = Report.init(self.gpa, "UNMATCHABLE PATTERN", .warning);
+        errdefer report.deinit();
+
+        self.bytes_buf.clearRetainingCapacity();
+        try appendOrdinal(&self.bytes_buf, data.problem_branch_index + 1);
+        const ordinal_str = try report.addOwnedString(self.bytes_buf.items);
+
+        try report.document.addText("The ");
+        try report.document.addText(ordinal_str);
+        try report.document.addText(" branch of this ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" can never match:");
+        try report.document.addLineBreak();
+
+        // Add source region highlighting
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const region_info = self.module_env.calcRegionInfo(match_region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("This pattern matches a type that has no possible values (an uninhabited type), ");
+        try report.document.addText("so no value can ever match it.");
+
+        return report;
+    }
+
     // helpers //
 
     // Given a buffer and a number, write a the human-readably ordinal number
@@ -2947,6 +3363,14 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
+        // Free the indices slice in non_exhaustive_match problems
+        // (the actual strings are managed by the SnapshotStore)
+        for (self.problems.items) |prob| {
+            switch (prob) {
+                .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
+                else => {},
+            }
+        }
         self.problems.deinit(gpa);
     }
 

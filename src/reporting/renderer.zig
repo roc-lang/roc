@@ -2,7 +2,6 @@
 //! output formats without the complexity of vtables or interfaces.
 
 const std = @import("std");
-const collections = @import("collections");
 
 const source_region = @import("source_region.zig");
 const Allocator = std.mem.Allocator;

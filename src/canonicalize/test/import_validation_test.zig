@@ -8,7 +8,6 @@
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
-const collections = @import("collections");
 
 const Can = @import("../Can.zig");
 const ModuleEnv = @import("../ModuleEnv.zig");

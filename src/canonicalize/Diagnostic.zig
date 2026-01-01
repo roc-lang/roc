@@ -7,7 +7,6 @@ const reporting = @import("reporting");
 const Region = base.Region;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Document = reporting.Document;
 const Report = reporting.Report;
 
 const Allocator = std.mem.Allocator;
@@ -38,6 +37,12 @@ pub const Diagnostic = union(enum) {
         region: Region,
     },
     ident_not_in_scope: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
+    /// A non-function value is defined in terms of itself, which would cause an infinite loop.
+    /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
+    self_referential_definition: struct {
         ident: Ident.Idx,
         region: Region,
     },
@@ -253,6 +258,15 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    /// Two or more type aliases form a cycle where each references another.
+    /// This is not allowed because type aliases are transparent synonyms.
+    /// Use nominal types (:=) for recursive types.
+    mutually_recursive_type_aliases: struct {
+        name: Ident.Idx,
+        other_name: Ident.Idx,
+        region: Region,
+        other_region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -266,6 +280,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .self_referential_definition => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
@@ -320,6 +335,7 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .mutually_recursive_type_aliases => |d| d.region,
         };
     }
 
@@ -527,6 +543,36 @@ pub const Diagnostic = union(enum) {
             try report.document.addReflowingTextWithBackticks(tip);
         }
 
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "self-referential assignment" diagnostic
+    pub fn buildSelfReferentialDefinitionReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addReflowingText("The value ");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);

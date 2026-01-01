@@ -18,10 +18,8 @@ const trace_modules = if (builtin.cpu.arch == .wasm32) false else if (@hasDecl(b
 const CompactWriter = collections.CompactWriter;
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const RegionInfo = base.RegionInfo;
 const Region = base.Region;
 const SExprTree = base.SExprTree;
-const SExpr = base.SExpr;
 const TypeVar = types_mod.Var;
 
 // Re-export these from other modules for convenience
@@ -389,6 +387,11 @@ pub const SmallDecValue = struct {
             .fits_in_f32 = fitsInF32(f64_val),
             .fits_in_dec = fitsInDec(f64_val),
         };
+    }
+
+    /// Convert to RocDec representation (i128 scaled by 10^18)
+    pub fn toRocDec(self: SmallDecValue) RocDec {
+        return RocDec.fromFraction(self.numerator, self.denominator_power_of_ten);
     }
 
     test "SmallDecValue.toF64 - basic cases" {

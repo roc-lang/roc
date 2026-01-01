@@ -9,7 +9,6 @@ const can = @import("can");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins.zig");
 
-const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 const compiled_builtins = @import("compiled_builtins");

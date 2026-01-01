@@ -5,12 +5,9 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const tracy = @import("tracy");
 
-const is_freestanding = builtin.os.tag == .freestanding;
-
 /// Stack size for the interpreter. WASM targets use a smaller stack to avoid
 /// memory pressure from repeated allocations that can't be efficiently coalesced.
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
-const trace_eval = build_options.trace_eval;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -31,13 +28,11 @@ const render_helpers = @import("render_helpers.zig");
 const builtins = @import("builtins");
 const RocOps = builtins.host_abi.RocOps;
 const RocExpectFailed = builtins.host_abi.RocExpectFailed;
-const RocCrashed = builtins.host_abi.RocCrashed;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
 const RocList = builtins.list.RocList;
 const utils = builtins.utils;
 const Layout = layout.Layout;
-const helpers = @import("test/helpers.zig");
 const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
 const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
@@ -115,20 +110,6 @@ fn listElementDec(context_opaque: ?*anyopaque, elem_ptr: ?[*]u8) callconv(.c) vo
 /// different element types (e.g., List(Dec) vs List(generic_num)) will be different.
 fn layoutsEqual(a: Layout, b: Layout) bool {
     return a.eql(b);
-}
-
-fn interpreterLookupModuleEnv(
-    ctx: ?*const anyopaque,
-    module_ident: base_pkg.Ident.Idx,
-) ?*const can.ModuleEnv {
-    const map_ptr = ctx orelse return null;
-    const map: *const std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv) =
-        @ptrCast(@alignCast(map_ptr));
-
-    if (map.*.get(module_ident)) |entry| {
-        return entry;
-    }
-    return null;
 }
 
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
@@ -630,6 +611,48 @@ pub const Interpreter = struct {
         @memset(self.var_to_layout_slot.items, 0);
     }
 
+    /// Check if adding source -> target to rigid_subst would create a cycle.
+    /// A cycle exists if following the substitution chain from target eventually leads back to source.
+    /// This checks BOTH rigid_subst and rigid_name_subst since getRuntimeLayout follows both.
+    fn wouldCreateRigidSubstCycle(self: *Interpreter, source: types.Var, target: types.Var) bool {
+        // First check: if source == target, it's a trivial cycle
+        if (source == target) return true;
+
+        // Follow the substitution chain from target, checking both rigid_subst and rigid_name_subst
+        // (same logic as getRuntimeLayout uses)
+        var resolved = self.runtime_types.resolveVar(target);
+        var count: u32 = 0;
+        while (true) {
+            count += 1;
+            if (count > 1000) {
+                // Safety limit - if we've followed 1000 substitutions, something is wrong
+                return true;
+            }
+
+            // Check if we've reached the source
+            if (resolved.var_ == source) {
+                return true;
+            }
+
+            // Try to follow substitution chain (same order as getRuntimeLayout)
+            if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (resolved.desc.content == .rigid) {
+                const rigid_name = resolved.desc.content.rigid.name;
+                if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
+                    resolved = self.runtime_types.resolveVar(substituted_var);
+                } else {
+                    // No more substitutions available
+                    break;
+                }
+            } else {
+                // Not a rigid, no more substitutions
+                break;
+            }
+        }
+        return false;
+    }
+
     /// Find a type alias declaration by name in a module and return the var for its underlying type.
     /// Returns null if no type alias declaration with the given name is found.
     fn findTypeAliasBodyVar(module: *const can.ModuleEnv, name: base_pkg.Ident.Idx) ?types.Var {
@@ -810,8 +833,8 @@ pub const Interpreter = struct {
             defer self.trimBindingList(&self.bindings, base_binding_len, roc_ops);
 
             // Evaluate body, handling early returns at function boundary
-            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| {
-                if (err == error.EarlyReturn) {
+            const result_value = self.evalWithExpectedType(header.body_idx, roc_ops, null) catch |err| switch (err) {
+                error.EarlyReturn => {
                     const return_val = self.early_return_value orelse return error.Crash;
                     self.early_return_value = null;
                     defer return_val.decref(&self.runtime_layout_store, roc_ops);
@@ -819,12 +842,12 @@ pub const Interpreter = struct {
                         try return_val.copyToPtr(&self.runtime_layout_store, ret_ptr, roc_ops);
                     }
                     return;
-                }
-                if (err == error.TypeMismatch) {
+                },
+                error.TypeMismatch => {
                     self.triggerCrash("Type mismatch error during evaluation - this may indicate a compile-time error that was deferred to runtime", false, roc_ops);
                     return;
-                }
-                return err;
+                },
+                else => return err,
             };
             defer result_value.decref(&self.runtime_layout_store, roc_ops);
 
@@ -1157,6 +1180,7 @@ pub const Interpreter = struct {
             .saved_rigid_subst = null,
             .saved_flex_type_context = null,
             .arg_rt_vars_to_free = null,
+            .saved_stack_ptr = self.stack_memory.next(),
         } } });
         try work_stack.push(.{ .eval_expr = .{
             .expr_idx = cmp_header.body_idx,
@@ -1887,7 +1911,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -1898,15 +1924,7 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write discriminant at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
-                            const disc_value: u32 = @intCast(ok_index orelse 0);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
-                            }
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
 
                             // Write Str payload at offset 0
                             const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
@@ -2109,7 +2127,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info for Err case
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -2120,15 +2140,8 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write outer discriminant (Err) at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
-                            const disc_value: u32 = @intCast(err_index orelse 1);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
-                            }
+                            // Write outer discriminant (Err)
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(err_index orelse 1));
 
                             // Get Err variant's payload layout (BadUtf8 - also a tag_union)
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
@@ -2136,16 +2149,12 @@ pub const Interpreter = struct {
 
                             // BadUtf8 is a tag_union with record { problem, index } as its payload
                             if (err_variant_layout.tag == .tag_union) {
-                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(err_variant_layout.data.tag_union.idx);
+                                const inner_tu_idx = err_variant_layout.data.tag_union.idx;
+                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(inner_tu_idx);
+                                const inner_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(inner_tu_idx);
 
                                 // Write inner discriminant (BadUtf8 is index 0)
-                                const inner_disc_ptr = ptr_u8 + inner_tu_data.discriminant_offset;
-                                switch (inner_tu_data.discriminant_size) {
-                                    1 => @as(*u8, @ptrCast(inner_disc_ptr)).* = 0,
-                                    2 => @as(*u16, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    4 => @as(*u32, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    else => {},
-                                }
+                                inner_tu_data.writeDiscriminantToPtr(ptr_u8 + inner_disc_offset, 0);
 
                                 // Get BadUtf8's payload layout (should be record { problem, index })
                                 const inner_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
@@ -2572,10 +2581,19 @@ pub const Interpreter = struct {
                                 const elem_var = vars[1];
                                 // Follow aliases to check if underlying type is concrete
                                 var elem_resolved = self.runtime_types.resolveVar(elem_var);
-                                var unwrap_count: u32 = 0;
-                                while (elem_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                                    const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
-                                    elem_resolved = self.runtime_types.resolveVar(backing);
+                                if (comptime builtin.mode == .Debug) {
+                                    var unwrap_count: u32 = 0;
+                                    while (elem_resolved.desc.content == .alias) {
+                                        unwrap_count += 1;
+                                        std.debug.assert(unwrap_count < 1000);
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
+                                } else {
+                                    while (elem_resolved.desc.content == .alias) {
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
                                 }
                                 // If element type is concrete (structure or alias to structure), create a fresh copy
                                 // to avoid corruption from later unifications during equality checking
@@ -2610,10 +2628,19 @@ pub const Interpreter = struct {
                     // List came from polymorphic context - try return_rt_var if it's concrete
                     if (return_rt_var) |rv| {
                         var rv_resolved = self.runtime_types.resolveVar(rv);
-                        var unwrap_count: u32 = 0;
-                        while (rv_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                            const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
-                            rv_resolved = self.runtime_types.resolveVar(backing);
+                        if (comptime builtin.mode == .Debug) {
+                            var unwrap_count: u32 = 0;
+                            while (rv_resolved.desc.content == .alias) {
+                                unwrap_count += 1;
+                                std.debug.assert(unwrap_count < 1000);
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
+                        } else {
+                            while (rv_resolved.desc.content == .alias) {
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
                         }
                         if (rv_resolved.desc.content == .structure) {
                             break :blk rv;
@@ -4606,22 +4633,16 @@ pub const Interpreter = struct {
                 } else if (result_layout.tag == .tag_union) {
                     // Tag union layout: payload at offset 0, discriminant at discriminant_offset
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    const tu_idx = result_layout.data.tag_union.idx;
+                    const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                    const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                    // Write tag discriminant at discriminant_offset
                     const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    switch (tu_data.discriminant_size) {
-                        1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                        2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        else => {},
-                    }
+                    const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+                    tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
                     // Clear payload area (at offset 0)
-                    const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+                    const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
                     if (payload_size > 0) {
                         @memset(base_ptr[0..payload_size], 0);
                     }
@@ -5318,22 +5339,16 @@ pub const Interpreter = struct {
         } else if (result_layout.tag == .tag_union) {
             // Tag union layout: payload at offset 0, discriminant at discriminant_offset
             const dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-            // Write tag discriminant at discriminant_offset
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
-            }
+            const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
-            // Clear payload area (at offset 0)
-            const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+            // Clear payload area
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -5923,22 +5938,15 @@ pub const Interpreter = struct {
             return dest;
         } else if (result_layout.tag == .tag_union) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-
-            // Write discriminant
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_idx));
 
             // Clear and write payload
-            const payload_size = tu_data.discriminant_offset;
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -6040,9 +6048,10 @@ pub const Interpreter = struct {
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
             // Tag union Bool: read discriminant at the correct offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+            const tu_idx = value.layout.data.tag_union.idx;
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             const bool_byte = disc_ptr[0];
             // Debug removed
             // discriminant 1 = True, discriminant 0 = False
@@ -6053,123 +6062,6 @@ pub const Interpreter = struct {
             self.triggerCrash(msg, false, roc_ops);
             return false;
         }
-    }
-
-    const NumericKind = enum { int, dec, f32, f64 };
-
-    fn numericKindFromLayout(layout_val: Layout) ?NumericKind {
-        if (layout_val.tag != .scalar) return null;
-        return switch (layout_val.data.scalar.tag) {
-            .int => .int,
-            .frac => switch (layout_val.data.scalar.data.frac) {
-                .dec => .dec,
-                .f32 => .f32,
-                .f64 => .f64,
-            },
-            else => null,
-        };
-    }
-
-    fn unifyNumericKinds(lhs: NumericKind, rhs: NumericKind) ?NumericKind {
-        if (lhs == rhs) return lhs;
-        if (lhs == .int) return rhs;
-        if (rhs == .int) return lhs;
-        return null;
-    }
-
-    fn layoutMatchesKind(_: *Interpreter, layout_val: Layout, kind: NumericKind) bool {
-        if (layout_val.tag != .scalar) return false;
-        return switch (kind) {
-            .int => layout_val.data.scalar.tag == .int,
-            .dec => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .dec,
-            .f32 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f32,
-            .f64 => layout_val.data.scalar.tag == .frac and layout_val.data.scalar.data.frac == .f64,
-        };
-    }
-
-    fn invalidateRuntimeLayoutCache(self: *Interpreter, type_var: types.Var) void {
-        const slot_idx = @intFromEnum(type_var);
-        if (slot_idx < self.var_to_layout_slot.items.len) {
-            self.var_to_layout_slot.items[slot_idx] = 0;
-        }
-
-        const resolved = self.runtime_types.resolveVar(type_var);
-        const map_idx = @intFromEnum(resolved.var_);
-        if (map_idx < self.runtime_layout_store.layouts_by_var.entries.len) {
-            self.runtime_layout_store.layouts_by_var.entries[map_idx] = layout.Idx.none;
-        }
-    }
-
-    fn adjustNumericResultLayout(
-        self: *Interpreter,
-        result_rt_var: types.Var,
-        current_layout: Layout,
-        lhs: StackValue,
-        lhs_rt_var: types.Var,
-        rhs: StackValue,
-        rhs_rt_var: types.Var,
-    ) !Layout {
-        const lhs_kind_opt = numericKindFromLayout(lhs.layout);
-        const rhs_kind_opt = numericKindFromLayout(rhs.layout);
-        if (lhs_kind_opt == null or rhs_kind_opt == null) return current_layout;
-
-        const desired_kind = unifyNumericKinds(lhs_kind_opt.?, rhs_kind_opt.?) orelse return error.TypeMismatch;
-
-        if (self.layoutMatchesKind(current_layout, desired_kind)) return current_layout;
-
-        const source = blk: {
-            if (self.layoutMatchesKind(lhs.layout, desired_kind)) break :blk lhs_rt_var;
-            if (self.layoutMatchesKind(rhs.layout, desired_kind)) break :blk rhs_rt_var;
-            return error.TypeMismatch;
-        };
-
-        const source_resolved = self.runtime_types.resolveVar(source);
-        try self.runtime_types.setVarContent(result_rt_var, source_resolved.desc.content);
-        self.invalidateRuntimeLayoutCache(result_rt_var);
-
-        const updated_layout = try self.getRuntimeLayout(result_rt_var);
-        if (!self.layoutMatchesKind(updated_layout, desired_kind)) return error.TypeMismatch;
-        return updated_layout;
-    }
-
-    fn evalDecBinop(
-        self: *Interpreter,
-        op: can.CIR.Expr.Binop.Op,
-        _: Layout, // Ignored - we always use Dec layout for proper alignment
-        lhs: StackValue,
-        rhs: StackValue,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const lhs_dec = try self.stackValueToDecimal(lhs);
-        const rhs_dec = try self.stackValueToDecimal(rhs);
-
-        const result_dec: RocDec = switch (op) {
-            .add => RocDec.add(lhs_dec, rhs_dec, roc_ops),
-            .sub => RocDec.sub(lhs_dec, rhs_dec, roc_ops),
-            .mul => RocDec.mul(lhs_dec, rhs_dec, roc_ops),
-            .div, .div_trunc => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec.div(lhs_dec, rhs_dec, roc_ops);
-            },
-            .rem => blk: {
-                if (rhs_dec.num == 0) return error.DivisionByZero;
-                break :blk RocDec.rem(lhs_dec, rhs_dec, roc_ops);
-            },
-            else => {
-                self.triggerCrash("Decimal operation not yet implemented in interpreter", false, roc_ops);
-                return error.TypeMismatch;
-            },
-        };
-
-        // Use proper Dec layout to ensure 16-byte alignment for RocDec
-        const dec_layout = Layout.frac(.dec);
-        var out = try self.pushRaw(dec_layout, 0, lhs.rt_var);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *RocDec = @ptrCast(@alignCast(ptr));
-            dest.* = result_dec;
-        }
-        return out;
     }
 
     /// Evaluate a binary operation on numeric values (int, f32, f64, or dec)
@@ -6331,117 +6223,12 @@ pub const Interpreter = struct {
         return out;
     }
 
-    fn evalFloatBinop(
-        self: *Interpreter,
-        comptime FloatT: type,
-        op: can.CIR.Expr.Binop.Op,
-        result_layout: Layout,
-        lhs: StackValue,
-        rhs: StackValue,
-        roc_ops: *RocOps,
-    ) !StackValue {
-        const lhs_float = try self.stackValueToFloat(FloatT, lhs);
-        const rhs_float = try self.stackValueToFloat(FloatT, rhs);
-
-        const result_float: FloatT = switch (op) {
-            .add => lhs_float + rhs_float,
-            .sub => lhs_float - rhs_float,
-            .mul => lhs_float * rhs_float,
-            .div => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk lhs_float / rhs_float;
-            },
-            .div_trunc => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                const quotient = lhs_float / rhs_float;
-                break :blk std.math.trunc(quotient);
-            },
-            .rem => blk: {
-                if (rhs_float == 0) return error.DivisionByZero;
-                break :blk @rem(lhs_float, rhs_float);
-            },
-            else => {
-                self.triggerCrash("Float operation not yet implemented in interpreter", false, roc_ops);
-                return error.TypeMismatch;
-            },
-        };
-
-        var out = try self.pushRaw(result_layout, 0);
-        out.is_initialized = true;
-        if (out.ptr) |ptr| {
-            const dest: *FloatT = @ptrCast(@alignCast(ptr));
-            dest.* = result_float;
-        }
-        return out;
-    }
-
-    fn stackValueToDecimal(_: *Interpreter, value: StackValue) !RocDec {
-        if (value.layout.tag != .scalar) return error.TypeMismatch;
-        switch (value.layout.data.scalar.tag) {
-            .frac => switch (value.layout.data.scalar.data.frac) {
-                .dec => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const dec_ptr: *const RocDec = @ptrCast(@alignCast(ptr));
-                    return dec_ptr.*;
-                },
-                else => return error.TypeMismatch,
-            },
-            .int => {
-                return RocDec{ .num = value.asI128() * RocDec.one_point_zero_i128 };
-            },
-            else => return error.TypeMismatch,
-        }
-    }
-
-    fn stackValueToFloat(_: *Interpreter, comptime FloatT: type, value: StackValue) !FloatT {
-        if (value.layout.tag != .scalar) return error.TypeMismatch;
-        switch (value.layout.data.scalar.tag) {
-            .int => {
-                return @floatFromInt(value.asI128());
-            },
-            .frac => switch (value.layout.data.scalar.data.frac) {
-                .f32 => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const val_ptr: *const f32 = @ptrCast(@alignCast(ptr));
-                    if (FloatT == f32) {
-                        return val_ptr.*;
-                    }
-                    return @floatCast(val_ptr.*);
-                },
-                .f64 => {
-                    const ptr = value.ptr orelse return error.TypeMismatch;
-                    const val_ptr: *const f64 = @ptrCast(@alignCast(ptr));
-                    if (FloatT == f64) {
-                        return val_ptr.*;
-                    }
-                    return @floatCast(val_ptr.*);
-                },
-                else => return error.TypeMismatch,
-            },
-            else => return error.TypeMismatch,
-        }
-    }
-
-    fn debugAssertIsBoolLayout(layout_val: Layout) void {
-        std.debug.assert(layout_val.tag == .scalar);
-        std.debug.assert(layout_val.data.scalar.tag == .int);
-        std.debug.assert(layout_val.data.scalar.data.int == .u8);
-    }
-
     const NumericValue = union(enum) {
         int: i128,
         f32: f32,
         f64: f64,
         dec: RocDec,
     };
-
-    fn isNumericScalar(_: *Interpreter, layout_val: Layout) bool {
-        if (layout_val.tag != .scalar) return false;
-        return switch (layout_val.data.scalar.tag) {
-            .int, .frac => true,
-            else => false,
-        };
-    }
 
     fn extractNumericValue(_: *Interpreter, value: StackValue) !NumericValue {
         if (value.layout.tag != .scalar) return error.NotNumeric;
@@ -6756,44 +6543,6 @@ pub const Interpreter = struct {
         return true;
     }
 
-    fn structuralEqualList(
-        self: *Interpreter,
-        lhs: StackValue,
-        rhs: StackValue,
-        elem_var: types.Var,
-        roc_ops: *RocOps,
-    ) StructuralEqError!bool {
-        const lhs_is_list = lhs.layout.tag == .list or lhs.layout.tag == .list_of_zst;
-        const rhs_is_list = rhs.layout.tag == .list or rhs.layout.tag == .list_of_zst;
-        if (!lhs_is_list or !rhs_is_list) return error.TypeMismatch;
-        if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-
-        const lhs_header = @as(*const RocList, @ptrCast(@alignCast(lhs.ptr.?))).*;
-        const rhs_header = @as(*const RocList, @ptrCast(@alignCast(rhs.ptr.?))).*;
-        if (lhs_header.len() != rhs_header.len()) return false;
-
-        const elem_layout = try self.getRuntimeLayout(elem_var);
-        const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
-        if (elem_size == 0 or lhs_header.len() == 0) {
-            return true;
-        }
-
-        var lhs_acc = try lhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
-        var rhs_acc = try rhs.asList(&self.runtime_layout_store, elem_layout, roc_ops);
-
-        var index: usize = 0;
-        while (index < lhs_header.len()) : (index += 1) {
-            const lhs_elem = try lhs_acc.getElement(index, elem_var);
-            const rhs_elem = try rhs_acc.getElement(index, elem_var);
-            const elems_equal = try self.valuesStructurallyEqual(lhs_elem, elem_var, rhs_elem, elem_var, roc_ops);
-            if (!elems_equal) {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     fn structuralEqualTag(
         self: *Interpreter,
         lhs: StackValue,
@@ -6905,12 +6654,10 @@ pub const Interpreter = struct {
             self.root_env.idents.is_eq,
             roc_ops,
             lhs.rt_var,
-        ) catch |err| {
+        ) catch |err| switch (err) {
             // If method lookup fails, we can't compare this type
-            if (err == error.MethodLookupFailed) {
-                return error.NotImplemented;
-            }
-            return err;
+            error.MethodLookupFailed => return error.NotImplemented,
+            else => return err,
         };
         defer method_func.decref(&self.runtime_layout_store, roc_ops);
 
@@ -7407,7 +7154,10 @@ pub const Interpreter = struct {
                         payload_value = null;
                     }
                 } else if (arg_vars.len == 1) {
-                    // Get the payload layout from the variant
+                    // Get the payload layout from the VALUE's actual layout, not the type's.
+                    // This is crucial for polymorphic types from builtin modules where the type
+                    // variable (arg_var) might be rigid/uninstantiated but the value's layout
+                    // contains the correct concrete information.
                     const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
                     const arg_resolved = self.runtime_types.resolveVar(arg_var);
@@ -7418,6 +7168,32 @@ pub const Interpreter = struct {
                             if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
                                 break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
                             }
+                            // For rigid types without substitution:
+                            // If variant_layout is ZST but value.rt_var suggests otherwise,
+                            // try to get layout from value's runtime type.
+                            if (variant_layout.tag == .zst) {
+                                // Try to get layout from value's rt_var which may have concrete type info
+                                const value_resolved = self.runtime_types.resolveVar(value.rt_var);
+                                if (value_resolved.desc.content == .structure) {
+                                    if (value_resolved.desc.content.structure == .tag_union) {
+                                        // Get payload type from value's tag union type
+                                        var value_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
+                                        defer value_tag_list.deinit();
+                                        self.appendUnionTags(value.rt_var, &value_tag_list) catch {};
+                                        if (tag_index < value_tag_list.items.len) {
+                                            const value_tag_args = self.runtime_types.sliceVars(value_tag_list.items[tag_index].args);
+                                            if (value_tag_args.len == 1) {
+                                                if (self.getRuntimeLayout(value_tag_args[0])) |value_payload_layout| {
+                                                    if (value_payload_layout.tag != .zst) {
+                                                        break :blk value_payload_layout;
+                                                    }
+                                                } else |_| {}
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            break :blk variant_layout;
                         }
                         // Second try: compute layout directly from arg_var
                         // This handles concrete types like opaque Item returned from polymorphic functions
@@ -7436,7 +7212,7 @@ pub const Interpreter = struct {
 
                     payload_value = StackValue{
                         .layout = effective_layout,
-                        .ptr = value.ptr, // Payload is at offset 0
+                        .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
                     };
@@ -7454,6 +7230,43 @@ pub const Interpreter = struct {
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
+            },
+            .box => {
+                // Auto-unbox for recursive types: the value is boxed but we need to extract
+                // the tag union inside. This happens when list elements are boxed for recursive types.
+                const elem_idx = value.layout.data.box;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
+
+                // Get the element rt_var from the Box type's type argument
+                const elem_rt_var = blk: {
+                    const box_resolved = self.runtime_types.resolveVar(value.rt_var);
+                    if (box_resolved.desc.content == .structure) {
+                        const flat = box_resolved.desc.content.structure;
+                        if (flat == .nominal_type) {
+                            const nom = flat.nominal_type;
+                            const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
+                            if (type_args.len > 0) {
+                                break :blk type_args[0];
+                            }
+                        }
+                    }
+                    // Fallback to union_rt_var
+                    break :blk union_rt_var;
+                };
+
+                // Get pointer to heap data from the box
+                const box_ptr: *const usize = @ptrCast(@alignCast(value.ptr.?));
+                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+
+                // Create an unboxed value and recursively extract tag
+                const unboxed = StackValue{
+                    .layout = elem_layout,
+                    .ptr = data_ptr,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+
+                return self.extractTagValue(unboxed, elem_rt_var);
             },
             else => return error.TypeMismatch,
         }
@@ -8019,15 +7832,20 @@ pub const Interpreter = struct {
                     break :blk vars[1];
                 };
 
-                // Get element layout from the actual list layout, not from the type system.
-                // The list's runtime layout may differ from the type system's expectation
-                // due to numeric literal defaulting.
-                const elem_layout = if (list_layout.tag == .list)
+                // Get element layout from the actual list layout for memory access.
+                // The list's runtime layout may differ from the type system's expectation.
+                const physical_elem_layout = if (list_layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_layout.data.list)
                 else
                     Layout.zst(); // list_of_zst has zero-sized elements
 
-                var accessor = try value.asList(&self.runtime_layout_store, elem_layout, roc_ops);
+                // Get type-based layout for element extraction.
+                // This is important for recursive opaque types where the physical layout is 'tuple'
+                // but we need 'tag_union' layout for proper pattern matching.
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch physical_elem_layout;
+
+                // Use physical layout for memory access (size/stride)
+                var accessor = try value.asList(&self.runtime_layout_store, physical_elem_layout, roc_ops);
                 const total_len = accessor.len();
                 const non_rest_patterns = self.env.store.slicePatterns(list_pat.patterns);
 
@@ -8039,7 +7857,13 @@ pub const Interpreter = struct {
 
                     var idx: usize = 0;
                     while (idx < prefix_len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary.
+                        // This handles recursive opaque types where the physical layout is 'tuple'
+                        // but we need 'tag_union' for proper pattern matching.
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8052,7 +7876,11 @@ pub const Interpreter = struct {
                     while (suffix_idx < suffix_len) : (suffix_idx += 1) {
                         const suffix_pattern_idx = non_rest_patterns[prefix_len + suffix_idx];
                         const element_idx = total_len - suffix_len + suffix_idx;
-                        const elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(element_idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(suffix_pattern_idx, elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8063,7 +7891,7 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
+                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
                         if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
@@ -8077,7 +7905,11 @@ pub const Interpreter = struct {
                     if (total_len != non_rest_patterns.len) return false;
                     var idx: usize = 0;
                     while (idx < non_rest_patterns.len) : (idx += 1) {
-                        const elem_value = try accessor.getElement(idx, elem_rt_var);
+                        var elem_value = try accessor.getElement(idx, elem_rt_var);
+                        // Override physical layout with type-based layout when necessary
+                        if (elem_value.layout.tag == .tuple and type_based_elem_layout.tag == .tag_union) {
+                            elem_value.layout = type_based_elem_layout;
+                        }
                         const before = out_binds.items.len;
                         const matched = try self.patternMatchesBind(non_rest_patterns[idx], elem_value, elem_rt_var, roc_ops, out_binds, expr_idx);
                         if (!matched) {
@@ -8796,6 +8628,107 @@ pub const Interpreter = struct {
         );
     }
 
+    /// Recursively searches a layout tree to find an existing Box(target_tag_union) layout.
+    ///
+    /// For recursive types like `Node := [Text(Str), Element(List(Node))]`, the compiler
+    /// auto-inserts Box layouts at runtime even though `Node` isn't a `Box` at type-checking
+    /// time. When we need to box a value of this type, we must reuse the existing Box layout
+    /// index rather than creating a new one, since layouts are compared by index for equality.
+    fn findBoxIdxForTagUnion(self: *Interpreter, lay_idx: layout.Idx, target_tu_idx: layout.TagUnionIdx) ?layout.Idx {
+        const lay = self.runtime_layout_store.getLayout(lay_idx);
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return lay_idx; // Return the index, not the layout
+                }
+                // Don't recurse into a different tag_union
+                if (inner_layout.tag == .tag_union) {
+                    return null;
+                }
+                return self.findBoxIdxForTagUnion(lay.data.box, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .list => {
+                return self.findBoxIdxForTagUnion(lay.data.list, target_tu_idx);
+            },
+            else => return null,
+        }
+    }
+
+    /// Check if a layout contains a Box that points to a specific tag_union.
+    ///
+    /// This detects recursive types: a tag_union is recursive if one of its variant payloads
+    /// contains a Box pointing back to the same tag_union. The compiler auto-inserts these
+    /// Box layouts at runtime even though the type isn't a `Box` at type-checking time.
+    fn layoutContainsBoxOfTagUnion(self: *Interpreter, lay: layout.Layout, target_tu_idx: layout.TagUnionIdx) bool {
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return true;
+                }
+                // Don't recurse into tag_unions (we're looking for Box(target), not nested tag_unions)
+                if (inner_layout.tag == .tag_union) {
+                    return false;
+                }
+                return self.layoutContainsBoxOfTagUnion(inner_layout, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .list => {
+                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                return self.layoutContainsBoxOfTagUnion(elem_layout, target_tu_idx);
+            },
+            // Don't recurse into tag_unions - we're looking for Box(target) directly
+            // in the current payload, not inside nested tag_unions
+            else => return false,
+        }
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         const trace = tracy.trace(@src());
@@ -8803,23 +8736,13 @@ pub const Interpreter = struct {
 
         var resolved = self.runtime_types.resolveVar(type_var);
 
-        // Apply rigid variable substitution if this is a rigid variable
-        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
-        var count: u32 = 0;
+        // Apply rigid variable substitution if this is a rigid variable.
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
         while (resolved.desc.content == .rigid) {
             const rigid_name = resolved.desc.content.rigid.name;
-            // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
-                // Also add this to rigid_subst for faster future lookups
-                self.rigid_subst.put(resolved.var_, substituted_var) catch {};
-                count += 1;
-                std.debug.assert(count < 1000);
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -9129,8 +9052,25 @@ pub const Interpreter = struct {
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
+            const flex = ct_resolved.desc.content.flex;
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
+
+            // Check if we've already mapped this flex var (cycle detection)
+            if (self.flex_type_context.get(flex_key)) |_| {
+                return; // Already processed, avoid infinite recursion
+            }
+
             try self.putFlexTypeContext(flex_key, rt_var);
+
+            // Also propagate through constraints if mapping to a nominal type.
+            // For example, if flex `a` has constraint `a.to_utf8 : a -> List(item)` and we map
+            // `a -> Str`, we should look up `Str.to_utf8 : Str -> List(U8)` and propagate
+            // `item -> U8` so numeric literals inside lambda bodies get the correct type.
+            if (flex.constraints.len() > 0 and rt_resolved.desc.content == .structure and
+                rt_resolved.desc.content.structure == .nominal_type)
+            {
+                try self.propagateConstraintMappings(module, flex.constraints, rt_resolved.desc.content.structure.nominal_type);
+            }
             return;
         }
 
@@ -9211,6 +9151,64 @@ pub const Interpreter = struct {
         if (ct_resolved.desc.content == .flex or ct_resolved.desc.content == .rigid) {
             const flex_key = ModuleVarKey{ .module = module, .var_ = ct_resolved.var_ };
             try self.putFlexTypeContext(flex_key, rt_var);
+        }
+    }
+
+    /// Propagate type mappings through static dispatch constraints.
+    /// When a flex var with constraints is mapped to a concrete nominal type, we need to
+    /// resolve each constraint against the nominal type's actual methods and propagate
+    /// the return type mappings. This ensures that type variables inside lambda bodies
+    /// (like `item` in `List(item)`) get correctly mapped to their concrete types.
+    fn propagateConstraintMappings(
+        self: *Interpreter,
+        module: *can.ModuleEnv,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+        nominal_type: types.NominalType,
+    ) Error!void {
+        // Get the origin module for this nominal type
+        const origin_module = nominal_type.origin_module;
+        const origin_env = self.getModuleEnvForOrigin(origin_module) orelse return;
+
+        // Get the nominal type's ident for method lookup
+        const nominal_ident = nominal_type.ident.ident_idx;
+
+        // Process each constraint
+        const ct_constraints = module.types.sliceStaticDispatchConstraints(constraints);
+        for (ct_constraints) |constraint| {
+            // Skip from_numeral constraints - they don't have methods to look up
+            if (constraint.origin == .from_numeral) continue;
+
+            // Look up the real method in the origin module
+            // constraint.fn_name is in module's ident space, nominal_ident is in runtime space
+            const method_ident = origin_env.lookupMethodIdentFromTwoEnvsConst(
+                self.runtime_layout_store.env,
+                nominal_ident,
+                module,
+                constraint.fn_name,
+            ) orelse continue;
+
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse continue;
+            const def_idx: can.CIR.Def.Idx = @enumFromInt(@as(u32, @intCast(node_idx)));
+            const def_var = can.ModuleEnv.varFrom(def_idx);
+
+            // Get the real method's type
+            const real_resolved = origin_env.types.resolveVar(def_var);
+            const real_func = real_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Get the constraint's function type
+            const constraint_resolved = module.types.resolveVar(constraint.fn_var);
+            const constraint_func = constraint_resolved.desc.content.unwrapFunc() orelse continue;
+
+            // Propagate return type mapping: constraint ret -> real method ret
+            // For example: List(item) -> List(U8) propagates item -> U8
+            const ct_ret = constraint_func.ret;
+            const real_ret = real_func.ret;
+
+            // Translate the real method's return type to runtime
+            const rt_ret = self.translateTypeVar(@constCast(origin_env), real_ret) catch continue;
+
+            // Propagate mappings from constraint return type to real return type
+            try self.propagateFlexMappings(module, ct_ret, rt_ret);
         }
     }
 
@@ -9641,12 +9639,15 @@ pub const Interpreter = struct {
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Mapping found! Add to empty_scope and rigid_subst
-                        if (self.empty_scope.scopes.items.len == 0) {
-                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                        // Don't add if it would create a cycle in rigid_subst
+                        if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
+                            // Mapping found! Add to empty_scope and rigid_subst
+                            if (self.empty_scope.scopes.items.len == 0) {
+                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                            }
+                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                         }
-                        try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
-                        try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                     }
 
                     break :blk rt_rigid_var;
@@ -9666,13 +9667,18 @@ pub const Interpreter = struct {
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
-            // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
-            var count: u32 = 0;
-            while (self.rigid_subst.get(current)) |next_subst| {
-                count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
-                current = next_subst;
+            if (comptime builtin.mode == .Debug) {
+                var chain_count: u32 = 0;
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    chain_count += 1;
+                    std.debug.assert(chain_count < 1000);
+                    current = next_subst;
+                }
+            } else {
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    current = next_subst;
+                }
             }
             break :blk current;
         } else out_var;
@@ -9922,18 +9928,28 @@ pub const Interpreter = struct {
 
         // Apply rigid substitutions to ret_var if needed
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to prevent infinite loops from cyclic substitutions
         var resolved_ret = self.runtime_types.resolveVar(ret_var);
         var substituted_ret = ret_var;
-        var ret_count: u32 = 0;
-        while (resolved_ret.desc.content == .rigid) {
-            if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
-                ret_count += 1;
-                if (ret_count > 1000) break; // Prevent infinite loops
-                substituted_ret = subst_var;
-                resolved_ret = self.runtime_types.resolveVar(subst_var);
-            } else {
-                break;
+        if (comptime builtin.mode == .Debug) {
+            var ret_count: u32 = 0;
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    ret_count += 1;
+                    std.debug.assert(ret_count < 1000);
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
+            }
+        } else {
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -9951,11 +9967,6 @@ pub const Interpreter = struct {
         const entry = PolyEntry{ .return_var = substituted_ret, .return_layout_slot = slot, .args = args_copy_mut };
         try self.polyInsert(module_id, func_id, entry);
         return entry;
-    }
-
-    /// Initial a TypeWriter from an interpreter. Useful when debugging
-    fn initTypeWriter(self: *const Interpreter) std.mem.Allocator.Error!types.TypeWriter {
-        return try types.TypeWriter.initFromParts(self.allocator, self.runtime_types, self.env.common.getIdentStore(), null);
     }
 
     // Stack-Safe Interpreter Infrastructure
@@ -10366,6 +10377,9 @@ pub const Interpreter = struct {
             saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
+            /// Saved stack pointer to restore after call completes.
+            /// This ensures stack memory allocated during the function body is reclaimed.
+            saved_stack_ptr: *anyopaque,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -10702,10 +10716,13 @@ pub const Interpreter = struct {
                 },
                 .apply_continuation => |cont| {
                     const should_continue = self.applyContinuation(&work_stack, &value_stack, cont, roc_ops) catch |err| {
-                        if (err == error.TypeMismatch) {
-                            var buf: [128]u8 = undefined;
-                            const msg = std.fmt.bufPrint(&buf, "Internal error: TypeMismatch in {s} continuation", .{@tagName(cont)}) catch "Internal error: TypeMismatch in continuation";
-                            self.triggerCrash(msg, false, roc_ops);
+                        switch (err) {
+                            error.TypeMismatch => {
+                                var buf: [128]u8 = undefined;
+                                const msg = std.fmt.bufPrint(&buf, "Internal error: TypeMismatch in {s} continuation", .{@tagName(cont)}) catch "Internal error: TypeMismatch in continuation";
+                                self.triggerCrash(msg, false, roc_ops);
+                            },
+                            else => {},
                         }
                         return err;
                     };
@@ -11107,10 +11124,21 @@ pub const Interpreter = struct {
                 var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
 
                 // Follow aliases to get to the underlying type
-                while (resolved.desc.content == .alias) {
-                    const alias = resolved.desc.content.alias;
-                    const backing = self.runtime_types.getAliasBackingVar(alias);
-                    resolved = self.runtime_types.resolveVar(backing);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (resolved.desc.content == .alias) {
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
                 }
 
                 // Get nominal type info for method resolution
@@ -11168,8 +11196,8 @@ pub const Interpreter = struct {
                     tvd.method_name,
                     roc_ops,
                     dispatch_rt_var,
-                ) catch |err| {
-                    if (err == error.MethodLookupFailed) {
+                ) catch |err| switch (err) {
+                    error.MethodLookupFailed => {
                         const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
@@ -11183,8 +11211,8 @@ pub const Interpreter = struct {
                         };
                         self.triggerCrash(crash_msg, true, roc_ops);
                         return error.Crash;
-                    }
-                    return err;
+                    },
+                    else => return err,
                 };
 
                 if (method_func.layout.tag != .closure) {
@@ -11232,6 +11260,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -11264,6 +11293,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -11732,7 +11762,10 @@ pub const Interpreter = struct {
                                                 rt_type_args[i],
                                             else => rt_type_args[i],
                                         };
-                                        try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        // Don't add if it would create a cycle
+                                        if (!self.wouldCreateRigidSubstCycle(rigids.items[i], concrete_type)) {
+                                            try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        }
                                     }
                                 }
                                 // Return backing and preserve the nominal type for wrapping
@@ -12221,30 +12254,10 @@ pub const Interpreter = struct {
                 else
                     func_rt_var_orig;
 
-                // If we instantiated AND there are actual substitutions, update rigid_subst and empty_scope.
-                // Skip this block entirely if subst_map is empty (no rigid vars to substitute).
-                if (should_instantiate and subst_map.count() > 0) {
-                    const setup_trace = tracy.traceNamed(@src(), "sched.call.instantiate_setup");
-                    defer setup_trace.end();
-
-                    // Ensure we have at least one scope level
-                    if (self.empty_scope.scopes.items.len == 0) {
-                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                    }
-                    const scope = &self.empty_scope.scopes.items[0];
-
-                    var subst_iter = subst_map.iterator();
-                    while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
-                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
-                        // Also add to empty_scope so layout store finds the mapping
-                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-                    // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
-                    // poly_context_generation increments when flex_type_context changes, which invalidates
-                    // stale layout cache entries. No explicit @memset needed.
-                }
+                // NOTE: We delay adding subst_map entries to rigid_subst until AFTER unification
+                // in prepareCallWithFuncVar. Unification can redirect fresh flex vars back to their
+                // source rigids, which would make our entries cyclic. By waiting until after unification,
+                // we can check for cycles and avoid adding problematic entries.
 
                 // Seed flex_type_context from any already-bound local lookups in the argument list.
                 //
@@ -12307,10 +12320,14 @@ pub const Interpreter = struct {
                     const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
 
                     // Apply substitution if this argument is a rigid variable that was instantiated
+                    // Use subst_map for the current call's substitutions (not yet in rigid_subst),
+                    // and fall back to rigid_subst for outer call substitutions.
                     if (should_instantiate) {
                         const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
                         if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                            if (subst_map.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_vars[i] = substituted_arg;
+                            } else if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
                                 arg_rt_vars[i] = substituted_arg;
                             } else {
                                 arg_rt_vars[i] = arg_rt_var;
@@ -12328,12 +12345,7 @@ pub const Interpreter = struct {
                 const call_ret_rt_var = try self.translateTypeVar(self.env, call_ret_ct_var);
 
                 // Prepare polymorphic call entry for unification
-                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch |err| blk: {
-                    if (err == error.TypeMismatch) {
-                        break :blk null;
-                    }
-                    break :blk null;
-                };
+                const poly_entry: ?PolyEntry = self.prepareCallWithFuncVar(0, @intCast(@intFromEnum(func_idx)), func_rt_var, arg_rt_vars) catch null;
 
                 // Unify call return type with function's return type
                 // Use the function's return var (from instantiated function) instead of
@@ -12355,6 +12367,34 @@ pub const Interpreter = struct {
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
                 } else call_ret_rt_var;
+
+                // NOW add subst_map entries to rigid_subst (after unification is complete).
+                // Only add entries that don't form cycles - unification may have redirected
+                // fresh flex vars back to their source rigids.
+                if (should_instantiate and subst_map.count() > 0) {
+                    // Ensure we have at least one scope level
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        const source = entry.key_ptr.*;
+                        const target = entry.value_ptr.*;
+                        // Check if unification made this entry cyclic
+                        const resolved_target = self.runtime_types.resolveVar(target);
+                        if (resolved_target.var_ == source) {
+                            // Skip - this entry would create a cycle
+                            continue;
+                        }
+                        // Also check the full cycle detection
+                        if (self.wouldCreateRigidSubstCycle(source, target)) continue;
+                        try self.rigid_subst.put(source, target);
+                        // Also add to empty_scope so layout store finds the mapping
+                        try scope.put(source, target);
+                    }
+                }
 
                 // Schedule: first evaluate function, then collect args, then invoke
                 // Push invoke continuation (to be executed after all args collected)
@@ -13024,17 +13064,11 @@ pub const Interpreter = struct {
             return dest;
         } else if (layout_val.tag == .tag_union) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            // Write discriminant at discriminant_offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_index),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                else => {},
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
             dest.is_initialized = true;
             return dest;
         }
@@ -13917,6 +13951,22 @@ pub const Interpreter = struct {
                     try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
                 }
             },
+            .s_nominal_decl => {
+                // Nominal type declaration is a compile-time construct, no runtime effect
+                // Just continue with remaining statements
+                if (remaining_stmts.len == 0) {
+                    // Evaluate final expression
+                    const final_ct_var = can.ModuleEnv.varFrom(final_expr);
+                    const final_rt_var = try self.translateTypeVar(self.env, final_ct_var);
+                    try work_stack.push(.{ .eval_expr = .{
+                        .expr_idx = final_expr,
+                        .expected_rt_var = if (expected_rt_var) |e| e else final_rt_var,
+                    } });
+                } else {
+                    const next_stmt = self.env.store.getStatement(remaining_stmts[0]);
+                    try self.scheduleNextStatement(work_stack, next_stmt, remaining_stmts[1..], final_expr, bindings_start, expected_rt_var, roc_ops);
+                }
+            },
             else => {
                 self.triggerCrash("Statement type not yet implemented in interpreter", false, roc_ops);
                 return error.NotImplemented;
@@ -14279,12 +14329,77 @@ pub const Interpreter = struct {
                             values[i] = value_stack.pop() orelse return error.Crash;
                         }
 
-                        // Use the actual layout from the first evaluated element
+                        // Check if we need to auto-box elements for recursive types
+                        // This happens when the expected element type is Box (from placeholder resolution)
+                        // but actual evaluated values are not boxed.
                         const actual_elem_layout = values[0].layout;
 
-                        // Create the list layout with the correct element layout
-                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                        // Try to get the expected element layout to check for Box.
+                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch null;
+
+                        // Check if the element type is a recursive nominal that needs boxing.
+                        // We check if the actual element layout is a tag_union that contains
+                        // a variant with a payload containing a Box pointing to this same tag_union.
+                        // This indicates a recursive type that needs element boxing.
+                        var need_auto_box = if (expected_elem_layout_opt) |expected_elem_layout|
+                            expected_elem_layout.tag == .box and
+                                actual_elem_layout.tag != .box and actual_elem_layout.tag != .box_of_zst
+                        else
+                            false;
+
+                        // If not already detected as needing boxing, check if the actual layout
+                        // is a recursive tag_union (contains a Box pointing back to itself)
+                        if (!need_auto_box and actual_elem_layout.tag == .tag_union) {
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            // Check if any variant's payload contains a Box that points to a tag_union
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    need_auto_box = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Determine the element layout index for the list
+                        var list_elem_layout = actual_elem_layout;
+                        var list_elem_idx: layout.Idx = undefined;
+
+                        if (need_auto_box) {
+                            // Find the existing Box layout INDEX from the tag union's variant payloads.
+                            // We must use the exact same index to avoid layout mismatches when
+                            // the list is copied into variant payloads later.
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                            // Look through variants for one with a Box(this_tag_union)
+                            var found_box_idx: ?layout.Idx = null;
+                            var search_idx: usize = 0;
+                            while (search_idx < variants.len) : (search_idx += 1) {
+                                const variant = variants.get(search_idx);
+                                if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                    found_box_idx = box_idx;
+                                    break;
+                                }
+                            }
+
+                            // We detected this is a recursive type (need_auto_box=true), so there MUST be
+                            // a Box layout in the tag union's variants. If not, it's a compiler bug.
+                            const box_idx = found_box_idx orelse unreachable;
+                            list_elem_idx = box_idx;
+                            list_elem_layout = self.runtime_layout_store.getLayout(box_idx);
+                        } else {
+                            // No boxing needed - use the actual element layout
+                            list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
+                        }
+
+                        // Create the list layout with the correct element layout index
+                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = list_elem_idx } };
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
@@ -14298,10 +14413,10 @@ pub const Interpreter = struct {
                         }
 
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                        const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                        const elem_alignment = list_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
-                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(actual_elem_layout);
+                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(list_elem_layout));
+                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(list_elem_layout);
 
                         var runtime_list = RocList.allocateExact(
                             elem_alignment_u32,
@@ -14313,9 +14428,30 @@ pub const Interpreter = struct {
 
                         if (elem_size > 0) {
                             if (runtime_list.bytes) |buffer| {
-                                for (values, 0..) |val, idx| {
-                                    const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                if (need_auto_box) {
+                                    // Auto-box each element before storing in the list
+                                    // list_elem_layout is Box(actual_elem_layout), so get the inner type
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(list_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        // Allocate heap memory with refcount for the boxed value
+                                        const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                        if (inner_elem_size > 0 and val.ptr != null) {
+                                            try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+                                        // Write box pointer to list element location
+                                        const slot: *usize = @ptrCast(@alignCast(dest_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    }
+                                } else {
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    }
                                 }
                             }
                         }
@@ -14540,8 +14676,7 @@ pub const Interpreter = struct {
                                     // If we hit this, it means there's a bug in how we're structuring
                                     // the work stack (likely a nested evalWithExpectedType call that
                                     // shouldn't be nested).
-                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
-                                    return error.Crash;
+                                    debugUnreachable(roc_ops, "early_return hit return_result without finding call_cleanup", @src());
                                 },
                                 .call_invoke_closure => |ci| {
                                     // Free resources if we're skipping a pending call invocation.
@@ -14791,7 +14926,9 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else if (tc.layout_type == 2) {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-                        const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                        const tu_idx = layout_val.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         // Check for layout mismatch - if the expected payload is smaller than actual
                         // we need to use a properly-sized tuple layout to avoid corruption.
@@ -14799,19 +14936,13 @@ pub const Interpreter = struct {
                         // is a disconnected flex var that defaults to ZST layout.
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
-                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
+                            const expected_payload_size = disc_offset; // payload is before discriminant
                             // Apply fix when expected payload is very small but actual is larger
                             const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
-                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
-                                    1 => .u8,
-                                    2 => .u16,
-                                    4 => .u32,
-                                    8 => .u64,
-                                    else => .u8,
-                                };
+                                const disc_precision = tu_data.discriminantPrecision();
                                 const disc_layout = Layout{
                                     .tag = .scalar,
                                     .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
@@ -14867,40 +14998,112 @@ pub const Interpreter = struct {
                         // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            // Get expected payload layout from the variant
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // Check if we need to auto-box: expected is Box but actual isn't
+                            if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
+                                // Auto-box the value for recursive types
+                                const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                const target_usize = self.runtime_layout_store.targetUsize();
+                                const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+                                const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                                if (elem_size > 0 and values[0].ptr != null) {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                }
+
+                                // Write box pointer to payload location
+                                const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                                slot.* = @intFromPtr(data_ptr);
+                            } else if (values[0].layout.tag == .box and expected_payload_layout.tag != .box) {
+                                // Auto-unbox: actual is boxed but expected is unboxed.
+                                // This happens when List elements are boxed (for recursive types),
+                                // but wrapped in a tag union (like Try) whose type says unboxed.
+                                // Dereference the box and copy the inner data.
+                                const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.data.box);
+                                const box_ptr: *const usize = @ptrCast(@alignCast(values[0].ptr.?));
+                                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+                                const inner_value = StackValue{
+                                    .layout = inner_layout,
+                                    .ptr = data_ptr,
+                                    .is_initialized = true,
+                                    .rt_var = values[0].rt_var,
+                                };
+                                try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            }
                         } else {
                             // Multiple args - create tuple payload at offset 0
+                            // Get expected payload layout from the variant to handle auto-boxing
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // A multi-value tag payload MUST have a tuple layout. If not, it's a compiler bug.
+                            if (expected_payload_layout.tag != .tuple) unreachable;
+                            const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
+                            const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
+
+                            // Create tuple with expected layouts for proper sizing
+                            // We must use the ORIGINAL index from expected_fields, not the sorted index
                             var elem_layouts = try self.allocator.alloc(Layout, total_count);
                             defer self.allocator.free(elem_layouts);
                             var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                             defer self.allocator.free(elem_rt_vars);
+                            // Initialize with actual value layouts first
                             for (values, 0..) |val, idx| {
                                 elem_layouts[idx] = val.layout;
                                 elem_rt_vars[idx] = val.rt_var;
                             }
+                            // Override with expected layouts using original indices
+                            for (0..expected_fields.len) |sorted_idx| {
+                                const field = expected_fields.get(sorted_idx);
+                                const orig_idx = field.index;
+                                if (orig_idx < total_count) {
+                                    elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                                }
+                            }
                             const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                             const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                            // Create tuple type from element types
                             const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                             const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
                             const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
                             var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+
+                            // Set each element, auto-boxing if needed
+                            // Use elem_layouts which we already populated with correct original indices
                             for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val, roc_ops);
+                                const expected_elem_layout = elem_layouts[idx];
+                                // Check if we need to auto-box
+                                if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
+                                    // Auto-box the value
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                    if (inner_elem_size > 0 and val.ptr != null) {
+                                        try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                    }
+
+                                    // Write box pointer to element location
+                                    const elem_ptr = try tup_acc.getElementPtr(idx);
+                                    const slot: *usize = @ptrCast(@alignCast(elem_ptr));
+                                    slot.* = @intFromPtr(data_ptr);
+                                } else {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
                             }
                         }
 
                         // Write discriminant AFTER the payload, so it doesn't get overwritten
                         // by a payload that extends past the discriminant offset.
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
-                        }
+                        tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
 
                         for (values) |val| {
                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -14995,10 +15198,9 @@ pub const Interpreter = struct {
                     }
                 }
 
-                // No branch matched
+                // No branch matched - this should be caught by compile-time exhaustiveness checking
                 scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                self.triggerCrash("non-exhaustive match", false, roc_ops);
-                return error.Crash;
+                unreachable;
             },
             .match_guard => |mg| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
@@ -15027,11 +15229,10 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, mg.bindings_start, roc_ops);
 
                     if (mg.remaining_branches.len == 0) {
-                        // No more branches
+                        // No more branches - this should be caught by compile-time exhaustiveness checking
                         const scrutinee = value_stack.pop() orelse return error.Crash;
                         scrutinee.decref(&self.runtime_layout_store, roc_ops);
-                        self.triggerCrash("non-exhaustive match", false, roc_ops);
-                        return error.Crash;
+                        unreachable;
                     }
 
                     // Continue with remaining branches
@@ -15522,6 +15723,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = cleanup_saved_rigid_subst,
                         .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
@@ -15545,7 +15747,7 @@ pub const Interpreter = struct {
                 if (self.early_return_value) |return_val_in| {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
-                    const return_val = return_val_in;
+                    var return_val = return_val_in;
 
                     // rt_var is already set by the return value's creation
 
@@ -15575,12 +15777,54 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
+                    // Restore stack memory (same logic as normal return)
+                    if (return_val.ptr) |return_ptr| {
+                        const return_addr = @intFromPtr(return_ptr);
+                        const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                        const current_addr = @intFromPtr(self.stack_memory.next());
+
+                        if (return_addr >= saved_addr and return_addr < current_addr) {
+                            const return_size = if (return_val.layout.tag == .closure)
+                                return_val.getTotalSize(&self.runtime_layout_store, roc_ops)
+                            else
+                                self.runtime_layout_store.layoutSize(return_val.layout);
+
+                            if (return_size > 0) {
+                                // Assertion: heap allocation for small temporary buffer should always succeed
+                                const temp_buffer = self.allocator.alloc(u8, return_size) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+                                defer self.allocator.free(temp_buffer);
+                                @memcpy(temp_buffer, @as([*]u8, @ptrCast(return_ptr))[0..return_size]);
+
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                                // Assertion: stack allocation after restore should always succeed
+                                const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
+                                const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+
+                                @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
+                                return_val.ptr = new_ptr;
+                            } else {
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+                            }
+                        } else {
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+
                     try value_stack.push(return_val);
                     return true;
                 }
 
                 // Normal return - result is on value stack
-                const result = value_stack.pop() orelse return error.Crash;
+                var result = value_stack.pop() orelse return error.Crash;
 
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
@@ -15618,6 +15862,62 @@ pub const Interpreter = struct {
                 self.env = cleanup.saved_env;
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                // Restore stack memory to reclaim intermediate allocations from the function body.
+                // If the result has data in the stack region being freed, we need to preserve it
+                // by copying to heap, restoring stack, allocating new stack space, and copying back.
+                if (result.ptr) |result_ptr| {
+                    const result_addr = @intFromPtr(result_ptr);
+                    const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                    const current_addr = @intFromPtr(self.stack_memory.next());
+
+                    // Check if result.ptr is in the region being freed (between saved and current)
+                    if (result_addr >= saved_addr and result_addr < current_addr) {
+                        // Result data is in the region being freed - preserve it
+                        const result_size = if (result.layout.tag == .closure)
+                            result.getTotalSize(&self.runtime_layout_store, roc_ops)
+                        else
+                            self.runtime_layout_store.layoutSize(result.layout);
+
+                        if (result_size > 0) {
+                            // Copy to temporary heap buffer
+                            // Assertion: heap allocation for small temporary buffer should always succeed
+                            const temp_buffer = self.allocator.alloc(u8, result_size) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+                            defer self.allocator.free(temp_buffer);
+                            @memcpy(temp_buffer, @as([*]u8, @ptrCast(result_ptr))[0..result_size]);
+
+                            // Restore stack to reclaim intermediate allocations
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                            // Allocate new space for result on restored stack
+                            // Assertion: stack allocation after restore should always succeed
+                            // since we just freed more space than we're now requesting
+                            const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+                            const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+
+                            // Copy data back from heap to new stack location
+                            @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..result_size], temp_buffer);
+
+                            // Update result to point to new location
+                            result.ptr = new_ptr;
+                        } else {
+                            // Zero-size result, just restore stack
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        // Result data is not in the freed region (already in caller's frame or heap)
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+                } else {
+                    // No pointer data to preserve, just restore stack
+                    self.stack_memory.restore(cleanup.saved_stack_ptr);
+                }
 
                 // rt_var is already set by the function's return value creation
                 try value_stack.push(result);
@@ -15732,6 +16032,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -15804,13 +16105,21 @@ pub const Interpreter = struct {
                 // Follow aliases to get to the underlying type
                 var current_var = effective_receiver_rt_var;
                 var current_resolved = lhs_resolved;
-                var alias_count: u32 = 0;
-                while (current_resolved.desc.content == .alias) {
-                    alias_count += 1;
-                    std.debug.assert(alias_count < 1000); // Prevent infinite loops
-                    const alias = current_resolved.desc.content.alias;
-                    current_var = self.runtime_types.getAliasBackingVar(alias);
-                    current_resolved = self.runtime_types.resolveVar(current_var);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (current_resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
+                } else {
+                    while (current_resolved.desc.content == .alias) {
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
                 }
 
                 // Check if we can use low-level numeric comparison based on layout
@@ -15883,12 +16192,12 @@ pub const Interpreter = struct {
                         .record, .tuple, .tag_union, .empty_record, .empty_tag_union => blk: {
                             // Anonymous structural types have implicit is_eq
                             if (ba.method_ident == self.root_env.idents.is_eq) {
-                                var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
-                                    if (err == error.NotImplemented) {
+                                var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
+                                    error.NotImplemented => {
                                         self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                         return error.Crash;
-                                    }
-                                    return err;
+                                    },
+                                    else => return err,
                                 };
                                 // For != operator, negate the result
                                 if (ba.negate_result) result = !result;
@@ -15945,12 +16254,12 @@ pub const Interpreter = struct {
                             }
 
                             // Structural equality using effective_receiver_rt_var for proper type tracking
-                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| {
-                                if (err == error.NotImplemented) {
+                            var result = self.valuesStructurallyEqual(lhs, effective_receiver_rt_var, rhs, ba.rhs_rt_var, roc_ops) catch |err| switch (err) {
+                                error.NotImplemented => {
                                     self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                     return error.Crash;
-                                }
-                                return err;
+                                },
+                                else => return err,
                             };
                             // For != operator, negate the result
                             if (ba.negate_result) result = !result;
@@ -16179,6 +16488,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -16383,6 +16693,7 @@ pub const Interpreter = struct {
                                                 .saved_rigid_subst = null,
                                                 .saved_flex_type_context = null,
                                                 .arg_rt_vars_to_free = null,
+                                                .saved_stack_ptr = self.stack_memory.next(),
                                             } } });
 
                                             const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
@@ -16436,11 +16747,13 @@ pub const Interpreter = struct {
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    if (err == error.NotImplemented) {
-                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                        return error.Crash;
+                                    switch (err) {
+                                        error.NotImplemented => {
+                                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                            return error.Crash;
+                                        },
+                                        else => return err,
                                     }
-                                    return err;
                                 };
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
                                 const result_val = try self.makeBoolValue(result);
@@ -16462,11 +16775,13 @@ pub const Interpreter = struct {
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                    if (err == error.NotImplemented) {
-                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                        return error.Crash;
+                                    switch (err) {
+                                        error.NotImplemented => {
+                                            self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                            return error.Crash;
+                                        },
+                                        else => return err,
                                     }
-                                    return err;
                                 };
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
                                 const result_val = try self.makeBoolValue(result);
@@ -16507,11 +16822,13 @@ pub const Interpreter = struct {
                             const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                             const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
                                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                                if (err == error.NotImplemented) {
-                                    self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
-                                    return error.Crash;
+                                switch (err) {
+                                    error.NotImplemented => {
+                                        self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
+                                        return error.Crash;
+                                    },
+                                    else => return err,
                                 }
-                                return err;
                             };
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                             const result_val = try self.makeBoolValue(result);
@@ -16604,22 +16921,24 @@ pub const Interpreter = struct {
                     effective_receiver_rt_var,
                 ) catch |err| {
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                    if (err == error.MethodLookupFailed) {
-                        const layout_env = self.runtime_layout_store.env;
-                        const type_name = import_mapping_mod.getDisplayName(
-                            self.import_mapping,
-                            layout_env.common.getIdentStore(),
-                            nominal_info.?.ident,
-                        );
-                        const method_name = self.env.getIdent(da.field_name);
-                        const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
-                            self.triggerCrash("Method not found", false, roc_ops);
+                    switch (err) {
+                        error.MethodLookupFailed => {
+                            const layout_env = self.runtime_layout_store.env;
+                            const type_name = import_mapping_mod.getDisplayName(
+                                self.import_mapping,
+                                layout_env.common.getIdentStore(),
+                                nominal_info.?.ident,
+                            );
+                            const method_name = self.env.getIdent(da.field_name);
+                            const crash_msg = std.fmt.allocPrint(self.allocator, "{s} does not implement {s}", .{ type_name, method_name }) catch {
+                                self.triggerCrash("Method not found", false, roc_ops);
+                                return error.Crash;
+                            };
+                            self.triggerCrash(crash_msg, true, roc_ops);
                             return error.Crash;
-                        };
-                        self.triggerCrash(crash_msg, true, roc_ops);
-                        return error.Crash;
+                        },
+                        else => return err,
                     }
-                    return err;
                 };
 
                 if (method_func.layout.tag != .closure) {
@@ -16729,6 +17048,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
@@ -16990,13 +17310,24 @@ pub const Interpreter = struct {
                     // Instantiate the method type (replaces rigid vars with fresh flex vars)
                     _ = try self.instantiateType(lambda_rt_var, &method_subst_map);
 
-                    // Save and update rigid_subst
+                    // Save and update rigid_subst AND empty_scope.
+                    // Both are needed: rigid_subst for runtime type resolution in getRuntimeLayout,
+                    // and empty_scope for the layout store's TypeScope.lookup() during layout computation.
                     saved_rigid_subst = try self.rigid_subst.clone();
+
+                    // Ensure we have at least one scope level for empty_scope
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
+                        // Skip if it would create a cycle in rigid_subst
+                        if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
+                        // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
+                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
                     }
                     // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
                     // No explicit @memset needed.
@@ -17074,6 +17405,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = saved_rigid_subst,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -17165,7 +17497,19 @@ pub const Interpreter = struct {
                     // Bind all arguments to parameters
                     for (params_slice, 0..) |param, idx| {
                         if (idx >= arg_values.len) break;
-                        const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(param));
+                        const param_ct_var = can.ModuleEnv.varFrom(param);
+
+                        // Propagate flex mappings from the argument's concrete type to the parameter type.
+                        // This is critical for cross-module dispatch: when calling U8.encode(self, format)
+                        // where format has type SimpleFormat (a local type from the test module),
+                        // we need to map Builtin's fmt type parameter to SimpleFormat.
+                        // This allows Fmt.encode_u8(format, self) inside U8.encode to resolve correctly.
+                        const arg_rt_resolved = self.runtime_types.resolveVar(arg_values[idx].rt_var);
+                        if (arg_rt_resolved.desc.content == .structure) {
+                            try self.propagateFlexMappings(self.env, param_ct_var, arg_values[idx].rt_var);
+                        }
+
+                        const param_rt_var = try self.translateTypeVar(self.env, param_ct_var);
                         if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             self.env = saved_env;
                             self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
@@ -17191,6 +17535,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -17242,6 +17587,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -17285,11 +17631,10 @@ pub const Interpreter = struct {
                     list_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.TypeMismatch;
                 }
-                const elem_layout = if (list_value.layout.tag == .list)
+                var elem_layout = if (list_value.layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_value.layout.data.list)
                 else
                     layout.Layout.zst(); // list_of_zst has zero-sized elements
-                const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(elem_layout));
 
                 // Get the RocList header
                 const list_header: *const RocList = @ptrCast(@alignCast(list_value.ptr.?));
@@ -17315,6 +17660,41 @@ pub const Interpreter = struct {
                     // Fall back to the pattern's translated type
                     break :blk fl_in.patt_rt_var;
                 };
+
+                // For recursive opaque types, the list's physical layout might have element layout
+                // as 'tuple' but the actual data is stored with 'tag_union' layout. We need to
+                // compute the type-based layout and use the larger size for correct iteration.
+                // Use elem_rt_var (which was already resolved from the list's type) rather than
+                // fl_in.patt_rt_var (which might be a flex variable that causes infinite loops).
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch elem_layout;
+
+                // For 'box' layouts (recursive types), unwrap to get the actual backing layout
+                const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
+                    const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
+                    if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
+                        // Need to resolve the nominal type to get its backing layout
+                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
+                        if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
+                            const nom = resolved.desc.content.structure.nominal_type;
+                            const backing = self.runtime_types.getNominalBackingVar(nom);
+                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
+                            break :blk backing_layout;
+                        }
+                    }
+                    break :blk inner;
+                } else type_based_elem_layout;
+
+                // Use the larger of the two layouts for element size to handle cases where
+                // the physical layout doesn't match the type-based layout
+                const stored_elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                const type_based_size = self.runtime_layout_store.layoutSize(effective_elem_layout);
+                const elem_size: usize = @intCast(@max(stored_elem_size, type_based_size));
+
+                // Override elem_layout if physical is tuple but type-based is tag_union
+                // This ensures proper discriminant extraction during pattern matching
+                if (effective_elem_layout.tag == .tag_union and elem_layout.tag == .tuple) {
+                    elem_layout = effective_elem_layout;
+                }
 
                 // Create the proper for_iterate with list info filled in
                 var fl = fl_in;
@@ -17642,10 +18022,11 @@ pub const Interpreter = struct {
                         break :blk discriminant == 2; // LT
                     } else if (cmp_result.layout.tag == .tag_union) {
                         // Get discriminant from tag_union layout
-                        const tu_data = self.runtime_layout_store.getTagUnionData(cmp_result.layout.data.tag_union.idx);
+                        const tu_idx = cmp_result.layout.data.tag_union.idx;
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
                         if (cmp_result.ptr) |ptr| {
                             const base_ptr: [*]u8 = @ptrCast(ptr);
-                            const discriminant_ptr = base_ptr + tu_data.discriminant_offset;
+                            const discriminant_ptr = base_ptr + disc_offset;
                             const discriminant: u8 = discriminant_ptr[0];
                             // Tag order is alphabetical: EQ=0, GT=1, LT=2
                             break :blk discriminant == 2; // LT
@@ -17755,6 +18136,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
                             .expr_idx = cmp_header.body_idx,
@@ -17837,6 +18219,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = cmp_header.body_idx,

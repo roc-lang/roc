@@ -9,17 +9,15 @@ const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
 const can = @import("can");
-const builtins = @import("builtins");
 
 const copy_import = @import("copy_import.zig");
 const unifier = @import("unify.zig");
 const occurs = @import("occurs.zig");
 const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
+const exhaustive = @import("exhaustive.zig");
 
-const ExposedItems = collections.ExposedItems;
 const CIR = can.CIR;
-const CommonEnv = base.CommonEnv;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
@@ -33,16 +31,12 @@ const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
 const FlatType = types_mod.FlatType;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
-const Num = types_mod.Num;
-const testing = std.testing;
 const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
-const SnapshotStore = @import("snapshot.zig").Store;
+const SnapshotStore = snapshot_mod.Store;
+const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
-
-const is_freestanding = builtin.os.tag == .freestanding;
 
 /// Deferred numeric literal for compile-time validation
 /// These are collected during type checking and validated during comptime evaluation
@@ -462,13 +456,18 @@ fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
     return null;
 }
 
-/// Check if a variable contains an infinite type (e.g. `a = List a`).
+/// Check if a variable contains an infinite type after solving a definition.
+/// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
+/// Similar to Rust's check_for_infinite_type called after LetCon.
 fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
 
     switch (occurs_result) {
-        .not_recursive, .recursive_nominal => {},
+        .not_recursive, .recursive_nominal => {
+            // These are fine - no cycle, or valid recursion through a nominal type
+        },
         .recursive_anonymous => {
+            // Anonymous recursion (recursive type not through a nominal type)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
             _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
                 .var_ = var_,
@@ -477,6 +476,7 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
             try self.types.setVarContent(var_, .err);
         },
         .infinite => {
+            // Infinite type (like `a = List(a)`)
             const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
             _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
                 .var_ = var_,
@@ -845,24 +845,20 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
-/// Create a nominal Try type with the given success and error types
+/// Create a nominal Try type with the given success and error types.
+/// This is used for creating Try types in function signatures (e.g., from_numeral).
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Try is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
-    // Use the relative name "Try" (not "Builtin.Try") to match the relative_name in TypeHeader
-    // The origin_module field already captures that this type is from Builtin
     const try_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // The backing var doesn't matter here. Nominal types unify based on their ident
-    // and type args only - the backing is never examined during unification.
-    // Creating the real backing type ([Ok(ok), Err(err)]) would be a waste of time.
+    // mkNominal requires a backing_var, but for nominal-to-nominal unification
+    // only the type ident and type args are compared, so ok_var is fine here.
     const backing_var = ok_var;
     const type_args = [_]Var{ ok_var, err_var };
 
@@ -1242,6 +1238,9 @@ pub fn checkPlatformRequirements(
             const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
 
             // Extract flex name -> instantiated var mappings from the var_map.
+            // Only process flex vars that are declared in the for-clause type aliases.
+            // Other flex vars (like those from open tag union extensions `..others`)
+            // are polymorphic and don't need to be unified with app-provided aliases.
             var var_map_iter = self.var_map.iterator();
             while (var_map_iter.next()) |entry| {
                 const fresh_var = entry.value_ptr.*;
@@ -1251,30 +1250,26 @@ pub fn checkPlatformRequirements(
                     // type is instantiated any rigid in the platform
                     // required type become flex
                     .flex => |flex| {
-                        // Assert flex has name (flex var should come from platform rigid vars)
-                        std.debug.assert(flex.name != null);
-                        const flex_name = flex.name.?;
+                        // Named flex vars come from rigid vars or named extensions (like `.._others`).
+                        // Anonymous flex vars (from `..` syntax) have no name and are skipped.
+                        const flex_name = flex.name orelse continue;
 
-                        // Assert that this flex var ident is in the list of
-                        // rigid vars declared by the platform.
-                        if (builtin.mode == .Debug) {
-                            var found_in_required_aliases = false;
-                            for (type_aliases_slice) |alias| {
-                                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                                if (app_rigid_name == flex_name) {
-                                    found_in_required_aliases = true;
-                                    break;
-                                }
-                            }
-                            if (!found_in_required_aliases) {
-                                std.debug.panic("Expected type var with name {s} to be declared in platform required type aliases", .{
-                                    self.cir.getIdentText(flex_name),
-                                });
+                        // Check if this flex var is in the list of rigid vars declared
+                        // in the for-clause type aliases. If not, it's from an open tag
+                        // union extension (like `..others`) and doesn't need to be stored.
+                        var found_in_required_aliases = false;
+                        for (type_aliases_slice) |alias| {
+                            const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                            if (app_rigid_name == flex_name) {
+                                found_in_required_aliases = true;
+                                break;
                             }
                         }
 
-                        // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                        try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                        if (found_in_required_aliases) {
+                            // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
+                            try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                        }
                     },
                     else => {},
                 }
@@ -1582,6 +1577,9 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
         // Check that the def and ptrn match
         _ = try self.unify(def_var, ptrn_var, env);
 
+        // After solving the definition, check for infinite types.
+        // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
+        // Similar to Rust's check_for_infinite_type called after LetCon.
         try self.checkForInfiniteType(def_var);
     }
 
@@ -4063,8 +4061,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Local declarations inside functions use standard let-polymorphism
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+                    // Only generalize if this is a lambda expression (value restriction)
+                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -4126,8 +4125,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                     does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
-                    // Local declarations inside functions use standard let-polymorphism
-                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+                    // Only generalize if this is a lambda expression (value restriction)
+                    const should_generalize = self.isLambdaExpr(decl_stmt.expr);
+                    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
 
                     // Check any accumulated static dispatch constraints
                     try self.checkDeferredStaticDispatchConstraints(env);
@@ -4516,7 +4516,7 @@ fn checkIfElseExpr(
 
 // match //
 
-/// Check the types for an if-else expr
+/// Check the types for a match expr
 fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4530,6 +4530,10 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Get slice of branches
     const branch_idxs = self.cir.store.sliceMatchBranches(match.branches);
+
+    // Track whether we encountered any type errors during pattern checking
+    // If so, we'll skip exhaustiveness checking since the types may be invalid
+    var had_type_error = false;
 
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
@@ -4547,6 +4551,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
             .match_expr = expr_idx,
         } });
+        if (!ptrn_result.isOk()) had_type_error = true;
     }
 
     // Check the first branch's value, then use that at the branch_var
@@ -4574,6 +4579,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
                 .num_patterns = @intCast(branch_ptrn_idxs.len),
                 .problem_pattern_index = @intCast(cur_ptrn_index),
             } });
+            if (!ptrn_result.isOk()) had_type_error = true;
         }
 
         // Then, check the body
@@ -4620,8 +4626,118 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         }
     }
 
+    // For matches desugared from `?` operator, verify the condition unifies with Try type.
+    // If it doesn't, report an error. Skip exhaustiveness checking for invalid try since
+    // the desugared match only handles Ok/Err branches and would report confusing errors.
+    var has_invalid_try = false;
+    if (match.is_try_suffix) {
+        // Get the actual Try type from builtins and instantiate it with fresh type vars
+        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
+        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
+            try self.copyVar(try_type_var, builtin_env, Region.zero())
+        else
+            try_type_var;
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
+
+        // Unify the condition with Try type
+        const try_result = try self.unify(try_var, cond_var, env);
+        if (!try_result.isOk()) {
+            has_invalid_try = true;
+            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
+                .expr = match.cond,
+            } });
+        }
+    }
+
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
+
+    // Perform exhaustiveness and redundancy checking
+    // Only do this if there were no type errors - type errors can lead to invalid types
+    // that confuse the exhaustiveness checker
+    // Also skip if the condition type is an error type (can happen with complex inference)
+    // Also skip if we already reported an invalid try operator error
+    const resolved_cond = self.types.resolveVar(cond_var);
+    const cond_is_error = resolved_cond.desc.content == .err;
+
+    if (!had_type_error and !cond_is_error and !has_invalid_try) {
+        const match_region = self.cir.store.regions.get(
+            @enumFromInt(@intFromEnum(expr_idx)),
+        ).*;
+
+        const builtin_idents = exhaustive.BuiltinIdents{
+            .builtin_module = self.cir.idents.builtin_module,
+            .u8_type = self.cir.idents.u8_type,
+            .i8_type = self.cir.idents.i8_type,
+            .u16_type = self.cir.idents.u16_type,
+            .i16_type = self.cir.idents.i16_type,
+            .u32_type = self.cir.idents.u32_type,
+            .i32_type = self.cir.idents.i32_type,
+            .u64_type = self.cir.idents.u64_type,
+            .i64_type = self.cir.idents.i64_type,
+            .u128_type = self.cir.idents.u128_type,
+            .i128_type = self.cir.idents.i128_type,
+            .f32_type = self.cir.idents.f32_type,
+            .f64_type = self.cir.idents.f64_type,
+            .dec_type = self.cir.idents.dec_type,
+        };
+
+        const result = exhaustive.checkMatch(
+            self.cir.gpa,
+            self.types,
+            &self.cir.store,
+            builtin_idents,
+            match.branches,
+            cond_var,
+            match_region,
+        ) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TypeError => {
+                // Type error in pattern - exhaustiveness checking can't proceed
+                // This is expected when there are polymorphic types or type mismatches
+                // Don't report exhaustiveness errors in this case
+                return does_fx;
+            },
+        };
+        defer result.deinit(self.cir.gpa);
+
+        // Report non-exhaustive match if any patterns are missing
+        if (!result.is_exhaustive) {
+            const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
+
+            // Format missing patterns and store in snapshot store for lifecycle management
+            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+            for (result.missing_patterns) |pattern| {
+                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                const idx = try self.snapshots.storeExtraString(formatted);
+                try missing_indices.append(self.cir.gpa, idx);
+            }
+
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
+                .match_expr = expr_idx,
+                .condition_snapshot = condition_snapshot,
+                .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
+            } });
+        }
+
+        // Report redundant patterns
+        for (result.redundant_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .redundant_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
+
+        // Report unmatchable patterns (patterns on uninhabited types)
+        for (result.unmatchable_indices) |idx| {
+            _ = try self.problems.appendProblem(self.cir.gpa, .{ .unmatchable_pattern = .{
+                .match_expr = expr_idx,
+                .num_branches = @intCast(match.branches.span.len),
+                .problem_branch_index = idx,
+            } });
+        }
+    }
 
     return does_fx;
 }
@@ -5690,7 +5806,11 @@ fn markConstraintFunctionAsError(self: *Self, constraint: StaticDispatchConstrai
     const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
     std.debug.assert(mb_resolved_func != null);
     const resolved_func = mb_resolved_func.?;
-    try self.unifyWith(resolved_func.ret, .err, env);
+    // Use unify instead of unifyWith because the constraint's return type may be at a
+    // different rank than the current env (e.g., from a local declaration that wasn't
+    // generalized due to the value restriction).
+    const err_var = try self.freshFromContent(.err, env, self.getRegionAt(resolved_func.ret));
+    _ = try self.unify(resolved_func.ret, err_var, env);
 }
 
 /// Report a constraint validation error
