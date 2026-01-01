@@ -2526,25 +2526,9 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
-        // lazyDependency returns null if we're not building a step that needs it
+        // lazyDependency returns null on the first pass; Zig will re-run build() after fetching
         const kcov_dep = b.lazyDependency("kcov", .{}) orelse return;
         const kcov_exe = kcov_dep.artifact("kcov");
-
-        // On macOS, kcov needs to be codesigned to use task_for_pid
-        // The entitlements file is in the kcov source directory
-        var codesign_step: ?*Step = null;
-        if (target.result.os.tag == .macos) {
-            const codesign = b.addSystemCommand(&.{
-                "codesign",
-                "-s",
-                "-",
-                "--entitlements",
-            });
-            codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
-            codesign.addArg("-f");
-            codesign.addArtifactArg(kcov_exe);
-            codesign_step = &codesign.step;
-        }
 
         // Run snapshot tests with kcov to get parser coverage
         // Snapshot tests actually parse real Roc code, giving meaningful coverage
@@ -2577,9 +2561,13 @@ pub fn build(b: *std.Build) void {
         // Create output directories before running kcov
         const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
 
-        // If we need to codesign, do that before running kcov
-        if (codesign_step) |cs| {
-            mkdir_step.step.dependOn(cs);
+        // On macOS, kcov needs to be codesigned to use task_for_pid
+        if (target.result.os.tag == .macos) {
+            const codesign = b.addSystemCommand(&.{ "codesign", "-s", "-", "--entitlements" });
+            codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
+            codesign.addArg("-f");
+            codesign.addArtifactArg(kcov_exe);
+            mkdir_step.step.dependOn(&codesign.step);
         }
 
         // Run kcov with the snapshot test binary
