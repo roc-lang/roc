@@ -37,7 +37,7 @@ The value before this ***** operator has a type that doesn't have a **times** me
 
 The value's type, which does not have a method named **times**, is:
 
-    List(_a)
+    List(...)
 
 **Hint:**The ***** operator calls a method named **times** on the value preceding it, passing the value after the operator as the one argument.
 

@@ -1,29 +1,29 @@
 # META
 ~~~ini
-description=Package header without open bracket for exposes
+description=App header without open bracket
 type=header
 ~~~
 # SOURCE
 ~~~roc
-package foo {}
+app main {}
 ~~~
 # EXPECTED
-PARSE ERROR - parse_error_package_no_bracket.md:1:9:1:12
+PARSE ERROR - parse_error_app_no_bracket.md:1:5:1:9
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `expected_provides_open_square`
 This is an unexpected parsing error. Please check your syntax.
 
-**parse_error_package_no_bracket.md:1:9:1:12:**
+**parse_error_app_no_bracket.md:1:5:1:9:**
 ```roc
-package foo {}
+app main {}
 ```
-        ^^^
+    ^^^^
 
 
 # TOKENS
 ~~~zig
-KwPackage,LowerIdent,OpenCurly,CloseCurly,
+KwApp,LowerIdent,OpenCurly,CloseCurly,
 EndOfFile,
 ~~~
 # PARSE

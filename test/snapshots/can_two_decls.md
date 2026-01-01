@@ -64,9 +64,9 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]")))
 	(expressions
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))))
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
+		(expr (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))))
 ~~~

@@ -80,5 +80,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
 ~~~

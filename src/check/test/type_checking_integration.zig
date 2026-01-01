@@ -177,8 +177,7 @@ test "check type - binop operands same type works - unbound plus unbound" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -578,8 +577,7 @@ test "check type - def - nested lambda" {
         \\d
         \\  where [
         \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        \\    d.plus : d, e -> d,
-        \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
+        \\    d.plus : d, d -> d,
         \\  ]
         ,
     );
@@ -1077,18 +1075,7 @@ test "check type - binops math plus" {
     const source =
         \\x = 10 + 10u32
     ;
-    // With flexible binops, lhs (unbound numeral) stays polymorphic,
-    // and the plus method takes a U32 as the second argument
-    try checkTypesModule(
-        source,
-        .{ .pass = .last_def },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U32 -> a,
-        \\  ]
-        ,
-    );
+    try checkTypesModule(source, .{ .pass = .last_def }, "U32");
 }
 
 test "check type - binops math sub" {
@@ -1101,8 +1088,7 @@ test "check type - binops math sub" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.minus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.minus : a, a -> a,
         \\  ]
         ,
     );
@@ -1438,8 +1424,7 @@ test "check type - var reassignment" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -1495,17 +1480,10 @@ test "check type - crash" {
         \\  x + y
         \\}
     ;
-    // With flexible binops, the lhs (unbound numeral x) stays polymorphic,
-    // and the plus method takes a U64 as the second argument
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U64 -> a,
-        \\  ]
-        ,
+        "U64",
     );
 }
 
@@ -1526,16 +1504,10 @@ test "check type - dbg" {
         \\  x + y
         \\}
     ;
-    // With flexible binops, the lhs (unbound numeral x) stays polymorphic
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        \\a
-        \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, U64 -> a,
-        \\  ]
-        ,
+        "U64",
     );
 }
 
@@ -1557,8 +1529,7 @@ test "check type - for" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -1955,8 +1926,7 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, c -> a,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -2015,8 +1985,7 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
         \\Container(b)
         \\  where [
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, c -> b,
-        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    b.plus : b, b -> b,
         \\  ]
         ,
     );
@@ -2239,14 +2208,11 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\    a.plus : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, h -> b,
-        \\    b.plus : b, i -> b,
+        \\    b.plus : b, b -> b,
+        \\    b.plus : b, b -> b,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\    c.plus : c, j -> c,
+        \\    c.plus : c, c -> c,
         \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
-        \\    h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]),
-        \\    i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]),
-        \\    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -2447,11 +2413,10 @@ test "List.fold works as builtin associated item" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "x" } },
-        \\state
+        \\item
         \\  where [
         \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
-        \\    state.from_numeral : Numeral -> Try(state, [InvalidNumeral(Str)]),
-        \\    state.plus : state, item -> state,
+        \\    item.plus : item, item -> item,
         \\  ]
         ,
     );
@@ -2945,8 +2910,7 @@ test "check type - lambda capturing top-level constant with plus - mono_pure_lam
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -2965,8 +2929,7 @@ test "check type - simple function call should have return type" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, b -> a,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
+        \\    a.plus : a, a -> a,
         \\  ]
         ,
     );
@@ -2994,12 +2957,12 @@ test "check type - range inferred" {
         .{ .pass = .last_def },
         \\a, a -> List(a)
         \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, b -> a,
+        \\    a.plus : a, a -> a,
         \\    a.to_u64 : a -> U64,
-        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );

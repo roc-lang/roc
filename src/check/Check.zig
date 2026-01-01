@@ -4824,25 +4824,37 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
-            // For numeric binops, lhs and rhs can have different types.
-            // This allows e.g. Duration * I64 -> Duration.
-            // The return type is the lhs (receiver) type.
+            // For numeric binops, we currently require lhs and rhs to have the same type.
+            // This is a temporary restriction due to an issue with the interpreter's
+            // handling of constraints with different lhs/rhs types during instantiation.
+            // TODO: Once the interpreter is fixed, we can allow different types for
+            // e.g. Duration * I64 -> Duration.
+            const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
+
+            // If unification failed, short-circuit and set the expression to error
+            if (!arg_unify_result.isOk()) {
+                try self.unifyWith(expr_var, .err, env);
+                return does_fx;
+            }
+
+            const arg_var = lhs_var;
+
             const method_name, const ret_var =
                 switch (binop.op) {
-                    .add => .{ self.cir.idents.plus, lhs_var },
-                    .sub => .{ self.cir.idents.minus, lhs_var },
-                    .mul => .{ self.cir.idents.times, lhs_var },
-                    .div => .{ self.cir.idents.div_by, lhs_var },
-                    .div_trunc => .{ self.cir.idents.div_trunc_by, lhs_var },
-                    .rem => .{ self.cir.idents.rem_by, lhs_var },
+                    .add => .{ self.cir.idents.plus, arg_var },
+                    .sub => .{ self.cir.idents.minus, arg_var },
+                    .mul => .{ self.cir.idents.times, arg_var },
+                    .div => .{ self.cir.idents.div_by, arg_var },
+                    .div_trunc => .{ self.cir.idents.div_trunc_by, arg_var },
+                    .rem => .{ self.cir.idents.rem_by, arg_var },
                     else => unreachable,
                 };
 
-            // Create the binop static dispatch function on lhs, rhs -> ret
-            // This function attaches the dispatch fn to the lhs (receiver)
+            // Create the binop static dispatch function on arg, arg -> ret
+            // (both args have the same type since we unified them above)
             try self.mkBinopConstraint(
-                lhs_var,
-                rhs_var,
+                arg_var,
+                arg_var,
                 ret_var,
                 method_name,
                 env,

@@ -1227,7 +1227,7 @@ main = {
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(patt (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(patt (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, h -> a, a.plus : a, i -> a, a.plus : a, a -> a, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, j -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]")))
+		(patt (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.plus : a, a -> a, a.plus : a, a -> a, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
 	(type_decls
 		(nominal (type "Container(a)")
 			(ty-header (name "Container")
@@ -1241,5 +1241,5 @@ main = {
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "(a -> b) -> ((b -> c) -> (a -> c))"))
 		(expr (type "a, c -> d where [a.map : a, (b -> c) -> d]"))
-		(expr (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, h -> a, a.plus : a, i -> a, a.plus : a, a -> a, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, j -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]), i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]), j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))))
+		(expr (type "{ chained: a, final: a, id_results: (e, Str, [True, .._others]), processed: c, transformed: a } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, a.plus : a, a -> a, a.plus : a, a -> a, c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))))
 ~~~

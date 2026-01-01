@@ -196,5 +196,5 @@ match items {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, a -> a]"))
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a]"))
 ~~~

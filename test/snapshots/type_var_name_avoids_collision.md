@@ -584,7 +584,7 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ad -> ac, ad.from_numeral : Numeral -> Try(ad, [InvalidNumeral(Str)])]"))
+		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
 		(patt (type "ac -> ac"))
 		(patt (type "Str"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
@@ -592,7 +592,7 @@ main! = |_| {
 		(patt (type "[False, .._others]"))
 		(patt (type "ac -> ac"))
 		(patt (type "ac, ad -> (ac, ad)"))
-		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
@@ -617,9 +617,9 @@ main! = |_| {
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(patt (type "ac -> ac"))
-		(patt (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ad -> ac, ad.from_numeral : Numeral -> Try(ad, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]")))
 	(expressions
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ad -> ac, ad.from_numeral : Numeral -> Try(ad, [InvalidNumeral(Str)])]"))
+		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
 		(expr (type "ac -> ac"))
 		(expr (type "Str"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
@@ -627,7 +627,7 @@ main! = |_| {
 		(expr (type "[False, .._others]"))
 		(expr (type "ac -> ac"))
 		(expr (type "ac, ad -> (ac, ad)"))
-		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
+		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
@@ -652,5 +652,5 @@ main! = |_| {
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)])]"))
 		(expr (type "ac -> ac"))
-		(expr (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ad -> ac, ad.from_numeral : Numeral -> Try(ad, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg2 -> ac where [ac.from_numeral : Numeral -> Try(ac, [InvalidNumeral(Str)]), ac.plus : ac, ac -> ac]"))))
 ~~~

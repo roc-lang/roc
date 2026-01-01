@@ -164,5 +164,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ addOne: a -> a, errTag: [Err(Str), .._others], nested: [Some([Ok([Just(b), .._others2]), .._others3]), .._others4], noneTag: [None, .._others5], okTag: [Ok(Str), .._others6], result: Error, someTag: [Some(c), .._others7], tagList: List([Some(d), ..[None, .._others8]]) } where [a.plus : a, e -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
+(expr (type "{ addOne: a -> a, errTag: [Err(Str), .._others], nested: [Some([Ok([Just(b), .._others2]), .._others3]), .._others4], noneTag: [None, .._others5], okTag: [Ok(Str), .._others6], result: Error, someTag: [Some(c), .._others7], tagList: List([Some(d), ..[None, .._others8]]) } where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 ~~~

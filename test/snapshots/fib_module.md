@@ -88,7 +88,7 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, b -> a, a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]")))
 	(expressions
-		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, b -> a, a.plus : a, a -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_lte : a, a -> Bool, a.minus : a, a -> a, a.plus : a, a -> a]"))))
 ~~~

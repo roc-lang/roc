@@ -682,14 +682,11 @@ pub const Diagnostic = struct {
         type_alias_cannot_have_associated,
 
         // Targets section parse errors
-        expected_targets,
         expected_targets_colon,
         expected_targets_open_curly,
         expected_targets_close_curly,
         expected_targets_field_name,
         expected_targets_field_colon,
-        expected_targets_files_string,
-        unknown_targets_field,
 
         // Target entry parse errors
         expected_target_link_open_curly,
@@ -700,10 +697,6 @@ pub const Diagnostic = struct {
         expected_target_files_close_square,
         expected_target_file,
         expected_target_file_string_end,
-
-        // Semantic warnings (detected at CLI time, not parse time)
-        targets_exe_empty,
-        targets_duplicate_target,
     };
 };
 

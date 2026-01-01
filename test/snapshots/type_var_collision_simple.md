@@ -249,19 +249,19 @@ main! = |_| {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(patt (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
 		(patt (type "d -> d"))
 		(patt (type "d -> d"))
 		(patt (type "d, e -> (d, e)"))
-		(patt (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
+		(patt (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]")))
 	(expressions
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
+		(expr (type "d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))
 		(expr (type "d -> d"))
 		(expr (type "d -> d"))
 		(expr (type "d, e -> (d, e)"))
-		(expr (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))))
+		(expr (type "_arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]), d.plus : d, d -> d]"))))
 ~~~
