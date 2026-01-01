@@ -95,6 +95,11 @@ jobs:
           Requires: libelf
           EOF
 
+      - name: Build Coverage Test Binaries
+        run: |
+          zig build build-coverage-tests
+          ls -la zig-out/bin/
+
       - name: Parser Code Coverage
         run: |
           zig build coverage
