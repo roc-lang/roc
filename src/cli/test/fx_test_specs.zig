@@ -255,7 +255,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/primitive_encode.roc",
-        .io_spec = "1>U64.encode(42): 42|1>Done",
+        .io_spec = "1>Bool.encode(True): true|1>U64.encode(42): 42|1>Done",
         .description = "Primitive types have encode methods for static dispatch (issue #8853)",
     },
 };

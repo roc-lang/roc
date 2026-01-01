@@ -33,6 +33,12 @@ main! = || {
     fmt : Utf8Fmt
     fmt = Fmt
 
+    # Test Bool.encode
+    my_bool : Bool
+    my_bool = True
+    bool_bytes = my_bool.encode(fmt).ok_or([])
+    Stdout.line!("Bool.encode(True): ${Str.from_utf8_lossy(bool_bytes)}")
+
     # Test U64.encode
     num : U64
     num = 42
