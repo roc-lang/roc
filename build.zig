@@ -1002,9 +1002,9 @@ const CoverageSummaryStep = struct {
         const self: *CoverageSummaryStep = @fieldParentPtr("step", step);
 
         // Read kcov JSON output
-        // kcov creates a subdirectory named after the executable (e.g., snapshot_coverage/)
+        // kcov creates a subdirectory named after the executable (parse_unit_coverage)
         // which contains the coverage.json file
-        const json_path = try std.fmt.allocPrint(allocator, "{s}/kcov-merged/coverage.json", .{self.coverage_dir});
+        const json_path = try std.fmt.allocPrint(allocator, "{s}/parse_unit_coverage/coverage.json", .{self.coverage_dir});
         defer allocator.free(json_path);
 
         const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
