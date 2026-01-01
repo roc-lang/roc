@@ -135,7 +135,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 62;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
@@ -3002,6 +3002,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .self_referential_definition => |r| {
+            node.tag = .diag_self_referential_definition;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
@@ -3372,6 +3377,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
+            .ident = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
