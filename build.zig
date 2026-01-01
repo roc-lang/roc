@@ -2634,13 +2634,12 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov using installed binary paths
             // Using string paths because artifact dependencies don't work reliably in lazy blocks
-            // Use include-pattern=src/parse to focus on parser files
-            // Also exclude patterns like HTML.zig and debug prints that aren't meant to be covered
+            // Exclude Zig stdlib paths to focus on our source files
+            // The patterns exclude stdlib, libc, compiler_rt, and non-coverage files
             const run_snapshot_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
                 "--skip-solibs",
-                "--include-pattern=src/parse",
-                "--exclude-pattern=HTML.zig",
+                "--exclude-pattern=/lib/std/,/lib/libc/,/lib/c/,/lib/compiler_rt/,HTML.zig",
                 "--exclude-line=std.debug.print,std.debug.panic",
                 "kcov-output/parser-snapshot-tests",
                 "zig-out/bin/snapshot_coverage",
@@ -2654,8 +2653,7 @@ pub fn build(b: *std.Build) void {
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
                 "--skip-solibs",
-                "--include-pattern=src/parse",
-                "--exclude-pattern=HTML.zig",
+                "--exclude-pattern=/lib/std/,/lib/libc/,/lib/c/,/lib/compiler_rt/,HTML.zig",
                 "--exclude-line=std.debug.print,std.debug.panic",
                 "kcov-output/parser-unit-tests",
                 "zig-out/bin/parse_unit_coverage",
