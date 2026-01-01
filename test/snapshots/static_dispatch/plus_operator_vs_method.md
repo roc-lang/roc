@@ -151,7 +151,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "MyType"))
 		(patt (type "MyType"))
 		(patt (type "MyType")))
 	(type_decls
@@ -159,7 +159,7 @@ NO CHANGE
 			(ty-header (name "MyType"))))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "MyType"))
 		(expr (type "Error"))
 		(expr (type "Error"))))
 ~~~

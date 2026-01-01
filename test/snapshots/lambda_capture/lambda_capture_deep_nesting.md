@@ -120,5 +120,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.plus : f, f -> f]"))
+(expr (type "f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.plus : f, g -> f, g.from_numeral : Numeral -> Try(g, [InvalidNumeral(Str)])]"))
 ~~~

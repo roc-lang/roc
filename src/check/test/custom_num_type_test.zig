@@ -102,6 +102,23 @@ test "Custom number type without negate: unary minus fails" {
     try test_env.assertOneTypeError("MISSING METHOD");
 }
 
-// TODO: Add test for heterogeneous binop types (e.g., Duration * I64 -> Duration)
-// once the interpreter's handling of constraints with different lhs/rhs types is fixed.
-// Currently, the type checker requires lhs and rhs of binops to have the same type.
+test "Custom type with heterogeneous times: Duration * I64 works" {
+    const source =
+        \\Duration := { seconds: I64 }.{
+        \\    times : Duration, I64 -> Duration
+        \\    times = |d, n| { seconds: d.seconds * n }
+        \\}
+        \\
+        \\my_duration : Duration
+        \\my_duration = { seconds: 60 }
+        \\
+        \\result : Duration
+        \\result = my_duration * 5
+    ;
+
+    var test_env = try TestEnv.init("Duration", source);
+    defer test_env.deinit();
+
+    // Should type-check successfully - Duration.times accepts Duration and I64
+    try test_env.assertNoErrors();
+}

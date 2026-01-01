@@ -54,39 +54,8 @@ x = {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - multiline_string_complex.md:37:3:37:4
-MISSING METHOD - multiline_string_complex.md:37:3:37:9
-- - :0:0:0:0
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**multiline_string_complex.md:37:3:37:4:**
-```roc
-		0 - \\
-```
-		^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-The value before this **-** operator has a type that doesn't have a **minus** method:
-**multiline_string_complex.md:37:3:37:9:**
-```roc
-		0 - \\
-```
-		^^^^^^
-
-The value's type, which does not have a method named **minus**, is:
-
-    Str
-
-**Hint:**The **-** operator calls a method named **minus** on the value preceding it, passing the value after the operator as the one argument.
-
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
 **multiline_string_complex.md:40:5:40:8:**
@@ -291,13 +260,13 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
 		(expr (type "Str"))))
 ~~~

@@ -2265,8 +2265,15 @@ const Unifier = struct {
         const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
 
         // Unify shared constraints
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The unifyStaticDispatchConstraint call can recursively call back into
+        // unifyStaticDispatchConstraints, which appends to the same scratch buffer.
+        // If that append causes reallocation, a cached slice would be invalidated.
         if (partitioned.in_both.len() > 0) {
-            for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+            const in_both_start: usize = @intFromEnum(partitioned.in_both.start);
+            for (0..partitioned.in_both.len()) |i| {
+                // Re-fetch on each iteration since the backing array may have moved
+                const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
                 try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
             }
