@@ -2669,12 +2669,18 @@ pub fn build(b: *std.Build) void {
             merge_coverage.setCwd(b.path("."));
             merge_coverage.step.dependOn(&run_parse_coverage.step);
 
-            // Debug: dump the JSON content to see which files kcov is tracking
+            // Debug: list kcov output files and dump JSON content
             const dump_json = b.addSystemCommand(&.{
                 "sh",
                 "-c",
-                "echo '=== Files being tracked by kcov ===' && " ++
-                    "cat kcov-output/parser/coverage.json 2>/dev/null | head -200 || echo 'No coverage.json found'",
+                "echo '=== kcov output directory structure ===' && " ++
+                    "find kcov-output -type f -name '*.json' 2>/dev/null | head -20 && " ++
+                    "echo '=== Looking for coverage data ===' && " ++
+                    "ls -la kcov-output/parser/ 2>/dev/null || echo 'parser dir not found' && " ++
+                    "echo '=== JSON files in snapshot tests ===' && " ++
+                    "cat kcov-output/parser-snapshot-tests/coverage.json 2>/dev/null | head -100 || echo 'No snapshot coverage.json' && " ++
+                    "echo '=== Files in kcov output ===' && " ++
+                    "ls -laR kcov-output/ 2>/dev/null | head -100 || echo 'No kcov-output dir'",
             });
             dump_json.setCwd(b.path("."));
             dump_json.step.dependOn(&merge_coverage.step);
