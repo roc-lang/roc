@@ -240,7 +240,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     const title = switch (diagnostic.tag) {
         .multiple_platforms => "MULTIPLE PLATFORMS",
         .no_platform => "NO PLATFORM",
-        .missing_header => "MISSING HEADER",
         .missing_arrow => "MISSING ARROW",
         .expected_exposes => "EXPECTED EXPOSES",
         .expected_exposes_close_square => "EXPECTED CLOSING BRACKET",
@@ -263,10 +262,8 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .where_expected_method_or_alias_name => "WHERE CLAUSE ERROR",
         .where_expected_colon => "WHERE CLAUSE ERROR",
         .where_expected_constraints => "WHERE CLAUSE ERROR",
-        .no_else => "IF WITHOUT ELSE",
         .type_alias_cannot_have_associated => "TYPE ALIAS WITH ASSOCIATED ITEMS",
         .nominal_associated_cannot_have_final_expression => "EXPRESSION IN ASSOCIATED ITEMS",
-        .where_clause_not_allowed_in_type_declaration => "WHERE CLAUSE IN TYPE DECLARATION",
         else => "PARSE ERROR",
     };
 
@@ -274,20 +271,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
 
     // Add detailed error message based on the diagnostic type
     switch (diagnostic.tag) {
-        .missing_header => {
-            try report.document.addReflowingText("Roc files must start with a module header.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addText("For example:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("module [main]");
-            try report.document.addLineBreak();
-            try report.document.addText("or for an app:");
-            try report.document.addLineBreak();
-            try report.document.addIndent(1);
-            try report.document.addCodeBlock("app [main!] { pf: platform \"../basic-cli/platform.roc\" }");
-        },
         .multiple_platforms => {
             try report.document.addReflowingText("Only one platform declaration is allowed per file.");
             try report.document.addLineBreak();
@@ -552,22 +535,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addAnnotated("takes", .emphasized);
             try report.document.addText(" another function)");
         },
-        .no_else => {
-            try report.document.addText("This ");
-            try report.document.addKeyword("if");
-            try report.document.addText(" is being used as an expression, but it doesn't have an ");
-            try report.document.addKeyword("else");
-            try report.document.addText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("When ");
-            try report.document.addKeyword("if");
-            try report.document.addReflowingText(" is used as an expression (to evaluate to a value), it must have an ");
-            try report.document.addKeyword("else");
-            try report.document.addReflowingText(" branch to specify what value to use when the condition is ");
-            try report.document.addKeyword("False");
-            try report.document.addReflowingText(".");
-        },
         .type_alias_cannot_have_associated => {
             try report.document.addText("Type aliases cannot have associated items (such as types or methods).");
             try report.document.addLineBreak();
@@ -583,14 +550,6 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             try report.document.addText("To fix this, remove the expression at the very end.");
-        },
-        .where_clause_not_allowed_in_type_declaration => {
-            try report.document.addText("Type declarations cannot include ");
-            try report.document.addKeyword("where");
-            try report.document.addText(" clauses.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Only type annotations (such as annottions for a function or other value) can have them.");
         },
         else => {
             const tag_name = @tagName(diagnostic.tag);
@@ -629,7 +588,6 @@ pub const Diagnostic = struct {
     pub const Tag = enum {
         multiple_platforms,
         no_platform,
-        missing_header,
         missing_arrow,
         expected_exposes,
         expected_exposes_close_square,
@@ -647,16 +605,12 @@ pub const Diagnostic = struct {
         expected_platform_name_string,
         expected_platform_string,
         expected_provides,
-        expected_provides_close_square,
         expected_provides_open_square,
         expected_provides_close_curly,
         expected_provides_open_curly,
         expected_requires,
-        expected_requires_rigids_close_curly,
         expected_requires_rigids_open_curly,
         expected_requires_signatures_close_curly,
-        expected_requires_signatures_open_curly,
-        expected_for_clause_open_square,
         expected_for_clause_close_square,
         expected_for_clause_alias_name,
         expected_for_clause_colon,
@@ -678,7 +632,6 @@ pub const Diagnostic = struct {
         expr_no_space_dot_int,
         import_exposing_no_open,
         import_exposing_no_close,
-        no_else,
         expected_type_field_name,
         expected_colon_after_type_field_name,
         expected_arrow,
@@ -727,7 +680,6 @@ pub const Diagnostic = struct {
         incomplete_import,
         nominal_associated_cannot_have_final_expression,
         type_alias_cannot_have_associated,
-        where_clause_not_allowed_in_type_declaration,
 
         // Targets section parse errors
         expected_targets,
