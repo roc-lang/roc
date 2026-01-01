@@ -2390,6 +2390,14 @@ pub const Interpreter = struct {
                         }
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
+                        // Special case: Bool should render as just "True" or "False", not "Bool.True"
+                        // Check if this is the Builtin.Bool type
+                        const is_builtin_bool = nom.origin_module == self.env.idents.builtin_module and
+                            (nom.ident.ident_idx == self.env.idents.bool or
+                                nom.ident.ident_idx == self.env.idents.bool_type);
+                        if (is_builtin_bool) {
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
                         // Nominal types render as "TypeName.InnerValue"
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
                         const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
@@ -6726,43 +6734,17 @@ pub const Interpreter = struct {
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
-        const bool_decl_idx = self.builtins.bool_stmt;
-
-        // Get the statement from the Bool module
-        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
-
-        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
-        const ct_var = switch (bool_stmt) {
-            .s_nominal_decl => blk: {
-                // The type of the declaration is the nominal type, but we want its backing
-                const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
-                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
-                if (nom_resolved.desc.content == .structure) {
-                    if (nom_resolved.desc.content.structure == .nominal_type) {
-                        const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
-                        break :blk backing_var;
-                    }
-                }
-                break :blk nom_var;
-            },
-            else => can.ModuleEnv.varFrom(bool_decl_idx),
-        };
+        // We need the nominal type itself (not the backing type) so that method dispatch
+        // can look up methods like encode, etc.
+        const ct_var = can.ModuleEnv.varFrom(self.builtins.bool_stmt);
 
         // Use bool_env to translate since bool_stmt is from the Bool module
         // Cast away const - translateTypeVar doesn't actually mutate the module
         const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
-        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-        const backing_rt_var = switch (nominal_resolved.desc.content) {
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                .tag_union => nominal_rt_var,
-                else => nominal_rt_var,
-            },
-            else => nominal_rt_var,
-        };
-        self.canonical_bool_rt_var = backing_rt_var;
-        return backing_rt_var;
+        // Return the nominal type, not the backing type - method dispatch needs the nominal
+        // type to look up methods like encode, etc.
+        self.canonical_bool_rt_var = nominal_rt_var;
+        return nominal_rt_var;
     }
 
     pub fn getCanonicalStrRuntimeVar(self: *Interpreter) !types.Var {
@@ -8217,13 +8199,13 @@ pub const Interpreter = struct {
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
         if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+            // Use the expression's type as the single source of truth for propagating
+            // type mappings. The expression's type always has the correct function type.
+            const expr_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+            const expr_resolved = origin_env.types.resolveVar(expr_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
+            if (expr_resolved.desc.content == .structure) {
+                const flat = expr_resolved.desc.content.structure;
                 switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
                         const param_vars = origin_env.types.sliceVars(fn_type.args);
@@ -8232,15 +8214,23 @@ pub const Interpreter = struct {
                             // Propagate mappings from the concrete receiver to this type
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
+                        // Also propagate mappings to the return type. This is needed when the
+                        // return type has type variables that should match the parameter's type
+                        // variables but may be represented as separate variables in the type store
+                        // after serialization. For example, identity : Iter(s) -> Iter(s) needs
+                        // both the parameter and return type's `s` to be mapped.
+                        try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
                     },
                     else => {},
                 }
             }
         }
 
-        // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        // Translate the expression's type to runtime.
+        // The expression's type is the single source of truth for the function type,
+        // whether it's a lambda or a reference to another function.
+        const expr_var = can.ModuleEnv.varFrom(target_def.expr);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), expr_var);
 
         // Evaluate the method's expression
         const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
@@ -9068,9 +9058,59 @@ pub const Interpreter = struct {
                     // Function type propagation is complex - skip for now
                     // The main use case we need is nominal types like `Num a`
                 },
-                .tag_union => {
-                    // Tag union propagation is complex - skip for now
-                    // This case is less common for the numeric range use case we're fixing
+                .tag_union => |ct_tu| {
+                    // For tag unions, match tags by name and propagate argument type mappings.
+                    // This is needed for methods on tag unions with type parameters, e.g.:
+                    // Iter(s) :: [It(s)].{ identity = |It(s_)| It(s_) }
+                    // When called with Iter(I64), we need to map s -> I64.
+                    //
+                    // The RT type might be a tag union directly, or it might be a nominal type
+                    // wrapping a tag union. We need to handle both cases.
+                    const rt_tu_opt: ?types.TagUnion = blk: {
+                        if (rt_resolved.desc.content == .structure) {
+                            switch (rt_resolved.desc.content.structure) {
+                                .tag_union => |tu| break :blk tu,
+                                .nominal_type => |nom| {
+                                    // Unwrap nominal to get backing type
+                                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure and
+                                        backing_resolved.desc.content.structure == .tag_union)
+                                    {
+                                        break :blk backing_resolved.desc.content.structure.tag_union;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (rt_tu_opt) |rt_tu| {
+                        const ct_tags = module.types.getTagsSlice(ct_tu.tags);
+                        const rt_tags = self.runtime_types.getTagsSlice(rt_tu.tags);
+
+                        // Match tags by name and propagate argument mappings
+                        for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
+                            const ct_tag_name_str = module.getIdent(ct_tag_name);
+                            // Translate CT ident to RT ident space for comparison
+                            const rt_ct_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
+
+                            // Find matching tag in RT type by ident index
+                            for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
+                                if (rt_ct_tag_ident == rt_tag_name) {
+                                    // Found matching tag - propagate argument mappings
+                                    const ct_args = module.types.sliceVars(ct_tag_args);
+                                    const rt_args = self.runtime_types.sliceVars(rt_tag_args);
+                                    const min_args = @min(ct_args.len, rt_args.len);
+                                    for (0..min_args) |i| {
+                                        try self.propagateFlexMappings(module, ct_args[i], rt_args[i]);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 },
                 .record => {
                     // Record propagation is complex - skip for now
@@ -10394,6 +10434,9 @@ pub const Interpreter = struct {
             receiver_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
+            /// Expected parameter types from the method signature (excluding receiver).
+            /// Used to provide correct expected types for arguments like numeric literals.
+            expected_arg_rt_vars: ?[]const types.Var,
         };
 
         /// Type var dispatch - collect arguments for a static method call on a type variable.
@@ -13018,7 +13061,7 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
         lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
-        roc_ops: *RocOps,
+        _: *RocOps,
     ) Error!StackValue {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -13031,10 +13074,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const closure_layout = try self.getRuntimeLayout(rt_var);
-        if (closure_layout.tag != .closure) {
-            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
-            return error.Crash;
-        }
+        std.debug.assert(closure_layout.tag == .closure);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -14142,7 +14182,7 @@ pub const Interpreter = struct {
                     } else {
                         // Gather layouts and values
                         const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        var elem_layouts = try self.allocator.alloc(layout.Layout, total_count);
                         defer self.allocator.free(elem_layouts);
 
                         // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
@@ -14153,15 +14193,75 @@ pub const Interpreter = struct {
                         // Collect element rt_vars for constructing tuple type
                         var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                         defer self.allocator.free(elem_rt_vars);
+
+                        // Track which elements need auto-boxing
+                        var need_auto_box = try self.allocator.alloc(bool, total_count);
+                        defer self.allocator.free(need_auto_box);
                         alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
-                        var i: usize = total_count;
-                        while (i > 0) {
-                            i -= 1;
-                            values[i] = value_stack.pop() orelse return error.Crash;
-                            elem_layouts[i] = values[i].layout;
-                            elem_rt_vars[i] = values[i].rt_var;
+                        var idx: usize = total_count;
+                        while (idx > 0) {
+                            idx -= 1;
+                            values[idx] = value_stack.pop() orelse return error.Crash;
+                            elem_rt_vars[idx] = values[idx].rt_var;
+
+                            // Check if this element is a recursive tag_union that needs boxing.
+                            // A tag_union is recursive if any of its variant payloads contains
+                            // a Box pointing to this same tag_union.
+                            const elem_layout = values[idx].layout;
+                            need_auto_box[idx] = false;
+
+                            if (elem_layout.tag == .tag_union) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                // Check if any variant's payload contains a Box pointing to this tag_union
+                                var var_idx: usize = 0;
+                                while (var_idx < variants.len) : (var_idx += 1) {
+                                    const variant = variants.get(var_idx);
+                                    const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                    if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                        need_auto_box[idx] = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If this element needs boxing, find the Box layout and box the value
+                            if (need_auto_box[idx]) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because:
+                                // 1. We only enter this block if need_auto_box[idx] is true
+                                // 2. need_auto_box[idx] is only set true if layoutContainsBoxOfTagUnion
+                                //    found a Box pointing to this tag_union in some variant's payload
+                                // 3. findBoxIdxForTagUnion searches the same layouts and returns the
+                                //    index of that Box, so it must find the same Box that was detected
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, values[idx], roc_ops, values[idx].rt_var);
+                                values[idx].decref(&self.runtime_layout_store, roc_ops);
+                                values[idx] = boxed;
+                                elem_layouts[idx] = box_layout;
+                            } else {
+                                elem_layouts[idx] = values[idx].layout;
+                            }
                         }
 
                         // Create tuple type from element types
@@ -14178,8 +14278,8 @@ pub const Interpreter = struct {
                         if (total_count != accessor.getElementCount()) return error.TypeMismatch;
 
                         // Set all elements
-                        for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx], roc_ops);
+                        for (0..total_count) |set_idx| {
+                            try accessor.setElement(set_idx, values[set_idx], roc_ops);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -14455,6 +14555,50 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
+
+                        // Check if this field value is a recursive tag_union that needs boxing.
+                        // A tag_union is recursive if any of its variant payloads contains
+                        // a Box pointing to this same tag_union.
+                        const field_layout = field_values[i].layout;
+                        if (field_layout.tag == .tag_union) {
+                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            var needs_boxing = false;
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    needs_boxing = true;
+                                    break;
+                                }
+                            }
+
+                            if (needs_boxing) {
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because we detected needs_boxing=true above,
+                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
+                                // searches the same layouts and must find the same Box.
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
+                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
+                                field_values[i] = boxed;
+                            }
+                        }
                     }
 
                     // Handle base record if extension exists
@@ -16747,6 +16891,21 @@ pub const Interpreter = struct {
                             try value_stack.push(result_val);
                             return true;
                         }
+                        // For flex/rigid types, first check if the actual value has a concrete
+                        // type in its rt_var. This handles cases like Bool where the value was
+                        // created with a concrete type but the compile-time type is polymorphic.
+                        const value_rt_var_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                        if (value_rt_var_resolved.desc.content == .structure) {
+                            switch (value_rt_var_resolved.desc.content.structure) {
+                                .nominal_type => |nom| {
+                                    break :blk .{
+                                        .origin = nom.origin_module,
+                                        .ident = nom.ident.ident_idx,
+                                    };
+                                },
+                                else => {},
+                            }
+                        }
                         // For flex/rigid numeric types with other method calls (like to_str),
                         // derive the nominal type from the layout
                         if (receiver_value.layout.tag == .scalar) {
@@ -16936,9 +17095,21 @@ pub const Interpreter = struct {
 
                     try self.active_closures.append(method_func);
 
-                    // Use patternMatchesBind to properly bind nested patterns (e.g., nominal patterns
-                    // like `|Widget.Content(s)|` need to bind `s`, not just the outer pattern).
-                    const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+                    // Propagate flex mappings BEFORE translation. This is critical for methods on
+                    // tag unions with type parameters: the translation needs the mappings to
+                    // resolve type variables to concrete types based on the receiver's actual type.
+                    // For example, in `identity = |It(s_)| It(s_)`, the pattern type `[It(s)]`
+                    // needs `s` mapped to the receiver's type argument (e.g., I64).
+                    const param_pattern_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, param_pattern_ct_var, da.receiver_rt_var);
+
+                    // Also propagate to the body expression's type for complete coverage
+                    const body_ct_var = can.ModuleEnv.varFrom(closure_header.body_idx);
+                    try self.propagateFlexMappings(self.env, body_ct_var, da.receiver_rt_var);
+
+                    // Now translate the pattern type with the mappings in place
+                    const receiver_param_rt_var = try self.translateTypeVar(self.env, param_pattern_ct_var);
+
                     if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
@@ -16974,17 +17145,86 @@ pub const Interpreter = struct {
                 try value_stack.push(receiver_value);
                 try value_stack.push(method_func);
 
+                // Extract expected argument types from the method's function signature.
+                // This is critical for type inference of polymorphic literals like numeric 0 in list.get(0).
+                // We get the parameter types from the method signature and use them as expected types,
+                // but only when they are concrete types (not flex/rigid type variables).
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const method_source_env = closure_header.source_env;
+                const method_lambda_rt_var = try self.translateTypeVar(@constCast(method_source_env), method_lambda_ct_var);
+
+                // Extract parameter types from the method signature (excluding receiver).
+                // We need to handle different resolved type cases explicitly.
+                const expected_arg_rt_vars: ?[]const types.Var = blk: {
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+                    const func_info: ?types.Func = switch (method_resolved.desc.content) {
+                        .structure => method_resolved.desc.content.unwrapFunc(),
+                        // Polymorphic method - type variable doesn't provide concrete param types
+                        .flex, .rigid => break :blk null,
+                        .alias => |alias| inner: {
+                            // Follow alias to get the underlying function type
+                            const backing = self.runtime_types.getAliasBackingVar(alias);
+                            const backing_resolved = self.runtime_types.resolveVar(backing);
+                            switch (backing_resolved.desc.content) {
+                                .structure => break :inner backing_resolved.desc.content.unwrapFunc(),
+                                // Polymorphic backing - no concrete param types
+                                .flex, .rigid => break :blk null,
+                                // Nested alias shouldn't happen after resolveVar
+                                .alias => unreachable,
+                                .err => unreachable,
+                            }
+                        },
+                        .err => unreachable, // Method type should never be error
+                    };
+                    // Methods are functions - structure content should unwrap to a function
+                    const fi = func_info orelse unreachable;
+                    const method_params = self.runtime_types.sliceVars(fi.args);
+
+                    // Return the parameters after the receiver as expected types for args
+                    if (method_params.len > 1) {
+                        break :blk method_params[1..];
+                    } else {
+                        break :blk null;
+                    }
+                };
+
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                     .method_name = da.field_name,
                     .collected_count = 0,
                     .remaining_args = arg_exprs,
                     .receiver_rt_var = da.receiver_rt_var,
                     .expr_idx = da.expr_idx,
+                    .expected_arg_rt_vars = expected_arg_rt_vars,
                 } } });
 
-                // Start evaluating first arg
-                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                // Start evaluating first arg with expected type from method signature.
+                // For concrete types (like U64 in List.get), use the method's parameter type -
+                // this is essential for numeric literal inference.
+                // For type variables (like `state` in List.fold_rev), use the argument's own type -
+                // type variables don't constrain numeric literals and the argument's type is correct.
+                const first_arg_rt_var = blk: {
+                    if (expected_arg_rt_vars != null and expected_arg_rt_vars.?.len > 0) {
+                        const expected = expected_arg_rt_vars.?[0];
+                        const resolved = self.runtime_types.resolveVar(expected);
+                        switch (resolved.desc.content) {
+                            .structure => break :blk expected, // Concrete type - use it
+                            .flex, .rigid => {}, // Type variable - fall through to use argument's type
+                            .alias => {
+                                // Follow alias to check underlying type
+                                const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                const backing_resolved = self.runtime_types.resolveVar(backing);
+                                if (backing_resolved.desc.content == .structure) {
+                                    break :blk expected;
+                                }
+                                // Otherwise fall through
+                            },
+                            .err => unreachable, // Method parameter types should never be error
+                        }
+                    }
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    break :blk try self.translateTypeVar(self.env, first_arg_ct_var);
+                };
 
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
@@ -16999,17 +17239,44 @@ pub const Interpreter = struct {
                 // Stack: [receiver, method_func, arg0, arg1, ...]
                 if (dac.remaining_args.len > 1) {
                     // More arguments to evaluate
+                    // Advance expected_arg_rt_vars to skip the current argument we just collected
+                    const next_expected_arg_rt_vars: ?[]const types.Var = if (dac.expected_arg_rt_vars) |vars|
+                        (if (vars.len > 1) vars[1..] else null)
+                    else
+                        null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                         .method_name = dac.method_name,
                         .collected_count = dac.collected_count + 1,
                         .remaining_args = dac.remaining_args[1..],
                         .receiver_rt_var = dac.receiver_rt_var,
                         .expr_idx = dac.expr_idx,
+                        .expected_arg_rt_vars = next_expected_arg_rt_vars,
                     } } });
 
-                    // Translate argument type
-                    const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
-                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    // Use expected type from method signature.
+                    // For concrete types (like U64), use the method's parameter type.
+                    // For type variables (flex/rigid), use the argument's own type.
+                    const next_arg_rt_var = blk: {
+                        if (next_expected_arg_rt_vars != null and next_expected_arg_rt_vars.?.len > 0) {
+                            const expected = next_expected_arg_rt_vars.?[0];
+                            const resolved = self.runtime_types.resolveVar(expected);
+                            switch (resolved.desc.content) {
+                                .structure => break :blk expected,
+                                .flex, .rigid => {},
+                                .alias => {
+                                    const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure) {
+                                        break :blk expected;
+                                    }
+                                },
+                                .err => unreachable,
+                            }
+                        }
+                        const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
+                        break :blk try self.translateTypeVar(self.env, next_arg_ct_var);
+                    };
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = dac.remaining_args[1],
                         .expected_rt_var = next_arg_rt_var,

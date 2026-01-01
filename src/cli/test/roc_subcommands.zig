@@ -87,17 +87,111 @@ test "roc version outputs at least 5 chars to stdout" {
     try testing.expect(result.stdout.len >= 5);
 }
 
-// Once repl is implemented, this test should be updated to check for the expected output.
-test "roc repl outputs at least 5 chars to stderr" {
+test "roc repl shows welcome banner" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
-    const result = try util.runRocCommand(gpa, &.{"repl"});
+    // Send empty input (just EOF) to exit the REPL
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "");
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
 
-    // Output (stderr) contains at least 5 characters
-    try testing.expect(result.stderr.len >= 5);
+    // Command exits successfully (EOF closes REPL gracefully)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Stdout contains the welcome banner
+    const has_welcome = std.mem.indexOf(u8, result.stdout, "Roc REPL") != null;
+    try testing.expect(has_welcome);
+
+    // Stdout mentions help
+    const has_help_hint = std.mem.indexOf(u8, result.stdout, ":help") != null;
+    try testing.expect(has_help_hint);
+}
+
+test "roc repl evaluates simple expression" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Evaluate a simple expression
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "1 + 1\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the result "2"
+    const has_result = std.mem.indexOf(u8, result.stdout, "2") != null;
+    try testing.expect(has_result);
+}
+
+test "roc repl :help command works" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Send :help command
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":help\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains help text (mentions commands)
+    const has_help_output = std.mem.indexOf(u8, result.stdout, ":exit") != null or
+        std.mem.indexOf(u8, result.stdout, ":quit") != null;
+    try testing.expect(has_help_output);
+}
+
+test "roc repl :exit command exits cleanly" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Send :exit command
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, ":exit\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains goodbye message
+    const has_goodbye = std.mem.indexOf(u8, result.stdout, "Goodbye") != null;
+    try testing.expect(has_goodbye);
+}
+
+test "roc repl variable definition and usage" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Define a variable and use it
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "x = 5\nx + 3\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the result "8"
+    const has_result = std.mem.indexOf(u8, result.stdout, "8") != null;
+    try testing.expect(has_result);
+}
+
+test "roc repl string expression" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Evaluate a string expression
+    const result = try util.runRocWithStdin(gpa, &.{"repl"}, "\"hello\"\n");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Command exits successfully
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+
+    // Output contains the string (with quotes in output)
+    const has_string = std.mem.indexOf(u8, result.stdout, "hello") != null;
+    try testing.expect(has_string);
 }
 
 test "roc help contains Usage:" {

@@ -1036,7 +1036,7 @@ pub const BuildEnv = struct {
                 defer self.gpa.free(plat_rel);
 
                 // Check if this is a URL - if so, resolve it to a cached local path
-                const plat_path = if (isUrl(plat_rel)) blk: {
+                const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
                     const cached_path = try self.resolveUrlPackage(plat_rel);
                     break :blk cached_path;
                 } else blk: {
@@ -1055,7 +1055,7 @@ pub const BuildEnv = struct {
 
                 // For URL-resolved packages, add the cache directory to workspace roots
                 // so that imports within the cached package can be resolved
-                if (isUrl(plat_rel)) {
+                if (base.url.isSafeUrl(plat_rel)) {
                     if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
                         try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
                     }
@@ -1075,7 +1075,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1110,7 +1110,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1151,7 +1151,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1269,11 +1269,6 @@ pub const BuildEnv = struct {
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
-    }
-
-    /// Check if a path is a URL (http:// or https://)
-    fn isUrl(path: []const u8) bool {
-        return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
     }
 
     /// Cross-platform environment variable lookup.
@@ -1528,7 +1523,7 @@ pub const BuildEnv = struct {
 
             const p_path = info.platform_path.?;
 
-            const abs = if (isUrl(p_path))
+            const abs = if (base.url.isSafeUrl(p_path))
                 try self.resolveUrlPackage(p_path)
             else
                 try self.makeAbsolute(p_path);
@@ -1545,6 +1540,9 @@ pub const BuildEnv = struct {
             const dep_key = try self.gpa.dupe(u8, alias);
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
@@ -1577,6 +1575,9 @@ pub const BuildEnv = struct {
                     try self.ensurePackage(module_name, .module, module_path);
                 }
 
+                // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+                pack = self.packages.getPtr(pkg_name).?;
+
                 // Also add to app's shorthands so imports resolve correctly
                 const mod_key = try self.gpa.dupe(u8, module_name);
                 if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
@@ -1606,7 +1607,7 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            const abs = if (isUrl(path))
+            const abs = if (base.url.isSafeUrl(path))
                 try self.resolveUrlPackage(path)
             else
                 try self.makeAbsolute(path);
@@ -1638,6 +1639,9 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
