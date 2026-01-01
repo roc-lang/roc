@@ -7136,64 +7136,10 @@ pub const Interpreter = struct {
                         payload_value = null;
                     }
                 } else if (arg_vars.len == 1) {
-                    // Get the payload layout from the VALUE's actual layout, not the type's.
-                    // This is crucial for polymorphic types from builtin modules where the type
-                    // variable (arg_var) might be rigid/uninstantiated but the value's layout
-                    // contains the correct concrete information.
-                    const variant_layout = acc.getVariantLayout(tag_index);
                     const arg_var = arg_vars[0];
-                    const arg_resolved = self.runtime_types.resolveVar(arg_var);
-
-                    const effective_layout = blk: {
-                        // First try: if arg is a rigid with a substitution, use substituted type's layout
-                        if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                break :blk self.getRuntimeLayout(subst_var) catch variant_layout;
-                            }
-                            // For rigid types without substitution:
-                            // If variant_layout is ZST but value.rt_var suggests otherwise,
-                            // try to get layout from value's runtime type.
-                            if (variant_layout.tag == .zst) {
-                                // Try to get layout from value's rt_var which may have concrete type info
-                                const value_resolved = self.runtime_types.resolveVar(value.rt_var);
-                                if (value_resolved.desc.content == .structure) {
-                                    if (value_resolved.desc.content.structure == .tag_union) {
-                                        // Get payload type from value's tag union type
-                                        var value_tag_list = std.array_list.AlignedManaged(types.Tag, null).init(self.allocator);
-                                        defer value_tag_list.deinit();
-                                        self.appendUnionTags(value.rt_var, &value_tag_list) catch {};
-                                        if (tag_index < value_tag_list.items.len) {
-                                            const value_tag_args = self.runtime_types.sliceVars(value_tag_list.items[tag_index].args);
-                                            if (value_tag_args.len == 1) {
-                                                if (self.getRuntimeLayout(value_tag_args[0])) |value_payload_layout| {
-                                                    if (value_payload_layout.tag != .zst) {
-                                                        break :blk value_payload_layout;
-                                                    }
-                                                } else |_| {}
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            break :blk variant_layout;
-                        }
-                        // Second try: compute layout directly from arg_var
-                        // This handles concrete types like opaque Item returned from polymorphic functions
-                        if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                            // If computed layout is ZST but variant_layout is not, prefer variant_layout.
-                            // This happens with polymorphic types where the type variable isn't resolved
-                            // but the actual layout in the tag union is concrete.
-                            if (computed_layout.tag == .zst and variant_layout.tag != .zst) {
-                                break :blk variant_layout;
-                            }
-                            break :blk computed_layout;
-                        } else |_| {}
-                        // Fallback to variant_layout
-                        break :blk variant_layout;
-                    };
-
+                    const arg_layout = try self.getRuntimeLayout(arg_var);
                     payload_value = StackValue{
-                        .layout = effective_layout,
+                        .layout = arg_layout,
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
@@ -7688,7 +7634,6 @@ pub const Interpreter = struct {
             .assign => |_| {
                 // Bind entire value to this pattern
                 const copied = try self.pushCopy(value, roc_ops);
-                // std.debug.print("DEBUG patternMatchesBind assign: copied.layout.tag={s}\n", .{@tagName(copied.layout.tag)});
                 // pushCopy preserves rt_var from value
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
@@ -10711,7 +10656,6 @@ pub const Interpreter = struct {
                     if (!should_continue) {
                         // return_result continuation signals completion
                         if (value_stack.pop()) |val| {
-                            // // std.debug.print("DEBUG eval returning: layout.tag={s}\n", .{@tagName(val.layout.tag)});
                             return val;
                         } else {
                             self.triggerCrash("eval: value_stack empty after return_result", false, roc_ops);
@@ -13423,9 +13367,7 @@ pub const Interpreter = struct {
                         }
                     }
                 }
-                // std.debug.print("DEBUG evalLookupLocal: found binding with layout.tag={s}\n", .{@tagName(b.value.layout.tag)});
                 const copy_result = try self.pushCopy(b.value, roc_ops);
-                // std.debug.print("DEBUG evalLookupLocal: copy_result.layout.tag={s}\n", .{@tagName(copy_result.layout.tag)});
                 return copy_result;
             }
         }
@@ -15023,14 +14965,8 @@ pub const Interpreter = struct {
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
                             const expected_payload_size = disc_offset; // payload is before discriminant
-                            // Get the variant's expected payload layout
-                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
-                            const expected_variant_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
-                            // Apply fix when:
-                            // 1. expected payload is very small but actual is larger, OR
-                            // 2. expected variant layout is ZST but actual payload is not ZST
-                            const needs_fix = (expected_payload_size <= 1 and arg_size > expected_payload_size) or
-                                (expected_variant_layout.tag == .zst and values[0].layout.tag != .zst);
+                            // Apply fix when expected payload is very small but actual is larger
+                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
@@ -15065,16 +15001,6 @@ pub const Interpreter = struct {
                                 for (values) |val| {
                                     val.decref(&self.runtime_layout_store, roc_ops);
                                 }
-                                // CRITICAL: Preserve tag_union layout for pattern matching.
-                                // The tuple memory layout is compatible with tag_union since both
-                                // have payload at offset 0. Create a new tag_union layout that
-                                // matches the actual payload size so pattern matching works correctly.
-                                const new_tu_layout = try self.runtime_layout_store.createTagUnionLayout(
-                                    values[0].layout,
-                                    tu_data.discriminant_size,
-                                    tc.tag_index,
-                                );
-                                proper_dest.layout = new_tu_layout;
                                 try value_stack.push(proper_dest);
                                 return true;
                             }
