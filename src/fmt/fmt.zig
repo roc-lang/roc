@@ -1004,7 +1004,59 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                _ = try fmt.formatExpr(fa.left);
+                // Special case: when left side is a local_dispatch with zero-arg apply,
+                // we must preserve ONE set of parens to prevent the output from being
+                // re-parsed with a different structure. E.g., `0->b().c()` should NOT
+                // become `0->b.c()` because the parser would interpret `b.c` as a
+                // qualified identifier instead of a field access chain. (See issue #8851)
+                //
+                // For nested applies like `0->b()().c()`, we strip all but one layer,
+                // outputting `0->b().c()` which is then stable on subsequent passes.
+                const left_expr = fmt.ast.store.getExpr(fa.left);
+                if (left_expr == .local_dispatch) {
+                    const ld = left_expr.local_dispatch;
+                    const ld_right_initial = fmt.ast.store.getExpr(ld.right);
+                    if (ld_right_initial == .apply) {
+                        const apply_initial = ld_right_initial.apply;
+                        if (fmt.ast.store.exprSlice(apply_initial.args).len == 0) {
+                            // Strip nested zero-arg applies to find the innermost function
+                            var innermost_fn = apply_initial.@"fn";
+                            var inner_expr = fmt.ast.store.getExpr(innermost_fn);
+                            while (inner_expr == .apply) {
+                                const inner_apply = inner_expr.apply;
+                                if (fmt.ast.store.exprSlice(inner_apply.args).len == 0) {
+                                    innermost_fn = inner_apply.@"fn";
+                                    inner_expr = fmt.ast.store.getExpr(innermost_fn);
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // Format the local_dispatch preserving one set of parens
+                            const ld_multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
+                            _ = try fmt.formatExpr(ld.left);
+                            if (ld_multiline and try fmt.flushCommentsBefore(ld.operator)) {
+                                fmt.curr_indent += 1;
+                                try fmt.pushIndent();
+                            }
+                            try fmt.pushAll("->");
+                            if (ld_multiline and try fmt.flushCommentsAfter(ld.operator)) {
+                                try fmt.pushIndent();
+                            }
+                            // Output the innermost function followed by () to preserve one
+                            // set of parens (prevents `b` from being parsed with following `.`
+                            // as a qualified identifier)
+                            _ = try fmt.formatExprInner(innermost_fn, .no_indent_on_access);
+                            try fmt.pushAll("()");
+                        } else {
+                            _ = try fmt.formatExpr(fa.left);
+                        }
+                    } else {
+                        _ = try fmt.formatExpr(fa.left);
+                    }
+                } else {
+                    _ = try fmt.formatExpr(fa.left);
+                }
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
