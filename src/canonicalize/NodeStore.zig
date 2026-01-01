@@ -135,7 +135,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 62;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 40;
 /// Count of the statement nodes in the ModuleEnv
@@ -3289,6 +3289,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             _ = try store.extra_data.append(store.gpa, r.other_region.end.offset);
             node.data_3 = @intCast(extra_start);
         },
+        .deprecated_number_suffix => |r| {
+            node.tag = .diag_deprecated_number_suffix;
+            region = r.region;
+            node.data_1 = @intFromEnum(r.suffix);
+            node.data_2 = @intFromEnum(r.suggested);
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3629,6 +3635,11 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
+        .diag_deprecated_number_suffix => return CIR.Diagnostic{ .deprecated_number_suffix = .{
+            .suffix = @enumFromInt(node.data_1),
+            .suggested = @enumFromInt(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },

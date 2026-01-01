@@ -41,9 +41,391 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:2:9:2:14
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:3:9:3:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:4:9:4:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:5:9:5:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:6:9:6:16
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:7:9:7:14
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:8:9:8:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:9:9:9:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:10:9:10:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:11:9:11:16
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:12:9:12:15
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:13:12:13:18
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:14:12:14:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:15:12:15:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:16:12:16:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:17:12:17:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:18:12:18:18
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:19:12:19:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:20:12:20:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:21:12:21:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:22:12:22:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:23:12:23:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:24:12:24:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:25:12:25:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:26:12:26:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:27:12:27:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:28:12:28:21
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:29:12:29:19
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:30:12:30:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:31:12:31:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:32:12:32:20
+DEPRECATED NUMBER SUFFIX - number_literal_suffixes.md:33:12:33:21
 # PROBLEMS
-NIL
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:2:9:2:14:**
+```roc
+  u8:   123u8,
+```
+        ^^^^^
+
+The `u8` suffix is no longer supported. Use `123.U8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:3:9:3:15:**
+```roc
+  u16:  123u16,
+```
+        ^^^^^^
+
+The `u16` suffix is no longer supported. Use `123.U16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:4:9:4:15:**
+```roc
+  u32:  123u32,
+```
+        ^^^^^^
+
+The `u32` suffix is no longer supported. Use `123.U32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:5:9:5:15:**
+```roc
+  u64:  123u64,
+```
+        ^^^^^^
+
+The `u64` suffix is no longer supported. Use `123.U64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:6:9:6:16:**
+```roc
+  u128: 123u128,
+```
+        ^^^^^^^
+
+The `u128` suffix is no longer supported. Use `123.U128` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:7:9:7:14:**
+```roc
+  i8:   123i8,
+```
+        ^^^^^
+
+The `i8` suffix is no longer supported. Use `123.I8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:8:9:8:15:**
+```roc
+  i16:  123i16,
+```
+        ^^^^^^
+
+The `i16` suffix is no longer supported. Use `123.I16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:9:9:9:15:**
+```roc
+  i32:  123i32,
+```
+        ^^^^^^
+
+The `i32` suffix is no longer supported. Use `123.I32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:10:9:10:15:**
+```roc
+  i64:  123i64,
+```
+        ^^^^^^
+
+The `i64` suffix is no longer supported. Use `123.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:11:9:11:16:**
+```roc
+  i128: 123i128,
+```
+        ^^^^^^^
+
+The `i128` suffix is no longer supported. Use `123.I128` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:12:9:12:15:**
+```roc
+  dec:  123dec,
+```
+        ^^^^^^
+
+The `dec` suffix is no longer supported. Use `123.Dec` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:13:12:13:18:**
+```roc
+  u8Neg:   -123u8,
+```
+           ^^^^^^
+
+The `u8` suffix is no longer supported. Use `-123.U8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:14:12:14:19:**
+```roc
+  u16Neg:  -123u16,
+```
+           ^^^^^^^
+
+The `u16` suffix is no longer supported. Use `-123.U16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:15:12:15:19:**
+```roc
+  u32Neg:  -123u32,
+```
+           ^^^^^^^
+
+The `u32` suffix is no longer supported. Use `-123.U32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:16:12:16:19:**
+```roc
+  u64Neg:  -123u64,
+```
+           ^^^^^^^
+
+The `u64` suffix is no longer supported. Use `-123.U64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:17:12:17:20:**
+```roc
+  u128Neg: -123u128,
+```
+           ^^^^^^^^
+
+The `u128` suffix is no longer supported. Use `-123.U128` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:18:12:18:18:**
+```roc
+  i8Neg:   -123i8,
+```
+           ^^^^^^
+
+The `i8` suffix is no longer supported. Use `-123.I8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:19:12:19:19:**
+```roc
+  i16Neg:  -123i16,
+```
+           ^^^^^^^
+
+The `i16` suffix is no longer supported. Use `-123.I16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:20:12:20:19:**
+```roc
+  i32Neg:  -123i32,
+```
+           ^^^^^^^
+
+The `i32` suffix is no longer supported. Use `-123.I32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:21:12:21:19:**
+```roc
+  i64Neg:  -123i64,
+```
+           ^^^^^^^
+
+The `i64` suffix is no longer supported. Use `-123.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:22:12:22:20:**
+```roc
+  i128Neg: -123i128,
+```
+           ^^^^^^^^
+
+The `i128` suffix is no longer supported. Use `-123.I128` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:23:12:23:19:**
+```roc
+  decNeg:  -123dec,
+```
+           ^^^^^^^
+
+The `dec` suffix is no longer supported. Use `-123.Dec` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:24:12:24:19:**
+```roc
+  u8Bin:   0b101u8,
+```
+           ^^^^^^^
+
+The `u8` suffix is no longer supported. Use `0b101.U8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:25:12:25:20:**
+```roc
+  u16Bin:  0b101u16,
+```
+           ^^^^^^^^
+
+The `u16` suffix is no longer supported. Use `0b101.U16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:26:12:26:20:**
+```roc
+  u32Bin:  0b101u32,
+```
+           ^^^^^^^^
+
+The `u32` suffix is no longer supported. Use `0b101.U32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:27:12:27:20:**
+```roc
+  u64Bin:  0b101u64,
+```
+           ^^^^^^^^
+
+The `u64` suffix is no longer supported. Use `0b101.U64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:28:12:28:21:**
+```roc
+  u128Bin: 0b101u128,
+```
+           ^^^^^^^^^
+
+The `u128` suffix is no longer supported. Use `0b101.U128` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:29:12:29:19:**
+```roc
+  i8Bin:   0b101i8,
+```
+           ^^^^^^^
+
+The `i8` suffix is no longer supported. Use `0b101.I8` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:30:12:30:20:**
+```roc
+  i16Bin:  0b101i16,
+```
+           ^^^^^^^^
+
+The `i16` suffix is no longer supported. Use `0b101.I16` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:31:12:31:20:**
+```roc
+  i32Bin:  0b101i32,
+```
+           ^^^^^^^^
+
+The `i32` suffix is no longer supported. Use `0b101.I32` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:32:12:32:20:**
+```roc
+  i64Bin:  0b101i64,
+```
+           ^^^^^^^^
+
+The `i64` suffix is no longer supported. Use `0b101.I64` instead.
+
+**DEPRECATED NUMBER SUFFIX**
+This number literal uses a deprecated suffix syntax:
+
+**number_literal_suffixes.md:33:12:33:21:**
+```roc
+  i128Bin: 0b101i128,
+```
+           ^^^^^^^^^
+
+The `i128` suffix is no longer supported. Use `0b101.I128` instead.
+
 # TOKENS
 ~~~zig
 OpenCurly,

@@ -21,14 +21,24 @@ test "check type - num - unbound" {
 
 test "check type - num - int suffix 1" {
     const source =
-        \\10u8
+        \\{
+        \\  x : U8
+        \\  x = 10
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "U8");
 }
 
 test "check type - num - int suffix 2" {
     const source =
-        \\10i128
+        \\{
+        \\  x : I128
+        \\  x = 10
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "I128");
 }
@@ -58,21 +68,36 @@ test "check type - num - float" {
 
 test "check type - num - float suffix 1" {
     const source =
-        \\10.1f32
+        \\{
+        \\  x : F32
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
 }
 
 test "check type - num - float suffix 2" {
     const source =
-        \\10.1f64
+        \\{
+        \\  x : F64
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
 }
 
 test "check type - num - float suffix 3" {
     const source =
-        \\10.1dec
+        \\{
+        \\  x : Dec
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
 }
@@ -134,35 +159,52 @@ test "check type - string plus string should fail (no plus method)" {
 
 test "check type - binop operands must have same type - I64 plus I32 should fail" {
     const source =
-        \\x = 1i64 + 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a + b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 minus I32 should fail" {
     const source =
-        \\x = 1i64 - 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a - b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 times I32 should fail" {
     const source =
-        \\x = 1i64 * 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a * b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - F64 divide F32 should fail" {
     const source =
-        \\x = 1.0f64 / 2.0f32
+        \\a : F64
+        \\a = 1.0
+        \\b : F32
+        \\b = 2.0
+        \\x = a / b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands same type works - I64 plus I64" {
     const source =
-        \\x = 1i64 + 2i64
+        \\x : I64
+        \\x = 1 + 2
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
@@ -185,14 +227,22 @@ test "check type - binop operands same type works - unbound plus unbound" {
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
-        \\x = 1i64 == 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a == b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - comparison operands must have same type - I64 lt I32 should fail" {
     const source =
-        \\x = 1i64 < 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a < b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
@@ -226,14 +276,24 @@ test "check type - list - same elems 2" {
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
-        \\[100u64, 200]
+        \\{
+        \\  x : U64
+        \\  x = 100
+        \\
+        \\  [x, 200]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U64)");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
-        \\[100, 200u32]
+        \\{
+        \\  x : U32
+        \\  x = 200
+        \\
+        \\  [100, x]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U32)");
 }
@@ -1073,7 +1133,9 @@ test "check type - unary minus mismatch" {
 
 test "check type - binops math plus" {
     const source =
-        \\x = 10 + 10u32
+        \\y : U32
+        \\y = 10
+        \\x = 10 + y
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "U32");
 }
@@ -1096,9 +1158,14 @@ test "check type - binops math sub" {
 
 test "check type - binops ord" {
     const source =
-        \\x = 10.0f32 > 15
+        \\{
+        \\  a : F32
+        \\  a = 10.0
+        \\
+        \\  a > 15
+        \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+    try checkTypesExpr(source, .pass, "Bool");
 }
 
 test "check type - binops and" {
@@ -1294,13 +1361,15 @@ test "check type - patterns num" {
 }
 
 test "check type - patterns int mismatch" {
+    // Test that matching a tag against incompatible tag patterns fails
     const source =
         \\{
-        \\  x = 10u8
+        \\  x : [Ok(I64), Err(Str)]
+        \\  x = Ok(42)
         \\
         \\  match(x) {
-        \\    10u32 => "true",
-        \\    _ => "false",
+        \\    Some(_) => "found",
+        \\    None => "empty",
         \\  }
         \\}
     ;
@@ -1310,10 +1379,13 @@ test "check type - patterns int mismatch" {
 test "check type - patterns frac 1" {
     const source =
         \\{
-        \\  match(20) {
-        \\    10dec as x => x,
+        \\  result : Dec
+        \\  result = match(20) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
@@ -1322,10 +1394,13 @@ test "check type - patterns frac 1" {
 test "check type - patterns frac 2" {
     const source =
         \\{
-        \\  match(10) {
-        \\    10f32 as x => x,
+        \\  result : F32
+        \\  result = match(10) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
@@ -1334,11 +1409,14 @@ test "check type - patterns frac 2" {
 test "check type - patterns frac 3" {
     const source =
         \\{
-        \\  match(50) {
+        \\  result : F64
+        \\  result = match(50) {
         \\    10 as x => x,
-        \\    15f64 as x => x,
+        \\    15 as x => x,
         \\    _ => 20,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
@@ -1538,7 +1616,7 @@ test "check type - for" {
 test "check type - for mismatch" {
     const source =
         \\main = {
-        \\  var result = 0u8
+        \\  var result = 0
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1547,8 +1625,8 @@ test "check type - for mismatch" {
     ;
     try checkTypesModule(
         source,
-        .fail,
-        "TYPE MISMATCH",
+        .fail_first,
+        "MISSING METHOD",
     );
 }
 
@@ -1999,7 +2077,8 @@ test "check type - segfault minimal 1 - just annotated plus" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(1u32, 2u32)
+        \\func : U32
+        \\func = my_plus(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2017,7 +2096,8 @@ test "check type - segfault minimal 2 - plus with inferred caller" {
         \\
         \\add_two = |a, b| my_plus(a, b)
         \\
-        \\func = add_two(1u32, 2u32)
+        \\func : U32
+        \\func = add_two(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2033,7 +2113,8 @@ test "check type - segfault minimal 3a - nested direct - SEGFAULTS" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(my_plus(1u32, 2u32), 3u32)
+        \\func : U32
+        \\func = my_plus(my_plus(1, 2), 3)
     ;
     try checkTypesModule(
         source,
@@ -2051,7 +2132,8 @@ test "check type - segfault minimal 3b - nested in lambda - SEGFAULTS" {
         \\
         \\add_three = |a, b, c| my_plus(my_plus(a, b), c)
         \\
-        \\func = add_three(1u32, 2u32, 3u32)
+        \\func : U32
+        \\func = add_three(1, 2, 3)
     ;
     try checkTypesModule(
         source,
@@ -2073,9 +2155,9 @@ test "check type - segfault minimal 4 - full original - SEGFAULTS" {
         \\
         \\# Annotated function using inferred one
         \\compute : U32 -> U32
-        \\compute = |x| add_three(x, 1u32, 2u32)
+        \\compute = |x| add_three(x, 1, 2)
         \\
-        \\func = compute(10u32)
+        \\func = compute(10)
     ;
     try checkTypesModule(
         source,
@@ -2542,7 +2624,16 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
         \\fn : a, a -> Bool where [a.is_eq : a, a -> Bool]
         \\fn = |x, y| x.is_eq(y)
         \\
-        \\result = fn(1u64, 2u64) == fn(3u64, 4u64)
+        \\a : U64
+        \\a = 1
+        \\b : U64
+        \\b = 2
+        \\c : U64
+        \\c = 3
+        \\d : U64
+        \\d = 4
+        \\
+        \\result = fn(a, b) == fn(c, d)
     ;
 
     // This should pass - both calls use the same types

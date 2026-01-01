@@ -261,6 +261,12 @@ pub const Diagnostic = union(enum) {
         region: Region,
         other_region: Region,
     },
+    /// A number literal uses the deprecated suffix syntax (e.g., 123u64 instead of 123.U64)
+    deprecated_number_suffix: struct {
+        suffix: StringLiteral.Idx,
+        suggested: StringLiteral.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -329,6 +335,7 @@ pub const Diagnostic = union(enum) {
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
+            .deprecated_number_suffix => |d| d.region,
         };
     }
 
@@ -1728,6 +1735,44 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
         try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
         try report.document.addInlineCode("a");
+        try report.document.addReflowingText(" instead.");
+
+        return report;
+    }
+
+    /// Build a report for "deprecated number suffix" diagnostic
+    pub fn buildDeprecatedNumberSuffixReport(
+        allocator: Allocator,
+        suffix: []const u8,
+        suggested: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+
+        const owned_suffix = try report.addOwnedString(suffix);
+        const owned_suggested = try report.addOwnedString(suggested);
+
+        try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addInlineCode(owned_suffix);
+        try report.document.addReflowingText(" suffix is no longer supported. Use ");
+        try report.document.addInlineCode(owned_suggested);
         try report.document.addReflowingText(" instead.");
 
         return report;
