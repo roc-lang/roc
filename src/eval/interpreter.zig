@@ -17029,13 +17029,9 @@ pub const Interpreter = struct {
                         .arg_rt_vars_to_free = null,
                         .saved_stack_ptr = self.stack_memory.next(),
                     } } });
-                    // Use null for expected_rt_var to let the body expression's type be inferred
-                    // from the compile-time type with flex_type_context mappings. This avoids issues
-                    // where effective_ret_var (from the function's return type) might be a flex type
-                    // that isn't properly connected to the concrete receiver type.
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
-                        .expected_rt_var = null,
+                        .expected_rt_var = effective_ret_var,
                     } });
                     return true;
                 }

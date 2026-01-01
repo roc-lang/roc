@@ -1869,7 +1869,6 @@ test "issue 8831: nested self-reference in list should also error" {
     , error.Crash, .no_trace);
 }
 
-
 test "recursive function with record - stack memory restoration (issue #8813)" {
     // Test that recursive closure calls don't leak stack memory.
     // If stack memory is not properly restored after closure returns,
