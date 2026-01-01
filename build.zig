@@ -2602,13 +2602,20 @@ pub fn build(b: *std.Build) void {
     // Only supported on Linux and macOS (kcov doesn't work on Windows)
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
+        // IMPORTANT: kcov requires native glibc binaries on Linux - it cannot instrument musl binaries.
+        // The default target on Linux is musl for static linking, so we override it here.
+        const coverage_target = if (builtin.target.os.tag == .linux)
+            b.resolveTargetQuery(.{}) // Native target with glibc
+        else
+            target; // macOS doesn't have this issue
+
         // Run snapshot tests with kcov to get parser coverage
         // Snapshot tests actually parse real Roc code, giving meaningful coverage
         const snapshot_coverage_test = b.addTest(.{
             .name = "snapshot_coverage",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/snapshot_tool/main.zig"),
-                .target = target,
+                .target = coverage_target,
                 .optimize = .Debug, // Debug required for DWARF debug info
                 .link_libc = true,
             }),
@@ -2634,7 +2641,7 @@ pub fn build(b: *std.Build) void {
             .name = "parse_unit_coverage",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/parse/mod.zig"),
-                .target = target,
+                .target = coverage_target, // Use native glibc target for kcov
                 .optimize = .Debug, // Debug required for DWARF debug info
             }),
         });
