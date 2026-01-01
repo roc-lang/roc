@@ -95,6 +95,9 @@ pub const Store = struct {
     f32_ident: ?Ident.Idx,
     f64_ident: ?Ident.Idx,
     dec_ident: ?Ident.Idx,
+    bool_ident: ?Ident.Idx,
+    // Identifier for unqualified "Bool" in the Builtin module
+    bool_plain_ident: ?Ident.Idx,
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
@@ -198,6 +201,8 @@ pub const Store = struct {
             .f32_ident = env.idents.f32_type,
             .f64_ident = env.idents.f64_type,
             .dec_ident = env.idents.dec_type,
+            .bool_ident = env.idents.bool_type,
+            .bool_plain_ident = env.idents.bool,
         };
     }
 
@@ -614,6 +619,32 @@ pub const Store = struct {
     pub fn getRecursiveBoxedLayout(self: *const Self, type_var: Var) ?Layout {
         if (self.recursive_boxed_layouts.get(type_var)) |boxed_idx| {
             return self.getLayout(boxed_idx);
+        }
+        return null;
+    }
+
+    /// Check if a nominal type (by identity) is recursive and return its boxed layout.
+    /// This is needed because different vars can represent the same nominal type,
+    /// and the boxed layout might have been stored under a different var.
+    pub fn getRecursiveBoxedLayoutByNominalKey(self: *const Self, nominal_key: work.NominalKey) ?Layout {
+        // Iterate through recursive_boxed_layouts to find an entry whose var
+        // resolves to this nominal type identity.
+        // ArrayListMap is indexed by var enum value, so we iterate over the entries.
+        for (self.recursive_boxed_layouts.entries, 0..) |boxed_idx, idx| {
+            if (boxed_idx == Idx.none) continue;
+            const var_: Var = @enumFromInt(idx);
+            const resolved = self.types_store.resolveVar(var_);
+            if (resolved.desc.content == .structure) {
+                const flat_type = resolved.desc.content.structure;
+                if (flat_type == .nominal_type) {
+                    const nom = flat_type.nominal_type;
+                    if (nom.ident.ident_idx == nominal_key.ident_idx and
+                        nom.origin_module == nominal_key.origin_module)
+                    {
+                        return self.getLayout(boxed_idx);
+                    }
+                }
+            }
         }
         return null;
     }
@@ -1228,6 +1259,24 @@ pub const Store = struct {
             // Check cache at every iteration - critical for recursive types
             // where the inner reference may resolve to the same var as the outer type
             if (self.layouts_by_var.get(current.var_)) |cached_idx| {
+                // Check if this cache hit is a recursive reference to an in-progress nominal.
+                // When we cache a nominal's placeholder (Box) and later hit that cache from
+                // within the nominal's backing type computation, we need to mark it as recursive.
+                // This can happen when the recursive reference uses the same var as the nominal.
+                if (current.desc.content == .structure) {
+                    const flat_type = current.desc.content.structure;
+                    if (flat_type == .nominal_type) {
+                        const nominal_type = flat_type.nominal_type;
+                        const nominal_key = work.NominalKey{
+                            .ident_idx = nominal_type.ident.ident_idx,
+                            .origin_module = nominal_type.origin_module,
+                        };
+                        if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
+                            // This cache hit is a recursive reference - mark the nominal as recursive
+                            progress.is_recursive = true;
+                        }
+                    }
+                }
                 // For recursive nominal types used as elements in List or Box containers,
                 // we need to use the boxed layout, not the raw cached layout.
                 // But for tag union and record fields, we use the raw layout - the type
@@ -1293,8 +1342,10 @@ pub const Store = struct {
                     .origin_module = nominal_type.origin_module,
                 };
 
-                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
+                if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
                     // This nominal type is already being processed - we have a cycle.
+                    // Mark it as truly recursive so we know to box its values.
+                    progress.is_recursive = true;
                     // Use the cached placeholder index for the nominal.
                     // The placeholder will be updated with the real layout once
                     // the nominal's backing type is fully computed.
@@ -1357,6 +1408,24 @@ pub const Store = struct {
                             if (is_builtin_str) {
                                 // This is Builtin.Str - use string layout
                                 break :flat_type Layout.str();
+                            }
+
+                            // Special-case Builtin.Bool: it has a tag union backing type [False, True],
+                            // but should have u8 layout.
+                            const is_builtin_bool = blk: {
+                                if (self.bool_ident) |bool_id| {
+                                    if (nominal_type.ident.ident_idx == bool_id) break :blk true;
+                                }
+                                if (nominal_type.origin_module == self.env.idents.builtin_module) {
+                                    if (self.bool_plain_ident) |plain_bool| {
+                                        if (nominal_type.ident.ident_idx == plain_bool) break :blk true;
+                                    }
+                                }
+                                break :blk false;
+                            };
+                            if (is_builtin_bool) {
+                                // This is Builtin.Bool - use bool layout (u8)
+                                break :flat_type Layout.boolType();
                             }
 
                             // Special handling for Builtin.Box
@@ -1888,10 +1957,12 @@ pub const Store = struct {
                             // Update the placeholder to Box(layout_idx) instead of replacing it
                             // with the raw layout. This keeps recursive references boxed.
                             self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                            // Store the boxed layout for later queries.
-                            // This allows List(RecursiveType) to use boxed elements even when
-                            // the list is computed after the recursive type finishes.
-                            try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
+                            // Only store in recursive_boxed_layouts if this type is truly recursive
+                            // (i.e., a cycle was detected during its processing). Non-recursive
+                            // nominal types don't need boxing for their values.
+                            if (progress.is_recursive) {
+                                try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
+                            }
                         }
                         // Update the cache so direct lookups get the actual layout
                         try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
@@ -2067,10 +2138,12 @@ pub const Store = struct {
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
                                 self.updateLayout(reserved_idx, Layout.box(layout_idx));
-                                // Store the boxed layout for later queries.
-                                // This allows List(RecursiveType) to use boxed elements even when
-                                // the list is computed after the recursive type finishes.
-                                try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
+                                // Only store in recursive_boxed_layouts if this type is truly recursive
+                                // (i.e., a cycle was detected during its processing). Non-recursive
+                                // nominal types don't need boxing for their values.
+                                if (progress.is_recursive) {
+                                    try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
+                                }
                             }
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
