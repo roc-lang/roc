@@ -48,6 +48,7 @@ const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
 const lsp = @import("lsp");
+const cli_repl = @import("repl.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtin_loading = eval.builtin_loading;
 const BuiltinTypes = eval.BuiltinTypes;
@@ -4913,8 +4914,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 }
 
 fn rocRepl(ctx: *CliContext) !void {
-    ctx.io.stderr().print("repl not implemented\n", .{}) catch {};
-    return error.NotImplemented;
+    return cli_repl.run(ctx);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
