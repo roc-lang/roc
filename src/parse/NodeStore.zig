@@ -139,6 +139,7 @@ pub fn emptyScratch(store: *NodeStore) void {
 }
 
 /// Prints debug information about all nodes and scratch buffers in the store.
+/// Note: This debug function is excluded from coverage via --exclude-line=std.debug.print
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
         std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
