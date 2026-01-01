@@ -1,8 +1,6 @@
 on:
   workflow_call:
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * *' # Run daily at 6:00 UTC
 
 name: CI New Compiler
 
@@ -120,18 +118,7 @@ jobs:
         with:
           version: 0.15.2
           use-cache: true
-      - name: Check for nix-related changes
-        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
-        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
-        id: nix-changes
-        with:
-          filters: |
-            nix:
-              - 'build.zig'
-              - 'build.zig.zon'
-              - '**/*.nix'
-              - 'flake.lock'
-      - if: (steps.nix-changes.outputs.nix == 'true' || github.event_name == 'schedule') && (startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos'))
+      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
         uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-25.05
@@ -272,7 +259,7 @@ jobs:
           }
 
       - name: Test inside nix too
-        if: ${{ (steps.nix-changes.outputs.nix == 'true' || github.event_name == 'schedule') && (runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64')) }}
+        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
         run: |
           git clean -fdx
           git reset --hard HEAD
