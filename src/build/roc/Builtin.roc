@@ -1380,7 +1380,7 @@ Builtin :: [].{
 		# A decoder function type - takes bytes and format, returns decode result
 		# The decode result is a record: { result : Try(val, DecodeErr), rest : List(U8) }
 		Decoder(val, fmt) := [
-			MkDecoder((List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) }))
+			MkDecoder((List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) })),
 		].{
 			# Unwrap and run the decoder
 			run : Decoder(val, fmt), List(U8), fmt -> { result : Try(val, DecodeErr), rest : List(U8) }
