@@ -2400,6 +2400,14 @@ pub const Interpreter = struct {
                         }
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
+                        // Special case: Bool should render as just "True" or "False", not "Bool.True"
+                        // Check if this is the Builtin.Bool type
+                        const is_builtin_bool = nom.origin_module == self.env.idents.builtin_module and
+                            (nom.ident.ident_idx == self.env.idents.bool or
+                                nom.ident.ident_idx == self.env.idents.bool_type);
+                        if (is_builtin_bool) {
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
                         // Nominal types render as "TypeName.InnerValue"
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
                         const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
@@ -6736,43 +6744,17 @@ pub const Interpreter = struct {
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
-        const bool_decl_idx = self.builtins.bool_stmt;
-
-        // Get the statement from the Bool module
-        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
-
-        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
-        const ct_var = switch (bool_stmt) {
-            .s_nominal_decl => blk: {
-                // The type of the declaration is the nominal type, but we want its backing
-                const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
-                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
-                if (nom_resolved.desc.content == .structure) {
-                    if (nom_resolved.desc.content.structure == .nominal_type) {
-                        const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
-                        break :blk backing_var;
-                    }
-                }
-                break :blk nom_var;
-            },
-            else => can.ModuleEnv.varFrom(bool_decl_idx),
-        };
+        // We need the nominal type itself (not the backing type) so that method dispatch
+        // can look up methods like encode, etc.
+        const ct_var = can.ModuleEnv.varFrom(self.builtins.bool_stmt);
 
         // Use bool_env to translate since bool_stmt is from the Bool module
         // Cast away const - translateTypeVar doesn't actually mutate the module
         const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
-        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-        const backing_rt_var = switch (nominal_resolved.desc.content) {
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                .tag_union => nominal_rt_var,
-                else => nominal_rt_var,
-            },
-            else => nominal_rt_var,
-        };
-        self.canonical_bool_rt_var = backing_rt_var;
-        return backing_rt_var;
+        // Return the nominal type, not the backing type - method dispatch needs the nominal
+        // type to look up methods like encode, etc.
+        self.canonical_bool_rt_var = nominal_rt_var;
+        return nominal_rt_var;
     }
 
     pub fn getCanonicalStrRuntimeVar(self: *Interpreter) !types.Var {
@@ -14220,7 +14202,7 @@ pub const Interpreter = struct {
                     } else {
                         // Gather layouts and values
                         const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        var elem_layouts = try self.allocator.alloc(layout.Layout, total_count);
                         defer self.allocator.free(elem_layouts);
 
                         // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
@@ -14231,15 +14213,75 @@ pub const Interpreter = struct {
                         // Collect element rt_vars for constructing tuple type
                         var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                         defer self.allocator.free(elem_rt_vars);
+
+                        // Track which elements need auto-boxing
+                        var need_auto_box = try self.allocator.alloc(bool, total_count);
+                        defer self.allocator.free(need_auto_box);
                         alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
-                        var i: usize = total_count;
-                        while (i > 0) {
-                            i -= 1;
-                            values[i] = value_stack.pop() orelse return error.Crash;
-                            elem_layouts[i] = values[i].layout;
-                            elem_rt_vars[i] = values[i].rt_var;
+                        var idx: usize = total_count;
+                        while (idx > 0) {
+                            idx -= 1;
+                            values[idx] = value_stack.pop() orelse return error.Crash;
+                            elem_rt_vars[idx] = values[idx].rt_var;
+
+                            // Check if this element is a recursive tag_union that needs boxing.
+                            // A tag_union is recursive if any of its variant payloads contains
+                            // a Box pointing to this same tag_union.
+                            const elem_layout = values[idx].layout;
+                            need_auto_box[idx] = false;
+
+                            if (elem_layout.tag == .tag_union) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                // Check if any variant's payload contains a Box pointing to this tag_union
+                                var var_idx: usize = 0;
+                                while (var_idx < variants.len) : (var_idx += 1) {
+                                    const variant = variants.get(var_idx);
+                                    const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                    if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                        need_auto_box[idx] = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If this element needs boxing, find the Box layout and box the value
+                            if (need_auto_box[idx]) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because:
+                                // 1. We only enter this block if need_auto_box[idx] is true
+                                // 2. need_auto_box[idx] is only set true if layoutContainsBoxOfTagUnion
+                                //    found a Box pointing to this tag_union in some variant's payload
+                                // 3. findBoxIdxForTagUnion searches the same layouts and returns the
+                                //    index of that Box, so it must find the same Box that was detected
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, values[idx], roc_ops, values[idx].rt_var);
+                                values[idx].decref(&self.runtime_layout_store, roc_ops);
+                                values[idx] = boxed;
+                                elem_layouts[idx] = box_layout;
+                            } else {
+                                elem_layouts[idx] = values[idx].layout;
+                            }
                         }
 
                         // Create tuple type from element types
@@ -14256,8 +14298,8 @@ pub const Interpreter = struct {
                         if (total_count != accessor.getElementCount()) return error.TypeMismatch;
 
                         // Set all elements
-                        for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx], roc_ops);
+                        for (0..total_count) |set_idx| {
+                            try accessor.setElement(set_idx, values[set_idx], roc_ops);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -14533,6 +14575,50 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
+
+                        // Check if this field value is a recursive tag_union that needs boxing.
+                        // A tag_union is recursive if any of its variant payloads contains
+                        // a Box pointing to this same tag_union.
+                        const field_layout = field_values[i].layout;
+                        if (field_layout.tag == .tag_union) {
+                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            var needs_boxing = false;
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    needs_boxing = true;
+                                    break;
+                                }
+                            }
+
+                            if (needs_boxing) {
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because we detected needs_boxing=true above,
+                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
+                                // searches the same layouts and must find the same Box.
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
+                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
+                                field_values[i] = boxed;
+                            }
+                        }
                     }
 
                     // Handle base record if extension exists
@@ -16840,6 +16926,21 @@ pub const Interpreter = struct {
                             const result_val = try self.makeBoolValue(result);
                             try value_stack.push(result_val);
                             return true;
+                        }
+                        // For flex/rigid types, first check if the actual value has a concrete
+                        // type in its rt_var. This handles cases like Bool where the value was
+                        // created with a concrete type but the compile-time type is polymorphic.
+                        const value_rt_var_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                        if (value_rt_var_resolved.desc.content == .structure) {
+                            switch (value_rt_var_resolved.desc.content.structure) {
+                                .nominal_type => |nom| {
+                                    break :blk .{
+                                        .origin = nom.origin_module,
+                                        .ident = nom.ident.ident_idx,
+                                    };
+                                },
+                                else => {},
+                            }
                         }
                         // For flex/rigid numeric types with other method calls (like to_str),
                         // derive the nominal type from the layout

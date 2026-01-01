@@ -1534,6 +1534,9 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
 
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
+
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
                 freeConstSlice(self.gpa, old_entry.key);
@@ -1564,6 +1567,9 @@ pub const BuildEnv = struct {
                 if (!self.packages.contains(module_name)) {
                     try self.ensurePackage(module_name, .module, module_path);
                 }
+
+                // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+                pack = self.packages.getPtr(pkg_name).?;
 
                 // Also add to app's shorthands so imports resolve correctly
                 const mod_key = try self.gpa.dupe(u8, module_name);
@@ -1626,6 +1632,9 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
