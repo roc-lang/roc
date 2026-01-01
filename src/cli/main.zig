@@ -359,15 +359,47 @@ fn renderTypeProblems(
     return error_count;
 }
 
-/// Size for shared memory allocator (just virtual address space to reserve)
+/// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
 ///
-/// We pick a large number because we can't resize this without messing up the
-/// child process. It's just virtual address space though, not physical memory.
-/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
-const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
+/// We need a large size because SharedMemoryAllocator is a bump allocator that
+/// cannot free memory. During type checking, the types Store grows significantly
+/// and every array growth allocates new memory without freeing old, causing
+/// memory fragmentation. With a 25KB source file, type checking can use ~2GB
+/// of shared memory due to this fragmentation.
+///
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory:
+/// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
+///   it until pages are actually touched.
+/// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
+///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
+///
+/// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets
 else
-    256 * 1024 * 1024; // 256MB for 32-bit targets
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+
+/// Fallback size for systems with overcommit disabled. On Linux with
+/// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
+/// though the memory wouldn't actually be used. We fall back to 4GB which
+/// should work on most systems while still being large enough for typical use.
+const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets (same as primary)
+else
+    4 * 1024 * 1024 * 1024; // 4GB for 64-bit targets
+
+/// Try to create shared memory, falling back to a smaller size if the system
+/// has overcommit disabled and rejects the initial allocation.
+fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
+    // Try the preferred size first
+    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
+        return shm;
+    } else |_| {}
+
+    // Fall back to smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+}
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
@@ -599,8 +631,16 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocs.arena);
 
-    mainArgs(&allocs, args) catch {
-        // Error messages have already been printed by the individual functions.
+    mainArgs(&allocs, args) catch |err| {
+        // Handle OutOfMemory specially - it may not have been printed
+        switch (err) {
+            error.OutOfMemory => {
+                // Use std.debug.print to stderr since we don't have access to ctx.io here
+                // TODO: if virtual address allocation fails at 4gb, fall back on doing `roc build` followed by manually running the executable
+                std.debug.print("The Roc compiler ran out of memory trying to preallocate virtual address space for compiling and running this program. Try using `roc build` to build the executable separately, then run it manually.\n", .{});
+            },
+            else => {}, // Other errors should already have printed messages
+        }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
@@ -1591,9 +1631,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
 pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+    var shm = try createSharedMemoryWithFallback(page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -2145,7 +2186,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations
+    // (scratch arrays, hashmaps, etc). SharedMemoryAllocator is a bump allocator
+    // that never frees, which causes OOM on large files.
+    var app_checker = try Check.init(ctx.gpa, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -2706,7 +2751,9 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations.
+    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
