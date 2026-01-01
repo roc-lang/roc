@@ -2590,6 +2590,13 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
+            // Debug: list what's in zig-out/bin before running kcov
+            const debug_ls = b.addSystemCommand(&.{ "ls", "-la", "zig-out/bin/" });
+            debug_ls.setCwd(b.path("."));
+            debug_ls.step.dependOn(&mkdir_step.step);
+            debug_ls.step.dependOn(&install_snapshot_test.step);
+            debug_ls.step.dependOn(&install_kcov.step);
+
             // Run kcov using installed binary paths
             // Using string paths because artifact dependencies don't work reliably in lazy blocks
             const run_snapshot_coverage = b.addSystemCommand(&.{
@@ -2599,7 +2606,7 @@ pub fn build(b: *std.Build) void {
                 "zig-out/bin/snapshot_coverage",
             });
             run_snapshot_coverage.setCwd(b.path("."));
-            run_snapshot_coverage.step.dependOn(&mkdir_step.step);
+            run_snapshot_coverage.step.dependOn(&debug_ls.step);
             run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
             run_snapshot_coverage.step.dependOn(&install_kcov.step);
 
