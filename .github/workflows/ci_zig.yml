@@ -1,6 +1,8 @@
 on:
   workflow_call:
   workflow_dispatch:
+  schedule:
+    - cron: '0 6 * * *' # Run daily at 6:00 UTC
 
 name: CI New Compiler
 
@@ -103,6 +105,9 @@ jobs:
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-24.04
+            cpu_flag: ''
+            target_flag: ''  # Native build for coverage (kcov doesn't work with musl)
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: -Dtarget=aarch64-linux-musl
@@ -123,7 +128,18 @@ jobs:
         with:
           version: 0.15.2
           use-cache: true
-      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+      - name: Check for nix-related changes
+        if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+        id: nix-changes
+        with:
+          filters: |
+            nix:
+              - 'build.zig'
+              - 'build.zig.zon'
+              - '**/*.nix'
+              - 'flake.lock'
+      - if: (steps.nix-changes.outputs.nix == 'true' || github.event_name == 'schedule') && (startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos'))
         uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-25.05
@@ -264,13 +280,13 @@ jobs:
           }
 
       - name: Test inside nix too
-        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
+        if: ${{ (steps.nix-changes.outputs.nix == 'true' || github.event_name == 'schedule') && (runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64')) }}
         run: |
           git clean -fdx
           git reset --hard HEAD
-          # Only run coverage on Linux (kcov on macOS is too slow - uses LLDB)
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }} && zig build coverage"
+          # Only run coverage on Linux with no target flag (kcov doesn't work with cross/musl targets)
+          if [ "$RUNNER_OS" = "Linux" ] && [ -z "${{ matrix.target_flag }}" ]; then
+            nix develop ./src/ -c bash -c "zig build && zig build snapshot && zig build test && zig build coverage"
           else
             nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
           fi
