@@ -10739,7 +10739,7 @@ pub const Interpreter = struct {
 
         // If this is a numeric literal or numeric operation, return it
         switch (expr) {
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => return expr_idx,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac => return expr_idx,
             .e_binop => |binop| {
                 // Binary operations on numbers can be re-evaluated with expected type
                 // Only return binop if it's a numeric operation (not boolean and/or)
@@ -10780,7 +10780,7 @@ pub const Interpreter = struct {
     ) Error!void {
         const expr = source_env.store.getExpr(expr_idx);
         switch (expr) {
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac => {
                 // For numeric literals, map the expression's type var to target
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const resolved = source_env.types.resolveVar(ct_var);
@@ -10912,6 +10912,20 @@ pub const Interpreter = struct {
 
             .e_dec_small => |small| {
                 const value = try self.evalDecSmall(expr_idx, expected_rt_var, small);
+                try value_stack.push(value);
+            },
+
+            .e_typed_int => |typed_int| {
+                // Typed integers like `123.U64` - the type is already resolved,
+                // evaluate like e_num with the value
+                const value = try self.evalTypedInt(expr_idx, expected_rt_var, typed_int);
+                try value_stack.push(value);
+            },
+
+            .e_typed_frac => |typed_frac| {
+                // Typed fracs like `3.14.Dec` - the type is already resolved,
+                // value is stored as scaled i128
+                const value = try self.evalTypedFrac(expr_idx, expected_rt_var, typed_frac);
                 try value_stack.push(value);
             },
 
@@ -12733,6 +12747,153 @@ pub const Interpreter = struct {
             const scaled = @as(i128, small.value.numerator) * scale_factor;
             typed_ptr.* = RocDec{ .num = scaled };
         }
+        return value;
+    }
+
+    /// Evaluate a typed integer literal (e_typed_int) like `123.U64`
+    /// The type annotation has already been resolved by type checking.
+    fn evalTypedInt(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        typed_int: @TypeOf(@as(can.CIR.Expr, undefined).e_typed_int),
+    ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Get the layout type variable - use expected_rt_var if provided
+        const layout_rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // For typed literals, this shouldn't normally happen since the type is explicit.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
+        // If the layout isn't a numeric type, default based on the explicit type annotation
+        const is_numeric_layout = layout_val.tag == .scalar and
+            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            // Get the type name from the identifier store to determine the correct type
+            const type_name = self.env.common.getIdentStore().getText(typed_int.type_name);
+            const type_content = try self.mkNumberTypeContentRuntime(type_name);
+            final_rt_var = try self.runtime_types.freshFromContent(type_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
+        }
+
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .int => try value.setIntFromBytes(typed_int.value.bytes, typed_int.value.kind == .u128),
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        if (typed_int.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(typed_int.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                        }
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        if (typed_int.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(typed_int.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                        }
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        ptr.* = .{ .num = typed_int.value.toI128() * RocDec.one_point_zero_i128 };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
+    /// Evaluate a typed fractional literal (e_typed_frac) like `3.14.Dec`
+    /// The type annotation has already been resolved by type checking.
+    /// The value is stored as a scaled i128 (like Dec, scaled by 10^18).
+    fn evalTypedFrac(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        typed_frac: @TypeOf(@as(can.CIR.Expr, undefined).e_typed_frac),
+    ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Get the layout type variable - use expected_rt_var if provided
+        const layout_rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Check if the resolved type is flex/rigid (unconstrained).
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
+        // If the layout isn't a numeric type, default based on the explicit type annotation
+        const is_numeric_layout = layout_val.tag == .scalar and
+            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            // Get the type name from the identifier store to determine the correct type
+            const type_name = self.env.common.getIdentStore().getText(typed_frac.type_name);
+            const type_content = try self.mkNumberTypeContentRuntime(type_name);
+            final_rt_var = try self.runtime_types.freshFromContent(type_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
+        }
+
+        // The value is stored as scaled i128 (scaled by 10^18, like Dec)
+        const scaled_value = typed_frac.value.toI128();
+
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        // Convert from scaled i128 (10^18) to f32
+                        ptr.* = @as(f32, @floatFromInt(scaled_value)) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        // Convert from scaled i128 (10^18) to f64
+                        ptr.* = @as(f64, @floatFromInt(scaled_value)) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        // Value is already in Dec format (scaled i128)
+                        ptr.* = .{ .num = scaled_value };
+                    },
+                },
+                .int => {
+                    // Converting fractional to integer - truncate
+                    const int_val = @divTrunc(scaled_value, RocDec.one_point_zero_i128);
+                    const bytes: [16]u8 = @bitCast(int_val);
+                    try value.setIntFromBytes(bytes, false);
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
         return value;
     }
 
