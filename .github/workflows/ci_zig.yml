@@ -104,7 +104,16 @@ jobs:
 
       - name: Parser Code Coverage
         run: |
-          zig build coverage
+          echo "=== Before zig build coverage ==="
+          ls -la zig-out/bin/
+          stat zig-out/bin/snapshot_coverage || echo "stat failed"
+          echo "=== Running zig build coverage ==="
+          zig build coverage || {
+            echo "=== After failure ==="
+            ls -la zig-out/bin/ || echo "ls failed"
+            stat zig-out/bin/snapshot_coverage || echo "stat failed"
+            exit 1
+          }
 
   zig-tests:
     needs: check-once
