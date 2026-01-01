@@ -2628,3 +2628,283 @@ test "monomorphizer: allExternalSpecializationsResolved detects unresolved" {
     // Now all resolved
     try testing.expect(mono.allExternalSpecializationsResolved());
 }
+
+test "monomorphizer: isPolymorphic returns true for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Flex vars are polymorphic
+    const flex_var = try module_env.types.fresh();
+    try testing.expect(mono.isPolymorphic(flex_var));
+}
+
+test "monomorphizer: getSpecializationCount starts at zero" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Initially no specializations
+    try testing.expectEqual(@as(usize, 0), mono.getSpecializationCount());
+}
+
+test "monomorphizer: createSpecializedName generates unique names" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    const original_ident = try module_env.insertIdent(base.Ident.for_text("myFunction"));
+
+    // Create a flex type for specialization
+    const flex_type = try module_env.types.fresh();
+
+    // Create a specialized name
+    const specialized_name = try mono.createSpecializedName(original_ident, flex_type);
+
+    // The specialized name should be different from the original
+    try testing.expect(specialized_name != original_ident);
+
+    // The specialized name should contain the original name
+    const original_text = module_env.getIdentText(original_ident);
+    const specialized_text = module_env.getIdentText(specialized_name);
+    try testing.expect(std.mem.indexOf(u8, specialized_text, original_text) != null);
+}
+
+test "monomorphizer: structuralTypeHash returns consistent hashes" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Same type variable should produce same hash when called multiple times
+    const flex_type = try module_env.types.fresh();
+
+    const hash1 = mono.structuralTypeHash(flex_type);
+    const hash2 = mono.structuralTypeHash(flex_type);
+
+    try testing.expectEqual(hash1, hash2);
+}
+
+test "monomorphizer: pattern duplication - string literal pattern" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a string literal pattern
+    const str_idx = try module_env.insertString("hello");
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern{ .str_literal = .{ .literal = str_idx } },
+        base.Region.zero(),
+    );
+
+    // Duplicate the pattern
+    const duplicated = try mono.duplicatePattern(pattern_idx);
+
+    // Should have created a new pattern
+    try testing.expect(duplicated != pattern_idx);
+
+    // The duplicated pattern should have the same structure
+    const dup_pattern = module_env.store.getPattern(duplicated);
+    try testing.expect(dup_pattern == .str_literal);
+}
+
+test "monomorphizer: pattern duplication - runtime error pattern" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a runtime error pattern using an existing diagnostic type
+    const diag_idx = try module_env.store.addDiagnostic(.{ .invalid_num_literal = .{
+        .region = base.Region.zero(),
+    } });
+    const pattern_idx = try module_env.store.addPattern(
+        Pattern{ .runtime_error = .{ .diagnostic = diag_idx } },
+        base.Region.zero(),
+    );
+
+    // Duplicate the pattern
+    const duplicated = try mono.duplicatePattern(pattern_idx);
+
+    // Should have created a new pattern
+    try testing.expect(duplicated != pattern_idx);
+
+    // The duplicated pattern should have the same structure
+    const dup_pattern = module_env.store.getPattern(duplicated);
+    try testing.expect(dup_pattern == .runtime_error);
+}
+
+test "monomorphizer: getTypeName returns string for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Create a flex type
+    const flex_type = try module_env.types.fresh();
+    const name = mono.getTypeName(flex_type);
+
+    // Should return a non-empty string
+    try testing.expect(name.len > 0);
+}
+
+test "monomorphizer: isTagUnion returns false for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Flex vars are not tag unions
+    const flex_type = try module_env.types.fresh();
+    try testing.expect(!mono.isTagUnion(flex_type));
+}
+
+test "monomorphizer: countTags returns zero for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Flex vars have no tags
+    const flex_type = try module_env.types.fresh();
+    try testing.expectEqual(@as(usize, 0), mono.countTags(flex_type));
+}
+
+test "monomorphizer: getTagNames returns null for flex vars" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Flex vars have no tags
+    const flex_type = try module_env.types.fresh();
+    try testing.expect(mono.getTagNames(flex_type) == null);
+}
+
+test "monomorphizer: getExternalRequests returns empty initially" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Initially no external requests
+    const requests = mono.getExternalRequests();
+    try testing.expectEqual(@as(usize, 0), requests.len);
+}
+
+test "monomorphizer: specializedIterator works on empty map" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Iterator on empty map should return no items
+    var iter = mono.specializedIterator();
+    try testing.expect(iter.next() == null);
+}
+
+test "monomorphizer: isPartialProc returns false for unknown ident" {
+    const allocator = testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var mono = Self.init(allocator, module_env, &module_env.types);
+    defer mono.deinit();
+
+    // Unknown ident should not be a partial proc
+    const unknown_ident = try module_env.insertIdent(base.Ident.for_text("unknown"));
+    try testing.expect(!mono.isPartialProc(unknown_ident));
+}

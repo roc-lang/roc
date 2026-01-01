@@ -839,3 +839,115 @@ test "emit lambda expression" {
     try emitter.emitExpr(lambda_idx);
     try std.testing.expectEqualStrings("|x| x", emitter.getOutput());
 }
+
+test "emit empty list" {
+    const allocator = std.testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "[]");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var emitter = Self.init(allocator, module_env);
+    defer emitter.deinit();
+
+    // Create an empty list expression
+    const expr_idx = try module_env.store.addExpr(.e_empty_list, base.Region.zero());
+
+    try emitter.emitExpr(expr_idx);
+    try std.testing.expectEqualStrings("[]", emitter.getOutput());
+}
+
+test "emit empty record" {
+    const allocator = std.testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "{}");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var emitter = Self.init(allocator, module_env);
+    defer emitter.deinit();
+
+    // Create an empty record expression
+    const expr_idx = try module_env.store.addExpr(.e_empty_record, base.Region.zero());
+
+    try emitter.emitExpr(expr_idx);
+    try std.testing.expectEqualStrings("{}", emitter.getOutput());
+}
+
+test "emit negative number" {
+    const allocator = std.testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "-42");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var emitter = Self.init(allocator, module_env);
+    defer emitter.deinit();
+
+    // Create a negative integer expression
+    const int_value = CIR.IntValue{
+        .bytes = @bitCast(@as(i128, -42)),
+        .kind = .i128,
+    };
+    const expr_idx = try module_env.store.addExpr(.{
+        .e_num = .{ .value = int_value, .kind = .i64 },
+    }, base.Region.zero());
+
+    try emitter.emitExpr(expr_idx);
+    try std.testing.expectEqualStrings("-42", emitter.getOutput());
+}
+
+test "emit variable lookup" {
+    const allocator = std.testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "foo");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var emitter = Self.init(allocator, module_env);
+    defer emitter.deinit();
+
+    // Create a pattern and lookup expression
+    const foo_ident = try module_env.insertIdent(base.Ident.for_text("foo"));
+    const pattern_idx = try module_env.store.addPattern(.{
+        .assign = .{ .ident = foo_ident },
+    }, base.Region.zero());
+    const expr_idx = try module_env.store.addExpr(.{
+        .e_lookup_local = .{ .pattern_idx = pattern_idx },
+    }, base.Region.zero());
+
+    try emitter.emitExpr(expr_idx);
+    try std.testing.expectEqualStrings("foo", emitter.getOutput());
+}
+
+test "emit deinit clears state" {
+    const allocator = std.testing.allocator;
+
+    const module_env = try allocator.create(ModuleEnv);
+    module_env.* = try ModuleEnv.init(allocator, "test");
+    defer {
+        module_env.deinit();
+        allocator.destroy(module_env);
+    }
+
+    var emitter = Self.init(allocator, module_env);
+
+    // Emit something to put data in the emitter
+    const expr_idx = try module_env.store.addExpr(.e_empty_list, base.Region.zero());
+    try emitter.emitExpr(expr_idx);
+
+    // deinit should clean up
+    emitter.deinit();
+}
