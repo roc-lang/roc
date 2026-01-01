@@ -973,14 +973,15 @@ const CheckCliGlobalStdioStep = struct {
 };
 
 /// Build step that parses kcov JSON output and prints coverage summary.
-/// Used by the `coverage` build step to report parser code coverage statistics.
+/// Used by the `coverage` build step to report parser and type checker code coverage statistics.
 const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
 
-    /// Minimum required coverage percentage. Build fails if coverage drops below this.
-    /// This threshold should be gradually increased as more tests are added.
-    const MIN_COVERAGE_PERCENT: f64 = 84.0;
+    /// Minimum required coverage percentage for parser. Build fails if coverage drops below this.
+    const MIN_PARSER_COVERAGE_PERCENT: f64 = 84.0;
+    /// Minimum required coverage percentage for type checker. Build fails if coverage drops below this.
+    const MIN_CHECK_COVERAGE_PERCENT: f64 = 83.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
@@ -1024,47 +1025,66 @@ const CoverageSummaryStep = struct {
         const json_content = try json_file.readToEndAlloc(allocator, 10 * 1024 * 1024);
         defer allocator.free(json_content);
 
-        // Parse and summarize coverage
-        const coverage_percent = try parseCoverageJson(allocator, json_content);
+        // Parse and summarize coverage for both parser and type checker
+        const coverage = try parseCoverageJson(allocator, json_content);
 
-        // Enforce minimum coverage threshold
-        if (coverage_percent < MIN_COVERAGE_PERCENT) {
+        // Check for failures
+        var failed = false;
+
+        // Enforce minimum parser coverage threshold
+        if (coverage.parser_percent < MIN_PARSER_COVERAGE_PERCENT) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            std.debug.print("COVERAGE CHECK FAILED\n", .{});
+            std.debug.print("PARSER COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ coverage_percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ coverage.parser_percent, MIN_PARSER_COVERAGE_PERCENT });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ coverage_percent, MIN_COVERAGE_PERCENT });
+            failed = true;
+        }
+
+        // Enforce minimum type checker coverage threshold
+        if (coverage.check_percent < MIN_CHECK_COVERAGE_PERCENT) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("TYPE CHECKER COVERAGE CHECK FAILED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("Type checker coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ coverage.check_percent, MIN_CHECK_COVERAGE_PERCENT });
+            std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            failed = true;
+        }
+
+        if (failed) {
+            return step.fail("Coverage below minimum thresholds", .{});
         }
     }
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !f64 {
+    const CoverageResult = struct {
+        parser_percent: f64,
+        check_percent: f64,
+    };
+
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
         const root = parsed.value;
 
-        // Get totals from root level (these are integers)
-        const total_lines: u64 = blk: {
-            const val = root.object.get("total_lines") orelse break :blk 0;
-            if (val != .integer) break :blk 0;
-            break :blk @intCast(val.integer);
-        };
-        const covered_lines: u64 = blk: {
-            const val = root.object.get("covered_lines") orelse break :blk 0;
-            if (val != .integer) break :blk 0;
-            break :blk @intCast(val.integer);
-        };
+        // Track coverage separately for parser and type checker
+        var parser_total: u64 = 0;
+        var parser_covered: u64 = 0;
+        var check_total: u64 = 0;
+        var check_covered: u64 = 0;
 
         // Collect uncovered files for the summary
-        var uncovered_files = std.ArrayList(UncoveredFile).empty;
+        var parser_uncovered_files = std.ArrayList(UncoveredFile).empty;
+        var check_uncovered_files = std.ArrayList(UncoveredFile).empty;
         defer {
-            for (uncovered_files.items) |uf| {
-                allocator.free(uf.file);
-            }
-            uncovered_files.deinit(allocator);
+            for (parser_uncovered_files.items) |uf| allocator.free(uf.file);
+            parser_uncovered_files.deinit(allocator);
+            for (check_uncovered_files.items) |uf| allocator.free(uf.file);
+            check_uncovered_files.deinit(allocator);
         }
 
         // kcov JSON format has "files" array with file coverage data
@@ -1077,11 +1097,13 @@ const CoverageSummaryStep = struct {
                     if (filename_val != .string) continue;
                     const filename = filename_val.string;
 
-                    // Only include src/parse files
-                    if (std.mem.indexOf(u8, filename, "src/parse") == null) continue;
-
                     // Skip test files
                     if (std.mem.indexOf(u8, filename, "/test/") != null) continue;
+
+                    // Determine which module this file belongs to
+                    const is_parser = std.mem.indexOf(u8, filename, "src/parse") != null;
+                    const is_check = std.mem.indexOf(u8, filename, "src/check") != null;
+                    if (!is_parser and !is_check) continue;
 
                     // Get coverage percentage (stored as string in kcov JSON)
                     const percent_val = file_obj.object.get("percent_covered") orelse continue;
@@ -1095,62 +1117,103 @@ const CoverageSummaryStep = struct {
                     const file_total = std.fmt.parseInt(u64, total_str.string, 10) catch 0;
                     const file_uncovered = file_total - file_covered;
 
-                    if (file_uncovered > 0) {
-                        try uncovered_files.append(allocator, .{
-                            .file = try allocator.dupe(u8, filename),
-                            .uncovered_lines = file_uncovered,
-                            .total_lines = file_total,
-                            .percent = std.fmt.parseFloat(f64, percent_val.string) catch 0.0,
-                        });
+                    if (is_parser) {
+                        parser_total += file_total;
+                        parser_covered += file_covered;
+                        if (file_uncovered > 0) {
+                            try parser_uncovered_files.append(allocator, .{
+                                .file = try allocator.dupe(u8, filename),
+                                .uncovered_lines = file_uncovered,
+                                .total_lines = file_total,
+                                .percent = std.fmt.parseFloat(f64, percent_val.string) catch 0.0,
+                            });
+                        }
+                    } else {
+                        check_total += file_total;
+                        check_covered += file_covered;
+                        if (file_uncovered > 0) {
+                            try check_uncovered_files.append(allocator, .{
+                                .file = try allocator.dupe(u8, filename),
+                                .uncovered_lines = file_uncovered,
+                                .total_lines = file_total,
+                                .percent = std.fmt.parseFloat(f64, percent_val.string) catch 0.0,
+                            });
+                        }
                     }
                 }
             }
         }
 
-        // Print summary
-        const uncovered_lines = total_lines - covered_lines;
-        const percent = if (total_lines > 0)
-            @as(f64, @floatFromInt(covered_lines)) / @as(f64, @floatFromInt(total_lines)) * 100.0
+        // Calculate percentages
+        const parser_percent = if (parser_total > 0)
+            @as(f64, @floatFromInt(parser_covered)) / @as(f64, @floatFromInt(parser_total)) * 100.0
+        else
+            0.0;
+        const check_percent = if (check_total > 0)
+            @as(f64, @floatFromInt(check_covered)) / @as(f64, @floatFromInt(check_total)) * 100.0
         else
             0.0;
 
+        // Print parser summary
         std.debug.print("\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
         std.debug.print("PARSER CODE COVERAGE SUMMARY\n", .{});
         std.debug.print("=" ** 60 ++ "\n\n", .{});
 
-        std.debug.print("Total lines:     {d}\n", .{total_lines});
-        std.debug.print("Covered lines:   {d}\n", .{covered_lines});
-        std.debug.print("Uncovered lines: {d}\n", .{uncovered_lines});
-        std.debug.print("Coverage:        {d:.2}%\n\n", .{percent});
+        std.debug.print("Total lines:     {d}\n", .{parser_total});
+        std.debug.print("Covered lines:   {d}\n", .{parser_covered});
+        std.debug.print("Uncovered lines: {d}\n", .{parser_total - parser_covered});
+        std.debug.print("Coverage:        {d:.2}%\n\n", .{parser_percent});
 
-        if (uncovered_files.items.len > 0) {
+        if (parser_uncovered_files.items.len > 0) {
             std.debug.print("Files with uncovered lines:\n", .{});
-
-            // Sort by uncovered lines (descending) for prioritization
-            std.mem.sort(UncoveredFile, uncovered_files.items, {}, struct {
+            std.mem.sort(UncoveredFile, parser_uncovered_files.items, {}, struct {
                 fn lessThan(_: void, a: UncoveredFile, b: UncoveredFile) bool {
-                    return a.uncovered_lines > b.uncovered_lines; // Descending
+                    return a.uncovered_lines > b.uncovered_lines;
                 }
             }.lessThan);
-
-            for (uncovered_files.items) |uf| {
-                // Extract just the filename from the full path
+            for (parser_uncovered_files.items) |uf| {
                 const basename = std.fs.path.basename(uf.file);
                 std.debug.print("  {s}: {d:.1}% covered ({d}/{d} lines uncovered)\n", .{
-                    basename,
-                    uf.percent,
-                    uf.uncovered_lines,
-                    uf.total_lines,
+                    basename, uf.percent, uf.uncovered_lines, uf.total_lines,
+                });
+            }
+        }
+
+        // Print type checker summary
+        std.debug.print("\n", .{});
+        std.debug.print("=" ** 60 ++ "\n", .{});
+        std.debug.print("TYPE CHECKER CODE COVERAGE SUMMARY\n", .{});
+        std.debug.print("=" ** 60 ++ "\n\n", .{});
+
+        std.debug.print("Total lines:     {d}\n", .{check_total});
+        std.debug.print("Covered lines:   {d}\n", .{check_covered});
+        std.debug.print("Uncovered lines: {d}\n", .{check_total - check_covered});
+        std.debug.print("Coverage:        {d:.2}%\n\n", .{check_percent});
+
+        if (check_uncovered_files.items.len > 0) {
+            std.debug.print("Files with uncovered lines:\n", .{});
+            std.mem.sort(UncoveredFile, check_uncovered_files.items, {}, struct {
+                fn lessThan(_: void, a: UncoveredFile, b: UncoveredFile) bool {
+                    return a.uncovered_lines > b.uncovered_lines;
+                }
+            }.lessThan);
+            for (check_uncovered_files.items) |uf| {
+                const basename = std.fs.path.basename(uf.file);
+                std.debug.print("  {s}: {d:.1}% covered ({d}/{d} lines uncovered)\n", .{
+                    basename, uf.percent, uf.uncovered_lines, uf.total_lines,
                 });
             }
         }
 
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
-        std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
+        std.debug.print("Full HTML report: kcov-output/merged/index.html\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
-        return percent;
+        return .{
+            .parser_percent = parser_percent,
+            .check_percent = check_percent,
+        };
     }
 
     const UncoveredFile = struct {
@@ -2598,12 +2661,12 @@ pub fn build(b: *std.Build) void {
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
     check_fmt_step.dependOn(&check_fmt.step);
 
-    // Parser code coverage with kcov
+    // Parser and type checker code coverage with kcov
     // Only supported on Linux and macOS (kcov doesn't work on Windows)
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
-        // Run snapshot tests with kcov to get parser coverage
-        // Snapshot tests actually parse real Roc code, giving meaningful coverage
+        // Run snapshot tests with kcov to get parser and type checker coverage
+        // Snapshot tests actually parse and type check real Roc code, giving meaningful coverage
         const snapshot_coverage_test = b.addTest(.{
             .name = "snapshot_coverage",
             .root_module = b.createModule(.{
@@ -2619,13 +2682,14 @@ pub fn build(b: *std.Build) void {
         snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
 
-        // Configure kcov execution - output to parser-snapshot-tests directory
+        // Configure kcov execution - output to snapshot-tests directory
+        // Include both parser and type checker source directories
         snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
             "kcov",
-            "--include-path=src/parse",
-            "--exclude-pattern=HTML.zig", // Exclude playground visualization utility
+            "--include-path=src/parse,src/check",
+            "--exclude-pattern=HTML.zig,test/", // Exclude playground utility and test files
             "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
-            "kcov-output/parser-snapshot-tests",
+            "kcov-output/snapshot-tests",
             null, // Zig inserts test binary path here
         });
 
@@ -2650,11 +2714,35 @@ pub fn build(b: *std.Build) void {
             null, // Zig inserts test binary path here
         });
 
+        // Run check module unit tests for type checker coverage
+        const check_unit_test = b.addTest(.{
+            .name = "check_unit_coverage",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/check/mod.zig"),
+                .target = target,
+                .optimize = .Debug, // Debug required for DWARF debug info
+                .link_libc = true,
+            }),
+        });
+        roc_modules.addAll(check_unit_test);
+        check_unit_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        check_unit_test.step.dependOn(&write_compiled_builtins.step);
+
+        // Configure kcov for check unit tests - output to check-unit-tests directory
+        check_unit_test.setExecCmd(&[_]?[]const u8{
+            "kcov",
+            "--include-path=src/check",
+            "--exclude-pattern=test/", // Exclude test files from coverage
+            "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
+            "kcov-output/check-unit-tests",
+            null, // Zig inserts test binary path here
+        });
+
         // Check that kcov is installed before attempting to run it
         const check_kcov = CheckKcovStep.create(b);
 
         // Create output directories before running kcov
-        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+        const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/snapshot-tests", "kcov-output/parser-unit-tests", "kcov-output/check-unit-tests" });
         mkdir_step.step.dependOn(&check_kcov.step);
 
         // Run snapshot tests first
@@ -2665,18 +2753,23 @@ pub fn build(b: *std.Build) void {
         const run_parse_coverage = b.addRunArtifact(parse_unit_test);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
-        // Merge coverage results into kcov-output/parser/
+        // Then run check unit tests
+        const run_check_coverage = b.addRunArtifact(check_unit_test);
+        run_check_coverage.step.dependOn(&run_parse_coverage.step);
+
+        // Merge all coverage results into kcov-output/merged/
         const merge_coverage = b.addSystemCommand(&.{
             "kcov",
             "--merge",
-            "kcov-output/parser",
-            "kcov-output/parser-snapshot-tests",
+            "kcov-output/merged",
+            "kcov-output/snapshot-tests",
             "kcov-output/parser-unit-tests",
+            "kcov-output/check-unit-tests",
         });
-        merge_coverage.step.dependOn(&run_parse_coverage.step);
+        merge_coverage.step.dependOn(&run_check_coverage.step);
 
         // Add coverage summary step that parses merged kcov JSON output
-        const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
+        const summary_step = CoverageSummaryStep.create(b, "kcov-output/merged");
         summary_step.step.dependOn(&merge_coverage.step);
 
         coverage_step.dependOn(&summary_step.step);

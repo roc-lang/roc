@@ -819,3 +819,240 @@ test "exhaustive - record patterns with different field subsets" {
 
     try test_env.assertLastDefType("Str");
 }
+
+// Float and Decimal Literal Pattern Tests
+// These tests exercise the pattern conversion for floating point literals.
+
+test "exhaustive - F32 literal patterns with wildcard" {
+    // Matching on F32 with specific literals requires a wildcard for exhaustiveness
+    const source =
+        \\x : F32
+        \\x = 1.0f32
+        \\
+        \\result = match x {
+        \\    1.0f32 => "one"
+        \\    2.0f32 => "two"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - F32 literal patterns without wildcard" {
+    // F32 literals alone are not exhaustive
+    const source =
+        \\x : F32
+        \\x = 1.0f32
+        \\
+        \\result = match x {
+        \\    1.0f32 => "one"
+        \\    2.0f32 => "two"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - F64 literal patterns with wildcard" {
+    // Matching on F64 with specific literals requires a wildcard for exhaustiveness
+    const source =
+        \\x : F64
+        \\x = 3.14f64
+        \\
+        \\result = match x {
+        \\    0.0f64 => "zero"
+        \\    3.14f64 => "pi"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - F64 literal patterns without wildcard" {
+    // F64 literals alone are not exhaustive
+    const source =
+        \\x : F64
+        \\x = 3.14f64
+        \\
+        \\result = match x {
+        \\    0.0f64 => "zero"
+        \\    3.14f64 => "pi"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - Dec literal patterns with wildcard" {
+    // Matching on Dec with specific literals requires a wildcard for exhaustiveness
+    const source =
+        \\x : Dec
+        \\x = 1.0dec
+        \\
+        \\result = match x {
+        \\    1.0dec => "one"
+        \\    2.0dec => "two"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "non-exhaustive - Dec literal patterns without wildcard" {
+    // Dec literals alone are not exhaustive
+    const source =
+        \\x : Dec
+        \\x = 1.0dec
+        \\
+        \\result = match x {
+        \\    1.0dec => "one"
+        \\    2.0dec => "two"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "redundant - duplicate F32 literal patterns" {
+    // Same F32 literal matched twice is redundant
+    const source =
+        \\x : F32
+        \\x = 1.0f32
+        \\
+        \\result = match x {
+        \\    1.0f32 => "first"
+        \\    1.0f32 => "second"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "redundant - duplicate Dec literal patterns" {
+    // Same Dec literal matched twice is redundant
+    const source =
+        \\x : Dec
+        \\x = 1.0dec
+        \\
+        \\result = match x {
+        \\    1.0dec => "first"
+        \\    1.0dec => "second"
+        \\    _ => "other"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+// Type Mismatch Tests for Match Branches
+// These tests exercise the incompatible_match_branches error path.
+
+test "type mismatch - incompatible match branches return different types" {
+    // When match branches return incompatible types, should trigger type mismatch
+    const source =
+        \\x : Try(I64, Str)
+        \\x = Ok(42i64)
+        \\
+        \\result = match x {
+        \\    Ok(n) => n
+        \\    Err(s) => s
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The branches return I64 and Str which don't unify
+    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH BRANCHES");
+}
+
+test "type mismatch - if branches with incompatible types" {
+    // If expression with branches returning incompatible types
+    const source =
+        \\x = if Bool.true { 42i64 } else { "string" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+}
+
+// Additional Type Error Tests
+
+test "type mismatch - boolean and with non-Bool left side" {
+    // Using 'and' with non-Bool on left side
+    const source =
+        \\x : I64
+        \\x = 42i64
+        \\
+        \\b : Bool
+        \\b = Bool.true
+        \\
+        \\result = x and b
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+}
+
+test "type mismatch - boolean or with non-Bool right side" {
+    // Using 'or' with non-Bool on right side
+    const source =
+        \\x : I64
+        \\x = 42i64
+        \\
+        \\b : Bool
+        \\b = Bool.true
+        \\
+        \\result = b or x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
+}
+
+test "type mismatch - function call with wrong number of args" {
+    // Calling function with wrong arity
+    const source =
+        \\f = |x, y| x + y
+        \\result = f(1i64)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TOO FEW ARGUMENTS");
+}
+
+test "type mismatch - function call with wrong arg type" {
+    // Calling function with wrong argument type
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| x + 1
+        \\result = f("string")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
