@@ -113,6 +113,10 @@ processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
 /// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
+/// The pattern being defined in the current non-lambda assignment (if any).
+/// Used to detect self-referential definitions like `a = a` or `a = [a]`.
+/// This is null when we're inside a lambda (where self-references are valid for recursion).
+defining_pattern: ?Pattern.Idx = null,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -4489,6 +4493,22 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
+                        // Check for self-reference outside of lambda (issue #8831).
+                        // If we're defining a non-lambda pattern and this lookup references it,
+                        // that's an invalid self-reference like `a = a` or `a = [a]`.
+                        if (self.defining_pattern) |defining_pat_idx| {
+                            if (found_pattern_idx == defining_pat_idx) {
+                                // Self-reference detected (issue #8831) - emit error and return malformed expr.
+                                // Non-function values cannot reference themselves as that would cause
+                                // an infinite loop at runtime.
+                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
+                                    .ident = ident,
+                                    .region = region,
+                                } });
+                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                            }
+                        }
+
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
@@ -10068,8 +10088,22 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } });
     };
 
+    // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
+    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    const ast_body_expr = self.parse_ir.store.getExpr(d.body);
+    const is_lambda = ast_body_expr == .lambda;
+
+    // Save and set defining_pattern for self-reference detection (issue #8831)
+    const saved_defining_pattern = self.defining_pattern;
+    if (!is_lambda) {
+        self.defining_pattern = pattern_idx;
+    }
+
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
+
+    // Restore defining_pattern
+    self.defining_pattern = saved_defining_pattern;
 
     // Determine if we should generalize based on RHS
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
