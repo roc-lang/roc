@@ -760,6 +760,8 @@ test "fx platform expect with toplevel numeric" {
 //     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
 // }
 
+// The platform requires `main! : () => {}` but test_type_mismatch.roc returns Str.
+// This should be a type error.
 test "fx platform test_type_mismatch" {
     const allocator = testing.allocator;
 

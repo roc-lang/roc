@@ -25,6 +25,8 @@ pub const BuiltinModules = @import("BuiltinModules.zig").BuiltinModules;
 const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
+/// LLVM-based evaluator for optimized expression evaluation
+pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -33,6 +35,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("stack.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
+    std.testing.refAllDecls(@import("llvm_evaluator.zig"));
 
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/eval_test.zig"));

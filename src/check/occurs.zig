@@ -213,10 +213,9 @@ const CheckOccurs = struct {
                     const backing_var = self.types_store.getAliasBackingVar(alias);
                     try self.occursSubVar(root, backing_var, ctx);
                 },
-                .flex => {
+                .flex => |_| {
                     // Flex variables are not checked for cycles - they are allowed to have
                     // self-referential constraints. Only structural content is checked.
-                    // This matches the Rust compiler behavior (see subs.rs occurs function).
                 },
                 .rigid => {},
                 .err => {},

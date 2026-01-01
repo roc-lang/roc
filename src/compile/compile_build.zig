@@ -22,17 +22,18 @@ const unbundle = @import("unbundle");
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
-const Mode = @import("compile_package.zig").Mode;
+const compile_package = @import("compile_package.zig");
+const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
-const PackageEnv = @import("compile_package.zig").PackageEnv;
-const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
-const ImportResolver = @import("compile_package.zig").ImportResolver;
-const ScheduleHook = @import("compile_package.zig").ScheduleHook;
+const PackageEnv = compile_package.PackageEnv;
+const ModuleTimingInfo = compile_package.TimingInfo;
+const ImportResolver = compile_package.ImportResolver;
+const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = @import("compile_package.zig").FileProvider;
+const FileProvider = compile_package.FileProvider;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -592,30 +593,41 @@ pub const BuildEnv = struct {
     /// This is called after all modules are compiled and type-checked.
     fn checkPlatformRequirements(self: *BuildEnv) !void {
         // Find the app and platform packages
-        var app_pkg: ?[]const u8 = null;
-        var platform_pkg: ?[]const u8 = null;
+        var app_pkg_info: ?Package = null;
+        var platform_pkg_info: ?Package = null;
+        var app_pkg_name: ?[]const u8 = null;
+        var platform_pkg_name: ?[]const u8 = null;
 
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.kind == .app) {
-                app_pkg = entry.key_ptr.*;
+                app_pkg_info = pkg;
+                app_pkg_name = entry.key_ptr.*;
             } else if (pkg.kind == .platform) {
-                platform_pkg = entry.key_ptr.*;
+                platform_pkg_info = pkg;
+                platform_pkg_name = entry.key_ptr.*;
             }
         }
 
         // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg orelse return;
-        const platform_name = platform_pkg orelse return;
+        const app_name = app_pkg_name orelse return;
+        const platform_name = platform_pkg_name orelse return;
+        const platform_pkg = platform_pkg_info orelse return;
 
         // Get the schedulers for both packages
         const app_sched = self.schedulers.get(app_name) orelse return;
         const platform_sched = self.schedulers.get(platform_name) orelse return;
 
-        // Get the root module envs for both packages
+        // Get the app's root module env
         const app_root_env = app_sched.getRootEnv() orelse return;
-        const platform_root_env = platform_sched.getRootEnv() orelse return;
+
+        // Get the platform's root module by finding the module that matches the root file
+        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
+        // root file if other modules (like exposed imports) were scheduled first.
+        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
+        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse return;
+        const platform_root_env = if (platform_module_state.env) |*env| env else return;
 
         // If the platform has no requires_types, nothing to check
         if (platform_root_env.requires_types.items.items.len == 0) {

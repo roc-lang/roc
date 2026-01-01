@@ -87,7 +87,7 @@ extern fn roc__process_string(ops: *RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyo
 comptime {
     // Export main for all platforms
     @export(&main, .{ .name = "main" });
-    
+
     // Windows MinGW/MSVCRT compatibility: export __main stub
     if (@import("builtin").os.tag == .windows) {
         @export(&__main, .{ .name = "__main" });
