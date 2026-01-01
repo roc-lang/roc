@@ -223,50 +223,27 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
     switch (node.tag) {
         .statement_decl => {
+            // data_3 uses offset encoding: 0 = null, idx+1 = present
             return CIR.Statement{ .s_decl = .{
                 .pattern = @enumFromInt(node.data_1),
                 .expr = @enumFromInt(node.data_2),
-                .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
-                    const has_anno = extra_data[0] != 0;
-                    if (has_anno) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
-                    } else {
-                        break :blk null;
-                    }
-                },
+                .anno = if (node.data_3 == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET)),
             } };
         },
         .statement_decl_gen => {
+            // data_3 uses offset encoding: 0 = null, idx+1 = present
             return CIR.Statement{ .s_decl_gen = .{
                 .pattern = @enumFromInt(node.data_1),
                 .expr = @enumFromInt(node.data_2),
-                .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
-                    const has_anno = extra_data[0] != 0;
-                    if (has_anno) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
-                    } else {
-                        break :blk null;
-                    }
-                },
+                .anno = if (node.data_3 == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET)),
             } };
         },
         .statement_var => {
+            // data_3 uses offset encoding: 0 = null, idx+1 = present
             return CIR.Statement{ .s_var = .{
                 .pattern_idx = @enumFromInt(node.data_1),
                 .expr = @enumFromInt(node.data_2),
-                .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
-                    if (extra_data[0] != 0) {
-                        break :blk @enumFromInt(extra_data[1]);
-                    } else {
-                        break :blk null;
-                    }
-                },
+                .anno = if (node.data_3 == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET)),
             } };
         },
         .statement_reassign => return CIR.Statement{ .s_reassign = .{
@@ -330,30 +307,27 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_nominal_decl => {
-            // Get is_opaque from extra_data
-            const extra_idx = node.data_3;
-            const is_opaque = store.extra_data.items.items[extra_idx] != 0;
+            // data_3 stores is_opaque directly (1 = opaque, 0 = not opaque)
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
                     .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
-                    .is_opaque = is_opaque,
+                    .is_opaque = node.data_3 != 0,
                 },
             };
         },
         .statement_type_anno => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            // data_1 = anno, data_2 = name, data_3 = packed where clause (offset encoded)
+            const anno: CIR.TypeAnno.Idx = @enumFromInt(node.data_1);
+            const name: Ident.Idx = @bitCast(node.data_2);
 
-            const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
-            const name: Ident.Idx = @bitCast(extra_data[1]);
-            const where_flag = extra_data[2];
-
-            const where_clause = if (where_flag == 1) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
+            const where_clause = if (node.data_3 == 0) null else blk: {
+                // Unpack: subtract offset, then extract start (bits 12-31) and len (bits 0-11)
+                const packed_val = node.data_3 - OPTIONAL_VALUE_OFFSET;
+                const where_start = packed_val >> 12;
+                const where_len = packed_val & 0xFFF;
                 break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
-            } else null;
+            };
 
             return CIR.Statement{
                 .s_type_anno = .{
@@ -1427,46 +1401,25 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 
     switch (statement) {
         .s_decl => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
             node.tag = .statement_decl;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            // Use offset encoding: 0 = null, idx+1 = present
+            node.data_3 = if (s.anno) |anno| @intFromEnum(anno) + OPTIONAL_VALUE_OFFSET else 0;
         },
         .s_decl_gen => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
             node.tag = .statement_decl_gen;
             node.data_1 = @intFromEnum(s.pattern);
             node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            // Use offset encoding: 0 = null, idx+1 = present
+            node.data_3 = if (s.anno) |anno| @intFromEnum(anno) + OPTIONAL_VALUE_OFFSET else 0;
         },
         .s_var => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
-
             node.tag = .statement_var;
             node.data_1 = @intFromEnum(s.pattern_idx);
             node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            // Use offset encoding: 0 = null, idx+1 = present
+            node.data_3 = if (s.anno) |anno| @intFromEnum(anno) + OPTIONAL_VALUE_OFFSET else 0;
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
@@ -1549,35 +1502,19 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .statement_nominal_decl;
             node.data_1 = @intFromEnum(s.header);
             node.data_2 = @intFromEnum(s.anno);
-            // Store is_opaque in extra_data
-            const extra_idx = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
-            node.data_3 = @intCast(extra_idx);
+            // Store is_opaque directly (1 = opaque, 0 = not opaque)
+            node.data_3 = @intFromBool(s.is_opaque);
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
-
-            // Store type_anno data in extra_data
-            const extra_start = store.extra_data.len();
-
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store name
-            _ = try store.extra_data.append(store.gpa, @bitCast(s.name));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store flag indicating where clause is present
-                _ = try store.extra_data.append(store.gpa, 1);
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                // Store flag indicating where clause is not present
-                _ = try store.extra_data.append(store.gpa, 0);
-            }
-
-            // Store the extra data start position in the node
-            node.data_1 = @intCast(extra_start);
+            node.data_1 = @intFromEnum(s.anno);
+            node.data_2 = @bitCast(s.name);
+            // Pack where clause span: 20 bits start, 12 bits len, 0 = null
+            // Use offset encoding so 0 means null
+            node.data_3 = if (s.where) |where_clause|
+                (@as(u32, where_clause.span.start) << 12 | @as(u32, where_clause.span.len)) + OPTIONAL_VALUE_OFFSET
+            else
+                0;
         },
         .s_type_var_alias => |s| {
             node.tag = .statement_type_var_alias;
