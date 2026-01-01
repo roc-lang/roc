@@ -383,7 +383,10 @@ else
 /// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
 /// though the memory wouldn't actually be used. We fall back to 4GB which
 /// should work on most systems while still being large enough for typical use.
-const SHARED_MEMORY_FALLBACK_SIZE: usize = 4 * 1024 * 1024 * 1024; // 4GB
+const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets (same as primary)
+else
+    4 * 1024 * 1024 * 1024; // 4GB for 64-bit targets
 
 /// Try to create shared memory, falling back to a smaller size if the system
 /// has overcommit disabled and rejects the initial allocation.
