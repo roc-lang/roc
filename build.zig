@@ -2578,6 +2578,8 @@ pub fn build(b: *std.Build) void {
             mkdir_step.step.dependOn(build_cov_tests);
 
             // On macOS, kcov needs to be codesigned to use task_for_pid
+            // We must codesign the INSTALLED binary (zig-out/bin/kcov) because
+            // addRunArtifact uses the installed path when an install step exists.
             if (target.result.os.tag == .macos) {
                 const codesign = b.addSystemCommand(&.{"codesign"});
                 codesign.addArgs(&.{ "-s", "-", "--entitlements" });
@@ -2587,31 +2589,20 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov - depend on build_cov_tests to ensure all binaries are installed
-            const run_snapshot_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-path=src/parse",
-                "kcov-output/parser-snapshot-tests",
-                "zig-out/bin/snapshot_coverage",
-            });
+            // Run kcov using addRunArtifact which properly tracks dependencies
+            const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
+            run_snapshot_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-snapshot-tests" });
+            run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
-            const run_parse_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-path=src/parse",
-                "kcov-output/parser-unit-tests",
-                "zig-out/bin/parse_unit_coverage",
-            });
+            const run_parse_coverage = b.addRunArtifact(kcov_exe);
+            run_parse_coverage.addArgs(&.{ "--include-path=src/parse", "kcov-output/parser-unit-tests" });
+            run_parse_coverage.addArtifactArg(parse_unit_test);
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
             // Merge coverage results into kcov-output/parser/
-            const merge_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--merge",
-                "kcov-output/parser",
-                "kcov-output/parser-snapshot-tests",
-                "kcov-output/parser-unit-tests",
-            });
+            const merge_coverage = b.addRunArtifact(kcov_exe);
+            merge_coverage.addArgs(&.{ "--merge", "kcov-output/parser", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
             merge_coverage.step.dependOn(&run_parse_coverage.step);
 
             // Add coverage summary step that parses merged kcov JSON output
