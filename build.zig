@@ -1146,69 +1146,6 @@ const CoverageSummaryStep = struct {
     };
 };
 
-/// Build step that checks if kcov is installed and fails with a helpful error if not.
-const CheckKcovStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *CheckKcovStep {
-        const self = b.allocator.create(CheckKcovStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "check-kcov",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-
-        // Try to find kcov in PATH
-        var child = std.process.Child.init(&.{ "which", "kcov" }, b.allocator);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-
-        const term = child.spawnAndWait() catch {
-            return printKcovError(step);
-        };
-
-        switch (term) {
-            .Exited => |code| {
-                if (code != 0) {
-                    return printKcovError(step);
-                }
-            },
-            else => {
-                return printKcovError(step);
-            },
-        }
-    }
-
-    fn printKcovError(step: *Step) !void {
-        std.debug.print("\n", .{});
-        std.debug.print("=" ** 70 ++ "\n", .{});
-        std.debug.print("KCOV NOT FOUND\n", .{});
-        std.debug.print("=" ** 70 ++ "\n\n", .{});
-        std.debug.print("The 'coverage' build step requires kcov to be installed.\n\n", .{});
-        std.debug.print("WHY WE USE KCOV:\n", .{});
-        std.debug.print("  kcov is a code coverage tool that uses DWARF debug information\n", .{});
-        std.debug.print("  to track which lines of code are executed during tests.\n", .{});
-        std.debug.print("  It works with Zig binaries without requiring special compiler flags.\n\n", .{});
-        std.debug.print("HOW TO INSTALL:\n", .{});
-        std.debug.print("  Linux (Debian/Ubuntu): sudo apt install kcov\n", .{});
-        std.debug.print("  Linux (Fedora):        sudo dnf install kcov\n", .{});
-        std.debug.print("  Linux (Arch):          sudo pacman -S kcov\n", .{});
-        std.debug.print("  macOS:                 brew install kcov\n\n", .{});
-        std.debug.print("After installing, run 'zig build coverage' again.\n", .{});
-        std.debug.print("=" ** 70 ++ "\n", .{});
-        return step.fail("kcov is required for code coverage. See installation instructions above.", .{});
-    }
-};
-
 fn checkFxPlatformTestCoverage(step: *Step) !void {
     const b = step.owner;
     std.debug.print("---- checking fx platform test coverage ----\n", .{});
@@ -2587,6 +2524,27 @@ pub fn build(b: *std.Build) void {
     // Only supported on Linux and macOS (kcov doesn't work on Windows)
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
+        // Get the kcov dependency and build it from source
+        // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
+        const kcov_dep = b.lazyDependency("kcov", .{}).?;
+        const kcov_exe = kcov_dep.artifact("kcov");
+
+        // On macOS, kcov needs to be codesigned to use task_for_pid
+        // The entitlements file is in the kcov source directory
+        var codesign_step: ?*Step = null;
+        if (target.result.os.tag == .macos) {
+            const codesign = b.addSystemCommand(&.{
+                "codesign",
+                "-s",
+                "-",
+                "--entitlements",
+            });
+            codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
+            codesign.addArg("-f");
+            codesign.addArtifactArg(kcov_exe);
+            codesign_step = &codesign.step;
+        }
+
         // Run snapshot tests with kcov to get parser coverage
         // Snapshot tests actually parse real Roc code, giving meaningful coverage
         const snapshot_coverage_test = b.addTest(.{
@@ -2604,14 +2562,6 @@ pub fn build(b: *std.Build) void {
         snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
 
-        // Configure kcov execution - output to parser-snapshot-tests directory
-        snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
-            "kcov",
-            "--include-path=src/parse",
-            "kcov-output/parser-snapshot-tests",
-            null, // Zig inserts test binary path here
-        });
-
         // Also run parse module unit tests for additional coverage
         const parse_unit_test = b.addTest(.{
             .name = "parse_unit_coverage",
@@ -2623,37 +2573,34 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
-        // Configure kcov for parse unit tests - output to parser-unit-tests directory
-        parse_unit_test.setExecCmd(&[_]?[]const u8{
-            "kcov",
-            "--include-path=src/parse",
-            "kcov-output/parser-unit-tests",
-            null, // Zig inserts test binary path here
-        });
-
-        // Check that kcov is installed before attempting to run it
-        const check_kcov = CheckKcovStep.create(b);
-
         // Create output directories before running kcov
         const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
-        mkdir_step.step.dependOn(&check_kcov.step);
 
-        // Run snapshot tests first
-        const run_snapshot_coverage = b.addRunArtifact(snapshot_coverage_test);
+        // If we need to codesign, do that before running kcov
+        if (codesign_step) |cs| {
+            mkdir_step.step.dependOn(cs);
+        }
+
+        // Run kcov with the snapshot test binary
+        const run_snapshot_coverage = b.addRunArtifact(kcov_exe);
+        run_snapshot_coverage.addArg("--include-path=src/parse");
+        run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
+        run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
-        // Then run parse unit tests
-        const run_parse_coverage = b.addRunArtifact(parse_unit_test);
+        // Run kcov with the parse unit test binary
+        const run_parse_coverage = b.addRunArtifact(kcov_exe);
+        run_parse_coverage.addArg("--include-path=src/parse");
+        run_parse_coverage.addArg("kcov-output/parser-unit-tests");
+        run_parse_coverage.addArtifactArg(parse_unit_test);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
-        // Merge coverage results into kcov-output/parser/
-        const merge_coverage = b.addSystemCommand(&.{
-            "kcov",
-            "--merge",
-            "kcov-output/parser",
-            "kcov-output/parser-snapshot-tests",
-            "kcov-output/parser-unit-tests",
-        });
+        // Merge coverage results into kcov-output/parser/ using built kcov
+        const merge_coverage = b.addRunArtifact(kcov_exe);
+        merge_coverage.addArg("--merge");
+        merge_coverage.addArg("kcov-output/parser");
+        merge_coverage.addArg("kcov-output/parser-snapshot-tests");
+        merge_coverage.addArg("kcov-output/parser-unit-tests");
         merge_coverage.step.dependOn(&run_parse_coverage.step);
 
         // Add coverage summary step that parses merged kcov JSON output
