@@ -2526,7 +2526,8 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
-        const kcov_dep = b.lazyDependency("kcov", .{}).?;
+        // lazyDependency returns null if we're not building a step that needs it
+        const kcov_dep = b.lazyDependency("kcov", .{}) orelse return;
         const kcov_exe = kcov_dep.artifact("kcov");
 
         // On macOS, kcov needs to be codesigned to use task_for_pid
