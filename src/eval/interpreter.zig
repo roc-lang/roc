@@ -977,13 +977,8 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = layout_val.alignment(target_usize);
         if (layout_val.tag == .closure) {
-            // Check bounds before accessing - builtin closures may have out-of-bounds indices
-            const idx_as_usize = @intFromEnum(layout_val.data.closure.captures_layout_idx);
-            const layout_count = self.runtime_layout_store.layouts.len();
-            if (idx_as_usize < layout_count) {
-                const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
-                alignment = alignment.max(captures_layout.alignment(target_usize));
-            }
+            const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
         }
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
@@ -1011,13 +1006,8 @@ pub const Interpreter = struct {
         const target_usize = self.runtime_layout_store.targetUsize();
         var alignment = src.layout.alignment(target_usize);
         if (src.layout.tag == .closure) {
-            // Check bounds before accessing - builtin closures may have out-of-bounds indices
-            const idx_as_usize = @intFromEnum(src.layout.data.closure.captures_layout_idx);
-            const layout_count = self.runtime_layout_store.layouts.len();
-            if (idx_as_usize < layout_count) {
-                const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
-                alignment = alignment.max(captures_layout.alignment(target_usize));
-            }
+            const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
+            alignment = alignment.max(captures_layout.alignment(target_usize));
         }
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         // Preserve rt_var for constant folding
@@ -13215,11 +13205,6 @@ pub const Interpreter = struct {
                 closure_idx -= 1;
                 const cls_val = self.active_closures.items[closure_idx];
                 if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                    // Check bounds before accessing - builtin closures may have out-of-bounds indices
-                    const idx_as_usize = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
-                    const layout_count = self.runtime_layout_store.layouts.len();
-                    if (idx_as_usize >= layout_count) continue;
-
                     const captures_layout = self.runtime_layout_store.getLayout(cls_val.layout.data.closure.captures_layout_idx);
                     const header_sz = @sizeOf(layout.Closure);
                     const cap_align = captures_layout.alignment(self.runtime_layout_store.targetUsize());
@@ -13383,11 +13368,6 @@ pub const Interpreter = struct {
                     closure_idx -= 1;
                     const cls_val = self.active_closures.items[closure_idx];
                     if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                        // Check bounds before accessing - builtin closures may have out-of-bounds indices
-                        const idx_as_usize = @intFromEnum(cls_val.layout.data.closure.captures_layout_idx);
-                        const layout_count = self.runtime_layout_store.layouts.len();
-                        if (idx_as_usize >= layout_count) continue;
-
                         const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
                         const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
                         const has_real_captures = (lambda_expr == .e_closure);
