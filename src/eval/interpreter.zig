@@ -14142,7 +14142,7 @@ pub const Interpreter = struct {
                     } else {
                         // Gather layouts and values
                         const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        var elem_layouts = try self.allocator.alloc(layout.Layout, total_count);
                         defer self.allocator.free(elem_layouts);
 
                         // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
@@ -14153,15 +14153,75 @@ pub const Interpreter = struct {
                         // Collect element rt_vars for constructing tuple type
                         var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                         defer self.allocator.free(elem_rt_vars);
+
+                        // Track which elements need auto-boxing
+                        var need_auto_box = try self.allocator.alloc(bool, total_count);
+                        defer self.allocator.free(need_auto_box);
                         alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
-                        var i: usize = total_count;
-                        while (i > 0) {
-                            i -= 1;
-                            values[i] = value_stack.pop() orelse return error.Crash;
-                            elem_layouts[i] = values[i].layout;
-                            elem_rt_vars[i] = values[i].rt_var;
+                        var idx: usize = total_count;
+                        while (idx > 0) {
+                            idx -= 1;
+                            values[idx] = value_stack.pop() orelse return error.Crash;
+                            elem_rt_vars[idx] = values[idx].rt_var;
+
+                            // Check if this element is a recursive tag_union that needs boxing.
+                            // A tag_union is recursive if any of its variant payloads contains
+                            // a Box pointing to this same tag_union.
+                            const elem_layout = values[idx].layout;
+                            need_auto_box[idx] = false;
+
+                            if (elem_layout.tag == .tag_union) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                // Check if any variant's payload contains a Box pointing to this tag_union
+                                var var_idx: usize = 0;
+                                while (var_idx < variants.len) : (var_idx += 1) {
+                                    const variant = variants.get(var_idx);
+                                    const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                    if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                        need_auto_box[idx] = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If this element needs boxing, find the Box layout and box the value
+                            if (need_auto_box[idx]) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because:
+                                // 1. We only enter this block if need_auto_box[idx] is true
+                                // 2. need_auto_box[idx] is only set true if layoutContainsBoxOfTagUnion
+                                //    found a Box pointing to this tag_union in some variant's payload
+                                // 3. findBoxIdxForTagUnion searches the same layouts and returns the
+                                //    index of that Box, so it must find the same Box that was detected
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, values[idx], roc_ops, values[idx].rt_var);
+                                values[idx].decref(&self.runtime_layout_store, roc_ops);
+                                values[idx] = boxed;
+                                elem_layouts[idx] = box_layout;
+                            } else {
+                                elem_layouts[idx] = values[idx].layout;
+                            }
                         }
 
                         // Create tuple type from element types
@@ -14178,8 +14238,8 @@ pub const Interpreter = struct {
                         if (total_count != accessor.getElementCount()) return error.TypeMismatch;
 
                         // Set all elements
-                        for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx], roc_ops);
+                        for (0..total_count) |set_idx| {
+                            try accessor.setElement(set_idx, values[set_idx], roc_ops);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -14455,6 +14515,50 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
+
+                        // Check if this field value is a recursive tag_union that needs boxing.
+                        // A tag_union is recursive if any of its variant payloads contains
+                        // a Box pointing to this same tag_union.
+                        const field_layout = field_values[i].layout;
+                        if (field_layout.tag == .tag_union) {
+                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            var needs_boxing = false;
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    needs_boxing = true;
+                                    break;
+                                }
+                            }
+
+                            if (needs_boxing) {
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because we detected needs_boxing=true above,
+                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
+                                // searches the same layouts and must find the same Box.
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
+                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
+                                field_values[i] = boxed;
+                            }
+                        }
                     }
 
                     // Handle base record if extension exists
