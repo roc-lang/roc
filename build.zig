@@ -2734,10 +2734,8 @@ pub fn build(b: *std.Build) void {
 
         coverage_step.dependOn(&parser_summary_step.step);
 
-        // =====================================================================
         // Canonicalizer code coverage
-        // =====================================================================
-
+        //
         // Run snapshot tests with kcov to get canonicalizer coverage
         // Snapshot tests actually canonicalize real Roc code, giving meaningful coverage
         const can_snapshot_coverage_test = b.addTest(.{
