@@ -258,6 +258,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Bool.encode(True): true|1>U64.encode(42): 42|1>Done",
         .description = "Primitive types have encode methods for static dispatch (issue #8853)",
     },
+    .{
+        .roc_file = "test/fx/issue8872_map_err.roc",
+        .io_spec = "1>Got Err: hello",
+        .description = "Regression test: Polymorphic tag union payload layout in match expressions (issue #8872)",
+    },
 };
 
 /// Get the total number of IO spec tests
