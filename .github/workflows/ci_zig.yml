@@ -95,25 +95,9 @@ jobs:
           Requires: libelf
           EOF
 
-      - name: Build coverage binaries
-        run: |
-          # Build all coverage binaries explicitly first
-          zig build build-coverage-tests
-          # Verify they exist
-          ls -la zig-out/bin/
-
       - name: Parser Code Coverage
         run: |
-          echo "=== Before zig build coverage ==="
-          ls -la zig-out/bin/
-          stat zig-out/bin/snapshot_coverage || echo "stat failed"
-          echo "=== Running zig build coverage ==="
-          zig build coverage || {
-            echo "=== After failure ==="
-            ls -la zig-out/bin/ || echo "ls failed"
-            stat zig-out/bin/snapshot_coverage || echo "stat failed"
-            exit 1
-          }
+          zig build coverage
 
   zig-tests:
     needs: check-once

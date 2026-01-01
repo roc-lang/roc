@@ -2575,12 +2575,14 @@ pub fn build(b: *std.Build) void {
 
             // Create output directories before running kcov
             const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+            mkdir_step.setCwd(b.path("."));
             mkdir_step.step.dependOn(build_cov_tests);
 
             // On macOS, kcov needs to be codesigned to use task_for_pid
             // Codesign the installed binary since we run from zig-out/bin/
             if (target.result.os.tag == .macos) {
                 const codesign = b.addSystemCommand(&.{"codesign"});
+                codesign.setCwd(b.path("."));
                 codesign.addArgs(&.{ "-s", "-", "--entitlements" });
                 codesign.addFileArg(kcov_dep.path("osx-entitlements.xml"));
                 codesign.addArgs(&.{ "-f", "zig-out/bin/kcov" });
@@ -2596,6 +2598,7 @@ pub fn build(b: *std.Build) void {
                 "kcov-output/parser-snapshot-tests",
                 "zig-out/bin/snapshot_coverage",
             });
+            run_snapshot_coverage.setCwd(b.path("."));
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
             run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
             run_snapshot_coverage.step.dependOn(&install_kcov.step);
@@ -2606,6 +2609,7 @@ pub fn build(b: *std.Build) void {
                 "kcov-output/parser-unit-tests",
                 "zig-out/bin/parse_unit_coverage",
             });
+            run_parse_coverage.setCwd(b.path("."));
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
             run_parse_coverage.step.dependOn(&install_parse_test.step);
 
@@ -2617,6 +2621,7 @@ pub fn build(b: *std.Build) void {
                 "kcov-output/parser-snapshot-tests",
                 "kcov-output/parser-unit-tests",
             });
+            merge_coverage.setCwd(b.path("."));
             merge_coverage.step.dependOn(&run_parse_coverage.step);
 
             // Add coverage summary step that parses merged kcov JSON output
