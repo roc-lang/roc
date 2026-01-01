@@ -983,14 +983,10 @@ const CoverageSummaryStep = struct {
     ///
     /// NOTE: On Linux, kcov with libdw/elfutils doesn't properly parse Zig's DWARF5
     /// debug info format. It only sees C files (like musl libc) but not Zig source files.
-    /// This is a known limitation. On macOS, kcov uses a different Mach-O parser that
-    /// works correctly with Zig binaries and achieves ~84% coverage.
+    /// This is a known limitation so we skip coverage enforcement on Linux.
+    /// On macOS, kcov uses a different Mach-O parser that works correctly with Zig binaries.
     /// TODO: Investigate fixing kcov's DWARF5 parsing for Zig or use LLVM source-based coverage.
     const MIN_COVERAGE_PERCENT: f64 = 84.0;
-
-    /// On Linux, we use a lower threshold because kcov's libdw parser doesn't properly
-    /// handle Zig's DWARF5 format and only sees test runner code, not parser source files.
-    const MIN_COVERAGE_PERCENT_LINUX: f64 = 30.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
@@ -1049,19 +1045,24 @@ const CoverageSummaryStep = struct {
             return step.fail("kcov failed to capture coverage data (0 total lines)", .{});
         }
 
-        // Enforce minimum coverage threshold
-        // On Linux, use lower threshold due to kcov/libdw DWARF5 parsing limitations
-        const min_coverage = if (builtin.os.tag == .linux) MIN_COVERAGE_PERCENT_LINUX else MIN_COVERAGE_PERCENT;
+        // Enforce minimum coverage threshold (macOS only)
+        // On Linux, kcov's libdw parser doesn't properly handle Zig's DWARF5 format,
+        // so coverage data is not meaningful. We skip enforcement but still print the result.
+        if (builtin.os.tag == .linux) {
+            std.debug.print("\nNote: Coverage enforcement skipped on Linux (kcov DWARF5 limitation)\n", .{});
+            std.debug.print("Coverage: {d:.2}% ({d} lines)\n", .{ result.percent, result.total_lines });
+            return;
+        }
 
-        if (result.percent < min_coverage) {
+        if (result.percent < MIN_COVERAGE_PERCENT) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, min_coverage });
+            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, min_coverage });
+            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
         }
     }
 
