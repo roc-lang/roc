@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+// Build configuration for the Roc compiler
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const roc_target = @import("src/target/mod.zig");
