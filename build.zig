@@ -2576,6 +2576,8 @@ pub fn build(b: *std.Build) void {
         run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
         run_snapshot_coverage.addArtifactArg(snapshot_coverage_test);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
+        // Explicitly depend on test compilation (addArtifactArg should do this but doesn't seem to work for tests)
+        run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
 
         // Run kcov with the parse unit test binary
         const run_parse_coverage = b.addRunArtifact(kcov_exe);
@@ -2583,6 +2585,7 @@ pub fn build(b: *std.Build) void {
         run_parse_coverage.addArg("kcov-output/parser-unit-tests");
         run_parse_coverage.addArtifactArg(parse_unit_test);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
+        run_parse_coverage.step.dependOn(&parse_unit_test.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
         const merge_coverage = b.addRunArtifact(kcov_exe);
