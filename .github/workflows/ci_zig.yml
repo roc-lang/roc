@@ -97,6 +97,9 @@ jobs:
 
       - name: Parser Code Coverage
         run: |
+          # First build the test binaries explicitly
+          zig build build-coverage-tests
+          # Then run coverage (which will use the already-built binaries)
           zig build coverage
 
   zig-tests:
