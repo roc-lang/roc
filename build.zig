@@ -2524,11 +2524,8 @@ pub fn build(b: *std.Build) void {
     // Only supported on Linux and macOS (kcov doesn't work on Windows)
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
-        // Get the kcov dependency and build it from source
-        // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
-        // lazyDependency returns null on the first pass; Zig will re-run build() after fetching
-        const kcov_dep = b.lazyDependency("kcov", .{}) orelse return;
-        const kcov_exe = kcov_dep.artifact("kcov");
+        // Create test artifacts FIRST, before checking for kcov dependency
+        // This ensures they exist in the build graph regardless of lazy dependency state
 
         // Run snapshot tests with kcov to get parser coverage
         // Snapshot tests actually parse real Roc code, giving meaningful coverage
@@ -2558,15 +2555,20 @@ pub fn build(b: *std.Build) void {
         });
         roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
-        // Force installation of test artifacts - this ensures they get compiled
-        const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
-        const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
+        // Get the kcov dependency and build it from source
+        // This is a fork with Zig-specific improvements (unreachable/panic detection, no-cover comments)
+        // lazyDependency returns null on the first pass; Zig will re-run build() after fetching
+        const kcov_dep = b.lazyDependency("kcov", .{}) orelse {
+            // On first pass, kcov isn't available yet. Still set up coverage_step
+            // to depend on the test compilation so they're ready when kcov is fetched.
+            coverage_step.dependOn(&snapshot_coverage_test.step);
+            coverage_step.dependOn(&parse_unit_test.step);
+            return;
+        };
+        const kcov_exe = kcov_dep.artifact("kcov");
 
         // Create output directories before running kcov
         const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
-        // Make mkdir depend on test installation so tests are built first
-        mkdir_step.step.dependOn(&install_snapshot_test.step);
-        mkdir_step.step.dependOn(&install_parse_test.step);
 
         // On macOS, kcov needs to be codesigned to use task_for_pid
         if (target.result.os.tag == .macos) {
@@ -2582,6 +2584,7 @@ pub fn build(b: *std.Build) void {
         run_snapshot_coverage.addArg("--include-path=src/parse");
         run_snapshot_coverage.addArg("kcov-output/parser-snapshot-tests");
         run_snapshot_coverage.addFileArg(snapshot_coverage_test.getEmittedBin());
+        run_snapshot_coverage.step.dependOn(&snapshot_coverage_test.step);
         run_snapshot_coverage.step.dependOn(&mkdir_step.step);
 
         // Run kcov with the parse unit test binary
@@ -2589,6 +2592,7 @@ pub fn build(b: *std.Build) void {
         run_parse_coverage.addArg("--include-path=src/parse");
         run_parse_coverage.addArg("kcov-output/parser-unit-tests");
         run_parse_coverage.addFileArg(parse_unit_test.getEmittedBin());
+        run_parse_coverage.step.dependOn(&parse_unit_test.step);
         run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
 
         // Merge coverage results into kcov-output/parser/ using built kcov
@@ -2603,10 +2607,7 @@ pub fn build(b: *std.Build) void {
         const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
         summary_step.step.dependOn(&merge_coverage.step);
 
-        // Hook up coverage_step to all required steps
-        // Direct dependencies on install steps to force test compilation
-        coverage_step.dependOn(&install_snapshot_test.step);
-        coverage_step.dependOn(&install_parse_test.step);
+        // Hook up coverage_step to the summary step
         coverage_step.dependOn(&summary_step.step);
 
         // Cross-compile for Windows to verify comptime branches compile
