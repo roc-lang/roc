@@ -95,6 +95,9 @@ jobs:
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-22.04
+            cpu_flag: ''
+            target_flag: ''
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: -Dtarget=aarch64-linux-musl
@@ -260,9 +263,9 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          # Only run coverage on Linux (kcov on macOS is too slow - uses LLDB)
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }} && zig build coverage"
+          # Only run coverage on native Linux (kcov can't capture cross-compiled binaries, and macOS kcov is too slow)
+          if [ "$RUNNER_OS" = "Linux" ] && [ -z "${{ matrix.target_flag }}" ]; then
+            nix develop ./src/ -c bash -c "zig build && zig build snapshot && zig build test && zig build coverage"
           else
             nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
           fi
