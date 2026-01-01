@@ -2603,9 +2603,11 @@ pub fn build(b: *std.Build) void {
     const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // IMPORTANT: kcov requires native glibc binaries on Linux - it cannot instrument musl binaries.
-        // The default target on Linux is musl for static linking, so we override it here.
+        // The default target on Linux is musl for static linking, so we must explicitly use glibc.
         const coverage_target = if (builtin.target.os.tag == .linux)
-            b.resolveTargetQuery(.{}) // Native target with glibc
+            b.resolveTargetQuery(.{
+                .abi = .gnu, // Explicitly use glibc, not musl
+            })
         else
             target; // macOS doesn't have this issue
 
