@@ -85,3 +85,54 @@ pub fn runRoc(allocator: std.mem.Allocator, args: []const []const u8, test_file_
         .term = result.term,
     };
 }
+
+/// Helper to run roc with stdin input (for REPL testing)
+pub fn runRocWithStdin(allocator: std.mem.Allocator, args: []const []const u8, stdin_input: []const u8) !RocResult {
+    // Get absolute path to roc binary from current working directory
+    const cwd_path = try std.fs.cwd().realpathAlloc(allocator, ".");
+    defer allocator.free(cwd_path);
+    const roc_binary_name = if (@import("builtin").os.tag == .windows) "roc.exe" else "roc";
+    const roc_path = try std.fs.path.join(allocator, &.{ cwd_path, "zig-out", "bin", roc_binary_name });
+    defer allocator.free(roc_path);
+
+    // Skip test if roc binary doesn't exist
+    std.fs.accessAbsolute(roc_path, .{}) catch {
+        std.debug.print("Skipping test: roc binary not found at {s}\n", .{roc_path});
+    };
+
+    // Build argv: [roc_path, ...args]
+    const argv = try std.mem.concat(allocator, []const u8, &.{
+        &.{roc_path},
+        args,
+    });
+    defer allocator.free(argv);
+
+    // Run roc with stdin pipe
+    var child = std.process.Child.init(argv, allocator);
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
+    child.cwd = cwd_path;
+
+    try child.spawn();
+
+    // Write input to stdin and close it
+    try child.stdin.?.writeAll(stdin_input);
+    child.stdin.?.close();
+    child.stdin = null;
+
+    // Collect output before waiting
+    const stdout = try child.stdout.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    errdefer allocator.free(stdout);
+    const stderr = try child.stderr.?.readToEndAlloc(allocator, 10 * 1024 * 1024);
+    errdefer allocator.free(stderr);
+
+    // Wait for completion
+    const term = try child.wait();
+
+    return RocResult{
+        .stdout = stdout,
+        .stderr = stderr,
+        .term = term,
+    };
+}

@@ -45,6 +45,9 @@ pub const Work = struct {
     pub const NominalProgress = struct {
         nominal_var: types.Var,
         backing_var: types.Var,
+        /// True if a recursive cycle was detected while processing this nominal type.
+        /// This is set when we encounter the same nominal type during its own processing.
+        is_recursive: bool = false,
     };
 
     /// A container being processed. The var_ is optional because synthetic tuples

@@ -58,7 +58,7 @@ pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 10;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 24;
+pub const AST_EXPR_NODE_COUNT = 26;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -605,6 +605,18 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .frac;
             node.region = e.region;
             node.main_token = e.token;
+        },
+        .typed_int => |e| {
+            node.tag = .typed_int;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
+        },
+        .typed_frac => |e| {
+            node.tag = .typed_frac;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
         },
         .tag => |e| {
             node.tag = .tag;
@@ -1571,6 +1583,20 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .frac => {
             return .{ .frac = .{
                 .token = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .typed_int => {
+            return .{ .typed_int = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
+                .region = node.region,
+            } };
+        },
+        .typed_frac => {
+            return .{ .typed_frac = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
                 .region = node.region,
             } };
         },

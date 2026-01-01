@@ -52,6 +52,9 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
+/// Track whether we're inside an expect block.
+/// When true, the ? operator crashes on Err instead of returning early.
+in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
@@ -2380,6 +2383,11 @@ pub fn canonicalizeFile(
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+                // Track that we're inside an expect so ? operator crashes on Err
+                const was_in_expect = self.in_expect;
+                self.in_expect = true;
+                defer self.in_expect = was_in_expect;
+
                 // Canonicalize the expect expression
                 const can_expect = try self.canonicalizeExpr(e.body) orelse {
                     // If canonicalization fails, create a malformed expression
@@ -4026,6 +4034,82 @@ pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8)
     return std.fmt.parseInt(T, buf[0..len], int_base);
 }
 
+/// Parse integer text into a CIR.IntValue.
+/// Handles base prefixes (0x, 0b, 0o), underscores, and negative numbers.
+/// Returns null if the number is invalid (too large, etc).
+pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
+    const is_negated = num_text[0] == '-';
+    const after_minus_sign = @as(usize, @intFromBool(is_negated));
+
+    var first_digit: usize = undefined;
+    const DEFAULT_BASE = 10;
+    var int_base: u8 = undefined;
+
+    if (num_text[after_minus_sign] == '0' and num_text.len > after_minus_sign + 2) {
+        switch (num_text[after_minus_sign + 1]) {
+            'x', 'X' => {
+                int_base = 16;
+                first_digit = after_minus_sign + 2;
+            },
+            'o', 'O' => {
+                int_base = 8;
+                first_digit = after_minus_sign + 2;
+            },
+            'b', 'B' => {
+                int_base = 2;
+                first_digit = after_minus_sign + 2;
+            },
+            else => {
+                int_base = DEFAULT_BASE;
+                first_digit = after_minus_sign;
+            },
+        }
+    } else {
+        int_base = DEFAULT_BASE;
+        first_digit = after_minus_sign;
+    }
+
+    const digit_part = num_text[first_digit..];
+
+    const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
+        return null;
+    };
+
+    // If this had a minus sign, but negating it would result in a negative number
+    // that would be too low to fit in i128, then this int literal is also invalid.
+    if (is_negated and u128_val > min_i128_negated) {
+        return null;
+    }
+
+    // Determine the appropriate storage type
+    if (is_negated) {
+        // Negative: must be i128 (or smaller)
+        const i128_val = if (u128_val == min_i128_negated)
+            std.math.minInt(i128) // Special case for -2^127
+        else
+            -@as(i128, @intCast(u128_val));
+        return CIR.IntValue{
+            .bytes = @bitCast(i128_val),
+            .kind = .i128,
+        };
+    } else {
+        // Positive: could be i128 or u128
+        if (u128_val > @as(u128, std.math.maxInt(i128))) {
+            // Too big for i128, keep as u128
+            return CIR.IntValue{
+                .bytes = @bitCast(u128_val),
+                .kind = .u128,
+            };
+        } else {
+            // Fits in i128
+            return CIR.IntValue{
+                .bytes = @bitCast(@as(i128, @intCast(u128_val))),
+                .kind = .i128,
+            };
+        }
+    }
+}
+
 /// Canonicalize an expression.
 pub fn canonicalizeExpr(
     self: *Self,
@@ -4593,81 +4677,9 @@ pub fn canonicalizeExpr(
             const token_text = self.parse_ir.resolve(e.token);
             const parsed = types.parseNumeralWithSuffix(token_text);
 
-            // Parse the integer value
-            const is_negated = parsed.num_text[0] == '-';
-            const after_minus_sign = @as(usize, @intFromBool(is_negated));
-
-            var first_digit: usize = undefined;
-            const DEFAULT_BASE = 10;
-            var int_base: u8 = undefined;
-
-            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
-                switch (parsed.num_text[after_minus_sign + 1]) {
-                    'x', 'X' => {
-                        int_base = 16;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'o', 'O' => {
-                        int_base = 8;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'b', 'B' => {
-                        int_base = 2;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    else => {
-                        int_base = DEFAULT_BASE;
-                        first_digit = after_minus_sign;
-                    },
-                }
-            } else {
-                int_base = DEFAULT_BASE;
-                first_digit = after_minus_sign;
-            }
-
-            const digit_part = parsed.num_text[first_digit..];
-
-            const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
-                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
+            const int_value = parseIntText(parsed.num_text) orelse {
                 const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // If this had a minus sign, but negating it would result in a negative number
-            // that would be too low to fit in i128, then this int literal is also invalid.
-            if (is_negated and u128_val > min_i128_negated) {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            }
-
-            // Determine the appropriate storage type
-            const int_value = blk: {
-                if (is_negated) {
-                    // Negative: must be i128 (or smaller)
-                    const i128_val = if (u128_val == min_i128_negated)
-                        std.math.minInt(i128) // Special case for -2^127
-                    else
-                        -@as(i128, @intCast(u128_val));
-                    break :blk CIR.IntValue{
-                        .bytes = @bitCast(i128_val),
-                        .kind = .i128,
-                    };
-                } else {
-                    // Positive: could be i128 or u128
-                    if (u128_val > @as(u128, std.math.maxInt(i128))) {
-                        // Too big for i128, keep as u128
-                        break :blk CIR.IntValue{
-                            .bytes = @bitCast(u128_val),
-                            .kind = .u128,
-                        };
-                    } else {
-                        // Fits in i128
-                        break :blk CIR.IntValue{
-                            .bytes = @bitCast(@as(i128, @intCast(u128_val))),
-                            .kind = .i128,
-                        };
-                    }
-                }
             };
 
             // If a user provided a suffix, then we treat is as an type
@@ -4824,6 +4836,78 @@ pub fn canonicalizeExpr(
             };
 
             const expr_idx = try self.env.addExpr(cir_expr, region);
+
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .typed_int => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const token_text = self.parse_ir.resolve(e.token);
+
+            const int_value = parseIntText(token_text) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Get the type identifier from the .Type token
+            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const expr_idx = try self.env.addExpr(
+                CIR.Expr{ .e_typed_int = .{
+                    .value = int_value,
+                    .type_name = type_ident,
+                } },
+                region,
+            );
+
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .typed_frac => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const token_text = self.parse_ir.resolve(e.token);
+
+            // Parse the fractional value as f64 first, then convert to scaled i128
+            const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Convert to scaled i128 (Dec representation: value * 10^18)
+            const dec_scale = std.math.pow(f64, 10, 18);
+            const scaled_val = f64_val * dec_scale;
+
+            // Check if it fits in i128
+            const i128_max_f64 = 170141183460469231731687303715884105727.0;
+            const i128_min_f64 = -170141183460469231731687303715884105728.0;
+
+            if (scaled_val < i128_min_f64 or scaled_val > i128_max_f64) {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            }
+
+            const rounded_val = @round(scaled_val);
+            const i128_val = @as(i128, @intFromFloat(rounded_val));
+
+            const int_value = CIR.IntValue{
+                .bytes = @bitCast(i128_val),
+                .kind = .i128,
+            };
+
+            // Get the type identifier from the .Type token
+            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const expr_idx = try self.env.addExpr(
+                CIR.Expr{ .e_typed_frac = .{
+                    .value = int_value,
+                    .type_name = type_ident,
+                } },
+                region,
+            );
 
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5515,36 +5599,45 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
                 const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-                // Create the branch body: return Err(#err)
-                // First, create lookup for #err
-                const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                    .pattern_idx = err_assign_pattern_idx,
-                } }, region);
-                // Mark the pattern as used
-                try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+                // Create the branch body
+                const branch_value_idx = if (self.in_expect) blk: {
+                    // Inside an expect: crash with a message instead of returning
+                    // This makes the expect fail when ? encounters an Err
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
+                        .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
+                    } }, region);
+                } else blk: {
+                    // Normal case: return Err(#err)
+                    // First, create lookup for #err
+                    const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                        .pattern_idx = err_assign_pattern_idx,
+                    } }, region);
+                    // Mark the pattern as used
+                    try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                // Create Err(#err) tag expression
-                const err_tag_args_start = self.env.store.scratchExprTop();
-                try self.env.store.addScratchExpr(err_lookup_idx);
-                const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+                    // Create Err(#err) tag expression
+                    const err_tag_args_start = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(err_lookup_idx);
+                    const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_tag_args_span,
-                    },
-                }, region);
+                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_tag_args_span,
+                        },
+                    }, region);
 
-                // Create return Err(#err) expression
-                const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
-                    .expr = err_tag_expr_idx,
-                } }, region);
+                    // Create return Err(#err) expression
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
+                        .expr = err_tag_expr_idx,
+                    } }, region);
+                };
 
                 // Create the Err branch
                 const err_branch_idx = try self.env.addMatchBranch(
                     Expr.Match.Branch{
                         .patterns = err_branch_pat_span,
-                        .value = return_expr_idx,
+                        .value = branch_value_idx,
                         .guard = null,
                         .redundant = try self.env.types.fresh(),
                     },
@@ -9265,6 +9358,11 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .expect => |e_| {
             const region = self.parse_ir.tokenizedRegionToRegion(e_.region);
+
+            // Track that we're inside an expect so ? operator crashes on Err
+            const was_in_expect = self.in_expect;
+            self.in_expect = true;
+            defer self.in_expect = was_in_expect;
 
             // Canonicalize the expect expression
             const expr = try self.canonicalizeExprOrMalformed(e_.body);

@@ -1204,7 +1204,7 @@ const CoverageSummaryStep = struct {
         std.debug.print("Full HTML report: {s}/index.html\n", .{coverage_dir});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
-        return percent;
+        return .{ .percent = percent, .total_lines = total_lines };
     }
 
     const UncoveredFile = struct {
