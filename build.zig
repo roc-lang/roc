@@ -2603,7 +2603,10 @@ pub fn build(b: *std.Build) void {
         const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
         summary_step.step.dependOn(&merge_coverage.step);
 
-        // Hook up coverage_step to the summary step (which chains back through kcov runs to install steps)
+        // Hook up coverage_step to all required steps
+        // Direct dependencies on install steps to force test compilation
+        coverage_step.dependOn(&install_snapshot_test.step);
+        coverage_step.dependOn(&install_parse_test.step);
         coverage_step.dependOn(&summary_step.step);
 
         // Cross-compile for Windows to verify comptime branches compile
