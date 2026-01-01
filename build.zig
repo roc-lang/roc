@@ -2622,12 +2622,16 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Debug: check if binaries have debug info
+            // Debug: check debug info and dump source file paths
             const check_debug_info = b.addSystemCommand(&.{
                 "sh", "-c",
                 "echo '=== Checking debug info ===' && " ++
                     "file zig-out/bin/snapshot_coverage && " ++
-                    "readelf -S zig-out/bin/snapshot_coverage 2>/dev/null | grep -i debug || echo 'No debug sections found'",
+                    "readelf -S zig-out/bin/snapshot_coverage 2>/dev/null | grep -i debug || echo 'No debug sections found' && " ++
+                    "echo '=== Source file paths in DWARF ===' && " ++
+                    "readelf --debug-dump=line zig-out/bin/snapshot_coverage 2>/dev/null | grep -E '(Directory|File name:)' | head -100 || echo 'No line info' && " ++
+                    "echo '=== Looking for parse files in DWARF ===' && " ++
+                    "readelf --debug-dump=line zig-out/bin/snapshot_coverage 2>/dev/null | grep -i parse | head -20 || echo 'No parse files found'",
             });
             check_debug_info.setCwd(b.path("."));
             check_debug_info.step.dependOn(&install_snapshot_test.step);
