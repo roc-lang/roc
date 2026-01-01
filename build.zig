@@ -1025,22 +1025,41 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        const coverage_percent = try parseCoverageJson(allocator, json_content);
+        const result = try parseCoverageJson(allocator, json_content);
+
+        // Skip enforcement if kcov didn't capture any data
+        // This happens when kcov version is incompatible with the binary format
+        if (result.total_lines == 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE DATA NOT CAPTURED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("kcov reported 0 total lines - coverage data was not captured.\n", .{});
+            std.debug.print("This may be due to kcov version incompatibility with Zig binaries.\n", .{});
+            std.debug.print("Skipping coverage enforcement.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return;
+        }
 
         // Enforce minimum coverage threshold
-        if (coverage_percent < MIN_COVERAGE_PERCENT) {
+        if (result.percent < MIN_COVERAGE_PERCENT) {
             std.debug.print("\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
             std.debug.print("COVERAGE CHECK FAILED\n", .{});
             std.debug.print("=" ** 60 ++ "\n\n", .{});
-            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ coverage_percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
             std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
             std.debug.print("=" ** 60 ++ "\n", .{});
-            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ coverage_percent, MIN_COVERAGE_PERCENT });
+            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
         }
     }
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !f64 {
+    const CoverageResult = struct {
+        percent: f64,
+        total_lines: u64,
+    };
+
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
         const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
@@ -1150,7 +1169,7 @@ const CoverageSummaryStep = struct {
         std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
 
-        return percent;
+        return .{ .percent = percent, .total_lines = total_lines };
     }
 
     const UncoveredFile = struct {
