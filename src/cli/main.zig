@@ -358,7 +358,7 @@ fn renderTypeProblems(
     return error_count;
 }
 
-/// Size for shared memory allocator.
+/// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
 ///
 /// We need a large size because SharedMemoryAllocator is a bump allocator that
 /// cannot free memory. During type checking, the types Store grows significantly
@@ -366,32 +366,36 @@ fn renderTypeProblems(
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On 64-bit targets, we reserve large virtual address spaces. This is possible
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
 /// without consuming physical memory:
 /// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
 ///   it until pages are actually touched.
 /// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
 ///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
 ///
-/// We previously used smaller sizes (8GB POSIX, 1GB Windows) because Windows used a
-/// fixed base address (0x10000000) to avoid ASLR issues between parent/child processes.
-/// This limited contiguous address space availability. However, the interpreter_shim
-/// already has pointer relocation logic that handles different base addresses, so we
-/// now let the OS choose the best address for large mappings (SHARED_MEMORY_BASE_ADDR
-/// is null), enabling much larger reserved sizes.
-///
-/// Windows gets 2TB since it has no valgrind-like tool constraints. POSIX uses 8GB
-/// to ensure compatibility with valgrind and other tools that have virtual address
-/// space limitations. While this is less than Windows, it's still sufficient for
-/// most codebases given the type checker now uses gpa for working memory.
-///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
-else if (builtin.target.os.tag == .windows)
-    2 * 1024 * 1024 * 1024 * 1024 // 2TB for Windows 64-bit
 else
-    8 * 1024 * 1024 * 1024; // 8GB for POSIX 64-bit (valgrind-compatible)
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+
+/// Fallback size for systems with overcommit disabled. On Linux with
+/// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
+/// though the memory wouldn't actually be used. We fall back to 4GB which
+/// should work on most systems while still being large enough for typical use.
+const SHARED_MEMORY_FALLBACK_SIZE: usize = 4 * 1024 * 1024 * 1024; // 4GB
+
+/// Try to create shared memory, falling back to a smaller size if the system
+/// has overcommit disabled and rejects the initial allocation.
+fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
+    // Try the preferred size first
+    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
+        return shm;
+    } else |_| {}
+
+    // Fall back to smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+}
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
@@ -628,12 +632,8 @@ pub fn main() !void {
         switch (err) {
             error.OutOfMemory => {
                 // Use std.debug.print to stderr since we don't have access to ctx.io here
-                std.debug.print("error: Out of memory during compilation. ", .{});
-                if (@sizeOf(usize) >= 8 and builtin.target.os.tag == .windows) {
-                    std.debug.print("Windows shared memory is limited to 1GB.\n", .{});
-                } else {
-                    std.debug.print("Try a smaller file or check system resources.\n", .{});
-                }
+                // TODO: if virtual address allocation fails at 4gb, fall back on doing `roc build` followed by manually running the executable
+                std.debug.print("The Roc compiler ran out of memory trying to preallocate virtual address space for compiling and running this program. Try using `roc build` to build the executable separately, then run it manually.\n", .{});
             },
             else => {}, // Other errors should already have printed messages
         }
@@ -1627,9 +1627,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
 pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+    var shm = try createSharedMemoryWithFallback(page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();

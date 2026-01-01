@@ -10,13 +10,10 @@ pub const is_windows = builtin.target.os.tag == .windows;
 /// Platform-specific handle type
 pub const Handle = if (is_windows) *anyopaque else std.posix.fd_t;
 
-/// Fixed base address for shared memory mapping.
-/// We previously used a fixed address on Windows (0x10000000) to avoid ASLR issues,
-/// but this severely limited the maximum mapping size since there might not be
-/// enough contiguous space above that address. The interpreter_shim already has
-/// pointer relocation logic that handles different base addresses between parent
-/// and child processes, so we can let the system choose the best address for
-/// large mappings.
+/// Base address for shared memory mapping. Set to null to let the OS choose
+/// the best address, which allows for larger contiguous mappings. The
+/// interpreter_shim has pointer relocation logic that handles different base
+/// addresses between parent and child processes.
 pub const SHARED_MEMORY_BASE_ADDR: ?*anyopaque = null;
 
 /// Windows API declarations
