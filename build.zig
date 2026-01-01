@@ -2643,6 +2643,12 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             coverage_step.dependOn(&windows_parse_build.step);
 
+            // Add explicit dependencies on install steps to coverage_step itself
+            // to work around Zig 0.15.2 lazy dependency issues
+            coverage_step.dependOn(&install_snapshot_test.step);
+            coverage_step.dependOn(&install_parse_test.step);
+            coverage_step.dependOn(&install_kcov.step);
+
             // Hook up coverage_step to the summary step
             coverage_step.dependOn(&summary_step.step);
         }
