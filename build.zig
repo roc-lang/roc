@@ -2622,10 +2622,21 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
+            // Debug: check if binaries have debug info
+            const check_debug_info = b.addSystemCommand(&.{
+                "sh", "-c",
+                "echo '=== Checking debug info ===' && " ++
+                    "file zig-out/bin/snapshot_coverage && " ++
+                    "readelf -S zig-out/bin/snapshot_coverage 2>/dev/null | grep -i debug || echo 'No debug sections found'",
+            });
+            check_debug_info.setCwd(b.path("."));
+            check_debug_info.step.dependOn(&install_snapshot_test.step);
+
             // Run kcov using installed binary paths
             // Using string paths because artifact dependencies don't work reliably in lazy blocks
             const run_snapshot_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
+                "--debug=31", // Enable all debug output
                 "--include-path=src/parse",
                 "--exclude-pattern=HTML.zig", // Exclude playground visualization utility
                 "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
@@ -2636,9 +2647,11 @@ pub fn build(b: *std.Build) void {
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
             run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
             run_snapshot_coverage.step.dependOn(&install_kcov.step);
+            run_snapshot_coverage.step.dependOn(&check_debug_info.step);
 
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
+                "--debug=31", // Enable all debug output
                 "--include-path=src/parse",
                 "--exclude-pattern=HTML.zig", // Exclude playground visualization utility
                 "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
