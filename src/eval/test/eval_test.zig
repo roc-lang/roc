@@ -1839,9 +1839,36 @@ test "static dispatch: List.sum uses item.plus and item.default" {
 //     , &[_]i64{ 104, 105 }, .no_trace);
 // }
 
-// NOTE: Test for issue 8637 (attached methods on tag union type aliases) is in
-// comptime_eval_test.zig. This requires module-level type alias declarations
-// which aren't supported by the expression-based eval test helpers.
+test "issue 8831: self-referential value definition should produce error, not crash" {
+    // Regression test for GitHub issue #8831
+    // A self-referential value definition like `a = a` should produce a
+    // compile-time error (ident_not_in_scope) instead of crashing at runtime
+    // with "e_lookup_local: definition not found in current scope".
+    //
+    // The fix is to detect during canonicalization that the RHS of a definition
+    // refers to a variable that is being defined in the current definition and
+    // hasn't been introduced to the scope yet.
+    try runExpectError(
+        \\{
+        \\    a = a
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "issue 8831: nested self-reference in list should also error" {
+    // Additional test for issue #8831
+    // Even nested self-references like `a = [a]` should error during canonicalization.
+    // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
+    // Only lambdas are allowed to self-reference (for recursive function calls).
+    try runExpectError(
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
     // Test that recursive closure calls don't leak stack memory.
