@@ -2634,17 +2634,12 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov using installed binary paths
             // Exclude Zig stdlib paths to focus on our source files
-            // Also add debug output to show what files kcov is finding
             const run_snapshot_coverage = b.addSystemCommand(&.{
-                "sh",
-                "-c",
-                "echo '=== Running kcov on snapshot tests ===' && " ++
-                    "zig-out/bin/kcov " ++
-                    "--debug=31 " ++
-                    "--exclude-pattern=/lib/std/,/lib/libc/,/lib/c/,/lib/compiler_rt/,HTML.zig " ++
-                    "--exclude-line=std.debug.print,std.debug.panic " ++
-                    "kcov-output/parser-snapshot-tests " ++
-                    "zig-out/bin/snapshot_coverage 2>&1 | head -200",
+                "zig-out/bin/kcov",
+                "--exclude-pattern=/lib/std/,/lib/libc/,/lib/c/,/lib/compiler_rt/,HTML.zig",
+                "--exclude-line=std.debug.print,std.debug.panic",
+                "kcov-output/parser-snapshot-tests",
+                "zig-out/bin/snapshot_coverage",
             });
             run_snapshot_coverage.setCwd(b.path("."));
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
@@ -2674,9 +2669,19 @@ pub fn build(b: *std.Build) void {
             merge_coverage.setCwd(b.path("."));
             merge_coverage.step.dependOn(&run_parse_coverage.step);
 
+            // Debug: dump the JSON content to see which files kcov is tracking
+            const dump_json = b.addSystemCommand(&.{
+                "sh",
+                "-c",
+                "echo '=== Files being tracked by kcov ===' && " ++
+                    "cat kcov-output/parser/coverage.json 2>/dev/null | head -200 || echo 'No coverage.json found'",
+            });
+            dump_json.setCwd(b.path("."));
+            dump_json.step.dependOn(&merge_coverage.step);
+
             // Add coverage summary step that parses merged kcov JSON output
             const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
-            summary_step.step.dependOn(&merge_coverage.step);
+            summary_step.step.dependOn(&dump_json.step);
 
             // Cross-compile for Windows to verify comptime branches compile
             // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
