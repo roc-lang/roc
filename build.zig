@@ -2632,17 +2632,17 @@ pub fn build(b: *std.Build) void {
             check_debug_info.setCwd(b.path("."));
             check_debug_info.step.dependOn(&install_snapshot_test.step);
 
-            // Run kcov using installed binary paths
-            // Using string paths because artifact dependencies don't work reliably in lazy blocks
-            // Use include-path to focus on src/parse directory
-            // Exclude Zig stdlib paths and other non-coverage patterns
+            // Run kcov using installed binary paths with absolute include path
+            // Use shell to expand $(pwd) to get absolute path that matches debug info
             const run_snapshot_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-path=src/parse",
-                "--exclude-pattern=HTML.zig",
-                "--exclude-line=std.debug.print,std.debug.panic",
-                "kcov-output/parser-snapshot-tests",
-                "zig-out/bin/snapshot_coverage",
+                "sh",
+                "-c",
+                "zig-out/bin/kcov " ++
+                    "--include-path=$(pwd)/src/parse " ++
+                    "--exclude-pattern=HTML.zig " ++
+                    "--exclude-line=std.debug.print,std.debug.panic " ++
+                    "kcov-output/parser-snapshot-tests " ++
+                    "zig-out/bin/snapshot_coverage",
             });
             run_snapshot_coverage.setCwd(b.path("."));
             run_snapshot_coverage.step.dependOn(&mkdir_step.step);
@@ -2651,12 +2651,14 @@ pub fn build(b: *std.Build) void {
             run_snapshot_coverage.step.dependOn(&check_debug_info.step);
 
             const run_parse_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-path=src/parse",
-                "--exclude-pattern=HTML.zig",
-                "--exclude-line=std.debug.print,std.debug.panic",
-                "kcov-output/parser-unit-tests",
-                "zig-out/bin/parse_unit_coverage",
+                "sh",
+                "-c",
+                "zig-out/bin/kcov " ++
+                    "--include-path=$(pwd)/src/parse " ++
+                    "--exclude-pattern=HTML.zig " ++
+                    "--exclude-line=std.debug.print,std.debug.panic " ++
+                    "kcov-output/parser-unit-tests " ++
+                    "zig-out/bin/parse_unit_coverage",
             });
             run_parse_coverage.setCwd(b.path("."));
             run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
