@@ -1761,11 +1761,6 @@ test "early return: ? in first argument of multi-arg call" {
     , 0, .no_trace);
 }
 
-// ============================================================================
-// Decode module tests - testing the new static dispatch based Decode builtin
-// ============================================================================
-
-
 test "Decode: create Decode.ok result - check result is Ok" {
     // Test that we can call Decode.ok and the result is an Ok
     try runExpectBool(
