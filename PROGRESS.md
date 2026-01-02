@@ -54,18 +54,39 @@ These appear to be runtime failures in compiled Roc programs, not serialization 
 - If branch: Partially migrated
 - Other node types: Mostly still using extra_data
 
-## Next Steps for Future Work
+## ⚠️ High-Priority: Next Node Types to Migrate
 
-### High-Impact Node Types to Migrate
-The following expression types use extra_data and would benefit from migration:
+The following expression types **MUST be migrated** to remove extra_data usage. These are the highest impact targets:
 
-1. **expr_call** - Stores args_start, args_len (2 u32s)
-2. **expr_closure** - Stores lambda_idx, capture_start, capture_len, tag_name (4 u32s)  
-3. **expr_lambda** - Stores args_start, args_len, body_idx (3 u32s)
-4. **expr_record** - Stores fields_start, fields_len, ext_value (3 u32s)
-5. **expr_tag_union** - Likely similar pattern
+### Priority 1: Very High Impact
+- **`expr_call`** (getExpr line ~442, addExpr line ~845)
+  - Currently stores: args_start, args_len (2 u32s in extra_data)
+  - Data: function index, arguments span, called_via flag
+  - Estimated frequency: VERY HIGH (common in all Roc code)
+  - **Recommendation**: Migrate this first - will eliminate many extra_data refs
 
-These 5 types probably account for a large portion of the remaining extra_data usage.
+- **`expr_closure`** (getExpr line ~561, addExpr line ~878)
+  - Currently stores: lambda_idx, capture_start, capture_len, tag_name (4 u32s in extra_data)
+  - Data: lambda reference, capture spans, closure tag name
+  - Estimated frequency: High
+  - **Recommendation**: Migrate second
+
+### Priority 2: High Impact
+- **`expr_lambda`** (getExpr line ~579, addExpr line ~911)
+  - Currently stores: args_start, args_len, body_idx (3 u32s in extra_data)
+  - Data: lambda parameters span, body expression
+  - Estimated frequency: High
+
+- **`expr_record`** (getExpr line ~610, addExpr line ~944)
+  - Currently stores: fields_start, fields_len, ext_value (3 u32s in extra_data)
+  - Data: record fields span, optional extension expression
+  - Estimated frequency: Medium-High
+
+- **`expr_tag_union`** (getExpr line ~?, addExpr line ~?)
+  - Pattern: Similar to record, stores field information
+  - Estimated frequency: Medium-High
+
+**These 5 types probably account for 60%+ of remaining extra_data usage.**
 
 ### Recommended Approach
 1. Pick one high-impact type (e.g., expr_call)
