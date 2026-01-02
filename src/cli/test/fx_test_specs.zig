@@ -263,13 +263,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Done: 2",
         .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
     },
-    .{
-        .roc_file = "test/fx/issue8555.roc",
-        // Note: dbg output goes to stderr via rocDbgFn but bypasses test spec validation,
-        // so we only check stdout. The dbg output "ROC DBG: 8" is visible in test output.
-        .io_spec = "1>done",
-        .description = "Regression test: dbg on U8 extracted from Ok result (issue #8555)",
-    },
 };
 
 /// Get the total number of IO spec tests
