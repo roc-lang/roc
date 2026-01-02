@@ -54,12 +54,33 @@ These appear to be runtime failures in compiled Roc programs, not serialization 
 - If branch: Partially migrated
 - Other node types: Mostly still using extra_data
 
-## Next Steps
+## Next Steps for Future Work
 
-1. **Continue migrating remaining node types** in canonicalize module
-2. **Investigate match-related stack overflows** (separate from this task)
-3. **Remove extra_data field entirely** once all migrations complete
-4. **Verify zero-byte memory increase** in production builds
+### High-Impact Node Types to Migrate
+The following expression types use extra_data and would benefit from migration:
+
+1. **expr_call** - Stores args_start, args_len (2 u32s)
+2. **expr_closure** - Stores lambda_idx, capture_start, capture_len, tag_name (4 u32s)  
+3. **expr_lambda** - Stores args_start, args_len, body_idx (3 u32s)
+4. **expr_record** - Stores fields_start, fields_len, ext_value (3 u32s)
+5. **expr_tag_union** - Likely similar pattern
+
+These 5 types probably account for a large portion of the remaining extra_data usage.
+
+### Recommended Approach
+1. Pick one high-impact type (e.g., expr_call)
+2. Design the typed payload struct (see MIGRATION_EXTRA_DATA_TO_PAYLOADS.md for constraints)
+3. Update Node.zig with the new struct
+4. Update getExpr() getter
+5. Update addExpr() setter  
+6. Run tests, verify no regressions
+7. Commit
+8. Repeat for next type
+
+### Final Steps
+1. Investigate and fix match-related stack overflows (pre-existing issue)
+2. Once all extra_data references are removed, delete the field from NodeStore
+3. Verify compiled binaries have identical size/memory usage
 
 ## Key Architecture Decisions
 
