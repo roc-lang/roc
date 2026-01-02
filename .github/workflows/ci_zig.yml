@@ -255,17 +255,24 @@ jobs:
               exit 1
           }
 
-      # Parser code coverage - only on macos-15 where kcov's Mach-O parser works with Zig's debug format
-      # (Linux kcov can't parse Zig's DWARF5 - reports 0 lines covered)
-      # macOS kcov is slow due to task_for_pid mechanism - parse tests take ~45 mins
-      - name: Parser Code Coverage
-        if: matrix.os == 'macos-15'
-        timeout-minutes: 60
+      # Parser code coverage - run on native Linux where kcov is faster
+      # Note: kcov uses DWARF debug info; ubuntu-24.04 has elfutils 0.190+ with DWARF5 support
+      - name: Install kcov dependencies
+        if: matrix.os == 'ubuntu-24.04'
         run: |
-          brew install libdwarf
-          echo "Starting coverage build at $(date)"
-          time zig build coverage
-          echo "Coverage completed at $(date)"
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libdw-dev libelf-dev zlib1g-dev pkg-config
+
+      - name: Parser Code Coverage
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          # Debug: check DWARF version in the test binary
+          echo "Building coverage test binary..."
+          zig build build-coverage-tests
+          echo "Checking DWARF version in test binary..."
+          readelf --debug-dump=info zig-out/bin/parse_unit_coverage 2>/dev/null | head -50 || true
+          echo "Running coverage..."
+          zig build coverage
 
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
