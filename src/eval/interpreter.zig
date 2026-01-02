@@ -17255,12 +17255,18 @@ pub const Interpreter = struct {
                     const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
                     const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
 
-                    // Get the function's return type and first parameter for unification
+                    // Get the return type from the CALL SITE, not the method's internal type.
+                    // This is critical because the call site's CT type has the correct
+                    // concrete types from type inference (e.g., Result U8 [...] instead of
+                    // Result a [...]). The method's internal type may have unresolved flex vars.
+                    // This mirrors what e_call does at line 12606.
+                    const call_site_return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                    const call_site_return_rt_var = try self.translateTypeVar(saved_env, call_site_return_ct_var);
+
+                    // Unify the method's parameter with the receiver for proper type propagation
                     const effective_ret_var: types.Var = blk: {
                         const func_info = method_resolved.desc.content.unwrapFunc() orelse {
-                            // Fall back to translating from call site if not a function type
-                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
-                            break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                            break :blk call_site_return_rt_var;
                         };
 
                         // Unify the method's first parameter with the receiver type
@@ -17280,8 +17286,8 @@ pub const Interpreter = struct {
                             );
                         }
 
-                        // Now the return type has rigid vars properly substituted
-                        break :blk func_info.ret;
+                        // Use the call site's return type - it has the correct concrete types
+                        break :blk call_site_return_rt_var;
                     };
 
                     try self.active_closures.append(method_func);
