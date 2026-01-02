@@ -258,6 +258,10 @@ jobs:
               exit 1
           }
 
+      - name: Install kcov for coverage (macOS ARM only)
+        if: ${{ runner.os == 'macOS' && runner.arch == 'ARM64' }}
+        run: brew install kcov
+
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
         run: |
