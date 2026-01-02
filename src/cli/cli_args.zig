@@ -141,9 +141,7 @@ pub const ExperimentalLspArgs = struct {
 };
 
 /// Arguments for `roc repl`
-pub const ReplArgs = struct {
-    opt: OptLevel = .dev, // the optimization level
-};
+pub const ReplArgs = struct {};
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
@@ -586,35 +584,22 @@ fn parseTest(args: []const []const u8) CliArgs {
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
-    var opt: OptLevel = .dev;
-
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
-            \\Usage: roc repl [OPTIONS]
+            \\Usage: roc repl
             \\
             \\Options:
-            \\      --opt=<size|speed|dev>  Optimization level (size uses LLVM backend). Defaults to dev
-            \\  -h, --help                  Print help
+            \\  -h, --help  Print help
             \\
         };
-        } else if (mem.startsWith(u8, arg, "--opt")) {
-            if (getFlagValue(arg)) |value| {
-                if (OptLevel.from_str(value)) |level| {
-                    opt = level;
-                } else {
-                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--opt", .value = value, .valid_options = "speed,size,dev" } } };
-                }
-            } else {
-                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--opt" } } };
-            }
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = ReplArgs{ .opt = opt } };
+    return CliArgs{ .repl = .{} };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {
@@ -1195,29 +1180,6 @@ test "roc repl" {
         const result = try parse(gpa, &[_][]const u8{"repl"});
         defer result.deinit(gpa);
         try testing.expectEqual(.repl, std.meta.activeTag(result));
-        try testing.expectEqual(.dev, result.repl.opt);
-    }
-    {
-        const result = try parse(gpa, &[_][]const u8{ "repl", "--opt=speed" });
-        defer result.deinit(gpa);
-        try testing.expectEqual(.repl, std.meta.activeTag(result));
-        try testing.expectEqual(.speed, result.repl.opt);
-    }
-    {
-        const result = try parse(gpa, &[_][]const u8{ "repl", "--opt=size" });
-        defer result.deinit(gpa);
-        try testing.expectEqual(.repl, std.meta.activeTag(result));
-        try testing.expectEqual(.size, result.repl.opt);
-    }
-    {
-        const result = try parse(gpa, &[_][]const u8{ "repl", "--opt" });
-        defer result.deinit(gpa);
-        try testing.expectEqualStrings("--opt", result.problem.missing_flag_value.flag);
-    }
-    {
-        const result = try parse(gpa, &[_][]const u8{ "repl", "--opt=notreal" });
-        defer result.deinit(gpa);
-        try testing.expectEqualStrings("notreal", result.problem.invalid_flag_value.value);
     }
     {
         const result = try parse(gpa, &[_][]const u8{ "repl", "foo.roc" });
