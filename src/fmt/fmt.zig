@@ -2711,3 +2711,45 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
     }
     return try result.toOwnedSlice();
 }
+
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// These test cases verify that formatting is stable (idempotent) - formatting twice
+// produces the same output as formatting once.
+
+test "issue 8851: local dispatch with space before field access is idempotent" {
+    // a=0->b .c() should format stably (not progressively strip parens)
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+    // a = 0->b()().c() should format stably
+    const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: multiline local dispatch with field access is idempotent" {
+    // Multiline case from issue comment 1
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=0->b
+        \\      .c()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
+}
+
+test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
+    // ()->b()()() from issue comment 2
+    const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
+}
+
+test "issue 8851: chained field access after local dispatch is idempotent" {
+    // 0->b .c .d() - multiple field accesses
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
+}
