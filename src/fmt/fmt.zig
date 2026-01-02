@@ -1004,59 +1004,7 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                // Special case: when left side is a local_dispatch with zero-arg apply,
-                // we must preserve ONE set of parens to prevent the output from being
-                // re-parsed with a different structure. E.g., `0->b().c()` should NOT
-                // become `0->b.c()` because the parser would interpret `b.c` as a
-                // qualified identifier instead of a field access chain. (See issue #8851)
-                //
-                // For nested applies like `0->b()().c()`, we strip all but one layer,
-                // outputting `0->b().c()` which is then stable on subsequent passes.
-                const left_expr = fmt.ast.store.getExpr(fa.left);
-                if (left_expr == .local_dispatch) {
-                    const ld = left_expr.local_dispatch;
-                    const ld_right_initial = fmt.ast.store.getExpr(ld.right);
-                    if (ld_right_initial == .apply) {
-                        const apply_initial = ld_right_initial.apply;
-                        if (fmt.ast.store.exprSlice(apply_initial.args).len == 0) {
-                            // Strip nested zero-arg applies to find the innermost function
-                            var innermost_fn = apply_initial.@"fn";
-                            var inner_expr = fmt.ast.store.getExpr(innermost_fn);
-                            while (inner_expr == .apply) {
-                                const inner_apply = inner_expr.apply;
-                                if (fmt.ast.store.exprSlice(inner_apply.args).len == 0) {
-                                    innermost_fn = inner_apply.@"fn";
-                                    inner_expr = fmt.ast.store.getExpr(innermost_fn);
-                                } else {
-                                    break;
-                                }
-                            }
-
-                            // Format the local_dispatch preserving one set of parens
-                            const ld_multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
-                            _ = try fmt.formatExpr(ld.left);
-                            if (ld_multiline and try fmt.flushCommentsBefore(ld.operator)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                            }
-                            try fmt.pushAll("->");
-                            if (ld_multiline and try fmt.flushCommentsAfter(ld.operator)) {
-                                try fmt.pushIndent();
-                            }
-                            // Output the innermost function followed by () to preserve one
-                            // set of parens (prevents `b` from being parsed with following `.`
-                            // as a qualified identifier)
-                            _ = try fmt.formatExprInner(innermost_fn, .no_indent_on_access);
-                            try fmt.pushAll("()");
-                        } else {
-                            _ = try fmt.formatExpr(fa.left);
-                        }
-                    } else {
-                        _ = try fmt.formatExpr(fa.left);
-                    }
-                } else {
-                    _ = try fmt.formatExpr(fa.left);
-                }
+                _ = try fmt.formatExpr(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
@@ -1077,31 +1025,17 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
                 }
-                // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
-                // BUT we can only strip if the inner function is NOT also a zero-arg apply,
-                // since `foo->bar()()` is semantically different from `foo->bar()`.
-                // (See issue #8851 for more context)
+                // Always format with parens after `->` for consistency and idempotence.
+                // Without parens, `0->b.c` would parse `b.c` as a qualified identifier,
+                // but `0->b().c` unambiguously parses as field access on `0->b()`.
+                // (See issue #8851)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
-                if (right_expr == .apply) {
-                    const apply = right_expr.apply;
-                    if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: check if we can safely strip the parens
-                        const inner_fn = fmt.ast.store.getExpr(apply.@"fn");
-                        const can_strip = switch (inner_fn) {
-                            // Don't strip if the inner is also a zero-arg apply
-                            // e.g., `foo->bar()()` should NOT become `foo->bar()`
-                            .apply => |inner_apply| fmt.ast.store.exprSlice(inner_apply.args).len != 0,
-                            else => true,
-                        };
-                        if (can_strip) {
-                            _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
-                        } else {
-                            _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-                        }
-                    } else {
-                        _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-                    }
+                if (right_expr == .ident) {
+                    // Plain identifier: add () after it
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.pushAll("()");
                 } else {
+                    // Already has parens (apply) or other expr: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                 }
             },
@@ -2700,4 +2634,46 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// These test cases verify that formatting is stable (idempotent) - formatting twice
+// produces the same output as formatting once.
+
+test "issue 8851: local dispatch with space before field access is idempotent" {
+    // a=0->b .c() should format stably (not progressively strip parens)
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+    // a = 0->b()().c() should format stably - must preserve ALL levels of function application
+    const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
+}
+
+test "issue 8851: multiline local dispatch with field access is idempotent" {
+    // Multiline case from issue comment 1
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=0->b
+        \\      .c()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
+}
+
+test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
+    // ()->b()()() from issue comment 2
+    const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
+}
+
+test "issue 8851: chained field access after local dispatch is idempotent" {
+    // 0->b .c .d() - multiple field accesses
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
 }
