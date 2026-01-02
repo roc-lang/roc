@@ -245,7 +245,6 @@ fn parseTestSpec(allocator: std.mem.Allocator, spec: []const u8) ParseError![]Sp
     return entries.toOwnedSlice(allocator) catch ParseError.OutOfMemory;
 }
 
-
 /// Host environment - contains GeneralPurposeAllocator for leak detection
 const HostEnv = struct {
     gpa: std.heap.GeneralPurposeAllocator(.{ .safety = true }),

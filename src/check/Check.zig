@@ -486,7 +486,6 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         },
     }
 }
-
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -1342,7 +1341,16 @@ pub fn checkPlatformRequirements(
             // This constrains type variables in the export (e.g., closure params)
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
-            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+            const unify_result = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+
+            // If unification failed, report the type mismatch with context about
+            // which platform requirement wasn't satisfied
+            const app_ident = app_required_ident orelse try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            self.setDetailIfTypeMismatch(unify_result, .{
+                .incompatible_platform_requirement = .{ .required_ident = app_ident },
+            });
         } else {
             // If we got here, it means that the the definition was not found in
             // the module's *export* list
