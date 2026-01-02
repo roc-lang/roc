@@ -495,6 +495,20 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_int = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_frac = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .single_quote = .{
             .region = rand_region(),
             .token = rand_token_idx(),

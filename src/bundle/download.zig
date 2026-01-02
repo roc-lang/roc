@@ -2,6 +2,7 @@
 //! (or http if the URL host is `localhost`, `127.0.0.1`, or `::1`)
 
 const std = @import("std");
+const base = @import("base");
 const builtin = @import("builtin");
 const bundle = @import("bundle.zig");
 
@@ -26,16 +27,7 @@ pub const DownloadError = error{
 /// Parse URL and validate it meets our security requirements.
 /// Returns the hash from the URL if valid.
 pub fn validateUrl(url: []const u8) DownloadError![]const u8 {
-    // Check for https:// prefix
-    if (std.mem.startsWith(u8, url, "https://")) {
-        // This is fine, extract hash from last segment
-    } else if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://127.0.0.1/")) {
-        // This is allowed for local testing (IPv4 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://[::1]:") or std.mem.startsWith(u8, url, "http://[::1]/")) {
-        // This is allowed for local testing (IPv6 loopback)
-    } else if (std.mem.startsWith(u8, url, "http://localhost:") or std.mem.startsWith(u8, url, "http://localhost/")) {
-        // This is allowed but will require verification that localhost resolves to loopback
-    } else {
+    if (!base.url.isSafeUrl(url)) {
         return error.InvalidUrl;
     }
 

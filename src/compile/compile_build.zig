@@ -22,17 +22,18 @@ const unbundle = @import("unbundle");
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
-const Mode = @import("compile_package.zig").Mode;
+const compile_package = @import("compile_package.zig");
+const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
-const PackageEnv = @import("compile_package.zig").PackageEnv;
-const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
-const ImportResolver = @import("compile_package.zig").ImportResolver;
-const ScheduleHook = @import("compile_package.zig").ScheduleHook;
+const PackageEnv = compile_package.PackageEnv;
+const ModuleTimingInfo = compile_package.TimingInfo;
+const ImportResolver = compile_package.ImportResolver;
+const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = @import("compile_package.zig").FileProvider;
+const FileProvider = compile_package.FileProvider;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -592,30 +593,41 @@ pub const BuildEnv = struct {
     /// This is called after all modules are compiled and type-checked.
     fn checkPlatformRequirements(self: *BuildEnv) !void {
         // Find the app and platform packages
-        var app_pkg: ?[]const u8 = null;
-        var platform_pkg: ?[]const u8 = null;
+        var app_pkg_info: ?Package = null;
+        var platform_pkg_info: ?Package = null;
+        var app_pkg_name: ?[]const u8 = null;
+        var platform_pkg_name: ?[]const u8 = null;
 
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.kind == .app) {
-                app_pkg = entry.key_ptr.*;
+                app_pkg_info = pkg;
+                app_pkg_name = entry.key_ptr.*;
             } else if (pkg.kind == .platform) {
-                platform_pkg = entry.key_ptr.*;
+                platform_pkg_info = pkg;
+                platform_pkg_name = entry.key_ptr.*;
             }
         }
 
         // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg orelse return;
-        const platform_name = platform_pkg orelse return;
+        const app_name = app_pkg_name orelse return;
+        const platform_name = platform_pkg_name orelse return;
+        const platform_pkg = platform_pkg_info orelse return;
 
         // Get the schedulers for both packages
         const app_sched = self.schedulers.get(app_name) orelse return;
         const platform_sched = self.schedulers.get(platform_name) orelse return;
 
-        // Get the root module envs for both packages
+        // Get the app's root module env
         const app_root_env = app_sched.getRootEnv() orelse return;
-        const platform_root_env = platform_sched.getRootEnv() orelse return;
+
+        // Get the platform's root module by finding the module that matches the root file
+        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
+        // root file if other modules (like exposed imports) were scheduled first.
+        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
+        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse return;
+        const platform_root_env = if (platform_module_state.env) |*env| env else return;
 
         // If the platform has no requires_types, nothing to check
         if (platform_root_env.requires_types.items.items.len == 0) {
@@ -1024,7 +1036,7 @@ pub const BuildEnv = struct {
                 defer self.gpa.free(plat_rel);
 
                 // Check if this is a URL - if so, resolve it to a cached local path
-                const plat_path = if (isUrl(plat_rel)) blk: {
+                const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
                     const cached_path = try self.resolveUrlPackage(plat_rel);
                     break :blk cached_path;
                 } else blk: {
@@ -1043,7 +1055,7 @@ pub const BuildEnv = struct {
 
                 // For URL-resolved packages, add the cache directory to workspace roots
                 // so that imports within the cached package can be resolved
-                if (isUrl(plat_rel)) {
+                if (base.url.isSafeUrl(plat_rel)) {
                     if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
                         try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
                     }
@@ -1063,7 +1075,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1098,7 +1110,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1139,7 +1151,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1257,11 +1269,6 @@ pub const BuildEnv = struct {
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
-    }
-
-    /// Check if a path is a URL (http:// or https://)
-    fn isUrl(path: []const u8) bool {
-        return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
     }
 
     /// Cross-platform environment variable lookup.
@@ -1516,7 +1523,7 @@ pub const BuildEnv = struct {
 
             const p_path = info.platform_path.?;
 
-            const abs = if (isUrl(p_path))
+            const abs = if (base.url.isSafeUrl(p_path))
                 try self.resolveUrlPackage(p_path)
             else
                 try self.makeAbsolute(p_path);
@@ -1600,7 +1607,7 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            const abs = if (isUrl(path))
+            const abs = if (base.url.isSafeUrl(path))
                 try self.resolveUrlPackage(path)
             else
                 try self.makeAbsolute(path);

@@ -66,6 +66,13 @@ pub const Store = struct {
     // This allows List(RecursiveType) to use the boxed element type even after computation.
     recursive_boxed_layouts: collections.ArrayListMap(Var, Idx),
 
+    // Cache for RAW (unboxed) layouts of recursive nominal types.
+    // When a recursive nominal is encountered INSIDE a Box/List container during cycle
+    // detection, we need a placeholder for the raw layout (not the boxed placeholder).
+    // This is because the Box/List container itself provides the boxing.
+    // Keyed by Var because we need to look it up by the original nominal_var.
+    raw_layout_placeholders: collections.ArrayListMap(Var, Idx),
+
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
@@ -183,6 +190,7 @@ pub const Store = struct {
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(env.gpa, 64),
             .layouts_by_var = layouts_by_var,
             .recursive_boxed_layouts = try collections.ArrayListMap(Var, Idx).init(env.gpa, 16),
+            .raw_layout_placeholders = try collections.ArrayListMap(Var, Idx).init(env.gpa, 16),
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -217,6 +225,7 @@ pub const Store = struct {
         self.tag_union_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.recursive_boxed_layouts.deinit(self.env.gpa);
+        self.raw_layout_placeholders.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
 
@@ -1352,21 +1361,38 @@ pub const Store = struct {
                 }
                 skip_layout_computation = true;
             } else if (self.work.in_progress_vars.contains(current.var_)) {
-                // Cycle detection: this var is already being processed.
-                // If we're inside a List or Box container, we can safely return opaquePtr()
-                // since the recursive reference will be heap-allocated.
-                if (self.work.pending_containers.len > 0) {
-                    const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                    if (pending_item.container == .box or pending_item.container == .list) {
-                        // Recursive reference inside List/Box - use opaque pointer
-                        layout_idx = try self.insertLayout(Layout.opaquePtr());
-                        skip_layout_computation = true;
-                    } else {
-                        // Recursive reference outside of List/Box container - this is an error
-                        return LayoutError.TypeContainedMismatch;
+                // Cycle detection: this var is already being processed, indicating a recursive type.
+                //
+                // INVARIANT: Recursive types are only valid if there's a heap-allocating container
+                // (List or Box) somewhere in the recursion path. This breaks the infinite size that
+                // would otherwise result from direct recursion.
+                //
+                // We must check the ENTIRE container stack, not just the last container, because
+                // the recursive reference may be nested inside other structures. For example:
+                //   Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+                //   parse_block : ... => Try((List(Statement), U64), Str)
+                //
+                // When processing this, the container stack might be:
+                //   Try -> tuple -> List -> Statement -> tag_union -> ForLoop -> List -> Statement
+                //
+                // When we hit the recursive Statement reference, the last container is tag_union,
+                // but there IS a List container earlier in the stack, so the recursion is valid.
+                var inside_heap_container = false;
+                for (self.work.pending_containers.slice().items(.container)) |container| {
+                    if (container == .box or container == .list) {
+                        inside_heap_container = true;
+                        break;
                     }
+                }
+
+                if (inside_heap_container) {
+                    // Valid recursive reference - heap allocation breaks the infinite size
+                    layout_idx = try self.insertLayout(Layout.opaquePtr());
+                    skip_layout_computation = true;
                 } else {
-                    // Recursive reference with no containers - this is an error
+                    // Invalid: recursive type without heap allocation would have infinite size.
+                    // This is a type error - the user defined a directly recursive type without
+                    // wrapping it in List or Box.
                     return LayoutError.TypeContainedMismatch;
                 }
             } else if (current.desc.content == .structure) blk: {
@@ -1381,34 +1407,62 @@ pub const Store = struct {
                 };
 
                 if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
-                    // This nominal type is already being processed - we have a cycle.
-                    // Mark it as truly recursive so we know to box its values.
-                    progress.is_recursive = true;
-                    // Use the cached placeholder index for the nominal.
-                    // The placeholder will be updated with the real layout once
-                    // the nominal's backing type is fully computed.
-                    if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
-                        // We have a placeholder - but we need to check if we're inside a List/Box.
-                        // If we are, we can use the placeholder index directly since the List/Box
-                        // will reference it by index, and it will be updated later.
-                        // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                layout_idx = cached_idx;
-                                skip_layout_computation = true;
-                                break :blk;
-                            }
+                    // Check if this is truly a recursive reference by comparing type arguments.
+                    // A recursive reference has the same type arguments (or none).
+                    // Different instantiations (like Try(Str, Str) inside Try((Try(Str, Str), U64), Str))
+                    // have different type arguments and should not be treated as recursive.
+                    const current_type_args = self.types_store.sliceNominalArgs(nominal_type);
+                    const same_type_args = argsMatch: {
+                        if (current_type_args.len != progress.type_args.len) break :argsMatch false;
+                        // Compare each type arg by resolving and checking if they point to the same type
+                        for (current_type_args, progress.type_args) |curr_arg, prog_arg| {
+                            const curr_resolved = self.types_store.resolveVar(curr_arg);
+                            const prog_resolved = self.types_store.resolveVar(prog_arg);
+                            if (curr_resolved.var_ != prog_resolved.var_) break :argsMatch false;
                         }
-                        // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
-                        // The placeholder will be updated by the time we need the actual layout.
-                        layout_idx = cached_idx;
-                        skip_layout_computation = true;
-                        break :blk;
-                    }
+                        break :argsMatch true;
+                    };
+                    if (same_type_args) {
+                        // This IS a true recursive reference - the type refers to itself.
+                        // Mark it as truly recursive so we know to box its values.
+                        progress.is_recursive = true;
+                        // Use the cached placeholder index for the nominal.
+                        // The placeholder will be updated with the real layout once
+                        // the nominal's backing type is fully computed.
+                        if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                            // We have a placeholder - but we need to check if we're inside a List/Box.
+                            // If we are inside a List/Box, we need a RAW layout placeholder, not the
+                            // boxed placeholder. This is because the List/Box container itself provides
+                            // the heap allocation - using the boxed placeholder would cause double-boxing.
+                            if (self.work.pending_containers.len > 0) {
+                                const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                                if (pending_item.container == .box or pending_item.container == .list) {
+                                    // Get or create a raw layout placeholder for this nominal
+                                    if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                        layout_idx = raw_idx;
+                                    } else {
+                                        // Create a new placeholder for the raw layout.
+                                        // Use opaque_ptr as a temporary that can be updated later.
+                                        const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                        try self.raw_layout_placeholders.put(self.env.gpa, progress.nominal_var, raw_placeholder);
+                                        layout_idx = raw_placeholder;
+                                    }
+                                    skip_layout_computation = true;
+                                    break :blk;
+                                }
+                            }
+                            // For record/tuple fields (not inside List/Box), we use the boxed placeholder.
+                            // The placeholder will be updated by the time we need the actual layout.
+                            layout_idx = cached_idx;
+                            skip_layout_computation = true;
+                            break :blk;
+                        }
 
-                    // No cached placeholder - this is an error
-                    return LayoutError.TypeContainedMismatch;
+                        // No cached placeholder - this is an error
+                        return LayoutError.TypeContainedMismatch;
+                    }
+                    // Different var means different instantiation - not a recursive reference.
+                    // Fall through to normal processing.
                 }
             }
 
@@ -1601,10 +1655,13 @@ pub const Store = struct {
                             try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
 
                             // Mark this nominal type as in-progress.
-                            // Store both the nominal var (for cache lookup) and backing var (to know when to update).
+                            // Store the nominal var, backing var, and type args.
+                            // Type args are needed to distinguish different instantiations.
+                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
+                                .type_args = type_args,
                             });
 
                             // From a layout perspective, nominal types are identical to type aliases:
@@ -2002,6 +2059,10 @@ pub const Store = struct {
                                 try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
                             }
                         }
+                        // Also update the raw layout placeholder if one was created
+                        if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                            self.updateLayout(raw_idx, self.getLayout(layout_idx));
+                        }
                         // Update the cache so direct lookups get the actual layout
                         try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
                         try nominals_to_remove.append(self.env.gpa, entry.key_ptr.*);
@@ -2182,6 +2243,10 @@ pub const Store = struct {
                                 if (progress.is_recursive) {
                                     try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
                                 }
+                            }
+                            // Also update the raw layout placeholder if one was created
+                            if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                self.updateLayout(raw_idx, self.getLayout(layout_idx));
                             }
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);

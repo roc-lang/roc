@@ -1078,12 +1078,26 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                // BUT we can only strip if the inner function is NOT also a zero-arg apply,
+                // since `foo->bar()()` is semantically different from `foo->bar()`.
+                // (See issue #8851 for more context)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
                 if (right_expr == .apply) {
                     const apply = right_expr.apply;
                     if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: just format the function, not the empty parens
-                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
+                        // Zero-arg apply: check if we can safely strip the parens
+                        const inner_fn = fmt.ast.store.getExpr(apply.@"fn");
+                        const can_strip = switch (inner_fn) {
+                            // Don't strip if the inner is also a zero-arg apply
+                            // e.g., `foo->bar()()` should NOT become `foo->bar()`
+                            .apply => |inner_apply| fmt.ast.store.exprSlice(inner_apply.args).len != 0,
+                            else => true,
+                        };
+                        if (can_strip) {
+                            _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
+                        } else {
+                            _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                        }
                     } else {
                         _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                     }
