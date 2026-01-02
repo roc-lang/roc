@@ -12,32 +12,13 @@ decodeThings : List(List(U8)) -> List(a)
 decodeThings = ...
 ~~~
 # EXPECTED
-DUPLICATE DEFINITION - where_clauses_4.md:1:1:1:32
-TYPE NOT EXPOSED - where_clauses_4.md:1:1:1:32
+MODULE NOT FOUND - where_clauses_4.md:1:1:1:32
 UNSUPPORTED WHERE CLAUSE - where_clauses_4.md:4:9:4:17
 # PROBLEMS
-**DUPLICATE DEFINITION**
-The name `Decode` is being redeclared in this scope.
+**MODULE NOT FOUND**
+The module `Decode` was not found in this Roc project.
 
-The redeclaration is here:
-**where_clauses_4.md:1:1:1:32:**
-```roc
-import Decode exposing [Decode]
-```
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-But `Decode` was already defined here:
-**where_clauses_4.md:1:1:1:1:**
-```roc
-import Decode exposing [Decode]
-```
-^
-
-
-**TYPE NOT EXPOSED**
-The type `Decode` is not exposed by the module `Decode`.
-
-You're attempting to use this type here:
+You're attempting to use this module here:
 **where_clauses_4.md:1:1:1:32:**
 ```roc
 import Decode exposing [Decode]

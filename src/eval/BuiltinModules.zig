@@ -35,7 +35,7 @@ pub const BuiltinModules = struct {
             .{ .name = "Bool", .module = &self.builtin_module },
             .{ .name = "Try", .module = &self.builtin_module },
             .{ .name = "Str", .module = &self.builtin_module },
-            .{ .name = "Decode", .module = &self.builtin_module },
+            .{ .name = "Decoder", .module = &self.builtin_module },
         };
     }
 

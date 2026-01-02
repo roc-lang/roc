@@ -1761,11 +1761,11 @@ test "early return: ? in first argument of multi-arg call" {
     , 0, .no_trace);
 }
 
-test "Decode: create Decode.ok result - check result is Ok" {
-    // Test that we can call Decode.ok and the result is an Ok
+test "Decoder: create ok result - check result is Ok" {
+    // Test that we can create a decode result and it is an Ok
     try runExpectBool(
         \\{
-        \\    result = Decode.ok(42i64, [])
+        \\    result = { result: Ok(42i64), rest: [] }
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1774,11 +1774,11 @@ test "Decode: create Decode.ok result - check result is Ok" {
     , true, .no_trace);
 }
 
-test "Decode: create Decode.ok result - extract value" {
-    // Test that we can extract the value from Decode.ok
+test "Decoder: create ok result - extract value" {
+    // Test that we can extract the value from a decode result
     try runExpectI64(
         \\{
-        \\    result = Decode.ok(42i64, [])
+        \\    result = { result: Ok(42i64), rest: [] }
         \\    match result.result {
         \\        Ok(n) => n
         \\        Err(_) => 0i64
@@ -1787,11 +1787,11 @@ test "Decode: create Decode.ok result - extract value" {
     , 42, .no_trace);
 }
 
-test "Decode: create Decode.err result" {
-    // Test that we can call Decode.err
+test "Decoder: create err result" {
+    // Test that we can create an error decode result
     try runExpectBool(
         \\{
-        \\    result = Decode.err(TooShort, [1u8, 2u8, 3u8])
+        \\    result = { result: Err(TooShort), rest: [1u8, 2u8, 3u8] }
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1800,12 +1800,12 @@ test "Decode: create Decode.err result" {
     , false, .no_trace);
 }
 
-test "Decode: call Decode.decoder and use decode" {
-    // Test calling Decode.decoder and running with decode
+test "Decoder: call Decoder.decoder and use decode" {
+    // Test calling Decoder.decoder and running with decode
     try runExpectI64(
         \\{
-        \\    dec = Decode.decoder(|bytes| Decode.ok(42i64, bytes))
-        \\    result = Decode.decode(dec, [1u8, 2u8])
+        \\    dec = Decoder.decoder(|bytes| { result: Ok(42i64), rest: bytes })
+        \\    result = Decoder.decode(dec, [1u8, 2u8])
         \\    match result.result {
         \\        Ok(n) => n
         \\        Err(_) => 0i64
@@ -1814,18 +1814,18 @@ test "Decode: call Decode.decoder and use decode" {
     , 42, .no_trace);
 }
 
-test "Decode: simple inline decoder with Str.from_utf8" {
+test "Decoder: simple inline decoder with Str.from_utf8" {
     // Test a simple inline decoder that converts all bytes to string
     try runExpectStr(
         \\{
-        \\    dec = Decode.decoder(|bytes| {
+        \\    dec = Decoder.decoder(|bytes| {
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    })
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(dec, bytes)
+        \\    result = Decoder.decode(dec, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"
@@ -1834,14 +1834,14 @@ test "Decode: simple inline decoder with Str.from_utf8" {
     , "hello", .no_trace);
 }
 
-test "Decode: custom decoder creation" {
+test "Decoder: custom decoder creation" {
     // Test creating a custom decoder
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    _decoder = string_decoder
@@ -1850,18 +1850,18 @@ test "Decode: custom decoder creation" {
     , true, .no_trace);
 }
 
-test "Decode: inline decoder via decode" {
+test "Decoder: inline decoder via decode" {
     // Test using decode with an inline decoder
     try runExpectStr(
         \\{
-        \\    dec = Decode.decoder(|bytes| {
+        \\    dec = Decoder.decoder(|bytes| {
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    })
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(dec, bytes)
+        \\    result = Decoder.decode(dec, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"
@@ -1870,53 +1870,53 @@ test "Decode: inline decoder via decode" {
     , "hello", .no_trace);
 }
 
-test "Decode: string_decoder - just get result" {
+test "Decoder: string_decoder - just get result" {
     // Test using decode with string decoder
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    _result = Decode.decode(string_decoder, bytes)
+        \\    _result = Decoder.decode(string_decoder, bytes)
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: string_decoder - access result.result" {
+test "Decoder: string_decoder - access result.result" {
     // Check if we can access result.result
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(string_decoder, bytes)
+        \\    result = Decoder.decode(string_decoder, bytes)
         \\    _r = result.result
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: string_decoder - match on result.result" {
+test "Decoder: string_decoder - match on result.result" {
     // Check if we can match on result.result
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(string_decoder, bytes)
+        \\    result = Decoder.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1925,18 +1925,18 @@ test "Decode: string_decoder - match on result.result" {
     , true, .no_trace);
 }
 
-test "Decode: string_decoder - extract Ok payload ignoring it" {
+test "Decoder: string_decoder - extract Ok payload ignoring it" {
     // Check if we can extract Ok payload (but ignore it)
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(string_decoder, bytes)
+        \\    result = Decoder.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(_s) => Bool.True
         \\        Err(_) => Bool.False
@@ -1945,18 +1945,18 @@ test "Decode: string_decoder - extract Ok payload ignoring it" {
     , true, .no_trace);
 }
 
-test "Decode: string_decoder decodes hello" {
+test "Decoder: string_decoder decodes hello" {
     // Test that string decoder properly decodes and returns the payload
     try runExpectStr(
         \\{
-        \\    string_decoder = Decode.decoder(|bytes|
+        \\    string_decoder = Decoder.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
-        \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(BadUtf8, bytes)
+        \\            Ok(s) => { result: Ok(s), rest: [] }
+        \\            Err(_) => { result: Err(BadUtf8), rest: bytes }
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.decode(string_decoder, bytes)
+        \\    result = Decoder.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"

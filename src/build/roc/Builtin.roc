@@ -1368,13 +1368,9 @@ Builtin :: [].{
 		}
 	}
 
-	# Decode module for deserializing bytes into Roc values
-	# Uses static dispatch via where clauses instead of abilities
-	Decode :: {}.{
-		# A decoder is a function that takes a source and returns a decode result.
-		# The format is captured via closure when creating the decoder.
-		Decoder(src, val, err) :: { decode : (src -> { result : Try(val, err), rest : src }) }
-
+	# A decoder is a function that takes a source and returns a decode result.
+	# The format is captured via closure when creating the decoder.
+	Decoder(src, val, err) :: { decode : (src -> { result : Try(val, err), rest : src }) }.{
 		# Create a decoder from a decode function
 		decoder : (src -> { result : Try(val, err), rest : src }) -> Decoder(src, val, err)
 		decoder = |decode_fn| { decode: decode_fn }
@@ -1400,14 +1396,6 @@ Builtin :: [].{
 				Err(Leftover(decode_result.rest))
 			}
 		}
-
-		# Helper to create a successful decode result
-		ok : val, src -> { result : Try(val, err), rest : src }
-		ok = |value, remaining| { result: Try.Ok(value), rest: remaining }
-
-		# Helper to create a failed decode result
-		err : err, src -> { result : Try(val, err), rest : src }
-		err = |error, remaining| { result: Try.Err(error), rest: remaining }
 	}
 }
 

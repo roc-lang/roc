@@ -1366,9 +1366,8 @@ pub fn main() !void {
     const f64_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "F64");
     const numeral_type_idx = try findNestedTypeDeclaration(builtin_env, "Num", "Numeral");
 
-    // Find Decode module types
-    const decode_type_idx = try findTypeDeclaration(builtin_env, "Decode");
-    const decoder_type_idx = try findNestedTypeDeclaration(builtin_env, "Decode", "Decoder");
+    // Find Decoder type
+    const decoder_type_idx = try findTypeDeclaration(builtin_env, "Decoder");
 
     // Look up idents for each type
     // All types use fully-qualified names for consistent member lookup
@@ -1399,9 +1398,8 @@ pub fn main() !void {
     // Tag idents for Try type (Ok and Err)
     const ok_ident = builtin_env.common.findIdent("Ok") orelse unreachable;
     const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
-    // Decode module idents
-    const decode_ident = builtin_env.common.findIdent("Builtin.Decode") orelse unreachable;
-    const decoder_ident = builtin_env.common.findIdent("Builtin.Decode.Decoder") orelse unreachable;
+    // Decoder ident
+    const decoder_ident = builtin_env.common.findIdent("Builtin.Decoder") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
     // Note: These types are already in exposed_items from canonicalization, we just set their node indices
@@ -1427,8 +1425,7 @@ pub fn main() !void {
     try builtin_env.common.setNodeIndexById(gpa, f64_ident, @intCast(@intFromEnum(f64_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, numeral_ident, @intCast(@intFromEnum(numeral_type_idx)));
 
-    // Expose Decode types
-    try builtin_env.common.setNodeIndexById(gpa, decode_ident, @intCast(@intFromEnum(decode_type_idx)));
+    // Expose Decoder type
     try builtin_env.common.setNodeIndexById(gpa, decoder_ident, @intCast(@intFromEnum(decoder_type_idx)));
 
     // Create output directory
@@ -1486,10 +1483,8 @@ pub fn main() !void {
         .numeral_ident = numeral_ident,
         .ok_ident = ok_ident,
         .err_ident = err_ident,
-        // Decode module
-        .decode_type = decode_type_idx,
+        // Decoder type
         .decoder_type = decoder_type_idx,
-        .decode_ident = decode_ident,
         .decoder_ident = decoder_ident,
     };
 

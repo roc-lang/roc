@@ -19,7 +19,6 @@ Decode(a) : a
 ~~~
 # EXPECTED
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:1:1:8:19
-TYPE REDECLARED - where_clauses_7.md:10:1:11:34
 WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - where_clauses_7.md:10:1:11:34
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
@@ -37,24 +36,6 @@ Hash(a, hasher) # After header
 						hasher, # After first clause
 				hasher.Hasher]
 ```
-
-
-**TYPE REDECLARED**
-The type _Decode_ is being redeclared.
-
-The redeclaration is here:
-**where_clauses_7.md:10:1:11:34:**
-```roc
-Decode(a) : a
-	where [a.decode : List(U8) -> a]
-```
-
-But _Decode_ was already declared here:
-**where_clauses_7.md:1:1:1:1:**
-```roc
-Hash(a, hasher) # After header
-```
-^
 
 
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
