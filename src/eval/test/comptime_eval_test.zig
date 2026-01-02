@@ -2583,6 +2583,28 @@ test "comptime eval - recursive nominal: command chain" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - recursive nominal inside Try with tuple (issue #8855)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8855
+    // A recursive nominal type used inside Try with a tuple caused TypeContainedMismatch
+    // because cycle detection only checked the last container, not the full stack.
+    const src =
+        \\Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+        \\
+        \\# This function signature triggers the bug: recursive nominal inside Try with tuple
+        \\parse_block : List(U8), U64, List(Statement) -> [Ok((List(Statement), U64)), Err(Str)]
+        \\parse_block = |_file, index, acc| Ok((acc, index))
+        \\
+        \\x = parse_block([], 0, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated); // parse_block and x
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" {
     // Regression test for issue #8795: recursive opaque types where the recursion
     // goes through a tuple field would crash with "increfDataPtrC: ptr not aligned"
@@ -2599,6 +2621,22 @@ test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" 
 
     const summary = try result.evaluator.evalAll();
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - nested nominal in tuple causes alignment crash (issue #8874)" {
+    // Regression test for issue #8874: nested nominal types (like Try) inside tuples
+    // caused "increfDataPtrC: ptr not aligned" crashes. The bug occurred when
+    // accessing the payload of an outer Try containing a tuple with an inner Try.
+    const src =
+        \\result : Try((Try(Str, Str), U64), Str) = Ok((Ok("todo"), 3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 

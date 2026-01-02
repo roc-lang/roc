@@ -486,7 +486,6 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         },
     }
 }
-
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -619,7 +618,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
     if (idx >= self.regions.len()) {
-        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
+        // Use the store's allocator since regions was allocated by the store
+        try self.regions.items.ensureTotalCapacity(self.cir.store.gpa, idx + 1);
 
         const empty_region = Region.zero();
         while (self.regions.len() <= idx) {
@@ -1268,7 +1268,8 @@ pub fn checkPlatformRequirements(
 
                         if (found_in_required_aliases) {
                             // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                            try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                            // Use cir.gpa since rigid_vars belongs to the ModuleEnv
+                            try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
                         }
                     },
                     else => {},
@@ -1340,7 +1341,16 @@ pub fn checkPlatformRequirements(
             // This constrains type variables in the export (e.g., closure params)
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
-            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+            const unify_result = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+
+            // If unification failed, report the type mismatch with context about
+            // which platform requirement wasn't satisfied
+            const app_ident = app_required_ident orelse try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            self.setDetailIfTypeMismatch(unify_result, .{
+                .incompatible_platform_requirement = .{ .required_ident = app_ident },
+            });
         } else {
             // If we got here, it means that the the definition was not found in
             // the module's *export* list
@@ -2898,7 +2908,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
                     // Record this literal for deferred validation during comptime eval
-                    _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
+                    _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                         .expr_idx = expr_idx,
                         .type_var = flex_var,
                         .constraint = constraint,
@@ -2938,7 +2949,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2964,7 +2975,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2990,7 +3001,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -3018,7 +3029,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
