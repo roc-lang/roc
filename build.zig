@@ -2637,6 +2637,15 @@ pub fn build(b: *std.Build) void {
             snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
             snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
 
+            // Add LLVM support (snapshot_tool uses llvm_compile for dual-mode testing)
+            const llvm_paths_cov = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+            snapshot_coverage_test.addLibraryPath(.{ .cwd_relative = llvm_paths_cov.lib });
+            snapshot_coverage_test.addIncludePath(.{ .cwd_relative = llvm_paths_cov.include });
+            try addStaticLlvmOptionsToModule(snapshot_coverage_test.root_module);
+            snapshot_coverage_test.root_module.addAnonymousImport("llvm_compile", .{
+                .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            });
+
             // Also run parse module unit tests for additional coverage
             const parse_unit_test = b.addTest(.{
                 .name = "parse_unit_coverage",
