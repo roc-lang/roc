@@ -2667,10 +2667,11 @@ pub fn build(b: *std.Build) void {
             }
 
             // Run kcov on parse unit tests
-            // Use --include-pattern to filter coverage to just src/parse files
+            // Use --include-pattern with just the suffix to match absolute paths
+            // e.g., matches /home/runner/work/roc/roc/src/parse/mod.zig
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
-                "--include-pattern=/src/parse/",
+                "--include-pattern=src/parse",
                 "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
