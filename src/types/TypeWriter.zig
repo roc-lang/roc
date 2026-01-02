@@ -205,6 +205,17 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Err
     }
 }
 
+/// Writes a type variable to the buffer WITHOUT the where clause.
+/// Use this for nested types (function arguments, record fields, etc.) where the
+/// where clause should only appear at the top level of the complete type.
+pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
+    self.reset();
+
+    var writer = self.buf.writer();
+    try self.writeVar(&writer, var_, var_);
+    // Don't write where clause - constraints will be collected and written at the top level
+}
+
 /// Writes the where clause containing static dispatch constraints to the buffer.
 /// Formats constraints in one of three styles based on line length:
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
