@@ -533,20 +533,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_nominal_external => {
-            const raw = payload.raw;
-            const module_idx: CIR.Import.Idx = @enumFromInt(raw.data_1);
-            const target_node_idx: u16 = @intCast(raw.data_2);
-
-            const extra_data_idx = raw.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
-            const backing_expr: CIR.Expr.Idx = @enumFromInt(extra_data[0]);
-            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+            const p = payload.expr_nominal_external;
+            const target_node_idx: u16 = @intCast(p.packed_target_and_type & 0xFFFF);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt((p.packed_target_and_type >> 16) & 0xFFFF);
 
             return CIR.Expr{
                 .e_nominal_external = .{
-                    .module_idx = module_idx,
+                    .module_idx = @enumFromInt(p.module_idx),
                     .target_node_idx = target_node_idx,
-                    .backing_expr = backing_expr,
+                    .backing_expr = @enumFromInt(p.backing_expr),
                     .backing_type = backing_type,
                 },
             };
@@ -1769,13 +1764,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_nominal_external => |e| {
             node.tag = .expr_nominal_external;
-            const extra_data_idx = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.module_idx),
-                .data_2 = @intCast(e.target_node_idx),
-                .data_3 = @intCast(extra_data_idx),
+            const packed_target_and_type = (@as(u32, @intFromEnum(e.backing_type)) << 16) | @as(u32, e.target_node_idx);
+            node.setPayload(.{ .expr_nominal_external = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .packed_target_and_type = packed_target_and_type,
+                .backing_expr = @intFromEnum(e.backing_expr),
             } });
         },
         .e_dot_access => |e| {
