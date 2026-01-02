@@ -1791,7 +1791,7 @@ test "Decode: create Decode.err result" {
     // Test that we can call Decode.err
     try runExpectBool(
         \\{
-        \\    result = Decode.err([1u8, 2u8, 3u8])
+        \\    result = Decode.err(TooShort, [1u8, 2u8, 3u8])
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1800,12 +1800,12 @@ test "Decode: create Decode.err result" {
     , false, .no_trace);
 }
 
-test "Decode: call Decode.custom and use from_bytes_partial" {
-    // Test calling Decode.custom and running with from_bytes_partial
+test "Decode: call Decode.decoder and use decode" {
+    // Test calling Decode.decoder and running with decode
     try runExpectI64(
         \\{
-        \\    decoder = Decode.custom(|bytes, _fmt| Decode.ok(42i64, bytes))
-        \\    result = Decode.from_bytes_partial([1u8, 2u8], {}, decoder)
+        \\    dec = Decode.decoder(|bytes| Decode.ok(42i64, bytes))
+        \\    result = Decode.decode(dec, [1u8, 2u8])
         \\    match result.result {
         \\        Ok(n) => n
         \\        Err(_) => 0i64
@@ -1818,14 +1818,14 @@ test "Decode: simple inline decoder with Str.from_utf8" {
     // Test a simple inline decoder that converts all bytes to string
     try runExpectStr(
         \\{
-        \\    decoder = Decode.custom(|bytes, _fmt| {
+        \\    dec = Decode.decoder(|bytes| {
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    })
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, decoder)
+        \\    result = Decode.decode(dec, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"
@@ -1834,14 +1834,14 @@ test "Decode: simple inline decoder with Str.from_utf8" {
     , "hello", .no_trace);
 }
 
-test "Decode: custom decoder with simple format" {
-    // Test using a custom decoder with a simple unit format
+test "Decode: custom decoder creation" {
+    // Test creating a custom decoder
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    _decoder = string_decoder
@@ -1850,18 +1850,18 @@ test "Decode: custom decoder with simple format" {
     , true, .no_trace);
 }
 
-test "Decode: inline decoder via from_bytes_partial" {
-    // Test using from_bytes_partial with an inline decoder (same as LineFmt.string_decoder logic)
+test "Decode: inline decoder via decode" {
+    // Test using decode with an inline decoder
     try runExpectStr(
         \\{
-        \\    decoder = Decode.custom(|bytes, _fmt| {
+        \\    dec = Decode.decoder(|bytes| {
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    })
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, decoder)
+        \\    result = Decode.decode(dec, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"
@@ -1870,53 +1870,53 @@ test "Decode: inline decoder via from_bytes_partial" {
     , "hello", .no_trace);
 }
 
-test "Decode: string_decoder with unit format - just get result" {
-    // Test using from_bytes_partial with a unit format
+test "Decode: string_decoder - just get result" {
+    // Test using decode with string decoder
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    _result = Decode.from_bytes_partial(bytes, {}, string_decoder)
+        \\    _result = Decode.decode(string_decoder, bytes)
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: string_decoder with unit format - access result.result" {
+test "Decode: string_decoder - access result.result" {
     // Check if we can access result.result
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
+        \\    result = Decode.decode(string_decoder, bytes)
         \\    _r = result.result
         \\    Bool.True
         \\}
     , true, .no_trace);
 }
 
-test "Decode: string_decoder with unit format - match on result.result" {
+test "Decode: string_decoder - match on result.result" {
     // Check if we can match on result.result
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
+        \\    result = Decode.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(_) => Bool.True
         \\        Err(_) => Bool.False
@@ -1925,18 +1925,18 @@ test "Decode: string_decoder with unit format - match on result.result" {
     , true, .no_trace);
 }
 
-test "Decode: string_decoder with unit format - extract Ok payload ignoring it" {
+test "Decode: string_decoder - extract Ok payload ignoring it" {
     // Check if we can extract Ok payload (but ignore it)
     try runExpectBool(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
+        \\    result = Decode.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(_s) => Bool.True
         \\        Err(_) => Bool.False
@@ -1945,18 +1945,18 @@ test "Decode: string_decoder with unit format - extract Ok payload ignoring it" 
     , true, .no_trace);
 }
 
-test "Decode: string_decoder with unit format decodes hello" {
+test "Decode: string_decoder decodes hello" {
     // Test that string decoder properly decodes and returns the payload
     try runExpectStr(
         \\{
-        \\    string_decoder = Decode.custom(|bytes, _fmt|
+        \\    string_decoder = Decode.decoder(|bytes|
         \\        match Str.from_utf8(bytes) {
         \\            Ok(s) => Decode.ok(s, [])
-        \\            Err(_) => Decode.err(bytes)
+        \\            Err(_) => Decode.err(BadUtf8, bytes)
         \\        }
         \\    )
         \\    bytes = [104u8, 101u8, 108u8, 108u8, 111u8]  # "hello"
-        \\    result = Decode.from_bytes_partial(bytes, {}, string_decoder)
+        \\    result = Decode.decode(string_decoder, bytes)
         \\    match result.result {
         \\        Ok(s) => s
         \\        Err(_) => "error"

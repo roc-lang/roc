@@ -1368,7 +1368,6 @@ pub fn main() !void {
 
     // Find Decode module types
     const decode_type_idx = try findTypeDeclaration(builtin_env, "Decode");
-    const decode_err_type_idx = try findNestedTypeDeclaration(builtin_env, "Decode", "DecodeErr");
     const decoder_type_idx = try findNestedTypeDeclaration(builtin_env, "Decode", "Decoder");
 
     // Look up idents for each type
@@ -1402,7 +1401,6 @@ pub fn main() !void {
     const err_ident = builtin_env.common.findIdent("Err") orelse unreachable;
     // Decode module idents
     const decode_ident = builtin_env.common.findIdent("Builtin.Decode") orelse unreachable;
-    const decode_err_ident = builtin_env.common.findIdent("Builtin.Decode.DecodeErr") orelse unreachable;
     const decoder_ident = builtin_env.common.findIdent("Builtin.Decode.Decoder") orelse unreachable;
 
     // Expose the types so they can be found by getExposedNodeIndexById (used for auto-imports)
@@ -1431,7 +1429,6 @@ pub fn main() !void {
 
     // Expose Decode types
     try builtin_env.common.setNodeIndexById(gpa, decode_ident, @intCast(@intFromEnum(decode_type_idx)));
-    try builtin_env.common.setNodeIndexById(gpa, decode_err_ident, @intCast(@intFromEnum(decode_err_type_idx)));
     try builtin_env.common.setNodeIndexById(gpa, decoder_ident, @intCast(@intFromEnum(decoder_type_idx)));
 
     // Create output directory
@@ -1491,10 +1488,8 @@ pub fn main() !void {
         .err_ident = err_ident,
         // Decode module
         .decode_type = decode_type_idx,
-        .decode_err_type = decode_err_type_idx,
         .decoder_type = decoder_type_idx,
         .decode_ident = decode_ident,
-        .decode_err_ident = decode_err_ident,
         .decoder_ident = decoder_ident,
     };
 
