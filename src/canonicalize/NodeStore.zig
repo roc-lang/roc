@@ -31,6 +31,7 @@ gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: collections.SafeList(u32),
+match_branch_redundant_data: collections.SafeList(types.Var),
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 const Scratch = struct {
@@ -108,6 +109,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
+        .match_branch_redundant_data = try collections.SafeList(types.Var).initCapacity(gpa, capacity / 8),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -117,6 +119,7 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
+    store.match_branch_redundant_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -998,18 +1001,16 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 
     std.debug.assert(node.tag == .match_branch);
 
-    // Retrieve when branch data from extra_data
-    const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const payload = node.getPayload();
+    const p = payload.match_branch;
 
-    const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
-    const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
-    const guard_idx: ?CIR.Expr.Idx = if (extra_data[3] == 0) null else @enumFromInt(extra_data[3]);
-    const redundant: types.Var = @enumFromInt(extra_data[4]);
+    const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = p.patterns.start, .len = p.patterns.len } };
+    const guard_idx: ?CIR.Expr.Idx = if (p.guard_and_redundant_idx.guard_plus_one == 0) null else @enumFromInt(p.guard_and_redundant_idx.guard_plus_one - 1);
+    const redundant: types.Var = store.match_branch_redundant_data.items.items[p.guard_and_redundant_idx.redundant_data_idx];
 
     return CIR.Expr.Match.Branch{
         .patterns = patterns,
-        .value = value_idx,
+        .value = @enumFromInt(p.value),
         .guard = guard_idx,
         .redundant = redundant,
     };
@@ -2206,15 +2207,22 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
         .tag = .match_branch,
     };
 
-    // Store when branch data in extra_data
-    const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, branch.patterns.span.start);
-    _ = try store.extra_data.append(store.gpa, branch.patterns.span.len);
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.value));
-    const guard_idx = if (branch.guard) |g| @intFromEnum(g) else 0;
-    _ = try store.extra_data.append(store.gpa, guard_idx);
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.redundant));
-    node.data_1 = @intCast(extra_data_start);
+    const guard_plus_one: u16 = @intCast(if (branch.guard) |g| @intFromEnum(g) + 1 else 0);
+    
+    const redundant_idx = store.match_branch_redundant_data.len();
+    _ = try store.match_branch_redundant_data.append(store.gpa, branch.redundant);
+
+    node.setPayload(.{ .match_branch = .{
+        .patterns = .{
+            .start = @intCast(branch.patterns.span.start),
+            .len = @intCast(branch.patterns.span.len),
+        },
+        .value = @intFromEnum(branch.value),
+        .guard_and_redundant_idx = .{
+            .guard_plus_one = guard_plus_one,
+            .redundant_data_idx = @intCast(redundant_idx),
+        },
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -3987,6 +3995,7 @@ pub const Serialized = extern struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     extra_data: collections.SafeList(u32).Serialized,
+    match_branch_redundant_data: collections.SafeList(types.Var).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4002,6 +4011,8 @@ pub const Serialized = extern struct {
         try self.regions.serialize(&store.regions, allocator, writer);
         // Serialize extra_data
         try self.extra_data.serialize(&store.extra_data, allocator, writer);
+        // Serialize match_branch_redundant_data
+        try self.match_branch_redundant_data.serialize(&store.match_branch_redundant_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4012,7 +4023,8 @@ pub const Serialized = extern struct {
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
-        // Deserialize in reverse order: extra_data, regions, then nodes
+        // Deserialize in reverse order: match_branch_redundant_data, extra_data, regions, then nodes
+        const deserialized_match_branch_redundant_data = self.match_branch_redundant_data.deserialize(base_addr).*;
         const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
         const deserialized_regions = self.regions.deserialize(base_addr).*;
         const deserialized_nodes = self.nodes.deserialize(base_addr).*;
@@ -4025,6 +4037,7 @@ pub const Serialized = extern struct {
             .nodes = deserialized_nodes,
             .regions = deserialized_regions,
             .extra_data = deserialized_extra_data,
+            .match_branch_redundant_data = deserialized_match_branch_redundant_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 
