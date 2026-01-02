@@ -357,7 +357,7 @@ pub fn setupAutoImportedBuiltinTypes(
             builtin_ident,
         );
 
-        const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Decode", "LineFmt" };
+        const builtin_types = [_][]const u8{ "Bool", "Try", "Dict", "Set", "Str", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Decode" };
         for (builtin_types) |type_name_text| {
             const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
             if (envs_map.get(type_ident)) |type_entry| {

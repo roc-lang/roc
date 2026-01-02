@@ -23,38 +23,6 @@ const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
 
-/// Copy memory, handling overlapping regions safely.
-/// Unlike @memcpy, this handles the case where src and dst overlap.
-fn safeCopy(dst: [*]u8, src: [*]const u8, len: usize) void {
-    const src_start = @intFromPtr(src);
-    const dst_start = @intFromPtr(dst);
-
-    // If same pointer or zero length, nothing to do
-    if (src_start == dst_start or len == 0) return;
-
-    // If not overlapping, use fast memcpy
-    const src_end = src_start + len;
-    const dst_end = dst_start + len;
-    if (dst_start >= src_end or src_start >= dst_end) {
-        @memcpy(dst[0..len], src[0..len]);
-        return;
-    }
-
-    // Overlapping regions - copy in the right direction
-    if (dst_start < src_start) {
-        // Copy forward (dst is before src)
-        for (0..len) |i| {
-            dst[i] = src[i];
-        }
-    } else {
-        // Copy backward (dst is after src)
-        var i = len;
-        while (i > 0) {
-            i -= 1;
-            dst[i] = src[i];
-        }
-    }
-}
 const Closure = layout_mod.Closure;
 
 const StackValue = @This();
@@ -501,7 +469,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        safeCopy(dst.ptr, src.ptr, result_size);
+        @memmove(dst, src);
 
         const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
         if (record_data.fields.count == 0) return;
@@ -532,7 +500,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        safeCopy(dst.ptr, src.ptr, result_size);
+        @memmove(dst, src);
 
         const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
         if (tuple_data.fields.count == 0) return;
@@ -559,7 +527,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        safeCopy(dst.ptr, src.ptr, result_size);
+        @memmove(dst, src);
 
         // Get the closure header to find the captures layout
         const closure = self.asClosure(roc_ops);
@@ -605,7 +573,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        safeCopy(dst.ptr, src.ptr, result_size);
+        @memmove(dst, src);
 
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
@@ -627,7 +595,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-    safeCopy(dst.ptr, src.ptr, result_size);
+    @memmove(dst, src);
 }
 
 /// Read this StackValue's integer value, ensuring it's initialized
