@@ -981,7 +981,7 @@ const CoverageSummaryStep = struct {
     /// Minimum required coverage percentage. Build fails if coverage drops below this.
     /// This threshold should be gradually increased as more tests are added.
     /// CI runs coverage on macOS where kcov works correctly with Zig's Mach-O format.
-    const MIN_COVERAGE_PERCENT: f64 = 84.0;
+    const MIN_COVERAGE_PERCENT: f64 = 100.0; // Temporarily set to 100% to verify CI enforcement works
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
