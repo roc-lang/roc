@@ -78,17 +78,6 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
-      - name: Install kcov build dependencies
-        run: |
-          sudo apt-get update
-          # libdw-dev is elfutils (libdw) which kcov's ELF parser uses
-          # libelf-dev provides libelf which is also required
-          sudo apt-get install -y libcurl4-openssl-dev libdw-dev libelf-dev zlib1g-dev pkg-config
-
-      - name: Parser Code Coverage
-        run: |
-          zig build coverage
-
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -107,7 +96,7 @@ jobs:
             target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04
             cpu_flag: ''
-            target_flag: ''  # Native build for coverage (kcov doesn't work with musl)
+            target_flag: ''  # Native build (kcov doesn't work with musl)
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: -Dtarget=aarch64-linux-musl
@@ -278,6 +267,12 @@ jobs:
               $imports | ForEach-Object { echo "  $_" }
               exit 1
           }
+
+      # Parser code coverage - only on macos-15 where kcov works properly with Zig's DWARF format
+      - name: Parser Code Coverage
+        if: matrix.os == 'macos-15'
+        run: |
+          zig build coverage
 
       - name: Test inside nix too
         if: ${{ (steps.nix-changes.outputs.nix == 'true' || github.event_name == 'schedule') && (runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64')) }}
