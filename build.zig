@@ -2667,10 +2667,8 @@ pub fn build(b: *std.Build) void {
             }
 
             // Run kcov on parse unit tests
-            // No filter for now - capture all coverage to see what paths kcov reports
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
-                "--dump-summary",
                 "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
