@@ -980,7 +980,7 @@ const CoverageSummaryStep = struct {
 
     /// Minimum required coverage percentage. Build fails if coverage drops below this.
     /// This threshold should be gradually increased as more tests are added.
-    const MIN_COVERAGE_PERCENT: f64 = 0.0; // Temporarily set to 0 to debug kcov
+    const MIN_COVERAGE_PERCENT: f64 = 84.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
@@ -2599,25 +2599,15 @@ pub fn build(b: *std.Build) void {
     check_fmt_step.dependOn(&check_fmt.step);
 
     // Parser code coverage with kcov
-    // Only supported on Linux and macOS (kcov doesn't work on Windows)
-    const is_coverage_supported = target.result.os.tag == .linux or target.result.os.tag == .macos;
+    // Only supported on macOS (kcov has issues with Zig binaries on Linux)
+    const is_coverage_supported = target.result.os.tag == .macos;
     if (is_coverage_supported and isNativeishOrMusl(target)) {
-        // IMPORTANT: kcov requires native glibc binaries on Linux - it cannot instrument musl binaries.
-        // The default target on Linux is musl for static linking, so we must explicitly use glibc.
-        const coverage_target = if (builtin.target.os.tag == .linux)
-            b.resolveTargetQuery(.{
-                .abi = .gnu, // Explicitly use glibc, not musl
-            })
-        else
-            target; // macOS doesn't have this issue
-
         // Build parse unit tests for coverage
-        // TigerBeetle approach: build binary first, then run kcov on it
         const parse_unit_test = b.addTest(.{
             .name = "parse_unit_coverage",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/parse/mod.zig"),
-                .target = coverage_target, // Use native glibc target for kcov
+                .target = target,
                 .optimize = .Debug, // Debug required for DWARF debug info
             }),
         });
@@ -2631,12 +2621,10 @@ pub fn build(b: *std.Build) void {
         mkdir_step.step.dependOn(&check_kcov.step);
         mkdir_step.step.dependOn(&parse_unit_test.step); // Make sure binary is built first
 
-        // Run kcov on the pre-built test binary (TigerBeetle approach)
-        // This is the key difference: run kcov as system command, not setExecCmd
-        // kcov output_dir binary_path
-        // Try without include-path filter first to verify coverage works
+        // Run kcov on the pre-built test binary
         const run_kcov = b.addSystemCommand(&.{
             "kcov",
+            "--include-path=./src/parse",
             "kcov-output/parser",
         });
         run_kcov.addArtifactArg(parse_unit_test);

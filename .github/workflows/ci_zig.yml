@@ -263,8 +263,8 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          # Only run coverage on Linux with no target flag (kcov doesn't work with cross/musl targets)
-          if [ "$RUNNER_OS" = "Linux" ] && [ -z "${{ matrix.target_flag }}" ]; then
+          # Run coverage on macOS ARM (kcov works reliably there, unlike Linux with Zig binaries)
+          if [ "$RUNNER_OS" = "macOS" ] && [ "$RUNNER_ARCH" = "ARM64" ]; then
             nix develop ./src/ -c bash -c "zig build && zig build snapshot && zig build test && zig build coverage"
           else
             nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
