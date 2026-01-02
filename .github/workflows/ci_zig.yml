@@ -257,9 +257,10 @@ jobs:
 
       # Parser code coverage - only on macos-15 where kcov's Mach-O parser works with Zig's debug format
       # (Linux kcov can't parse Zig's DWARF5 - reports 0 lines covered)
+      # macOS kcov is slow due to task_for_pid mechanism, needs ~25-30 mins for parse tests
       - name: Parser Code Coverage
         if: matrix.os == 'macos-15'
-        timeout-minutes: 15
+        timeout-minutes: 35
         run: |
           brew install libdwarf
           echo "Starting coverage build at $(date)"
