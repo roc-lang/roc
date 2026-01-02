@@ -1,12 +1,53 @@
 # Migration: Remove Generic extra_data in Favor of Typed Payloads
 
+## Critical Success Criteria
+
+⚠️ **MUST NOT INCREASE PRODUCTION MEMORY USAGE BY EVEN 1 BYTE** ⚠️
+
+This refactoring has **two hard constraints**:
+
+1. **ZERO runtime memory increase**: The compiled code must use the EXACT SAME number of bytes in memory as before this migration. Not 1 byte more. The Payload union must remain 12 bytes (3 × u32). Any approach that adds memory overhead (like adding tag bytes for tagged unions) is a **project failure**.
+
+2. **COMPLETE elimination of extra_data**: Every single use of `extra_data` must be removed. Zero remaining references in the final code. If even one `extra_data` access remains, the migration has **failed**. This applies only to release builds; debug builds may use more memory due to Zig's untagged union features.
+
+**Important**: The `Payload` union MUST use `extern union` (untagged union), NOT a tagged union. Tagged unions add a tag field that increases memory usage and violate constraint #1.
+
 ## Overview
 
-This document describes an ongoing refactoring effort in the Roc compiler to improve type safety and maintainability of AST (Abstract Syntax Tree) node storage. The goal is to replace a generic, untyped `extra_data` buffer with purpose-built, typed data structures.
+This document describes an ongoing refactoring effort in the Roc compiler to improve type safety and maintainability of AST (Abstract Syntax Tree) node storage. The goal is to replace a generic, untyped `extra_data` buffer with purpose-built, typed data structures **while maintaining identical production memory usage**.
 
 **Status**: In Progress  
 **Branch**: `remove-extra-data`  
 **Tests**: All 2241 tests passing ✓
+
+---
+
+## Memory Constraints (Critical)
+
+### The Rule: Zero New Bytes
+
+The Payload union is currently **exactly 12 bytes**: 3 × u32 (data_1, data_2, data_3). This is non-negotiable.
+
+- ✅ **ALLOWED**: Bit-packing data, clever field layout, reinterpreting bytes
+- ✅ **ALLOWED**: Storing indices into specialized typed lists (separate from general extra_data)
+- ❌ **NOT ALLOWED**: Adding a tag field (turns it into 16+ bytes with alignment padding)
+- ❌ **NOT ALLOWED**: Using `union(enum)` or any tagged union
+- ❌ **NOT ALLOWED**: Larger structs than 12 bytes
+- ❌ **NOT ALLOWED**: New allocator overhead
+
+### What This Means
+
+If a node type cannot be stored in 12 bytes **without** using the `extra_data` generic buffer, then you must:
+1. Use **bit-packing** to compress data into fewer bits
+2. Store large data in **specialized typed lists** (like `expr_span_data`, `statement_span_data`) instead of the generic `extra_data`
+3. Use **clever encoding** (offsets, optional value tricks, etc.)
+
+You may **NOT** accept "we'll store it in extra_data and improve later." This is a hard stop for the migration.
+
+### Production vs Debug
+
+- **Production (release builds)**: MUST be identical byte-for-byte
+- **Debug builds**: May use additional memory due to Zig's untagged union implementation details, but this doesn't count against the constraint
 
 ---
 
@@ -187,9 +228,19 @@ The migration has been started but not fully completed. The `extra_data` field s
 
 ## What Needs to Be Done
 
+### ⚠️ Important: Respect Memory Constraints
+
+Before starting work on ANY node type migration:
+
+- **Verify the Payload struct** is exactly 12 bytes (3 × u32)
+- **Design the bit-packing** before you start coding
+- **Calculate the bits needed** for each field
+- **If it doesn't fit**, use specialized typed lists instead of extra_data
+- **Assume extra_data is forbidden** - find another way or the migration is incomplete
+
 ### Phase 1: Complete Canonicalize Module
 
-The `src/canonicalize/NodeStore.zig` file still has ~324 references to `extra_data` spread across:
+The `src/canonicalize/NodeStore.zig` file still has ~323 references to `extra_data` spread across:
 
 1. **Expression getters** (in `getExpr` function) - ~40+ cases
    - `.e_num` - Stores i128 values
@@ -220,19 +271,23 @@ The `src/parse/NodeStore.zig` has a similar structure and scope of work.
 
 ### Key Challenges
 
-1. **Data Size Constraints**: Some nodes need to store more than 3 u32 values. Solutions:
-   - **Bit packing**: Combine multiple small values into a u32
-   - **Typed span lists**: Store span data in purpose-built lists (like `expr_span_data`, `statement_span_data`)
-   - **Limited use of extra_data**: Keep extra_data for unavoidable cases, but minimize it
+1. **Data Size Constraints**: Some nodes need to store more than 3 u32 values. 
+   
+   ⚠️ **CRITICAL**: You CANNOT use `extra_data` as a fallback. Solutions:
+    - **Bit packing**: Combine multiple small values into a u32 (this is the primary strategy)
+    - **Typed span lists**: Store data in purpose-built lists (like `expr_span_data`, `statement_span_data`)
+    - **Clever encoding**: Use offsets, flags, optional value tricks to fit within 12 bytes
+    
+   If a node type cannot be migrated away from `extra_data`, the migration is **incomplete for that type** and must be redesigned.
 
-2. **Existing Typed Span Lists**: The migration is partially done using specialized data lists:
-   ```zig
-   expr_span_data: SafeList(CIR.Expr.Idx),
-   statement_span_data: SafeList(CIR.Statement.Idx),
-   pattern_span_data: SafeList(CIR.Pattern.Idx),
-   // ... many more
-   ```
-   These should be preferred over `extra_data` for their types.
+2. **Existing Typed Span Lists**: The migration should use specialized data lists:
+    ```zig
+    expr_span_data: SafeList(CIR.Expr.Idx),
+    statement_span_data: SafeList(CIR.Statement.Idx),
+    pattern_span_data: SafeList(CIR.Pattern.Idx),
+    // ... many more
+    ```
+    These are **preferred** over `extra_data` for their types because they are purpose-built and type-safe.
 
 3. **Optional Values**: When storing optional indices where 0 is valid:
    ```zig
@@ -245,12 +300,26 @@ The `src/parse/NodeStore.zig` has a similar structure and scope of work.
 
 ## How to Approach the Work
 
+### 0. Before You Start: Design the Migration
+
+For EVERY node type you work on:
+
+1. **Calculate the bits needed** for each field
+2. **Design the bit-packing layout** on paper
+3. **Verify it fits in 12 bytes** (3 × u32 = 96 bits)
+4. **If it doesn't fit**, design an alternative using typed lists
+5. **Only then** start coding
+
+If you skip this step and rely on extra_data, the migration is incomplete.
+
 ### 1. Pick a Node Type
 
 Start with a single node type that's straightforward. For example:
 
 - **For Canonicalize**: Start with a simple expression like `.e_list` or `.e_tuple`
 - **For Parse**: Start with a simple node like `header` or `var`
+
+**ONLY pick node types that can be fully migrated away from extra_data.**
 
 ### 2. For Each Node Type:
 
@@ -325,9 +394,23 @@ Run the test suite to verify nothing broke:
 zig build test
 ```
 
-### 3. Iterative Process
+### 3. Completion Criteria for Each Node Type
+
+A node type migration is **COMPLETE** when:
+
+- ✅ The getter uses the typed payload struct (NOT `.raw`)
+- ✅ The setter populates the typed payload struct (NOT `.raw`)
+- ✅ **ZERO references to `extra_data`** for that node type
+- ✅ All tests pass
+- ✅ The Payload struct remains exactly 12 bytes
+- ✅ Release build memory usage is identical to before
+
+If a node type still accesses `extra_data`, the migration is **INCOMPLETE** and must be redesigned.
+
+### 4. Iterative Process
 
 - Complete one node type
+- Verify it meets all completion criteria above
 - Verify tests pass
 - Commit changes
 - Move to the next node type
@@ -465,16 +548,31 @@ const val = if (node.main_token == 0) null else @enumFromInt(node.main_token - O
 
 ## Long-term Goal
 
-Once complete, the benefits will include:
+Once complete, the migration will deliver:
 
-- ✓ Type-safe node access
-- ✓ Self-documenting code
-- ✓ Easier refactoring
-- ✓ Fewer runtime errors
-- ✓ Better compiler error messages
-- ✓ Complete removal of `extra_data` buffer
+- ✓ Type-safe node access (zero runtime cost)
+- ✓ Self-documenting code (field names instead of data_1, data_2, data_3)
+- ✓ Easier refactoring (strongly typed structs)
+- ✓ Fewer runtime errors (compiler-enforced field access)
+- ✓ Better compiler error messages (clear struct names)
+- ✓ **Complete removal of `extra_data` buffer** (MANDATORY)
 
-The migration represents a significant quality-of-life improvement for future compiler development.
+### Success Definition
+
+The migration is **SUCCESSFUL** if and only if:
+
+1. **ZERO extra_data references remain** in production code (release builds)
+2. **ZERO byte increase** in compiled code size or runtime memory
+3. **All tests pass** without regression
+4. Every node type uses a typed payload struct, never `.raw`
+
+The migration is a **FAILURE** if:
+- ❌ Even one `extra_data` reference remains in release builds
+- ❌ Compiled code is larger by even 1 byte
+- ❌ Runtime memory usage increases by even 1 byte
+- ❌ Any node type still uses `.raw` payload access
+
+This is not a "nice to have" improvement—it's a fundamental refactoring with hard success/failure criteria.
 
 ---
 
