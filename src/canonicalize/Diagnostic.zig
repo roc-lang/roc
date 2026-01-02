@@ -40,6 +40,12 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A non-function value is defined in terms of itself, which would cause an infinite loop.
+    /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
+    self_referential_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     qualified_ident_does_not_exist: struct {
         ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
@@ -280,6 +286,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .self_referential_definition => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
@@ -543,6 +550,36 @@ pub const Diagnostic = union(enum) {
             try report.document.addReflowingTextWithBackticks(tip);
         }
 
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "self-referential assignment" diagnostic
+    pub fn buildSelfReferentialDefinitionReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addReflowingText("The value ");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);

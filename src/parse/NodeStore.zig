@@ -18,6 +18,10 @@ const Diagnostic = AST.Diagnostic;
 /// packing optional data into u32 fields where 0 would otherwise be ambiguous.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
+/// Bit flag for is_var in type_anno statement's main_token field.
+/// Uses the high bit to store whether this is a var declaration.
+const TYPE_ANNO_IS_VAR_BIT: u32 = 0x80000000;
+
 /// The root node is always stored at index 0 in the node list.
 pub const root_node_idx: Node.List.Idx = .first;
 
@@ -54,7 +58,7 @@ pub const AST_PATTERN_NODE_COUNT = 15;
 /// Count of the type annotation nodes in the AST
 pub const AST_TYPE_ANNO_NODE_COUNT = 10;
 /// Count of the expression nodes in the AST
-pub const AST_EXPR_NODE_COUNT = 24;
+pub const AST_EXPR_NODE_COUNT = 26;
 
 /// Initialize the store with an assumed capacity to
 /// ensure resizing of underlying data structures happens
@@ -135,6 +139,7 @@ pub fn emptyScratch(store: *NodeStore) void {
 }
 
 /// Prints debug information about all nodes and scratch buffers in the store.
+/// Note: This debug function is excluded from coverage via --exclude-line=std.debug.print
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
         std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
@@ -465,7 +470,9 @@ pub fn addStatement(store: *NodeStore, statement: AST.Statement) std.mem.Allocat
             node.region = a.region;
             node.data.lhs = a.name;
             node.data.rhs = @intFromEnum(a.anno);
-            node.main_token = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
+            const where_val: u32 = if (a.where) |w| @intFromEnum(w) + OPTIONAL_VALUE_OFFSET else 0;
+            const is_var_bit: u32 = if (a.is_var) TYPE_ANNO_IS_VAR_BIT else 0;
+            node.main_token = where_val | is_var_bit;
         },
         .malformed => {
             @panic("Use addMalformed instead");
@@ -598,6 +605,18 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
             node.tag = .frac;
             node.region = e.region;
             node.main_token = e.token;
+        },
+        .typed_int => |e| {
+            node.tag = .typed_int;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
+        },
+        .typed_frac => |e| {
+            node.tag = .typed_frac;
+            node.region = e.region;
+            node.main_token = e.token;
+            node.data.lhs = e.type_token;
         },
         .tag => |e| {
             node.tag = .tag;
@@ -972,13 +991,18 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
             try store.extra_data.append(store.gpa, tu.tags.span.start);
             try store.extra_data.append(store.gpa, tu.tags.span.len);
 
-            var rhs = AST.TypeAnno.TagUnionRhs{
-                .open = 0,
-                .tags_len = @as(u31, @intCast(tu.tags.span.len)),
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext_kind: u2 = switch (tu.ext) {
+                .closed => 0,
+                .open => 1,
+                .named => 2,
             };
-            if (tu.open_anno) |a| {
-                rhs.open = 1;
-                try store.extra_data.append(store.gpa, @intFromEnum(a));
+            const rhs = AST.TypeAnno.TagUnionRhs{
+                .ext_kind = ext_kind,
+                .tags_len = @as(u30, @intCast(tu.tags.span.len)),
+            };
+            if (tu.ext == .named) {
+                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
             }
 
             node.data.lhs = data_start;
@@ -1396,11 +1420,14 @@ pub fn getStatement(store: *const NodeStore, statement_idx: AST.Statement.Idx) A
             } };
         },
         .type_anno => {
+            const is_var = (node.main_token & TYPE_ANNO_IS_VAR_BIT) != 0;
+            const where_val = node.main_token & ~TYPE_ANNO_IS_VAR_BIT;
             return .{ .type_anno = .{
                 .region = node.region,
                 .name = node.data.lhs,
                 .anno = @enumFromInt(node.data.rhs),
-                .where = if (node.main_token != 0) @enumFromInt(node.main_token - OPTIONAL_VALUE_OFFSET) else null,
+                .where = if (where_val != 0) @enumFromInt(where_val - OPTIONAL_VALUE_OFFSET) else null,
+                .is_var = is_var,
             } };
         },
         .malformed => {
@@ -1556,6 +1583,20 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
         .frac => {
             return .{ .frac = .{
                 .token = node.main_token,
+                .region = node.region,
+            } };
+        },
+        .typed_int => {
+            return .{ .typed_int = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
+                .region = node.region,
+            } };
+        },
+        .typed_frac => {
+            return .{ .typed_frac = .{
+                .token = node.main_token,
+                .type_token = node.data.lhs,
                 .region = node.region,
             } };
         },
@@ -1925,11 +1966,17 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             const tags_len = store.extra_data.items[extra_data_pos];
             extra_data_pos += 1;
 
-            const open_anno = if (rhs.open == 1) @as(AST.TypeAnno.Idx, @enumFromInt(store.extra_data.items[extra_data_pos])) else null;
+            // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
+            const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
+                0 => .closed,
+                1 => .open,
+                2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
+                3 => unreachable,
+            };
 
             return .{ .tag_union = .{
                 .region = node.region,
-                .open_anno = open_anno,
+                .ext = ext,
                 .tags = .{ .span = .{
                     .start = tags_start,
                     .len = tags_len,

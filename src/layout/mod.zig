@@ -44,6 +44,7 @@ pub const LayoutError = @import("store.zig").LayoutError;
 
 // Re-export work queue functionality
 pub const Work = @import("work.zig").Work;
+pub const work = @import("work.zig");
 
 test "layout tests" {
     std.testing.refAllDecls(@This());

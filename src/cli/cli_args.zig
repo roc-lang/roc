@@ -14,7 +14,7 @@ pub const CliArgs = union(enum) {
     test_cmd: TestArgs,
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
-    repl,
+    repl: ReplArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -139,6 +139,9 @@ pub const ExperimentalLspArgs = struct {
     debug_syntax: bool = false,
     debug_server: bool = false,
 };
+
+/// Arguments for `roc repl`
+pub const ReplArgs = struct {};
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
@@ -586,7 +589,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .help = 
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
-            \\Usage: roc repl [OPTIONS]
+            \\Usage: roc repl
             \\
             \\Options:
             \\  -h, --help  Print help
@@ -596,7 +599,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs.repl;
+    return CliArgs{ .repl = .{} };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {

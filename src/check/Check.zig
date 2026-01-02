@@ -486,7 +486,6 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         },
     }
 }
-
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -619,7 +618,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
     if (idx >= self.regions.len()) {
-        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
+        // Use the store's allocator since regions was allocated by the store
+        try self.regions.items.ensureTotalCapacity(self.cir.store.gpa, idx + 1);
 
         const empty_region = Region.zero();
         while (self.regions.len() <= idx) {
@@ -845,24 +845,20 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
     );
 }
 
-/// Create a nominal Try type with the given success and error types
+/// Create a nominal Try type with the given success and error types.
+/// This is used for creating Try types in function signatures (e.g., from_numeral).
 fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
-    // Use the cached builtin_module_ident from the current module's ident store.
-    // This represents the "Builtin" module where Try is defined.
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
         self.builtin_ctx.module_name; // We're compiling Builtin module itself
 
-    // Use the relative name "Try" (not "Builtin.Try") to match the relative_name in TypeHeader
-    // The origin_module field already captures that this type is from Builtin
     const try_ident = types_mod.TypeIdent{
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // The backing var doesn't matter here. Nominal types unify based on their ident
-    // and type args only - the backing is never examined during unification.
-    // Creating the real backing type ([Ok(ok), Err(err)]) would be a waste of time.
+    // mkNominal requires a backing_var, but for nominal-to-nominal unification
+    // only the type ident and type args are compared, so ok_var is fine here.
     const backing_var = ok_var;
     const type_args = [_]Var{ ok_var, err_var };
 
@@ -1242,6 +1238,9 @@ pub fn checkPlatformRequirements(
             const type_aliases_slice = all_aliases[@intFromEnum(type_aliases_range.start)..][0..type_aliases_range.count];
 
             // Extract flex name -> instantiated var mappings from the var_map.
+            // Only process flex vars that are declared in the for-clause type aliases.
+            // Other flex vars (like those from open tag union extensions `..others`)
+            // are polymorphic and don't need to be unified with app-provided aliases.
             var var_map_iter = self.var_map.iterator();
             while (var_map_iter.next()) |entry| {
                 const fresh_var = entry.value_ptr.*;
@@ -1251,30 +1250,27 @@ pub fn checkPlatformRequirements(
                     // type is instantiated any rigid in the platform
                     // required type become flex
                     .flex => |flex| {
-                        // Assert flex has name (flex var should come from platform rigid vars)
-                        std.debug.assert(flex.name != null);
-                        const flex_name = flex.name.?;
+                        // Named flex vars come from rigid vars or named extensions (like `.._others`).
+                        // Anonymous flex vars (from `..` syntax) have no name and are skipped.
+                        const flex_name = flex.name orelse continue;
 
-                        // Assert that this flex var ident is in the list of
-                        // rigid vars declared by the platform.
-                        if (builtin.mode == .Debug) {
-                            var found_in_required_aliases = false;
-                            for (type_aliases_slice) |alias| {
-                                const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
-                                if (app_rigid_name == flex_name) {
-                                    found_in_required_aliases = true;
-                                    break;
-                                }
-                            }
-                            if (!found_in_required_aliases) {
-                                std.debug.panic("Expected type var with name {s} to be declared in platform required type aliases", .{
-                                    self.cir.getIdentText(flex_name),
-                                });
+                        // Check if this flex var is in the list of rigid vars declared
+                        // in the for-clause type aliases. If not, it's from an open tag
+                        // union extension (like `..others`) and doesn't need to be stored.
+                        var found_in_required_aliases = false;
+                        for (type_aliases_slice) |alias| {
+                            const app_rigid_name = platform_to_app_idents.get(alias.rigid_name) orelse continue;
+                            if (app_rigid_name == flex_name) {
+                                found_in_required_aliases = true;
+                                break;
                             }
                         }
 
-                        // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                        try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                        if (found_in_required_aliases) {
+                            // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
+                            // Use cir.gpa since rigid_vars belongs to the ModuleEnv
+                            try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
+                        }
                     },
                     else => {},
                 }
@@ -1345,7 +1341,16 @@ pub fn checkPlatformRequirements(
             // This constrains type variables in the export (e.g., closure params)
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
-            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+            const unify_result = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+
+            // If unification failed, report the type mismatch with context about
+            // which platform requirement wasn't satisfied
+            const app_ident = app_required_ident orelse try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            self.setDetailIfTypeMismatch(unify_result, .{
+                .incompatible_platform_requirement = .{ .required_ident = app_ident },
+            });
         } else {
             // If we got here, it means that the the definition was not found in
             // the module's *export* list
@@ -2903,7 +2908,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
                     // Record this literal for deferred validation during comptime eval
-                    _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
+                    _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                         .expr_idx = expr_idx,
                         .type_var = flex_var,
                         .constraint = constraint,
@@ -2943,7 +2949,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2969,7 +2975,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2995,7 +3001,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -3023,13 +3029,81 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
                     .region = expr_region,
                 });
             }
+        },
+        .e_typed_int => |typed_num| {
+            // Typed integer literal like 123.U64
+            // Create from_numeral constraint and unify with the explicit type
+            const num_literal_info = switch (typed_num.value.kind) {
+                .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
+                .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
+            };
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents = self.cir.getIdentStoreConst();
+            const type_name = idents.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
+        },
+        .e_typed_frac => |typed_num| {
+            // Typed fractional literal like 3.14.Dec
+            // The value is stored as scaled i128 (like Dec)
+            const num_literal_info = types_mod.NumeralInfo.fromI128(
+                typed_num.value.toI128(),
+                typed_num.value.toI128() < 0,
+                true, // is_fractional
+                expr_region,
+            );
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents_frac = self.cir.getIdentStoreConst();
+            const type_name = idents_frac.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
         },
         // list //
         .e_empty_list => {
@@ -4521,7 +4595,7 @@ fn checkIfElseExpr(
 
 // match //
 
-/// Check the types for an if-else expr
+/// Check the types for a match expr
 fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Expr.Match) Allocator.Error!bool {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -4631,6 +4705,29 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         }
     }
 
+    // For matches desugared from `?` operator, verify the condition unifies with Try type.
+    // If it doesn't, report an error. Skip exhaustiveness checking for invalid try since
+    // the desugared match only handles Ok/Err branches and would report confusing errors.
+    var has_invalid_try = false;
+    if (match.is_try_suffix) {
+        // Get the actual Try type from builtins and instantiate it with fresh type vars
+        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
+        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
+            try self.copyVar(try_type_var, builtin_env, Region.zero())
+        else
+            try_type_var;
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
+
+        // Unify the condition with Try type
+        const try_result = try self.unify(try_var, cond_var, env);
+        if (!try_result.isOk()) {
+            has_invalid_try = true;
+            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
+                .expr = match.cond,
+            } });
+        }
+    }
+
     // Unify the root expr with the match value
     _ = try self.unify(ModuleEnv.varFrom(expr_idx), val_var, env);
 
@@ -4638,10 +4735,11 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // Only do this if there were no type errors - type errors can lead to invalid types
     // that confuse the exhaustiveness checker
     // Also skip if the condition type is an error type (can happen with complex inference)
+    // Also skip if we already reported an invalid try operator error
     const resolved_cond = self.types.resolveVar(cond_var);
     const cond_is_error = resolved_cond.desc.content == .err;
 
-    if (!had_type_error and !cond_is_error) {
+    if (!had_type_error and !cond_is_error and !has_invalid_try) {
         const match_region = self.cir.store.regions.get(
             @enumFromInt(@intFromEnum(expr_idx)),
         ).*;

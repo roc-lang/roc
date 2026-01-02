@@ -35,6 +35,9 @@ pub const AutoImportedType = struct {
     /// The fully qualified type identifier (e.g., "Builtin.Str" for Str, "Builtin.Num.U8" for U8)
     /// Used for looking up members like U8.to_i16 -> "Builtin.Num.U8.to_i16"
     qualified_type_ident: Ident.Idx,
+    /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
+    /// Used to determine the correct module name for auto-imports
+    is_package_qualified: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -49,6 +52,9 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
+/// Track whether we're inside an expect block.
+/// When true, the ? operator crashes on Err instead of returning early.
+in_expect: bool = false,
 scopes: std.ArrayList(Scope) = .{},
 /// Special scope for rigid type variables in annotations
 type_vars_scope: base.Scratch(TypeVarScope),
@@ -110,6 +116,10 @@ processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
 /// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
+/// The pattern being defined in the current non-lambda assignment (if any).
+/// Used to detect self-referential definitions like `a = a` or `a = [a]`.
+/// This is null when we're inside a lambda (where self-references are valid for recursion).
+defining_pattern: ?Pattern.Idx = null,
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -866,9 +876,9 @@ fn collectTypeReferencesFromAST(
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
                 try self.collectTypeReferencesFromAST(tag_idx, refs);
             }
-            // Also check the open annotation if present
-            if (tag_union.open_anno) |open_idx| {
-                try self.collectTypeReferencesFromAST(open_idx, refs);
+            // Also check the named extension if present
+            if (tag_union.ext == .named) {
+                try self.collectTypeReferencesFromAST(tag_union.ext.named, refs);
             }
         },
         .tuple => |tuple| {
@@ -2373,6 +2383,11 @@ pub fn canonicalizeFile(
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
+                // Track that we're inside an expect so ? operator crashes on Err
+                const was_in_expect = self.in_expect;
+                self.in_expect = true;
+                defer self.in_expect = was_in_expect;
+
                 // Canonicalize the expect expression
                 const can_expect = try self.canonicalizeExpr(e.body) orelse {
                     // If canonicalization fails, create a malformed expression
@@ -3145,10 +3160,12 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
 
         // Canonicalize the type annotation for this entrypoint
         //
-        // IMPORTANT: We set the context here to be type_decl_anno so we
-        // correctly get errors if the annotation tries to introduce a rigid var
-        // that's not  in scope
-        var type_anno_ctx = TypeAnnoCtx.init(.type_decl_anno);
+        // We use for_clause_anno context which allows:
+        // - Type variables from the for-clause (e.g., `model` in `[Model : model]`) - already in scope
+        // - Anonymous open unions (`..`) - become underscore type annotations
+        // - Underscore-prefixed type vars (e.g., `_others`) - allowed without for-clause declaration
+        // But disallows regular undeclared type variables.
+        var type_anno_ctx = TypeAnnoCtx.init(.for_clause_anno);
         const type_anno_idx = try self.canonicalizeTypeAnnoHelp(entry.type_anno, &type_anno_ctx);
 
         // Store the required type in the module env
@@ -4017,6 +4034,82 @@ pub fn parseIntWithUnderscores(comptime T: type, text: []const u8, int_base: u8)
     return std.fmt.parseInt(T, buf[0..len], int_base);
 }
 
+/// Parse integer text into a CIR.IntValue.
+/// Handles base prefixes (0x, 0b, 0o), underscores, and negative numbers.
+/// Returns null if the number is invalid (too large, etc).
+pub fn parseIntText(num_text: []const u8) ?CIR.IntValue {
+    const is_negated = num_text[0] == '-';
+    const after_minus_sign = @as(usize, @intFromBool(is_negated));
+
+    var first_digit: usize = undefined;
+    const DEFAULT_BASE = 10;
+    var int_base: u8 = undefined;
+
+    if (num_text[after_minus_sign] == '0' and num_text.len > after_minus_sign + 2) {
+        switch (num_text[after_minus_sign + 1]) {
+            'x', 'X' => {
+                int_base = 16;
+                first_digit = after_minus_sign + 2;
+            },
+            'o', 'O' => {
+                int_base = 8;
+                first_digit = after_minus_sign + 2;
+            },
+            'b', 'B' => {
+                int_base = 2;
+                first_digit = after_minus_sign + 2;
+            },
+            else => {
+                int_base = DEFAULT_BASE;
+                first_digit = after_minus_sign;
+            },
+        }
+    } else {
+        int_base = DEFAULT_BASE;
+        first_digit = after_minus_sign;
+    }
+
+    const digit_part = num_text[first_digit..];
+
+    const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
+        return null;
+    };
+
+    // If this had a minus sign, but negating it would result in a negative number
+    // that would be too low to fit in i128, then this int literal is also invalid.
+    if (is_negated and u128_val > min_i128_negated) {
+        return null;
+    }
+
+    // Determine the appropriate storage type
+    if (is_negated) {
+        // Negative: must be i128 (or smaller)
+        const i128_val = if (u128_val == min_i128_negated)
+            std.math.minInt(i128) // Special case for -2^127
+        else
+            -@as(i128, @intCast(u128_val));
+        return CIR.IntValue{
+            .bytes = @bitCast(i128_val),
+            .kind = .i128,
+        };
+    } else {
+        // Positive: could be i128 or u128
+        if (u128_val > @as(u128, std.math.maxInt(i128))) {
+            // Too big for i128, keep as u128
+            return CIR.IntValue{
+                .bytes = @bitCast(u128_val),
+                .kind = .u128,
+            };
+        } else {
+            // Fits in i128
+            return CIR.IntValue{
+                .bytes = @bitCast(@as(i128, @intCast(u128_val))),
+                .kind = .i128,
+            };
+        }
+    }
+}
+
 /// Canonicalize an expression.
 pub fn canonicalizeExpr(
     self: *Self,
@@ -4226,8 +4319,10 @@ pub fn canonicalizeExpr(
                                         if (module_env.common.findIdent(qualified_text)) |qname_ident| {
                                             if (module_env.getExposedNodeIndexById(qname_ident)) |target_node_idx| {
                                                 // Found it! This is a module-qualified lookup
-                                                // Need to get or create the auto-import for the Builtin module
-                                                const actual_module_name = module_env.module_name;
+                                                // Need to get or create the auto-import for the module
+                                                // For package-qualified imports (pf.Stdout), use the qualified name
+                                                // For builtin nested types (Bool, Str), use the parent module name
+                                                const actual_module_name = if (auto_imported_type_env.is_package_qualified) type_text else module_env.module_name;
                                                 const import_idx = try self.getOrCreateAutoImport(actual_module_name);
 
                                                 // Create e_lookup_external expression
@@ -4295,25 +4390,28 @@ pub fn canonicalizeExpr(
                             // This is a module-qualified lookup
                             const module_text = self.env.getIdent(module_name);
 
+                            // Look up auto-imported type info once to avoid repeated map lookups
+                            const auto_imported_type_info: ?AutoImportedType = if (self.module_envs) |envs_map|
+                                envs_map.get(module_name)
+                            else
+                                null;
+
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
-                            const lookup_module_name = if (self.module_envs) |envs_map| blk_lookup: {
-                                if (envs_map.get(module_name)) |auto_imported_type| {
-                                    break :blk_lookup auto_imported_type.env.module_name;
-                                } else {
-                                    break :blk_lookup module_text;
-                                }
-                            } else module_text;
+                            // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                            const lookup_module_name = if (auto_imported_type_info) |info|
+                                if (info.is_package_qualified) module_text else info.env.module_name
+                            else
+                                module_text;
 
                             // If not, create an auto-import
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
-                                if (self.module_envs) |envs_map| {
-                                    if (envs_map.get(module_name)) |auto_imported_type| {
-                                        // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
-                                        const actual_module_name = auto_imported_type.env.module_name;
-                                        break :blk try self.getOrCreateAutoImport(actual_module_name);
-                                    }
+                                if (auto_imported_type_info) |info| {
+                                    // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
+                                    // For package-qualified imports (pf.Stdout), use the qualified name
+                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
+                                    break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
                                 // Module not imported in current scope
@@ -4330,58 +4428,44 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
-                            const target_node_idx_opt: ?u16 = if (self.module_envs) |envs_map| blk: {
-                                if (envs_map.get(module_name)) |auto_imported_type| {
-                                    const module_env = auto_imported_type.env;
+                            const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
+                                const module_env = info.env;
 
-                                    // For auto-imported types with statement_idx (builtin types and platform modules),
-                                    // build the full qualified name using qualified_type_ident.
-                                    // For regular user module imports (statement_idx is null), use field_text directly.
-                                    const lookup_name: []const u8 = if (auto_imported_type.statement_idx) |_| name_blk: {
-                                        // Build the fully qualified member name using the type's qualified ident
-                                        // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
-                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
-                                        // Note: qualified_type_ident is always stored in the calling module's ident store
-                                        // (self.env), since Ident.Idx values are not transferable between stores.
-                                        const qualified_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
-                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                        break :name_blk self.env.getIdent(fully_qualified_idx);
-                                    } else field_text;
+                                // For auto-imported types with statement_idx (builtin types and platform modules),
+                                // build the full qualified name using qualified_type_ident.
+                                // For regular user module imports (statement_idx is null), use field_text directly.
+                                const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
+                                    // Build the fully qualified member name using the type's qualified ident
+                                    // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
+                                    // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    // Note: qualified_type_ident is always stored in the calling module's ident store
+                                    // (self.env), since Ident.Idx values are not transferable between stores.
+                                    const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    break :name_blk self.env.getIdent(fully_qualified_idx);
+                                } else field_text;
 
-                                    // Look up the associated item by its name
-                                    const qname_ident = module_env.common.findIdent(lookup_name) orelse {
-                                        // Identifier not found - just return null
-                                        // The error will be handled by the code below that checks target_node_idx_opt
-                                        break :blk null;
-                                    };
-                                    break :blk module_env.getExposedNodeIndexById(qname_ident);
-                                } else {
+                                // Look up the associated item by its name
+                                const qname_ident = module_env.common.findIdent(lookup_name) orelse {
+                                    // Identifier not found - just return null
+                                    // The error will be handled by the code below that checks target_node_idx_opt
                                     break :blk null;
-                                }
+                                };
+                                break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
                             const target_node_idx = target_node_idx_opt orelse {
                                 // The identifier doesn't exist in the module or isn't exposed
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
-                                const module_exists = if (self.module_envs) |envs_map|
-                                    envs_map.contains(module_name)
-                                else
-                                    false;
-
-                                if (!module_exists) {
+                                if (auto_imported_type_info == null) {
                                     // Module import failed, don't generate redundant error
                                     // Fall through to normal identifier lookup
                                     break :blk_qualified;
                                 }
 
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                const is_auto_imported_type = if (self.module_envs) |envs_map|
-                                    envs_map.contains(module_name)
-                                else
-                                    false;
-
-                                const diagnostic = if (is_auto_imported_type)
+                                const diagnostic = if (auto_imported_type_info != null)
                                     Diagnostic{ .nested_value_not_found = .{
                                         .parent_name = module_name,
                                         .nested_name = ident,
@@ -4417,6 +4501,22 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
+                        // Check for self-reference outside of lambda (issue #8831).
+                        // If we're defining a non-lambda pattern and this lookup references it,
+                        // that's an invalid self-reference like `a = a` or `a = [a]`.
+                        if (self.defining_pattern) |defining_pat_idx| {
+                            if (found_pattern_idx == defining_pat_idx) {
+                                // Self-reference detected (issue #8831) - emit error and return malformed expr.
+                                // Non-function values cannot reference themselves as that would cause
+                                // an infinite loop at runtime.
+                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
+                                    .ident = ident,
+                                    .region = region,
+                                } });
+                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                            }
+                        }
+
                         // Mark this pattern as used for unused variable checking
                         try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
 
@@ -4577,81 +4677,9 @@ pub fn canonicalizeExpr(
             const token_text = self.parse_ir.resolve(e.token);
             const parsed = types.parseNumeralWithSuffix(token_text);
 
-            // Parse the integer value
-            const is_negated = parsed.num_text[0] == '-';
-            const after_minus_sign = @as(usize, @intFromBool(is_negated));
-
-            var first_digit: usize = undefined;
-            const DEFAULT_BASE = 10;
-            var int_base: u8 = undefined;
-
-            if (parsed.num_text[after_minus_sign] == '0' and parsed.num_text.len > after_minus_sign + 2) {
-                switch (parsed.num_text[after_minus_sign + 1]) {
-                    'x', 'X' => {
-                        int_base = 16;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'o', 'O' => {
-                        int_base = 8;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    'b', 'B' => {
-                        int_base = 2;
-                        first_digit = after_minus_sign + 2;
-                    },
-                    else => {
-                        int_base = DEFAULT_BASE;
-                        first_digit = after_minus_sign;
-                    },
-                }
-            } else {
-                int_base = DEFAULT_BASE;
-                first_digit = after_minus_sign;
-            }
-
-            const digit_part = parsed.num_text[first_digit..];
-
-            const u128_val = parseIntWithUnderscores(u128, digit_part, int_base) catch {
-                // Any number literal that is too large for u128 is invalid, regardless of whether it had a minus sign!
+            const int_value = parseIntText(parsed.num_text) orelse {
                 const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            };
-
-            // If this had a minus sign, but negating it would result in a negative number
-            // that would be too low to fit in i128, then this int literal is also invalid.
-            if (is_negated and u128_val > min_i128_negated) {
-                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
-                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
-            }
-
-            // Determine the appropriate storage type
-            const int_value = blk: {
-                if (is_negated) {
-                    // Negative: must be i128 (or smaller)
-                    const i128_val = if (u128_val == min_i128_negated)
-                        std.math.minInt(i128) // Special case for -2^127
-                    else
-                        -@as(i128, @intCast(u128_val));
-                    break :blk CIR.IntValue{
-                        .bytes = @bitCast(i128_val),
-                        .kind = .i128,
-                    };
-                } else {
-                    // Positive: could be i128 or u128
-                    if (u128_val > @as(u128, std.math.maxInt(i128))) {
-                        // Too big for i128, keep as u128
-                        break :blk CIR.IntValue{
-                            .bytes = @bitCast(u128_val),
-                            .kind = .u128,
-                        };
-                    } else {
-                        // Fits in i128
-                        break :blk CIR.IntValue{
-                            .bytes = @bitCast(@as(i128, @intCast(u128_val))),
-                            .kind = .i128,
-                        };
-                    }
-                }
             };
 
             // Old-style suffixes (e.g., 123u64) are deprecated - emit error but still process
@@ -4845,6 +4873,78 @@ pub fn canonicalizeExpr(
             };
 
             const expr_idx = try self.env.addExpr(cir_expr, region);
+
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .typed_int => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const token_text = self.parse_ir.resolve(e.token);
+
+            const int_value = parseIntText(token_text) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Get the type identifier from the .Type token
+            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const expr_idx = try self.env.addExpr(
+                CIR.Expr{ .e_typed_int = .{
+                    .value = int_value,
+                    .type_name = type_ident,
+                } },
+                region,
+            );
+
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+        .typed_frac => |e| {
+            const region = self.parse_ir.tokenizedRegionToRegion(e.region);
+            const token_text = self.parse_ir.resolve(e.token);
+
+            // Parse the fractional value as f64 first, then convert to scaled i128
+            const f64_val = std.fmt.parseFloat(f64, token_text) catch {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            // Convert to scaled i128 (Dec representation: value * 10^18)
+            const dec_scale = std.math.pow(f64, 10, 18);
+            const scaled_val = f64_val * dec_scale;
+
+            // Check if it fits in i128
+            const i128_max_f64 = 170141183460469231731687303715884105727.0;
+            const i128_min_f64 = -170141183460469231731687303715884105728.0;
+
+            if (scaled_val < i128_min_f64 or scaled_val > i128_max_f64) {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            }
+
+            const rounded_val = @round(scaled_val);
+            const i128_val = @as(i128, @intFromFloat(rounded_val));
+
+            const int_value = CIR.IntValue{
+                .bytes = @bitCast(i128_val),
+                .kind = .i128,
+            };
+
+            // Get the type identifier from the .Type token
+            const type_ident = self.parse_ir.tokens.resolveIdentifier(e.type_token) orelse {
+                const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
+                return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            };
+
+            const expr_idx = try self.env.addExpr(
+                CIR.Expr{ .e_typed_frac = .{
+                    .value = int_value,
+                    .type_name = type_ident,
+                } },
+                region,
+            );
 
             return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
         },
@@ -5536,36 +5636,45 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchMatchBranchPattern(err_branch_pattern_idx);
                 const err_branch_pat_span = try self.env.store.matchBranchPatternSpanFrom(branch_pat_scratch_top);
 
-                // Create the branch body: return Err(#err)
-                // First, create lookup for #err
-                const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
-                    .pattern_idx = err_assign_pattern_idx,
-                } }, region);
-                // Mark the pattern as used
-                try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
+                // Create the branch body
+                const branch_value_idx = if (self.in_expect) blk: {
+                    // Inside an expect: crash with a message instead of returning
+                    // This makes the expect fail when ? encounters an Err
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_crash = .{
+                        .msg = try self.env.insertString("The ? operator returned an Err in an expect"),
+                    } }, region);
+                } else blk: {
+                    // Normal case: return Err(#err)
+                    // First, create lookup for #err
+                    const err_lookup_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                        .pattern_idx = err_assign_pattern_idx,
+                    } }, region);
+                    // Mark the pattern as used
+                    try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                // Create Err(#err) tag expression
-                const err_tag_args_start = self.env.store.scratchExprTop();
-                try self.env.store.addScratchExpr(err_lookup_idx);
-                const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
+                    // Create Err(#err) tag expression
+                    const err_tag_args_start = self.env.store.scratchExprTop();
+                    try self.env.store.addScratchExpr(err_lookup_idx);
+                    const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_tag_args_span,
-                    },
-                }, region);
+                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
+                        .e_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_tag_args_span,
+                        },
+                    }, region);
 
-                // Create return Err(#err) expression
-                const return_expr_idx = try self.env.addExpr(CIR.Expr{ .e_return = .{
-                    .expr = err_tag_expr_idx,
-                } }, region);
+                    // Create return Err(#err) expression
+                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
+                        .expr = err_tag_expr_idx,
+                    } }, region);
+                };
 
                 // Create the Err branch
                 const err_branch_idx = try self.env.addMatchBranch(
                     Expr.Match.Branch{
                         .patterns = err_branch_pat_span,
-                        .value = return_expr_idx,
+                        .value = branch_value_idx,
                         .guard = null,
                         .redundant = try self.env.types.fresh(),
                     },
@@ -5577,11 +5686,12 @@ pub fn canonicalizeExpr(
             // Create span from scratch branches
             const branches_span = try self.env.store.matchBranchSpanFrom(scratch_top);
 
-            // Create the match expression
+            // Create the match expression (is_try_suffix = true since this comes from `?`)
             const match_expr = Expr.Match{
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = true,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -5977,6 +6087,7 @@ pub fn canonicalizeExpr(
                 .cond = can_cond.idx,
                 .branches = branches_span,
                 .exhaustive = try self.env.types.fresh(),
+                .is_try_suffix = false,
             };
             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_match = match_expr }, region);
 
@@ -8011,7 +8122,14 @@ const TypeAnnoCtx = struct {
     type: TypeAnnoCtxType,
     found_underscore: bool,
 
-    const TypeAnnoCtxType = enum(u1) { type_decl_anno, inline_anno };
+    const TypeAnnoCtxType = enum(u2) {
+        /// Regular type declarations - no new type vars can be introduced
+        type_decl_anno,
+        /// Platform requires for-clause - allows `_`-prefixed type vars (like `_others` in open unions)
+        for_clause_anno,
+        /// Inline annotations - any type var can be introduced
+        inline_anno,
+    };
 
     pub fn init(typ: TypeAnnoCtxType) TypeAnnoCtx {
         return .{ .type = typ, .found_underscore = false };
@@ -8019,6 +8137,15 @@ const TypeAnnoCtx = struct {
 
     pub fn isTypeDeclAndHasUnderscore(self: TypeAnnoCtx) bool {
         return self.type == .type_decl_anno and self.found_underscore;
+    }
+
+    /// Returns true if new type variables can be introduced in this context
+    pub fn canIntroduceTypeVar(self: TypeAnnoCtx, is_ignored: bool) bool {
+        return switch (self.type) {
+            .type_decl_anno => false,
+            .for_clause_anno => is_ignored,
+            .inline_anno => true,
+        };
     }
 };
 
@@ -8054,29 +8181,30 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    switch (type_anno_ctx.type) {
-                        // If this is an inline anno, then we can introduce the variable
-                        // into the scope
-                        .inline_anno => {
-                            // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(name_ident);
+                    // Whether new type variables can be introduced depends on context:
+                    // - type_decl_anno: no new vars allowed
+                    // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
+                    // - inline_anno: any new var allowed
+                    const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
-                            const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                                .name = name_ident,
-                            } }, region);
+                    if (can_introduce) {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(name_ident);
 
-                            // Add to scope
-                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                            .name = name_ident,
+                        } }, region);
 
-                            return new_anno_idx;
-                        },
-                        // Otherwise, this is malformed
-                        .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
-                                .name = name_ident,
-                                .region = region,
-                            } });
-                        },
+                        // Add to scope
+                        _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+
+                        return new_anno_idx;
+                    } else {
+                        // In type declarations, undeclared type variables are errors
+                        return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                            .name = name_ident,
+                            .region = region,
+                        } });
                     }
                 },
             }
@@ -8111,29 +8239,30 @@ fn canonicalizeTypeAnnoHelp(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_c
                     } }, region);
                 },
                 .not_found => {
-                    switch (type_anno_ctx.type) {
-                        // If this is an inline anno, then we can introduce the variable
-                        // into the scope
-                        .inline_anno => {
-                            // Track this type variable for underscore validation
-                            try self.scratch_type_var_validation.append(name_ident);
+                    // Whether new type variables can be introduced depends on context:
+                    // - type_decl_anno: no new vars allowed
+                    // - for_clause_anno: only _-prefixed vars allowed (for open unions in platform requires)
+                    // - inline_anno: any new var allowed
+                    const can_introduce = type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored);
 
-                            const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
-                                .name = name_ident,
-                            } }, region);
+                    if (can_introduce) {
+                        // Track this type variable for underscore validation
+                        try self.scratch_type_var_validation.append(name_ident);
 
-                            // Add to scope
-                            _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+                        const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
+                            .name = name_ident,
+                        } }, region);
 
-                            return new_anno_idx;
-                        },
-                        // Otherwise, this is malformed
-                        .type_decl_anno => {
-                            return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
-                                .name = name_ident,
-                                .region = region,
-                            } });
-                        },
+                        // Add to scope
+                        _ = try self.scopeIntroduceTypeVar(name_ident, new_anno_idx);
+
+                        return new_anno_idx;
+                    } else {
+                        // In type declarations, undeclared type variables are errors
+                        return self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
+                            .name = name_ident,
+                            .region = region,
+                        } });
                     }
                 },
             }
@@ -8710,10 +8839,18 @@ fn canonicalizeTypeAnnoTagUnion(
 
     const tag_anno_idxs = try self.env.store.typeAnnoSpanFrom(scratch_annos_top);
 
-    // Canonicalize the ext, if it exists
-    const mb_ext_anno = if (tag_union.open_anno) |open_idx| blk: {
-        break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
-    } else null;
+    // Canonicalize the ext based on extension type
+    const mb_ext_anno: ?TypeAnno.Idx = switch (tag_union.ext) {
+        .closed => null,
+        .open => blk: {
+            // Anonymous open union `..` - create an anonymous underscore (inferred) type
+            break :blk try self.env.addTypeAnno(.{ .underscore = {} }, region);
+        },
+        .named => |open_idx| blk: {
+            // Named extension like `..ext`
+            break :blk try self.canonicalizeTypeAnnoHelp(open_idx, type_anno_ctx);
+        },
+    };
 
     return try self.env.addTypeAnno(.{ .tag_union = .{
         .tags = tag_anno_idxs,
@@ -9300,6 +9437,11 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
         },
         .expect => |e_| {
             const region = self.parse_ir.tokenizedRegionToRegion(e_.region);
+
+            // Track that we're inside an expect so ? operator crashes on Err
+            const was_in_expect = self.in_expect;
+            self.in_expect = true;
+            defer self.in_expect = was_in_expect;
 
             // Canonicalize the expect expression
             const expr = try self.canonicalizeExprOrMalformed(e_.body);
@@ -10047,8 +10189,22 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } });
     };
 
+    // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
+    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    const ast_body_expr = self.parse_ir.store.getExpr(d.body);
+    const is_lambda = ast_body_expr == .lambda;
+
+    // Save and set defining_pattern for self-reference detection (issue #8831)
+    const saved_defining_pattern = self.defining_pattern;
+    if (!is_lambda) {
+        self.defining_pattern = pattern_idx;
+    }
+
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
+
+    // Restore defining_pattern
+    self.defining_pattern = saved_defining_pattern;
 
     // Determine if we should generalize based on RHS
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
@@ -10323,9 +10479,9 @@ fn extractTypeVarIdentsFromASTAnno(self: *Self, anno_idx: AST.TypeAnno.Idx, iden
             for (self.parse_ir.store.typeAnnoSlice(tag_union.tags)) |tag_idx| {
                 try self.extractTypeVarIdentsFromASTAnno(tag_idx, idents_start_idx);
             }
-            // Extract type variable from open extension if present
-            if (tag_union.open_anno) |open_idx| {
-                try self.extractTypeVarIdentsFromASTAnno(open_idx, idents_start_idx);
+            // Extract type variable from named extension if present
+            if (tag_union.ext == .named) {
+                try self.extractTypeVarIdentsFromASTAnno(tag_union.ext.named, idents_start_idx);
             }
         },
         .ty, .underscore, .malformed => {
@@ -10399,8 +10555,8 @@ fn getTypeVarRegionFromAST(self: *Self, anno_idx: AST.TypeAnno.Idx, target_ident
                     return region;
                 }
             }
-            if (tag_union.open_anno) |open_idx| {
-                return self.getTypeVarRegionFromAST(open_idx, target_ident);
+            if (tag_union.ext == .named) {
+                return self.getTypeVarRegionFromAST(tag_union.ext.named, target_ident);
             }
             return null;
         },
@@ -11167,7 +11323,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 break :blk new_anno_idx;
                             },
                             // Otherwise, this is malformed
-                            .type_decl_anno => {
+                            .type_decl_anno, .for_clause_anno => {
                                 break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
                                     .name = var_ident,
                                     .region = region,
@@ -11250,7 +11406,7 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                                 break :blk new_anno_idx;
                             },
                             // Otherwise, this is malformed
-                            .type_decl_anno => {
+                            .type_decl_anno, .for_clause_anno => {
                                 break :blk try self.env.pushMalformed(TypeAnno.Idx, Diagnostic{ .undeclared_type_var = .{
                                     .name = var_ident,
                                     .region = region,

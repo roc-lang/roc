@@ -97,6 +97,21 @@ pub const Expr = union(enum) {
         value: CIR.SmallDecValue,
         has_suffix: bool, // If the value had a `dec` suffix
     },
+    /// An integer literal with explicit type annotation: `123.U64`
+    /// The type_name stores the type identifier (e.g., "U64", "I32")
+    /// At compile time, from_numeral is called to validate and convert the value.
+    e_typed_int: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
+    /// A fractional literal with explicit type annotation: `3.14.Dec`
+    /// The type_name stores the type identifier (e.g., "Dec", "F64")
+    /// At compile time, from_numeral is called to validate and convert the value.
+    /// The value is stored as scaled i128 (like Dec, scaled by 10^18).
+    e_typed_frac: struct {
+        value: CIR.IntValue,
+        type_name: Ident.Idx,
+    },
     // A single segment of a string literal
     // a single string may be made up of a span sequential segments
     // for example if it was split across multiple lines
@@ -1361,6 +1376,38 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
+            .e_typed_int => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .e_typed_frac => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                const region = ir.store.getExprRegion(expr_idx);
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+
+                var value_buf: [40]u8 = undefined;
+                const value_str = e.value.bufPrint(&value_buf) catch unreachable;
+                try tree.pushStringPair("value", value_str);
+
+                const type_name = ir.getIdent(e.type_name);
+                try tree.pushStringPair("type", type_name);
+
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
             .e_str_segment => |e| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-literal");
@@ -1958,6 +2005,9 @@ pub const Expr = union(enum) {
         branches: Branch.Span,
         /// Marks whether a match expression is exhaustive using a variable.
         exhaustive: TypeVar,
+        /// Whether this match was desugared from the `?` (try suffix) operator.
+        /// When true, we need to verify the condition is actually a Try type.
+        is_try_suffix: bool,
 
         pub const Idx = enum(u32) { _ };
         pub const Span = extern struct { span: base.DataSpan };

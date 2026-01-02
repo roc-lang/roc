@@ -611,6 +611,48 @@ pub const Interpreter = struct {
         @memset(self.var_to_layout_slot.items, 0);
     }
 
+    /// Check if adding source -> target to rigid_subst would create a cycle.
+    /// A cycle exists if following the substitution chain from target eventually leads back to source.
+    /// This checks BOTH rigid_subst and rigid_name_subst since getRuntimeLayout follows both.
+    fn wouldCreateRigidSubstCycle(self: *Interpreter, source: types.Var, target: types.Var) bool {
+        // First check: if source == target, it's a trivial cycle
+        if (source == target) return true;
+
+        // Follow the substitution chain from target, checking both rigid_subst and rigid_name_subst
+        // (same logic as getRuntimeLayout uses)
+        var resolved = self.runtime_types.resolveVar(target);
+        var count: u32 = 0;
+        while (true) {
+            count += 1;
+            if (count > 1000) {
+                // Safety limit - if we've followed 1000 substitutions, something is wrong
+                return true;
+            }
+
+            // Check if we've reached the source
+            if (resolved.var_ == source) {
+                return true;
+            }
+
+            // Try to follow substitution chain (same order as getRuntimeLayout)
+            if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
+                resolved = self.runtime_types.resolveVar(substituted_var);
+            } else if (resolved.desc.content == .rigid) {
+                const rigid_name = resolved.desc.content.rigid.name;
+                if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
+                    resolved = self.runtime_types.resolveVar(substituted_var);
+                } else {
+                    // No more substitutions available
+                    break;
+                }
+            } else {
+                // Not a rigid, no more substitutions
+                break;
+            }
+        }
+        return false;
+    }
+
     /// Find a type alias declaration by name in a module and return the var for its underlying type.
     /// Returns null if no type alias declaration with the given name is found.
     fn findTypeAliasBodyVar(module: *const can.ModuleEnv, name: base_pkg.Ident.Idx) ?types.Var {
@@ -1128,6 +1170,7 @@ pub const Interpreter = struct {
             .saved_rigid_subst = null,
             .saved_flex_type_context = null,
             .arg_rt_vars_to_free = null,
+            .saved_stack_ptr = self.stack_memory.next(),
         } } });
         try work_stack.push(.{ .eval_expr = .{
             .expr_idx = cmp_header.body_idx,
@@ -1858,7 +1901,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -1869,15 +1914,7 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write discriminant at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
-                            const disc_value: u32 = @intCast(ok_index orelse 0);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
-                            }
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
 
                             // Write Str payload at offset 0
                             const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
@@ -2080,7 +2117,9 @@ pub const Interpreter = struct {
                     } else if (result_layout.tag == .tag_union) {
                         // Tag union layout with proper variant info for Err case
                         var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                        const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                        const tu_idx = result_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
@@ -2091,15 +2130,8 @@ pub const Interpreter = struct {
                                 @memset(ptr_u8[0..total_size], 0);
                             }
 
-                            // Write outer discriminant (Err) at discriminant_offset
-                            const disc_ptr = ptr_u8 + tu_data.discriminant_offset;
-                            const disc_value: u32 = @intCast(err_index orelse 1);
-                            switch (tu_data.discriminant_size) {
-                                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(disc_value),
-                                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(disc_value),
-                                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = disc_value,
-                                else => {},
-                            }
+                            // Write outer discriminant (Err)
+                            tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(err_index orelse 1));
 
                             // Get Err variant's payload layout (BadUtf8 - also a tag_union)
                             const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
@@ -2107,16 +2139,12 @@ pub const Interpreter = struct {
 
                             // BadUtf8 is a tag_union with record { problem, index } as its payload
                             if (err_variant_layout.tag == .tag_union) {
-                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(err_variant_layout.data.tag_union.idx);
+                                const inner_tu_idx = err_variant_layout.data.tag_union.idx;
+                                const inner_tu_data = self.runtime_layout_store.getTagUnionData(inner_tu_idx);
+                                const inner_disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(inner_tu_idx);
 
                                 // Write inner discriminant (BadUtf8 is index 0)
-                                const inner_disc_ptr = ptr_u8 + inner_tu_data.discriminant_offset;
-                                switch (inner_tu_data.discriminant_size) {
-                                    1 => @as(*u8, @ptrCast(inner_disc_ptr)).* = 0,
-                                    2 => @as(*u16, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    4 => @as(*u32, @ptrCast(@alignCast(inner_disc_ptr))).* = 0,
-                                    else => {},
-                                }
+                                inner_tu_data.writeDiscriminantToPtr(ptr_u8 + inner_disc_offset, 0);
 
                                 // Get BadUtf8's payload layout (should be record { problem, index })
                                 const inner_variants = self.runtime_layout_store.getTagUnionVariants(inner_tu_data);
@@ -2362,6 +2390,14 @@ pub const Interpreter = struct {
                         }
                         break :blk try self.allocator.dupe(u8, "<opaque>");
                     } else {
+                        // Special case: Bool should render as just "True" or "False", not "Bool.True"
+                        // Check if this is the Builtin.Bool type
+                        const is_builtin_bool = nom.origin_module == self.env.idents.builtin_module and
+                            (nom.ident.ident_idx == self.env.idents.bool or
+                                nom.ident.ident_idx == self.env.idents.bool_type);
+                        if (is_builtin_bool) {
+                            break :blk try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
+                        }
                         // Nominal types render as "TypeName.InnerValue"
                         const type_name = self.root_env.getIdent(nom.ident.ident_idx);
                         const inner_rendered = try self.renderValueRocWithType(value, effective_rt_var, roc_ops);
@@ -2543,10 +2579,19 @@ pub const Interpreter = struct {
                                 const elem_var = vars[1];
                                 // Follow aliases to check if underlying type is concrete
                                 var elem_resolved = self.runtime_types.resolveVar(elem_var);
-                                var unwrap_count: u32 = 0;
-                                while (elem_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                                    const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
-                                    elem_resolved = self.runtime_types.resolveVar(backing);
+                                if (comptime builtin.mode == .Debug) {
+                                    var unwrap_count: u32 = 0;
+                                    while (elem_resolved.desc.content == .alias) {
+                                        unwrap_count += 1;
+                                        std.debug.assert(unwrap_count < 1000);
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
+                                } else {
+                                    while (elem_resolved.desc.content == .alias) {
+                                        const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
+                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                    }
                                 }
                                 // If element type is concrete (structure or alias to structure), create a fresh copy
                                 // to avoid corruption from later unifications during equality checking
@@ -2581,10 +2626,19 @@ pub const Interpreter = struct {
                     // List came from polymorphic context - try return_rt_var if it's concrete
                     if (return_rt_var) |rv| {
                         var rv_resolved = self.runtime_types.resolveVar(rv);
-                        var unwrap_count: u32 = 0;
-                        while (rv_resolved.desc.content == .alias and unwrap_count < 100) : (unwrap_count += 1) {
-                            const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
-                            rv_resolved = self.runtime_types.resolveVar(backing);
+                        if (comptime builtin.mode == .Debug) {
+                            var unwrap_count: u32 = 0;
+                            while (rv_resolved.desc.content == .alias) {
+                                unwrap_count += 1;
+                                std.debug.assert(unwrap_count < 1000);
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
+                        } else {
+                            while (rv_resolved.desc.content == .alias) {
+                                const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
+                                rv_resolved = self.runtime_types.resolveVar(backing);
+                            }
                         }
                         if (rv_resolved.desc.content == .structure) {
                             break :blk rv;
@@ -4577,22 +4631,16 @@ pub const Interpreter = struct {
                 } else if (result_layout.tag == .tag_union) {
                     // Tag union layout: payload at offset 0, discriminant at discriminant_offset
                     var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-                    const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+                    const tu_idx = result_layout.data.tag_union.idx;
+                    const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                    const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                    // Write tag discriminant at discriminant_offset
                     const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                    const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-                    switch (tu_data.discriminant_size) {
-                        1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                        2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                        else => {},
-                    }
+                    const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+                    tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
                     // Clear payload area (at offset 0)
-                    const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+                    const payload_size = disc_offset; // Payload spans from 0 to discriminant_offset
                     if (payload_size > 0) {
                         @memset(base_ptr[0..payload_size], 0);
                     }
@@ -5289,22 +5337,16 @@ pub const Interpreter = struct {
         } else if (result_layout.tag == .tag_union) {
             // Tag union layout: payload at offset 0, discriminant at discriminant_offset
             const dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-            // Write tag discriminant at discriminant_offset
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            const tag_idx: usize = if (in_range) ok_index orelse 0 else err_index orelse 1;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
-            }
+            const tag_idx: u32 = if (in_range) @intCast(ok_index orelse 0) else @intCast(err_index orelse 1);
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, tag_idx);
 
-            // Clear payload area (at offset 0)
-            const payload_size = tu_data.discriminant_offset; // Payload spans from 0 to discriminant_offset
+            // Clear payload area
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -5894,22 +5936,15 @@ pub const Interpreter = struct {
             return dest;
         } else if (result_layout.tag == .tag_union) {
             var dest = try self.pushRaw(result_layout, 0, result_rt_var);
-            const tu_data = self.runtime_layout_store.getTagUnionData(result_layout.data.tag_union.idx);
+            const tu_idx = result_layout.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-
-            // Write discriminant
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_idx),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_idx),
-                else => {},
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_idx));
 
             // Clear and write payload
-            const payload_size = tu_data.discriminant_offset;
+            const payload_size = disc_offset;
             if (payload_size > 0) {
                 @memset(base_ptr[0..payload_size], 0);
             }
@@ -6011,9 +6046,10 @@ pub const Interpreter = struct {
             return (bool_byte != 0) == equals;
         } else if (value.layout.tag == .tag_union) {
             // Tag union Bool: read discriminant at the correct offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+            const tu_idx = value.layout.data.tag_union.idx;
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
+            const disc_ptr = base_ptr + disc_offset;
             const bool_byte = disc_ptr[0];
             // Debug removed
             // discriminant 1 = True, discriminant 0 = False
@@ -6698,43 +6734,17 @@ pub const Interpreter = struct {
     pub fn getCanonicalBoolRuntimeVar(self: *Interpreter) !types.Var {
         if (self.canonical_bool_rt_var) |cached| return cached;
         // Use the dynamic bool_stmt index (from the Bool module)
-        const bool_decl_idx = self.builtins.bool_stmt;
-
-        // Get the statement from the Bool module
-        const bool_stmt = self.builtins.bool_env.store.getStatement(bool_decl_idx);
-
-        // For nominal type declarations, we need to get the backing type, not the nominal wrapper
-        const ct_var = switch (bool_stmt) {
-            .s_nominal_decl => blk: {
-                // The type of the declaration is the nominal type, but we want its backing
-                const nom_var = can.ModuleEnv.varFrom(bool_decl_idx);
-                const nom_resolved = self.builtins.bool_env.types.resolveVar(nom_var);
-                if (nom_resolved.desc.content == .structure) {
-                    if (nom_resolved.desc.content.structure == .nominal_type) {
-                        const nt = nom_resolved.desc.content.structure.nominal_type;
-                        const backing_var = self.builtins.bool_env.types.getNominalBackingVar(nt);
-                        break :blk backing_var;
-                    }
-                }
-                break :blk nom_var;
-            },
-            else => can.ModuleEnv.varFrom(bool_decl_idx),
-        };
+        // We need the nominal type itself (not the backing type) so that method dispatch
+        // can look up methods like encode, etc.
+        const ct_var = can.ModuleEnv.varFrom(self.builtins.bool_stmt);
 
         // Use bool_env to translate since bool_stmt is from the Bool module
         // Cast away const - translateTypeVar doesn't actually mutate the module
         const nominal_rt_var = try self.translateTypeVar(@constCast(self.builtins.bool_env), ct_var);
-        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
-        const backing_rt_var = switch (nominal_resolved.desc.content) {
-            .structure => |st| switch (st) {
-                .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
-                .tag_union => nominal_rt_var,
-                else => nominal_rt_var,
-            },
-            else => nominal_rt_var,
-        };
-        self.canonical_bool_rt_var = backing_rt_var;
-        return backing_rt_var;
+        // Return the nominal type, not the backing type - method dispatch needs the nominal
+        // type to look up methods like encode, etc.
+        self.canonical_bool_rt_var = nominal_rt_var;
+        return nominal_rt_var;
     }
 
     pub fn getCanonicalStrRuntimeVar(self: *Interpreter) !types.Var {
@@ -7006,6 +7016,12 @@ pub const Interpreter = struct {
                         // This is critical for opaque types returned from polymorphic functions
                         // where the field layout might not match the expected tag union layout
                         // of the opaque type's backing.
+                        //
+                        // HOWEVER: For polymorphic types where arg_var is a flex var that defaults
+                        // to Dec, the computed layout would be wrong (smaller than actual).
+                        // In this case, prefer the field_value.layout which was set correctly
+                        // during tag creation.
+                        // See https://github.com/roc-lang/roc/issues/8872
                         const arg_var = arg_vars[0];
                         const arg_resolved = self.runtime_types.resolveVar(arg_var);
                         const effective_layout = blk: {
@@ -7015,10 +7031,24 @@ pub const Interpreter = struct {
                                     break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
                                 }
                             }
+                            // For flex vars, use the actual field_value.layout which was set
+                            // correctly during tag creation. Computing layout from a flex var
+                            // would give Dec (16 bytes) which may not match the actual payload.
+                            if (arg_resolved.desc.content == .flex) {
+                                break :blk field_value.layout;
+                            }
                             // Second try: compute layout directly from arg_var
                             // This handles concrete types like opaque Item returned from polymorphic functions
                             if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                                break :blk computed_layout;
+                                // Only use computed layout if it matches or exceeds field layout size.
+                                // If computed is smaller, the type has flex vars that defaulted to
+                                // a smaller type (like Dec), but the actual data is larger.
+                                const computed_size = self.runtime_layout_store.layoutSize(computed_layout);
+                                const field_size = self.runtime_layout_store.layoutSize(field_value.layout);
+                                if (computed_size >= field_size) {
+                                    break :blk computed_layout;
+                                }
+                                // Fall through to use field_value.layout
                             } else |_| {}
                             // Fallback to field_value.layout
                             break :blk field_value.layout;
@@ -7138,6 +7168,43 @@ pub const Interpreter = struct {
                 }
 
                 return .{ .index = tag_index, .payload = payload_value };
+            },
+            .box => {
+                // Auto-unbox for recursive types: the value is boxed but we need to extract
+                // the tag union inside. This happens when list elements are boxed for recursive types.
+                const elem_idx = value.layout.data.box;
+                const elem_layout = self.runtime_layout_store.getLayout(elem_idx);
+
+                // Get the element rt_var from the Box type's type argument
+                const elem_rt_var = blk: {
+                    const box_resolved = self.runtime_types.resolveVar(value.rt_var);
+                    if (box_resolved.desc.content == .structure) {
+                        const flat = box_resolved.desc.content.structure;
+                        if (flat == .nominal_type) {
+                            const nom = flat.nominal_type;
+                            const type_args = self.runtime_types.sliceVars(nom.vars.nonempty);
+                            if (type_args.len > 0) {
+                                break :blk type_args[0];
+                            }
+                        }
+                    }
+                    // Fallback to union_rt_var
+                    break :blk union_rt_var;
+                };
+
+                // Get pointer to heap data from the box
+                const box_ptr: *const usize = @ptrCast(@alignCast(value.ptr.?));
+                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+
+                // Create an unboxed value and recursively extract tag
+                const unboxed = StackValue{
+                    .layout = elem_layout,
+                    .ptr = data_ptr,
+                    .is_initialized = true,
+                    .rt_var = elem_rt_var,
+                };
+
+                return self.extractTagValue(unboxed, elem_rt_var);
             },
             else => return error.TypeMismatch,
         }
@@ -8152,13 +8219,13 @@ pub const Interpreter = struct {
         // This ensures that polymorphic methods like `to` have their type parameters mapped
         // to the correct concrete type (e.g., U8) before the closure is created.
         if (receiver_rt_var) |recv_rt_var| {
-            const def_ct_var = can.ModuleEnv.varFrom(target_def_idx);
-            const def_resolved = origin_env.types.resolveVar(def_ct_var);
+            // Use the expression's type as the single source of truth for propagating
+            // type mappings. The expression's type always has the correct function type.
+            const expr_ct_var = can.ModuleEnv.varFrom(target_def.expr);
+            const expr_resolved = origin_env.types.resolveVar(expr_ct_var);
 
-            // If the method has a function type, extract its first parameter type
-            // and propagate mappings from the receiver type to it
-            if (def_resolved.desc.content == .structure) {
-                const flat = def_resolved.desc.content.structure;
+            if (expr_resolved.desc.content == .structure) {
+                const flat = expr_resolved.desc.content.structure;
                 switch (flat) {
                     .fn_pure, .fn_effectful, .fn_unbound => |fn_type| {
                         const param_vars = origin_env.types.sliceVars(fn_type.args);
@@ -8167,15 +8234,23 @@ pub const Interpreter = struct {
                             // Propagate mappings from the concrete receiver to this type
                             try self.propagateFlexMappings(@constCast(origin_env), param_vars[0], recv_rt_var);
                         }
+                        // Also propagate mappings to the return type. This is needed when the
+                        // return type has type variables that should match the parameter's type
+                        // variables but may be represented as separate variables in the type store
+                        // after serialization. For example, identity : Iter(s) -> Iter(s) needs
+                        // both the parameter and return type's `s` to be mapped.
+                        try self.propagateFlexMappings(@constCast(origin_env), fn_type.ret, recv_rt_var);
                     },
                     else => {},
                 }
             }
         }
 
-        // Translate the def's type var to runtime
-        const def_var = can.ModuleEnv.varFrom(target_def_idx);
-        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), def_var);
+        // Translate the expression's type to runtime.
+        // The expression's type is the single source of truth for the function type,
+        // whether it's a lambda or a reference to another function.
+        const expr_var = can.ModuleEnv.varFrom(target_def.expr);
+        const rt_def_var = try self.translateTypeVar(@constCast(origin_env), expr_var);
 
         // Evaluate the method's expression
         const method_value = try self.evalWithExpectedType(target_def.expr, roc_ops, rt_def_var);
@@ -8498,6 +8573,107 @@ pub const Interpreter = struct {
         );
     }
 
+    /// Recursively searches a layout tree to find an existing Box(target_tag_union) layout.
+    ///
+    /// For recursive types like `Node := [Text(Str), Element(List(Node))]`, the compiler
+    /// auto-inserts Box layouts at runtime even though `Node` isn't a `Box` at type-checking
+    /// time. When we need to box a value of this type, we must reuse the existing Box layout
+    /// index rather than creating a new one, since layouts are compared by index for equality.
+    fn findBoxIdxForTagUnion(self: *Interpreter, lay_idx: layout.Idx, target_tu_idx: layout.TagUnionIdx) ?layout.Idx {
+        const lay = self.runtime_layout_store.getLayout(lay_idx);
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return lay_idx; // Return the index, not the layout
+                }
+                // Don't recurse into a different tag_union
+                if (inner_layout.tag == .tag_union) {
+                    return null;
+                }
+                return self.findBoxIdxForTagUnion(lay.data.box, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    if (self.findBoxIdxForTagUnion(fields.get(i).layout, target_tu_idx)) |box_idx| {
+                        return box_idx;
+                    }
+                }
+                return null;
+            },
+            .list => {
+                return self.findBoxIdxForTagUnion(lay.data.list, target_tu_idx);
+            },
+            else => return null,
+        }
+    }
+
+    /// Check if a layout contains a Box that points to a specific tag_union.
+    ///
+    /// This detects recursive types: a tag_union is recursive if one of its variant payloads
+    /// contains a Box pointing back to the same tag_union. The compiler auto-inserts these
+    /// Box layouts at runtime even though the type isn't a `Box` at type-checking time.
+    fn layoutContainsBoxOfTagUnion(self: *Interpreter, lay: layout.Layout, target_tu_idx: layout.TagUnionIdx) bool {
+        switch (lay.tag) {
+            .box => {
+                const inner_layout = self.runtime_layout_store.getLayout(lay.data.box);
+                if (inner_layout.tag == .tag_union and inner_layout.data.tag_union.idx.int_idx == target_tu_idx.int_idx) {
+                    return true;
+                }
+                // Don't recurse into tag_unions (we're looking for Box(target), not nested tag_unions)
+                if (inner_layout.tag == .tag_union) {
+                    return false;
+                }
+                return self.layoutContainsBoxOfTagUnion(inner_layout, target_tu_idx);
+            },
+            .tuple => {
+                const tuple_data = self.runtime_layout_store.getTupleData(lay.data.tuple.idx);
+                const fields = self.runtime_layout_store.tuple_fields.sliceRange(tuple_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .record => {
+                const record_data = self.runtime_layout_store.getRecordData(lay.data.record.idx);
+                const fields = self.runtime_layout_store.record_fields.sliceRange(record_data.getFields());
+                var i: usize = 0;
+                while (i < fields.len) : (i += 1) {
+                    const field_layout = self.runtime_layout_store.getLayout(fields.get(i).layout);
+                    if (self.layoutContainsBoxOfTagUnion(field_layout, target_tu_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            .list => {
+                const elem_layout = self.runtime_layout_store.getLayout(lay.data.list);
+                return self.layoutContainsBoxOfTagUnion(elem_layout, target_tu_idx);
+            },
+            // Don't recurse into tag_unions - we're looking for Box(target) directly
+            // in the current payload, not inside nested tag_unions
+            else => return false,
+        }
+    }
+
     /// Get the layout for a runtime type var using the O(1) biased slot array.
     pub fn getRuntimeLayout(self: *Interpreter, type_var: types.Var) !layout.Layout {
         const trace = tracy.trace(@src());
@@ -8505,23 +8681,13 @@ pub const Interpreter = struct {
 
         var resolved = self.runtime_types.resolveVar(type_var);
 
-        // Apply rigid variable substitution if this is a rigid variable
-        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
-        var count: u32 = 0;
+        // Apply rigid variable substitution if this is a rigid variable.
+        // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
         while (resolved.desc.content == .rigid) {
             const rigid_name = resolved.desc.content.rigid.name;
-            // First check rigid_subst (by type variable)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                // Fall back to rigid_name_subst (by string index) - used for for-clause type mappings
-                // Also add this to rigid_subst for faster future lookups
-                self.rigid_subst.put(resolved.var_, substituted_var) catch {};
-                count += 1;
-                std.debug.assert(count < 1000);
                 resolved = self.runtime_types.resolveVar(substituted_var);
             } else {
                 break;
@@ -8912,9 +9078,59 @@ pub const Interpreter = struct {
                     // Function type propagation is complex - skip for now
                     // The main use case we need is nominal types like `Num a`
                 },
-                .tag_union => {
-                    // Tag union propagation is complex - skip for now
-                    // This case is less common for the numeric range use case we're fixing
+                .tag_union => |ct_tu| {
+                    // For tag unions, match tags by name and propagate argument type mappings.
+                    // This is needed for methods on tag unions with type parameters, e.g.:
+                    // Iter(s) :: [It(s)].{ identity = |It(s_)| It(s_) }
+                    // When called with Iter(I64), we need to map s -> I64.
+                    //
+                    // The RT type might be a tag union directly, or it might be a nominal type
+                    // wrapping a tag union. We need to handle both cases.
+                    const rt_tu_opt: ?types.TagUnion = blk: {
+                        if (rt_resolved.desc.content == .structure) {
+                            switch (rt_resolved.desc.content.structure) {
+                                .tag_union => |tu| break :blk tu,
+                                .nominal_type => |nom| {
+                                    // Unwrap nominal to get backing type
+                                    const backing = self.runtime_types.getNominalBackingVar(nom);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure and
+                                        backing_resolved.desc.content.structure == .tag_union)
+                                    {
+                                        break :blk backing_resolved.desc.content.structure.tag_union;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                        break :blk null;
+                    };
+
+                    if (rt_tu_opt) |rt_tu| {
+                        const ct_tags = module.types.getTagsSlice(ct_tu.tags);
+                        const rt_tags = self.runtime_types.getTagsSlice(rt_tu.tags);
+
+                        // Match tags by name and propagate argument mappings
+                        for (ct_tags.items(.name), ct_tags.items(.args)) |ct_tag_name, ct_tag_args| {
+                            const ct_tag_name_str = module.getIdent(ct_tag_name);
+                            // Translate CT ident to RT ident space for comparison
+                            const rt_ct_tag_ident = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(ct_tag_name_str));
+
+                            // Find matching tag in RT type by ident index
+                            for (rt_tags.items(.name), rt_tags.items(.args)) |rt_tag_name, rt_tag_args| {
+                                if (rt_ct_tag_ident == rt_tag_name) {
+                                    // Found matching tag - propagate argument mappings
+                                    const ct_args = module.types.sliceVars(ct_tag_args);
+                                    const rt_args = self.runtime_types.sliceVars(rt_tag_args);
+                                    const min_args = @min(ct_args.len, rt_args.len);
+                                    for (0..min_args) |i| {
+                                        try self.propagateFlexMappings(module, ct_args[i], rt_args[i]);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
                 },
                 .record => {
                     // Record propagation is complex - skip for now
@@ -9418,12 +9634,15 @@ pub const Interpreter = struct {
                     // If there's a for-clause mapping for this rigid name, add it to empty_scope
                     // so the layout store can find it during Box/List layout computation
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Mapping found! Add to empty_scope and rigid_subst
-                        if (self.empty_scope.scopes.items.len == 0) {
-                            try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                        // Don't add if it would create a cycle in rigid_subst
+                        if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
+                            // Mapping found! Add to empty_scope and rigid_subst
+                            if (self.empty_scope.scopes.items.len == 0) {
+                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                            }
+                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                         }
-                        try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
-                        try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
                     }
 
                     break :blk rt_rigid_var;
@@ -9443,13 +9662,18 @@ pub const Interpreter = struct {
         // Check if this variable has a substitution active (for generic function instantiation)
         const final_var = if (self.rigid_subst.get(out_var)) |substituted| blk: {
             // Follow the substitution chain to find the final variable
-            // In debug builds, use a counter to prevent infinite loops from cyclic substitutions
             var current = substituted;
-            var count: u32 = 0;
-            while (self.rigid_subst.get(current)) |next_subst| {
-                count += 1;
-                std.debug.assert(count < 1000); // Guard against infinite loops in debug builds
-                current = next_subst;
+            if (comptime builtin.mode == .Debug) {
+                var chain_count: u32 = 0;
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    chain_count += 1;
+                    std.debug.assert(chain_count < 1000);
+                    current = next_subst;
+                }
+            } else {
+                while (self.rigid_subst.get(current)) |next_subst| {
+                    current = next_subst;
+                }
             }
             break :blk current;
         } else out_var;
@@ -9699,18 +9923,28 @@ pub const Interpreter = struct {
 
         // Apply rigid substitutions to ret_var if needed
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        // Use a counter to prevent infinite loops from cyclic substitutions
         var resolved_ret = self.runtime_types.resolveVar(ret_var);
         var substituted_ret = ret_var;
-        var ret_count: u32 = 0;
-        while (resolved_ret.desc.content == .rigid) {
-            if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
-                ret_count += 1;
-                if (ret_count > 1000) break; // Prevent infinite loops
-                substituted_ret = subst_var;
-                resolved_ret = self.runtime_types.resolveVar(subst_var);
-            } else {
-                break;
+        if (comptime builtin.mode == .Debug) {
+            var ret_count: u32 = 0;
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    ret_count += 1;
+                    std.debug.assert(ret_count < 1000);
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
+            }
+        } else {
+            while (resolved_ret.desc.content == .rigid) {
+                if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
+                    substituted_ret = subst_var;
+                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -10138,6 +10372,9 @@ pub const Interpreter = struct {
             saved_flex_type_context: ?std.AutoHashMap(ModuleVarKey, types.Var),
             /// Allocated arg_rt_vars slice to free (null if none)
             arg_rt_vars_to_free: ?[]const types.Var,
+            /// Saved stack pointer to restore after call completes.
+            /// This ensures stack memory allocated during the function body is reclaimed.
+            saved_stack_ptr: *anyopaque,
         };
 
         /// Unary operation - apply method after operand is evaluated
@@ -10217,6 +10454,9 @@ pub const Interpreter = struct {
             receiver_rt_var: types.Var,
             /// Expression index (for return type)
             expr_idx: can.CIR.Expr.Idx,
+            /// Expected parameter types from the method signature (excluding receiver).
+            /// Used to provide correct expected types for arguments like numeric literals.
+            expected_arg_rt_vars: ?[]const types.Var,
         };
 
         /// Type var dispatch - collect arguments for a static method call on a type variable.
@@ -10519,7 +10759,7 @@ pub const Interpreter = struct {
 
         // If this is a numeric literal or numeric operation, return it
         switch (expr) {
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => return expr_idx,
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac => return expr_idx,
             .e_binop => |binop| {
                 // Binary operations on numbers can be re-evaluated with expected type
                 // Only return binop if it's a numeric operation (not boolean and/or)
@@ -10560,7 +10800,7 @@ pub const Interpreter = struct {
     ) Error!void {
         const expr = source_env.store.getExpr(expr_idx);
         switch (expr) {
-            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => {
+            .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac => {
                 // For numeric literals, map the expression's type var to target
                 const ct_var = can.ModuleEnv.varFrom(expr_idx);
                 const resolved = source_env.types.resolveVar(ct_var);
@@ -10692,6 +10932,20 @@ pub const Interpreter = struct {
 
             .e_dec_small => |small| {
                 const value = try self.evalDecSmall(expr_idx, expected_rt_var, small);
+                try value_stack.push(value);
+            },
+
+            .e_typed_int => |typed_int| {
+                // Typed integers like `123.U64` - the type is already resolved,
+                // evaluate like e_num with the value
+                const value = try self.evalTypedInt(expr_idx, expected_rt_var, typed_int);
+                try value_stack.push(value);
+            },
+
+            .e_typed_frac => |typed_frac| {
+                // Typed fracs like `3.14.Dec` - the type is already resolved,
+                // value is stored as scaled i128
+                const value = try self.evalTypedFrac(expr_idx, expected_rt_var, typed_frac);
                 try value_stack.push(value);
             },
 
@@ -10881,10 +11135,21 @@ pub const Interpreter = struct {
                 var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
 
                 // Follow aliases to get to the underlying type
-                while (resolved.desc.content == .alias) {
-                    const alias = resolved.desc.content.alias;
-                    const backing = self.runtime_types.getAliasBackingVar(alias);
-                    resolved = self.runtime_types.resolveVar(backing);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
+                } else {
+                    while (resolved.desc.content == .alias) {
+                        const alias = resolved.desc.content.alias;
+                        const backing = self.runtime_types.getAliasBackingVar(alias);
+                        resolved = self.runtime_types.resolveVar(backing);
+                    }
                 }
 
                 // Get nominal type info for method resolution
@@ -11006,6 +11271,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -11038,6 +11304,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
 
                         // Push body evaluation
@@ -11506,7 +11773,10 @@ pub const Interpreter = struct {
                                                 rt_type_args[i],
                                             else => rt_type_args[i],
                                         };
-                                        try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        // Don't add if it would create a cycle
+                                        if (!self.wouldCreateRigidSubstCycle(rigids.items[i], concrete_type)) {
+                                            try self.rigid_subst.put(rigids.items[i], concrete_type);
+                                        }
                                     }
                                 }
                                 // Return backing and preserve the nominal type for wrapping
@@ -11995,30 +12265,10 @@ pub const Interpreter = struct {
                 else
                     func_rt_var_orig;
 
-                // If we instantiated AND there are actual substitutions, update rigid_subst and empty_scope.
-                // Skip this block entirely if subst_map is empty (no rigid vars to substitute).
-                if (should_instantiate and subst_map.count() > 0) {
-                    const setup_trace = tracy.traceNamed(@src(), "sched.call.instantiate_setup");
-                    defer setup_trace.end();
-
-                    // Ensure we have at least one scope level
-                    if (self.empty_scope.scopes.items.len == 0) {
-                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                    }
-                    const scope = &self.empty_scope.scopes.items[0];
-
-                    var subst_iter = subst_map.iterator();
-                    while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
-                        try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
-                        // Also add to empty_scope so layout store finds the mapping
-                        try scope.put(entry.key_ptr.*, entry.value_ptr.*);
-                    }
-                    // Layout cache invalidation is handled by generation-based checking in getRuntimeLayout.
-                    // poly_context_generation increments when flex_type_context changes, which invalidates
-                    // stale layout cache entries. No explicit @memset needed.
-                }
+                // NOTE: We delay adding subst_map entries to rigid_subst until AFTER unification
+                // in prepareCallWithFuncVar. Unification can redirect fresh flex vars back to their
+                // source rigids, which would make our entries cyclic. By waiting until after unification,
+                // we can check for cycles and avoid adding problematic entries.
 
                 // Seed flex_type_context from any already-bound local lookups in the argument list.
                 //
@@ -12081,10 +12331,14 @@ pub const Interpreter = struct {
                     const arg_rt_var = try self.translateTypeVar(self.env, arg_ct_var);
 
                     // Apply substitution if this argument is a rigid variable that was instantiated
+                    // Use subst_map for the current call's substitutions (not yet in rigid_subst),
+                    // and fall back to rigid_subst for outer call substitutions.
                     if (should_instantiate) {
                         const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
                         if (arg_resolved.desc.content == .rigid) {
-                            if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
+                            if (subst_map.get(arg_resolved.var_)) |substituted_arg| {
+                                arg_rt_vars[i] = substituted_arg;
+                            } else if (self.rigid_subst.get(arg_resolved.var_)) |substituted_arg| {
                                 arg_rt_vars[i] = substituted_arg;
                             } else {
                                 arg_rt_vars[i] = arg_rt_var;
@@ -12124,6 +12378,34 @@ pub const Interpreter = struct {
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
                 } else call_ret_rt_var;
+
+                // NOW add subst_map entries to rigid_subst (after unification is complete).
+                // Only add entries that don't form cycles - unification may have redirected
+                // fresh flex vars back to their source rigids.
+                if (should_instantiate and subst_map.count() > 0) {
+                    // Ensure we have at least one scope level
+                    if (self.empty_scope.scopes.items.len == 0) {
+                        try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
+                    }
+                    const scope = &self.empty_scope.scopes.items[0];
+
+                    var subst_iter = subst_map.iterator();
+                    while (subst_iter.next()) |entry| {
+                        const source = entry.key_ptr.*;
+                        const target = entry.value_ptr.*;
+                        // Check if unification made this entry cyclic
+                        const resolved_target = self.runtime_types.resolveVar(target);
+                        if (resolved_target.var_ == source) {
+                            // Skip - this entry would create a cycle
+                            continue;
+                        }
+                        // Also check the full cycle detection
+                        if (self.wouldCreateRigidSubstCycle(source, target)) continue;
+                        try self.rigid_subst.put(source, target);
+                        // Also add to empty_scope so layout store finds the mapping
+                        try scope.put(source, target);
+                    }
+                }
 
                 // Schedule: first evaluate function, then collect args, then invoke
                 // Push invoke continuation (to be executed after all args collected)
@@ -12488,6 +12770,153 @@ pub const Interpreter = struct {
         return value;
     }
 
+    /// Evaluate a typed integer literal (e_typed_int) like `123.U64`
+    /// The type annotation has already been resolved by type checking.
+    fn evalTypedInt(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        typed_int: @TypeOf(@as(can.CIR.Expr, undefined).e_typed_int),
+    ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Get the layout type variable - use expected_rt_var if provided
+        const layout_rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Check if the resolved type is flex/rigid (unconstrained).
+        // For typed literals, this shouldn't normally happen since the type is explicit.
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
+        // If the layout isn't a numeric type, default based on the explicit type annotation
+        const is_numeric_layout = layout_val.tag == .scalar and
+            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            // Get the type name from the identifier store to determine the correct type
+            const type_name = self.env.common.getIdentStore().getText(typed_int.type_name);
+            const type_content = try self.mkNumberTypeContentRuntime(type_name);
+            final_rt_var = try self.runtime_types.freshFromContent(type_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
+        }
+
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .int => try value.setIntFromBytes(typed_int.value.bytes, typed_int.value.kind == .u128),
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        if (typed_int.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(typed_int.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                        }
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        if (typed_int.value.kind == .u128) {
+                            const u128_val: u128 = @bitCast(typed_int.value.bytes);
+                            ptr.* = @floatFromInt(u128_val);
+                        } else {
+                            ptr.* = @floatFromInt(typed_int.value.toI128());
+                        }
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        ptr.* = .{ .num = typed_int.value.toI128() * RocDec.one_point_zero_i128 };
+                    },
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
+    /// Evaluate a typed fractional literal (e_typed_frac) like `3.14.Dec`
+    /// The type annotation has already been resolved by type checking.
+    /// The value is stored as a scaled i128 (like Dec, scaled by 10^18).
+    fn evalTypedFrac(
+        self: *Interpreter,
+        expr_idx: can.CIR.Expr.Idx,
+        expected_rt_var: ?types.Var,
+        typed_frac: @TypeOf(@as(can.CIR.Expr, undefined).e_typed_frac),
+    ) Error!StackValue {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
+        // Get the layout type variable - use expected_rt_var if provided
+        const layout_rt_var = expected_rt_var orelse blk: {
+            const ct_var = can.ModuleEnv.varFrom(expr_idx);
+            break :blk try self.translateTypeVar(self.env, ct_var);
+        };
+
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Check if the resolved type is flex/rigid (unconstrained).
+        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
+
+        // If the layout isn't a numeric type, default based on the explicit type annotation
+        const is_numeric_layout = layout_val.tag == .scalar and
+            (layout_val.data.scalar.tag == .int or layout_val.data.scalar.tag == .frac);
+        var final_rt_var = layout_rt_var;
+        if (!is_numeric_layout or is_flex_or_rigid) {
+            // Get the type name from the identifier store to determine the correct type
+            const type_name = self.env.common.getIdentStore().getText(typed_frac.type_name);
+            const type_content = try self.mkNumberTypeContentRuntime(type_name);
+            final_rt_var = try self.runtime_types.freshFromContent(type_content);
+            layout_val = try self.getRuntimeLayout(final_rt_var);
+        }
+
+        // The value is stored as scaled i128 (scaled by 10^18, like Dec)
+        const scaled_value = typed_frac.value.toI128();
+
+        var value = try self.pushRaw(layout_val, 0, final_rt_var);
+        value.is_initialized = false;
+        switch (layout_val.tag) {
+            .scalar => switch (layout_val.data.scalar.tag) {
+                .frac => switch (layout_val.data.scalar.data.frac) {
+                    .f32 => {
+                        const ptr = @as(*f32, @ptrCast(@alignCast(value.ptr.?)));
+                        // Convert from scaled i128 (10^18) to f32
+                        ptr.* = @as(f32, @floatFromInt(scaled_value)) / @as(f32, @floatFromInt(RocDec.one_point_zero_i128));
+                    },
+                    .f64 => {
+                        const ptr = @as(*f64, @ptrCast(@alignCast(value.ptr.?)));
+                        // Convert from scaled i128 (10^18) to f64
+                        ptr.* = @as(f64, @floatFromInt(scaled_value)) / @as(f64, @floatFromInt(RocDec.one_point_zero_i128));
+                    },
+                    .dec => {
+                        const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
+                        // Value is already in Dec format (scaled i128)
+                        ptr.* = .{ .num = scaled_value };
+                    },
+                },
+                .int => {
+                    // Converting fractional to integer - truncate
+                    const int_val = @divTrunc(scaled_value, RocDec.one_point_zero_i128);
+                    const bytes: [16]u8 = @bitCast(int_val);
+                    try value.setIntFromBytes(bytes, false);
+                },
+                else => return error.TypeMismatch,
+            },
+            else => return error.TypeMismatch,
+        }
+        value.is_initialized = true;
+        return value;
+    }
+
     /// Evaluate a string segment literal (e_str_segment)
     fn evalStrSegment(
         self: *Interpreter,
@@ -12793,17 +13222,11 @@ pub const Interpreter = struct {
             return dest;
         } else if (layout_val.tag == .tag_union) {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
-            // Write discriminant at discriminant_offset
-            const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
             const base_ptr: [*]u8 = @ptrCast(dest.ptr.?);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            switch (tu_data.discriminant_size) {
-                1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tag_index),
-                2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tag_index),
-                else => {},
-            }
+            tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tag_index));
             dest.is_initialized = true;
             return dest;
         }
@@ -12819,7 +13242,7 @@ pub const Interpreter = struct {
         expr_idx: can.CIR.Expr.Idx,
         expected_rt_var: ?types.Var,
         lam: @TypeOf(@as(can.CIR.Expr, undefined).e_lambda),
-        roc_ops: *RocOps,
+        _: *RocOps,
     ) Error!StackValue {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -12832,10 +13255,7 @@ pub const Interpreter = struct {
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
         const closure_layout = try self.getRuntimeLayout(rt_var);
-        if (closure_layout.tag != .closure) {
-            self.triggerCrash("e_lambda: expected closure layout", false, roc_ops);
-            return error.Crash;
-        }
+        std.debug.assert(closure_layout.tag == .closure);
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -13943,7 +14363,7 @@ pub const Interpreter = struct {
                     } else {
                         // Gather layouts and values
                         const alloc_trace = tracy.traceNamed(@src(), "tuple_collect.alloc_temps");
-                        var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                        var elem_layouts = try self.allocator.alloc(layout.Layout, total_count);
                         defer self.allocator.free(elem_layouts);
 
                         // Values are in reverse order on stack (first element pushed first, so it's at the bottom)
@@ -13954,15 +14374,75 @@ pub const Interpreter = struct {
                         // Collect element rt_vars for constructing tuple type
                         var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                         defer self.allocator.free(elem_rt_vars);
+
+                        // Track which elements need auto-boxing
+                        var need_auto_box = try self.allocator.alloc(bool, total_count);
+                        defer self.allocator.free(need_auto_box);
                         alloc_trace.end();
 
                         // Pop values in reverse order (last evaluated is on top)
-                        var i: usize = total_count;
-                        while (i > 0) {
-                            i -= 1;
-                            values[i] = value_stack.pop() orelse return error.Crash;
-                            elem_layouts[i] = values[i].layout;
-                            elem_rt_vars[i] = values[i].rt_var;
+                        var idx: usize = total_count;
+                        while (idx > 0) {
+                            idx -= 1;
+                            values[idx] = value_stack.pop() orelse return error.Crash;
+                            elem_rt_vars[idx] = values[idx].rt_var;
+
+                            // Check if this element is a recursive tag_union that needs boxing.
+                            // A tag_union is recursive if any of its variant payloads contains
+                            // a Box pointing to this same tag_union.
+                            const elem_layout = values[idx].layout;
+                            need_auto_box[idx] = false;
+
+                            if (elem_layout.tag == .tag_union) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                                // Check if any variant's payload contains a Box pointing to this tag_union
+                                var var_idx: usize = 0;
+                                while (var_idx < variants.len) : (var_idx += 1) {
+                                    const variant = variants.get(var_idx);
+                                    const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                    if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                        need_auto_box[idx] = true;
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // If this element needs boxing, find the Box layout and box the value
+                            if (need_auto_box[idx]) {
+                                const tu_idx = elem_layout.data.tag_union.idx;
+                                const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                                const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because:
+                                // 1. We only enter this block if need_auto_box[idx] is true
+                                // 2. need_auto_box[idx] is only set true if layoutContainsBoxOfTagUnion
+                                //    found a Box pointing to this tag_union in some variant's payload
+                                // 3. findBoxIdxForTagUnion searches the same layouts and returns the
+                                //    index of that Box, so it must find the same Box that was detected
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, values[idx], roc_ops, values[idx].rt_var);
+                                values[idx].decref(&self.runtime_layout_store, roc_ops);
+                                values[idx] = boxed;
+                                elem_layouts[idx] = box_layout;
+                            } else {
+                                elem_layouts[idx] = values[idx].layout;
+                            }
                         }
 
                         // Create tuple type from element types
@@ -13979,8 +14459,8 @@ pub const Interpreter = struct {
                         if (total_count != accessor.getElementCount()) return error.TypeMismatch;
 
                         // Set all elements
-                        for (0..total_count) |idx| {
-                            try accessor.setElement(idx, values[idx], roc_ops);
+                        for (0..total_count) |set_idx| {
+                            try accessor.setElement(set_idx, values[set_idx], roc_ops);
                         }
 
                         // Decref temporary values after they've been copied into the tuple
@@ -14052,12 +14532,77 @@ pub const Interpreter = struct {
                             values[i] = value_stack.pop() orelse return error.Crash;
                         }
 
-                        // Use the actual layout from the first evaluated element
+                        // Check if we need to auto-box elements for recursive types
+                        // This happens when the expected element type is Box (from placeholder resolution)
+                        // but actual evaluated values are not boxed.
                         const actual_elem_layout = values[0].layout;
 
-                        // Create the list layout with the correct element layout
-                        const correct_elem_idx = try self.runtime_layout_store.insertLayout(actual_elem_layout);
-                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = correct_elem_idx } };
+                        // Try to get the expected element layout to check for Box.
+                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch null;
+
+                        // Check if the element type is a recursive nominal that needs boxing.
+                        // We check if the actual element layout is a tag_union that contains
+                        // a variant with a payload containing a Box pointing to this same tag_union.
+                        // This indicates a recursive type that needs element boxing.
+                        var need_auto_box = if (expected_elem_layout_opt) |expected_elem_layout|
+                            expected_elem_layout.tag == .box and
+                                actual_elem_layout.tag != .box and actual_elem_layout.tag != .box_of_zst
+                        else
+                            false;
+
+                        // If not already detected as needing boxing, check if the actual layout
+                        // is a recursive tag_union (contains a Box pointing back to itself)
+                        if (!need_auto_box and actual_elem_layout.tag == .tag_union) {
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            // Check if any variant's payload contains a Box that points to a tag_union
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    need_auto_box = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Determine the element layout index for the list
+                        var list_elem_layout = actual_elem_layout;
+                        var list_elem_idx: layout.Idx = undefined;
+
+                        if (need_auto_box) {
+                            // Find the existing Box layout INDEX from the tag union's variant payloads.
+                            // We must use the exact same index to avoid layout mismatches when
+                            // the list is copied into variant payloads later.
+                            const tu_idx = actual_elem_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+
+                            // Look through variants for one with a Box(this_tag_union)
+                            var found_box_idx: ?layout.Idx = null;
+                            var search_idx: usize = 0;
+                            while (search_idx < variants.len) : (search_idx += 1) {
+                                const variant = variants.get(search_idx);
+                                if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                    found_box_idx = box_idx;
+                                    break;
+                                }
+                            }
+
+                            // We detected this is a recursive type (need_auto_box=true), so there MUST be
+                            // a Box layout in the tag union's variants. If not, it's a compiler bug.
+                            const box_idx = found_box_idx orelse unreachable;
+                            list_elem_idx = box_idx;
+                            list_elem_layout = self.runtime_layout_store.getLayout(box_idx);
+                        } else {
+                            // No boxing needed - use the actual element layout
+                            list_elem_idx = try self.runtime_layout_store.insertLayout(list_elem_layout);
+                        }
+
+                        // Create the list layout with the correct element layout index
+                        const actual_list_layout = Layout{ .tag = .list, .data = .{ .list = list_elem_idx } };
 
                         var dest = try self.pushRaw(actual_list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
@@ -14071,10 +14616,10 @@ pub const Interpreter = struct {
                         }
 
                         const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                        const elem_alignment = actual_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
+                        const elem_alignment = list_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
-                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(actual_elem_layout));
-                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(actual_elem_layout);
+                        const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(list_elem_layout));
+                        const elements_refcounted = self.runtime_layout_store.layoutContainsRefcounted(list_elem_layout);
 
                         var runtime_list = RocList.allocateExact(
                             elem_alignment_u32,
@@ -14086,9 +14631,30 @@ pub const Interpreter = struct {
 
                         if (elem_size > 0) {
                             if (runtime_list.bytes) |buffer| {
-                                for (values, 0..) |val, idx| {
-                                    const dest_ptr = buffer + idx * elem_size;
-                                    try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                if (need_auto_box) {
+                                    // Auto-box each element before storing in the list
+                                    // list_elem_layout is Box(actual_elem_layout), so get the inner type
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(list_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        // Allocate heap memory with refcount for the boxed value
+                                        const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                        if (inner_elem_size > 0 and val.ptr != null) {
+                                            try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                        }
+                                        // Write box pointer to list element location
+                                        const slot: *usize = @ptrCast(@alignCast(dest_ptr));
+                                        slot.* = @intFromPtr(data_ptr);
+                                    }
+                                } else {
+                                    for (values, 0..) |val, idx| {
+                                        const dest_ptr = buffer + idx * elem_size;
+                                        try val.copyToPtr(&self.runtime_layout_store, dest_ptr, roc_ops);
+                                    }
                                 }
                             }
                         }
@@ -14170,6 +14736,50 @@ pub const Interpreter = struct {
                     while (i > 0) {
                         i -= 1;
                         field_values[i] = value_stack.pop() orelse return error.Crash;
+
+                        // Check if this field value is a recursive tag_union that needs boxing.
+                        // A tag_union is recursive if any of its variant payloads contains
+                        // a Box pointing to this same tag_union.
+                        const field_layout = field_values[i].layout;
+                        if (field_layout.tag == .tag_union) {
+                            const tu_idx = field_layout.data.tag_union.idx;
+                            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            var needs_boxing = false;
+                            var var_idx: usize = 0;
+                            while (var_idx < variants.len) : (var_idx += 1) {
+                                const variant = variants.get(var_idx);
+                                const payload_layout = self.runtime_layout_store.getLayout(variant.payload_layout);
+                                if (self.layoutContainsBoxOfTagUnion(payload_layout, tu_idx)) {
+                                    needs_boxing = true;
+                                    break;
+                                }
+                            }
+
+                            if (needs_boxing) {
+                                // Find the Box layout index from the tag union's variants
+                                var found_box_idx: ?layout.Idx = null;
+                                var search_idx: usize = 0;
+                                while (search_idx < variants.len) : (search_idx += 1) {
+                                    const variant = variants.get(search_idx);
+                                    if (self.findBoxIdxForTagUnion(variant.payload_layout, tu_idx)) |box_idx| {
+                                        found_box_idx = box_idx;
+                                        break;
+                                    }
+                                }
+
+                                // This is unreachable because we detected needs_boxing=true above,
+                                // which means layoutContainsBoxOfTagUnion found a Box. findBoxIdxForTagUnion
+                                // searches the same layouts and must find the same Box.
+                                const box_idx = found_box_idx orelse unreachable;
+                                const box_layout = self.runtime_layout_store.getLayout(box_idx);
+
+                                // Box the value
+                                const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
+                                field_values[i].decref(&self.runtime_layout_store, roc_ops);
+                                field_values[i] = boxed;
+                            }
+                        }
                     }
 
                     // Handle base record if extension exists
@@ -14313,8 +14923,7 @@ pub const Interpreter = struct {
                                     // If we hit this, it means there's a bug in how we're structuring
                                     // the work stack (likely a nested evalWithExpectedType call that
                                     // shouldn't be nested).
-                                    self.triggerCrash("early_return hit return_result without finding call_cleanup - this indicates a work stack structure bug", false, roc_ops);
-                                    return error.Crash;
+                                    debugUnreachable(roc_ops, "early_return hit return_result without finding call_cleanup", @src());
                                 },
                                 .call_invoke_closure => |ci| {
                                     // Free resources if we're skipping a pending call invocation.
@@ -14401,9 +15010,8 @@ pub const Interpreter = struct {
                 } else {
                     // All arguments collected - finalize the tag
                     const total_count = tc.collected_count;
-                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
 
-                    // Pop all collected values
+                    // Pop all collected values first to get their concrete types
                     var values = try self.allocator.alloc(StackValue, total_count);
                     defer self.allocator.free(values);
                     var i: usize = total_count;
@@ -14412,8 +15020,17 @@ pub const Interpreter = struct {
                         values[i] = value_stack.pop() orelse return error.Crash;
                     }
 
+                    // Get the layout from the original type (tc.rt_var).
+                    // Note: For polymorphic types, this layout may have incorrect payload sizes
+                    // (e.g., flex vars default to Dec/ZST). The branches below handle this
+                    // by checking actual value sizes and using properly-typed layouts when needed.
+                    // See https://github.com/roc-lang/roc/issues/8872
+                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
+
                     if (tc.layout_type == 0) {
                         // Record layout { tag, payload }
+                        // Use layout_val (from concrete types) for memory, but tc.rt_var
+                        // (original type) for the value's type so printing works correctly.
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
                         const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
@@ -14564,27 +15181,25 @@ pub const Interpreter = struct {
                         try value_stack.push(dest);
                     } else if (tc.layout_type == 2) {
                         // Tag union layout: payload at offset 0, discriminant at discriminant_offset
-                        const tu_data = self.runtime_layout_store.getTagUnionData(layout_val.data.tag_union.idx);
+                        const tu_idx = layout_val.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                        // Check for layout mismatch - if the expected payload is smaller than actual
+                        // Check for layout mismatch - if the actual payload is LARGER than expected
                         // we need to use a properly-sized tuple layout to avoid corruption.
-                        // This happens with polymorphic types like Result where the type param
-                        // is a disconnected flex var that defaults to ZST layout.
+                        // This happens with polymorphic types like Try/Result where the type param
+                        // is a flex/rigid var that defaults to a smaller layout (Dec or ZST).
+                        // When actual is smaller than expected, it's fine - we just copy to the right place.
+                        // See https://github.com/roc-lang/roc/issues/8872
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
-                            const expected_payload_size = tu_data.discriminant_offset; // payload is before discriminant
-                            // Apply fix when expected payload is very small but actual is larger
-                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            const expected_payload_size = disc_offset; // payload is before discriminant
+                            // Apply fix only when actual is larger than expected (would overflow)
+                            const needs_fix = arg_size > expected_payload_size;
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
-                                const disc_precision: types.Int.Precision = switch (tu_data.discriminant_size) {
-                                    1 => .u8,
-                                    2 => .u16,
-                                    4 => .u32,
-                                    8 => .u64,
-                                    else => .u8,
-                                };
+                                const disc_precision = tu_data.discriminantPrecision();
                                 const disc_layout = Layout{
                                     .tag = .scalar,
                                     .data = .{ .scalar = .{ .tag = .int, .data = .{ .int = disc_precision } } },
@@ -14630,40 +15245,112 @@ pub const Interpreter = struct {
                         // the payload after writing the discriminant would overwrite it.
                         const payload_ptr: *anyopaque = @ptrCast(base_ptr);
                         if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            // Get expected payload layout from the variant
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // Check if we need to auto-box: expected is Box but actual isn't
+                            if (expected_payload_layout.tag == .box and values[0].layout.tag != .box and values[0].layout.tag != .box_of_zst) {
+                                // Auto-box the value for recursive types
+                                const elem_layout = self.runtime_layout_store.getLayout(expected_payload_layout.data.box);
+                                const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
+                                const target_usize = self.runtime_layout_store.targetUsize();
+                                const elem_align: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+
+                                const data_ptr = builtins.utils.allocateWithRefcount(elem_size, elem_align, false, roc_ops);
+                                if (elem_size > 0 and values[0].ptr != null) {
+                                    try values[0].copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                }
+
+                                // Write box pointer to payload location
+                                const slot: *usize = @ptrCast(@alignCast(payload_ptr));
+                                slot.* = @intFromPtr(data_ptr);
+                            } else if (values[0].layout.tag == .box and expected_payload_layout.tag != .box) {
+                                // Auto-unbox: actual is boxed but expected is unboxed.
+                                // This happens when List elements are boxed (for recursive types),
+                                // but wrapped in a tag union (like Try) whose type says unboxed.
+                                // Dereference the box and copy the inner data.
+                                const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.data.box);
+                                const box_ptr: *const usize = @ptrCast(@alignCast(values[0].ptr.?));
+                                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+                                const inner_value = StackValue{
+                                    .layout = inner_layout,
+                                    .ptr = data_ptr,
+                                    .is_initialized = true,
+                                    .rt_var = values[0].rt_var,
+                                };
+                                try inner_value.copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            } else {
+                                try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                            }
                         } else {
                             // Multiple args - create tuple payload at offset 0
+                            // Get expected payload layout from the variant to handle auto-boxing
+                            const variants = self.runtime_layout_store.getTagUnionVariants(tu_data);
+                            const expected_payload_layout = self.runtime_layout_store.getLayout(variants.get(tc.tag_index).payload_layout);
+
+                            // A multi-value tag payload MUST have a tuple layout. If not, it's a compiler bug.
+                            if (expected_payload_layout.tag != .tuple) unreachable;
+                            const expected_tuple_data = self.runtime_layout_store.getTupleData(expected_payload_layout.data.tuple.idx);
+                            const expected_fields = self.runtime_layout_store.tuple_fields.sliceRange(expected_tuple_data.getFields());
+
+                            // Create tuple with expected layouts for proper sizing
+                            // We must use the ORIGINAL index from expected_fields, not the sorted index
                             var elem_layouts = try self.allocator.alloc(Layout, total_count);
                             defer self.allocator.free(elem_layouts);
                             var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
                             defer self.allocator.free(elem_rt_vars);
+                            // Initialize with actual value layouts first
                             for (values, 0..) |val, idx| {
                                 elem_layouts[idx] = val.layout;
                                 elem_rt_vars[idx] = val.rt_var;
                             }
+                            // Override with expected layouts using original indices
+                            for (0..expected_fields.len) |sorted_idx| {
+                                const field = expected_fields.get(sorted_idx);
+                                const orig_idx = field.index;
+                                if (orig_idx < total_count) {
+                                    elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                                }
+                            }
                             const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                             const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                            // Create tuple type from element types
                             const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                             const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
                             const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
                             var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
                             var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+
+                            // Set each element, auto-boxing if needed
+                            // Use elem_layouts which we already populated with correct original indices
                             for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val, roc_ops);
+                                const expected_elem_layout = elem_layouts[idx];
+                                // Check if we need to auto-box
+                                if (expected_elem_layout.tag == .box and val.layout.tag != .box and val.layout.tag != .box_of_zst) {
+                                    // Auto-box the value
+                                    const inner_elem_layout = self.runtime_layout_store.getLayout(expected_elem_layout.data.box);
+                                    const inner_elem_size = self.runtime_layout_store.layoutSize(inner_elem_layout);
+                                    const target_usize = self.runtime_layout_store.targetUsize();
+                                    const inner_elem_align: u32 = @intCast(inner_elem_layout.alignment(target_usize).toByteUnits());
+
+                                    const data_ptr = builtins.utils.allocateWithRefcount(inner_elem_size, inner_elem_align, false, roc_ops);
+                                    if (inner_elem_size > 0 and val.ptr != null) {
+                                        try val.copyToPtr(&self.runtime_layout_store, data_ptr, roc_ops);
+                                    }
+
+                                    // Write box pointer to element location
+                                    const elem_ptr = try tup_acc.getElementPtr(idx);
+                                    const slot: *usize = @ptrCast(@alignCast(elem_ptr));
+                                    slot.* = @intFromPtr(data_ptr);
+                                } else {
+                                    try tup_acc.setElement(idx, val, roc_ops);
+                                }
                             }
                         }
 
                         // Write discriminant AFTER the payload, so it doesn't get overwritten
                         // by a payload that extends past the discriminant offset.
-                        const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                        switch (tu_data.discriminant_size) {
-                            1 => @as(*u8, @ptrCast(disc_ptr)).* = @intCast(tc.tag_index),
-                            2 => @as(*u16, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            4 => @as(*u32, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            8 => @as(*u64, @ptrCast(@alignCast(disc_ptr))).* = @intCast(tc.tag_index),
-                            else => {},
-                        }
+                        tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
 
                         for (values) |val| {
                             val.decref(&self.runtime_layout_store, roc_ops);
@@ -15283,6 +15970,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = cleanup_saved_rigid_subst,
                         .saved_flex_type_context = saved_flex_type_context,
                         .arg_rt_vars_to_free = ci.arg_rt_vars_to_free,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = header.body_idx,
@@ -15306,7 +15994,7 @@ pub const Interpreter = struct {
                 if (self.early_return_value) |return_val_in| {
                     // Body triggered early return - use that value
                     self.early_return_value = null;
-                    const return_val = return_val_in;
+                    var return_val = return_val_in;
 
                     // rt_var is already set by the return value's creation
 
@@ -15336,12 +16024,54 @@ pub const Interpreter = struct {
                     self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                     if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
+                    // Restore stack memory (same logic as normal return)
+                    if (return_val.ptr) |return_ptr| {
+                        const return_addr = @intFromPtr(return_ptr);
+                        const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                        const current_addr = @intFromPtr(self.stack_memory.next());
+
+                        if (return_addr >= saved_addr and return_addr < current_addr) {
+                            const return_size = if (return_val.layout.tag == .closure)
+                                return_val.getTotalSize(&self.runtime_layout_store, roc_ops)
+                            else
+                                self.runtime_layout_store.layoutSize(return_val.layout);
+
+                            if (return_size > 0) {
+                                // Assertion: heap allocation for small temporary buffer should always succeed
+                                const temp_buffer = self.allocator.alloc(u8, return_size) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+                                defer self.allocator.free(temp_buffer);
+                                @memcpy(temp_buffer, @as([*]u8, @ptrCast(return_ptr))[0..return_size]);
+
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                                // Assertion: stack allocation after restore should always succeed
+                                const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
+                                const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
+                                    self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                    return error.Crash;
+                                };
+
+                                @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..return_size], temp_buffer);
+                                return_val.ptr = new_ptr;
+                            } else {
+                                self.stack_memory.restore(cleanup.saved_stack_ptr);
+                            }
+                        } else {
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+
                     try value_stack.push(return_val);
                     return true;
                 }
 
                 // Normal return - result is on value stack
-                const result = value_stack.pop() orelse return error.Crash;
+                var result = value_stack.pop() orelse return error.Crash;
 
                 // Pop active closure if needed
                 if (cleanup.has_active_closure) {
@@ -15379,6 +16109,62 @@ pub const Interpreter = struct {
                 self.env = cleanup.saved_env;
                 self.trimBindingList(&self.bindings, cleanup.saved_bindings_len, roc_ops);
                 if (cleanup.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+
+                // Restore stack memory to reclaim intermediate allocations from the function body.
+                // If the result has data in the stack region being freed, we need to preserve it
+                // by copying to heap, restoring stack, allocating new stack space, and copying back.
+                if (result.ptr) |result_ptr| {
+                    const result_addr = @intFromPtr(result_ptr);
+                    const saved_addr = @intFromPtr(cleanup.saved_stack_ptr);
+                    const current_addr = @intFromPtr(self.stack_memory.next());
+
+                    // Check if result.ptr is in the region being freed (between saved and current)
+                    if (result_addr >= saved_addr and result_addr < current_addr) {
+                        // Result data is in the region being freed - preserve it
+                        const result_size = if (result.layout.tag == .closure)
+                            result.getTotalSize(&self.runtime_layout_store, roc_ops)
+                        else
+                            self.runtime_layout_store.layoutSize(result.layout);
+
+                        if (result_size > 0) {
+                            // Copy to temporary heap buffer
+                            // Assertion: heap allocation for small temporary buffer should always succeed
+                            const temp_buffer = self.allocator.alloc(u8, result_size) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+                            defer self.allocator.free(temp_buffer);
+                            @memcpy(temp_buffer, @as([*]u8, @ptrCast(result_ptr))[0..result_size]);
+
+                            // Restore stack to reclaim intermediate allocations
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+
+                            // Allocate new space for result on restored stack
+                            // Assertion: stack allocation after restore should always succeed
+                            // since we just freed more space than we're now requesting
+                            const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+                            const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
+                                self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
+                                return error.Crash;
+                            };
+
+                            // Copy data back from heap to new stack location
+                            @memcpy(@as([*]u8, @ptrCast(new_ptr))[0..result_size], temp_buffer);
+
+                            // Update result to point to new location
+                            result.ptr = new_ptr;
+                        } else {
+                            // Zero-size result, just restore stack
+                            self.stack_memory.restore(cleanup.saved_stack_ptr);
+                        }
+                    } else {
+                        // Result data is not in the freed region (already in caller's frame or heap)
+                        self.stack_memory.restore(cleanup.saved_stack_ptr);
+                    }
+                } else {
+                    // No pointer data to preserve, just restore stack
+                    self.stack_memory.restore(cleanup.saved_stack_ptr);
+                }
 
                 // rt_var is already set by the function's return value creation
                 try value_stack.push(result);
@@ -15493,6 +16279,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = null,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -15565,13 +16352,21 @@ pub const Interpreter = struct {
                 // Follow aliases to get to the underlying type
                 var current_var = effective_receiver_rt_var;
                 var current_resolved = lhs_resolved;
-                var alias_count: u32 = 0;
-                while (current_resolved.desc.content == .alias) {
-                    alias_count += 1;
-                    std.debug.assert(alias_count < 1000); // Prevent infinite loops
-                    const alias = current_resolved.desc.content.alias;
-                    current_var = self.runtime_types.getAliasBackingVar(alias);
-                    current_resolved = self.runtime_types.resolveVar(current_var);
+                if (comptime builtin.mode == .Debug) {
+                    var alias_count: u32 = 0;
+                    while (current_resolved.desc.content == .alias) {
+                        alias_count += 1;
+                        std.debug.assert(alias_count < 1000);
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
+                } else {
+                    while (current_resolved.desc.content == .alias) {
+                        const alias = current_resolved.desc.content.alias;
+                        current_var = self.runtime_types.getAliasBackingVar(alias);
+                        current_resolved = self.runtime_types.resolveVar(current_var);
+                    }
                 }
 
                 // Check if we can use low-level numeric comparison based on layout
@@ -15940,6 +16735,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = null,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -16144,6 +16940,7 @@ pub const Interpreter = struct {
                                                 .saved_rigid_subst = null,
                                                 .saved_flex_type_context = null,
                                                 .arg_rt_vars_to_free = null,
+                                                .saved_stack_ptr = self.stack_memory.next(),
                                             } } });
 
                                             const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
@@ -16284,6 +17081,21 @@ pub const Interpreter = struct {
                             const result_val = try self.makeBoolValue(result);
                             try value_stack.push(result_val);
                             return true;
+                        }
+                        // For flex/rigid types, first check if the actual value has a concrete
+                        // type in its rt_var. This handles cases like Bool where the value was
+                        // created with a concrete type but the compile-time type is polymorphic.
+                        const value_rt_var_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                        if (value_rt_var_resolved.desc.content == .structure) {
+                            switch (value_rt_var_resolved.desc.content.structure) {
+                                .nominal_type => |nom| {
+                                    break :blk .{
+                                        .origin = nom.origin_module,
+                                        .ident = nom.ident.ident_idx,
+                                    };
+                                },
+                                else => {},
+                            }
                         }
                         // For flex/rigid numeric types with other method calls (like to_str),
                         // derive the nominal type from the layout
@@ -16474,9 +17286,21 @@ pub const Interpreter = struct {
 
                     try self.active_closures.append(method_func);
 
-                    // Use patternMatchesBind to properly bind nested patterns (e.g., nominal patterns
-                    // like `|Widget.Content(s)|` need to bind `s`, not just the outer pattern).
-                    const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
+                    // Propagate flex mappings BEFORE translation. This is critical for methods on
+                    // tag unions with type parameters: the translation needs the mappings to
+                    // resolve type variables to concrete types based on the receiver's actual type.
+                    // For example, in `identity = |It(s_)| It(s_)`, the pattern type `[It(s)]`
+                    // needs `s` mapped to the receiver's type argument (e.g., I64).
+                    const param_pattern_ct_var = can.ModuleEnv.varFrom(params[0]);
+                    try self.propagateFlexMappings(self.env, param_pattern_ct_var, da.receiver_rt_var);
+
+                    // Also propagate to the body expression's type for complete coverage
+                    const body_ct_var = can.ModuleEnv.varFrom(closure_header.body_idx);
+                    try self.propagateFlexMappings(self.env, body_ct_var, da.receiver_rt_var);
+
+                    // Now translate the pattern type with the mappings in place
+                    const receiver_param_rt_var = try self.translateTypeVar(self.env, param_pattern_ct_var);
+
                     if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
@@ -16498,6 +17322,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = closure_header.body_idx,
@@ -16511,17 +17336,86 @@ pub const Interpreter = struct {
                 try value_stack.push(receiver_value);
                 try value_stack.push(method_func);
 
+                // Extract expected argument types from the method's function signature.
+                // This is critical for type inference of polymorphic literals like numeric 0 in list.get(0).
+                // We get the parameter types from the method signature and use them as expected types,
+                // but only when they are concrete types (not flex/rigid type variables).
+                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const method_source_env = closure_header.source_env;
+                const method_lambda_rt_var = try self.translateTypeVar(@constCast(method_source_env), method_lambda_ct_var);
+
+                // Extract parameter types from the method signature (excluding receiver).
+                // We need to handle different resolved type cases explicitly.
+                const expected_arg_rt_vars: ?[]const types.Var = blk: {
+                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+                    const func_info: ?types.Func = switch (method_resolved.desc.content) {
+                        .structure => method_resolved.desc.content.unwrapFunc(),
+                        // Polymorphic method - type variable doesn't provide concrete param types
+                        .flex, .rigid => break :blk null,
+                        .alias => |alias| inner: {
+                            // Follow alias to get the underlying function type
+                            const backing = self.runtime_types.getAliasBackingVar(alias);
+                            const backing_resolved = self.runtime_types.resolveVar(backing);
+                            switch (backing_resolved.desc.content) {
+                                .structure => break :inner backing_resolved.desc.content.unwrapFunc(),
+                                // Polymorphic backing - no concrete param types
+                                .flex, .rigid => break :blk null,
+                                // Nested alias shouldn't happen after resolveVar
+                                .alias => unreachable,
+                                .err => unreachable,
+                            }
+                        },
+                        .err => unreachable, // Method type should never be error
+                    };
+                    // Methods are functions - structure content should unwrap to a function
+                    const fi = func_info orelse unreachable;
+                    const method_params = self.runtime_types.sliceVars(fi.args);
+
+                    // Return the parameters after the receiver as expected types for args
+                    if (method_params.len > 1) {
+                        break :blk method_params[1..];
+                    } else {
+                        break :blk null;
+                    }
+                };
+
                 try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                     .method_name = da.field_name,
                     .collected_count = 0,
                     .remaining_args = arg_exprs,
                     .receiver_rt_var = da.receiver_rt_var,
                     .expr_idx = da.expr_idx,
+                    .expected_arg_rt_vars = expected_arg_rt_vars,
                 } } });
 
-                // Start evaluating first arg
-                const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                // Start evaluating first arg with expected type from method signature.
+                // For concrete types (like U64 in List.get), use the method's parameter type -
+                // this is essential for numeric literal inference.
+                // For type variables (like `state` in List.fold_rev), use the argument's own type -
+                // type variables don't constrain numeric literals and the argument's type is correct.
+                const first_arg_rt_var = blk: {
+                    if (expected_arg_rt_vars != null and expected_arg_rt_vars.?.len > 0) {
+                        const expected = expected_arg_rt_vars.?[0];
+                        const resolved = self.runtime_types.resolveVar(expected);
+                        switch (resolved.desc.content) {
+                            .structure => break :blk expected, // Concrete type - use it
+                            .flex, .rigid => {}, // Type variable - fall through to use argument's type
+                            .alias => {
+                                // Follow alias to check underlying type
+                                const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                const backing_resolved = self.runtime_types.resolveVar(backing);
+                                if (backing_resolved.desc.content == .structure) {
+                                    break :blk expected;
+                                }
+                                // Otherwise fall through
+                            },
+                            .err => unreachable, // Method parameter types should never be error
+                        }
+                    }
+                    const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                    break :blk try self.translateTypeVar(self.env, first_arg_ct_var);
+                };
 
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = arg_exprs[0],
@@ -16536,17 +17430,44 @@ pub const Interpreter = struct {
                 // Stack: [receiver, method_func, arg0, arg1, ...]
                 if (dac.remaining_args.len > 1) {
                     // More arguments to evaluate
+                    // Advance expected_arg_rt_vars to skip the current argument we just collected
+                    const next_expected_arg_rt_vars: ?[]const types.Var = if (dac.expected_arg_rt_vars) |vars|
+                        (if (vars.len > 1) vars[1..] else null)
+                    else
+                        null;
+
                     try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
                         .method_name = dac.method_name,
                         .collected_count = dac.collected_count + 1,
                         .remaining_args = dac.remaining_args[1..],
                         .receiver_rt_var = dac.receiver_rt_var,
                         .expr_idx = dac.expr_idx,
+                        .expected_arg_rt_vars = next_expected_arg_rt_vars,
                     } } });
 
-                    // Translate argument type
-                    const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
-                    const next_arg_rt_var = try self.translateTypeVar(self.env, next_arg_ct_var);
+                    // Use expected type from method signature.
+                    // For concrete types (like U64), use the method's parameter type.
+                    // For type variables (flex/rigid), use the argument's own type.
+                    const next_arg_rt_var = blk: {
+                        if (next_expected_arg_rt_vars != null and next_expected_arg_rt_vars.?.len > 0) {
+                            const expected = next_expected_arg_rt_vars.?[0];
+                            const resolved = self.runtime_types.resolveVar(expected);
+                            switch (resolved.desc.content) {
+                                .structure => break :blk expected,
+                                .flex, .rigid => {},
+                                .alias => {
+                                    const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
+                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    if (backing_resolved.desc.content == .structure) {
+                                        break :blk expected;
+                                    }
+                                },
+                                .err => unreachable,
+                            }
+                        }
+                        const next_arg_ct_var = can.ModuleEnv.varFrom(dac.remaining_args[1]);
+                        break :blk try self.translateTypeVar(self.env, next_arg_ct_var);
+                    };
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = dac.remaining_args[1],
                         .expected_rt_var = next_arg_rt_var,
@@ -16772,8 +17693,8 @@ pub const Interpreter = struct {
 
                     var subst_iter = method_subst_map.iterator();
                     while (subst_iter.next()) |entry| {
-                        // Skip identity mappings to avoid infinite loops when following substitution chains
-                        if (entry.key_ptr.* == entry.value_ptr.*) continue;
+                        // Skip if it would create a cycle in rigid_subst
+                        if (self.wouldCreateRigidSubstCycle(entry.key_ptr.*, entry.value_ptr.*)) continue;
                         try self.rigid_subst.put(entry.key_ptr.*, entry.value_ptr.*);
                         // Also add to empty_scope so layout store finds the mapping via TypeScope.lookup()
                         try scope.put(entry.key_ptr.*, entry.value_ptr.*);
@@ -16854,6 +17775,7 @@ pub const Interpreter = struct {
                     .saved_rigid_subst = saved_rigid_subst,
                     .saved_flex_type_context = saved_flex_type_context,
                     .arg_rt_vars_to_free = null,
+                    .saved_stack_ptr = self.stack_memory.next(),
                 } } });
                 try work_stack.push(.{ .eval_expr = .{
                     .expr_idx = closure_header.body_idx,
@@ -16983,6 +17905,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -17034,6 +17957,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
 
                     // Push body evaluation
@@ -17468,10 +18392,11 @@ pub const Interpreter = struct {
                         break :blk discriminant == 2; // LT
                     } else if (cmp_result.layout.tag == .tag_union) {
                         // Get discriminant from tag_union layout
-                        const tu_data = self.runtime_layout_store.getTagUnionData(cmp_result.layout.data.tag_union.idx);
+                        const tu_idx = cmp_result.layout.data.tag_union.idx;
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
                         if (cmp_result.ptr) |ptr| {
                             const base_ptr: [*]u8 = @ptrCast(ptr);
-                            const discriminant_ptr = base_ptr + tu_data.discriminant_offset;
+                            const discriminant_ptr = base_ptr + disc_offset;
                             const discriminant: u8 = discriminant_ptr[0];
                             // Tag order is alphabetical: EQ=0, GT=1, LT=2
                             break :blk discriminant == 2; // LT
@@ -17581,6 +18506,7 @@ pub const Interpreter = struct {
                             .saved_rigid_subst = null,
                             .saved_flex_type_context = null,
                             .arg_rt_vars_to_free = null,
+                            .saved_stack_ptr = self.stack_memory.next(),
                         } } });
                         try work_stack.push(.{ .eval_expr = .{
                             .expr_idx = cmp_header.body_idx,
@@ -17663,6 +18589,7 @@ pub const Interpreter = struct {
                         .saved_rigid_subst = null,
                         .saved_flex_type_context = null,
                         .arg_rt_vars_to_free = null,
+                        .saved_stack_ptr = self.stack_memory.next(),
                     } } });
                     try work_stack.push(.{ .eval_expr = .{
                         .expr_idx = cmp_header.body_idx,

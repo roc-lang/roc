@@ -549,6 +549,9 @@ const Formatter = struct {
                 }
             },
             .type_anno => |t| {
+                if (t.is_var) {
+                    try fmt.pushAll("var ");
+                }
                 try fmt.pushTokenText(t.name);
                 if (multiline and try fmt.flushCommentsAfter(t.name)) {
                     fmt.curr_indent += 1;
@@ -816,6 +819,68 @@ const Formatter = struct {
         try fmt.push(braces.end());
     }
 
+    /// Format a record type annotation with an extension (e.g., { name: Str, ..ext } or { name: Str, .. })
+    fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.Idx, record_region: AST.TokenizedRegion) anyerror!void {
+        const fields = fmt.ast.store.annoRecordFieldSlice(fields_span);
+        const record_multiline = fmt.ast.regionIsMultiline(record_region);
+        const record_indent = fmt.curr_indent;
+        defer {
+            fmt.curr_indent = record_indent;
+        }
+        try fmt.push('{');
+        if (fields.len == 0) {
+            // Just the extension, e.g. { .. } or { ..a }
+            try fmt.push(' ');
+        } else {
+            if (record_multiline) {
+                fmt.curr_indent += 1;
+            } else {
+                try fmt.push(' ');
+            }
+            for (fields, 0..) |field_idx, i| {
+                const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
+                if (record_multiline) {
+                    _ = try fmt.flushCommentsBefore(field_region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                _ = try @as(fn (*Formatter, AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion, Formatter.formatAnnoRecordField)(fmt, field_idx);
+                if (record_multiline) {
+                    try fmt.push(',');
+                } else if (i < (fields.len - 1)) {
+                    try fmt.pushAll(", ");
+                } else {
+                    // Last field before extension
+                    try fmt.pushAll(", ");
+                }
+            }
+        }
+        // Handle the record extension (..ext or ..)
+        const ext_region = fmt.nodeRegion(@intFromEnum(ext));
+        if (record_multiline) {
+            _ = try fmt.flushCommentsBefore(ext_region.start);
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+        const ext_anno = fmt.ast.store.getTypeAnno(ext);
+        try fmt.pushAll("..");
+        // Only output the extension type if it's not an anonymous underscore
+        switch (ext_anno) {
+            .underscore => {}, // Anonymous extension - just output ".."
+            else => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+        }
+        if (record_multiline) {
+            try fmt.push(',');
+            _ = try fmt.flushCommentsBefore(record_region.end - 1);
+            fmt.curr_indent -= 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        } else {
+            try fmt.push(' ');
+        }
+        try fmt.push('}');
+    }
+
     fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
@@ -939,7 +1004,59 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                _ = try fmt.formatExpr(fa.left);
+                // Special case: when left side is a local_dispatch with zero-arg apply,
+                // we must preserve ONE set of parens to prevent the output from being
+                // re-parsed with a different structure. E.g., `0->b().c()` should NOT
+                // become `0->b.c()` because the parser would interpret `b.c` as a
+                // qualified identifier instead of a field access chain. (See issue #8851)
+                //
+                // For nested applies like `0->b()().c()`, we strip all but one layer,
+                // outputting `0->b().c()` which is then stable on subsequent passes.
+                const left_expr = fmt.ast.store.getExpr(fa.left);
+                if (left_expr == .local_dispatch) {
+                    const ld = left_expr.local_dispatch;
+                    const ld_right_initial = fmt.ast.store.getExpr(ld.right);
+                    if (ld_right_initial == .apply) {
+                        const apply_initial = ld_right_initial.apply;
+                        if (fmt.ast.store.exprSlice(apply_initial.args).len == 0) {
+                            // Strip nested zero-arg applies to find the innermost function
+                            var innermost_fn = apply_initial.@"fn";
+                            var inner_expr = fmt.ast.store.getExpr(innermost_fn);
+                            while (inner_expr == .apply) {
+                                const inner_apply = inner_expr.apply;
+                                if (fmt.ast.store.exprSlice(inner_apply.args).len == 0) {
+                                    innermost_fn = inner_apply.@"fn";
+                                    inner_expr = fmt.ast.store.getExpr(innermost_fn);
+                                } else {
+                                    break;
+                                }
+                            }
+
+                            // Format the local_dispatch preserving one set of parens
+                            const ld_multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
+                            _ = try fmt.formatExpr(ld.left);
+                            if (ld_multiline and try fmt.flushCommentsBefore(ld.operator)) {
+                                fmt.curr_indent += 1;
+                                try fmt.pushIndent();
+                            }
+                            try fmt.pushAll("->");
+                            if (ld_multiline and try fmt.flushCommentsAfter(ld.operator)) {
+                                try fmt.pushIndent();
+                            }
+                            // Output the innermost function followed by () to preserve one
+                            // set of parens (prevents `b` from being parsed with following `.`
+                            // as a qualified identifier)
+                            _ = try fmt.formatExprInner(innermost_fn, .no_indent_on_access);
+                            try fmt.pushAll("()");
+                        } else {
+                            _ = try fmt.formatExpr(fa.left);
+                        }
+                    } else {
+                        _ = try fmt.formatExpr(fa.left);
+                    }
+                } else {
+                    _ = try fmt.formatExpr(fa.left);
+                }
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
@@ -961,12 +1078,26 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                // BUT we can only strip if the inner function is NOT also a zero-arg apply,
+                // since `foo->bar()()` is semantically different from `foo->bar()`.
+                // (See issue #8851 for more context)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
                 if (right_expr == .apply) {
                     const apply = right_expr.apply;
                     if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: just format the function, not the empty parens
-                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
+                        // Zero-arg apply: check if we can safely strip the parens
+                        const inner_fn = fmt.ast.store.getExpr(apply.@"fn");
+                        const can_strip = switch (inner_fn) {
+                            // Don't strip if the inner is also a zero-arg apply
+                            // e.g., `foo->bar()()` should NOT become `foo->bar()`
+                            .apply => |inner_apply| fmt.ast.store.exprSlice(inner_apply.args).len != 0,
+                            else => true,
+                        };
+                        if (can_strip) {
+                            _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
+                        } else {
+                            _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                        }
                     } else {
                         _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                     }
@@ -1988,19 +2119,25 @@ const Formatter = struct {
             },
             .record => |r| {
                 region = r.region;
-                try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                if (r.ext) |ext| {
+                    // Record with extension - handle specially
+                    try fmt.formatRecordWithExtension(r.fields, ext, region);
+                } else {
+                    // Regular record without extension - use formatCollection
+                    try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                }
             },
             .tag_union => |t| {
                 region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const has_open = t.open_anno != null;
+                const is_open = t.ext != .closed;
                 const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
                 const tag_indent = fmt.curr_indent;
                 defer {
                     fmt.curr_indent = tag_indent;
                 }
                 try fmt.push('[');
-                if (tags.len == 0 and !has_open) {
+                if (tags.len == 0 and !is_open) {
                     try fmt.push(']');
                 } else {
                     if (tag_multiline) {
@@ -2016,20 +2153,22 @@ const Formatter = struct {
                         _ = try fmt.formatTypeAnno(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
-                        } else if (i < (tags.len - 1) or has_open) {
+                        } else if (i < (tags.len - 1) or is_open) {
                             try fmt.pushAll(", ");
                         }
                     }
-                    // Handle the open extension (..others)
-                    if (t.open_anno) |open| {
-                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                    // Handle open tag unions - always format as just ".." (silently drop any named extension)
+                    if (is_open) {
+                        // If there was a named extension, use its region for comment flushing
+                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            if (open_region) |oreg| {
+                                _ = try fmt.flushCommentsBefore(oreg.start);
+                            }
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.pushAll("..");
-                        _ = try fmt.formatTypeAnno(open);
                         if (tag_multiline) {
                             try fmt.push(',');
                         }

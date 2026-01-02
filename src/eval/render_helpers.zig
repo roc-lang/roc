@@ -473,19 +473,12 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                 }
             } else if (value.layout.tag == .tag_union) {
                 // Tag union with new proper layout: payload at offset 0, discriminant at discriminant_offset
-                const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+                const tu_idx = value.layout.data.tag_union.idx;
+                const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+                const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
                 if (value.ptr) |ptr| {
                     const base_ptr: [*]u8 = @ptrCast(ptr);
-                    const disc_ptr = base_ptr + tu_data.discriminant_offset;
-                    // Read discriminant based on its size
-                    const discriminant: usize = switch (tu_data.discriminant_size) {
-                        1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                        2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                        4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                        8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                        else => 0,
-                    };
-                    tag_index = discriminant;
+                    tag_index = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
                     have_tag = true;
                 }
                 // Use getSortedTag to ensure consistent tag ordering
@@ -713,8 +706,12 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 return buf.toOwnedSlice();
             },
             .int => {
-                const i = value.asI128();
-                return try std.fmt.allocPrint(gpa, "{d}", .{i});
+                // Check if this is an unsigned type that needs asU128
+                const precision = value.getIntPrecision();
+                return switch (precision) {
+                    .u64, .u128 => try std.fmt.allocPrint(gpa, "{d}", .{value.asU128()}),
+                    else => try std.fmt.allocPrint(gpa, "{d}", .{value.asI128()}),
+                };
             },
             .frac => {
                 std.debug.assert(value.ptr != null);
@@ -865,19 +862,14 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
     }
     if (value.layout.tag == .tag_union) {
         // Layout-only fallback for tag_union: show discriminant and raw payload
-        const tu_data = ctx.layout_store.getTagUnionData(value.layout.data.tag_union.idx);
+        const tu_idx = value.layout.data.tag_union.idx;
+        const tu_data = ctx.layout_store.getTagUnionData(tu_idx);
+        const disc_offset = ctx.layout_store.getTagUnionDiscriminantOffset(tu_idx);
         var out = std.array_list.AlignedManaged(u8, null).init(gpa);
         errdefer out.deinit();
         if (value.ptr) |ptr| {
             const base_ptr: [*]u8 = @ptrCast(ptr);
-            const disc_ptr = base_ptr + tu_data.discriminant_offset;
-            const discriminant: usize = switch (tu_data.discriminant_size) {
-                1 => @as(*const u8, @ptrCast(disc_ptr)).*,
-                2 => @as(*const u16, @ptrCast(@alignCast(disc_ptr))).*,
-                4 => @as(*const u32, @ptrCast(@alignCast(disc_ptr))).*,
-                8 => @intCast(@as(*const u64, @ptrCast(@alignCast(disc_ptr))).*),
-                else => 0,
-            };
+            const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
             try std.fmt.format(out.writer(), "<tag_union variant={d}>", .{discriminant});
         } else {
             try out.appendSlice("<tag_union>");
@@ -895,15 +887,18 @@ fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
     var out = std.array_list.AlignedManaged(u8, null).init(gpa);
     errdefer out.deinit();
 
-    var num = dec.num;
-    if (num < 0) {
+    const is_negative = dec.num < 0;
+    // Use @abs which handles i128 min correctly by returning u128
+    // (negating i128 min directly would overflow)
+    const abs_value: u128 = @abs(dec.num);
+
+    if (is_negative) {
         try out.append('-');
-        num = -num;
     }
 
-    const one = RocDec.one_point_zero_i128;
-    const integer_part = @divTrunc(num, one);
-    const fractional_part = @rem(num, one);
+    const one: u128 = @intCast(RocDec.one_point_zero_i128);
+    const integer_part = @divTrunc(abs_value, one);
+    const fractional_part = @rem(abs_value, one);
 
     try std.fmt.format(out.writer(), "{d}", .{integer_part});
 

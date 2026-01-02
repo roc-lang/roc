@@ -935,6 +935,7 @@ pub const Statement = union(enum) {
         name: Token.Idx,
         anno: TypeAnno.Idx,
         where: ?Collection.Idx,
+        is_var: bool,
         region: TokenizedRegion,
     },
     malformed: struct {
@@ -2127,7 +2128,8 @@ pub const TypeAnno = union(enum) {
     },
     tag_union: struct {
         tags: TypeAnno.Span,
-        open_anno: ?TypeAnno.Idx,
+        /// Extension for open tag unions
+        ext: TagUnionExt,
         region: TokenizedRegion,
     },
     tuple: struct {
@@ -2157,7 +2159,21 @@ pub const TypeAnno = union(enum) {
     pub const Idx = enum(u32) { _ };
     pub const Span = struct { span: base.DataSpan };
 
-    pub const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+    /// Extension type for open tag unions
+    pub const TagUnionExt = union(enum) {
+        /// Closed tag union: `[A, B, C]`
+        closed,
+        /// Anonymous open tag union: `[A, B, ..]`
+        open,
+        /// Named open tag union: `[A, B, ..ext]`
+        named: TypeAnno.Idx,
+    };
+
+    pub const TagUnionRhs = packed struct {
+        /// 0 = closed, 1 = anonymous open, 2 = named open
+        ext_kind: u2,
+        tags_len: u30,
+    };
     pub const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
     /// Extract the region from any TypeAnno variant
@@ -2241,8 +2257,10 @@ pub const TypeAnno = union(enum) {
                 }
                 try tree.endNode(tags_begin, attrs2);
 
-                if (a.open_anno) |anno_idx| {
-                    try ast.store.getTypeAnno(anno_idx).pushToSExprTree(gpa, env, ast, tree);
+                if (a.ext == .named) {
+                    try ast.store.getTypeAnno(a.ext.named).pushToSExprTree(gpa, env, ast, tree);
+                } else if (a.ext == .open) {
+                    try tree.pushStaticAtom("..");
                 }
 
                 try tree.endNode(begin, attrs);
@@ -2469,6 +2487,20 @@ pub const Expr = union(enum) {
         token: Token.Idx,
         region: TokenizedRegion,
     },
+    /// An integer with an explicit type annotation: `123.U64`
+    /// The type_token contains the `.U64` part (NoSpaceDotUpperIdent)
+    typed_int: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
+    /// A fractional number with an explicit type annotation: `3.14.Dec`
+    /// The type_token contains the `.Dec` part (NoSpaceDotUpperIdent)
+    typed_frac: struct {
+        token: Token.Idx,
+        type_token: Token.Idx,
+        region: TokenizedRegion,
+    },
     single_quote: struct {
         token: Token.Idx,
         region: TokenizedRegion,
@@ -2580,6 +2612,8 @@ pub const Expr = union(enum) {
             .ident => |e| e.region,
             .int => |e| e.region,
             .frac => |e| e.region,
+            .typed_int => |e| e.region,
+            .typed_frac => |e| e.region,
             .string => |e| e.region,
             .multiline_string => |e| e.region,
             .tag => |e| e.region,
@@ -2630,6 +2664,24 @@ pub const Expr = union(enum) {
                 try tree.pushStaticAtom("e-frac");
                 try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 try tree.pushStringPair("raw", ast.resolve(a.token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_int => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-int");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
+                const attrs = tree.beginNode();
+                try tree.endNode(begin, attrs);
+            },
+            .typed_frac => |a| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-typed-frac");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
+                try tree.pushStringPair("raw", ast.resolve(a.token));
+                try tree.pushStringPair("type", ast.resolve(a.type_token));
                 const attrs = tree.beginNode();
                 try tree.endNode(begin, attrs);
             },
