@@ -767,9 +767,9 @@ pub const Payload = extern union {
 
     // Lambda Capture
     pub const LambdaCapture = extern struct {
+        name: u32, // Ident.Idx
+        scope_depth: u32,
         pattern_idx: u32, // CIR.Pattern.Idx
-        _unused1: u32,
-        _unused2: u32,
     };
 
     // Definition
@@ -782,9 +782,9 @@ pub const Payload = extern union {
 
     // Exposed Item
     pub const ExposedItem = extern struct {
-        ident: u32, // Ident.Idx
-        _unused1: u32,
-        _unused2: u32,
+        name: u32, // Ident.Idx
+        alias: u32, // Ident.Idx or 0 if no alias
+        is_wildcard: u32,
     };
 
     // If Branch

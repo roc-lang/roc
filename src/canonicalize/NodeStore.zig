@@ -1463,10 +1463,12 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 
     switch (node.tag) {
         .exposed_item => {
+            const payload = node.getPayload();
+            const p = payload.exposed_item;
             return CIR.ExposedItem{
-                .name = @bitCast(node.data_1),
-                .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
-                .is_wildcard = node.data_3 != 0,
+                .name = @bitCast(p.name),
+                .alias = if (p.alias == 0) null else @bitCast(p.alias),
+                .is_wildcard = p.is_wildcard != 0,
             };
         },
         else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
@@ -2165,12 +2167,17 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Region) Allocator.Error!CIR.Expr.Capture.Idx {
-    const node = Node{
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .lambda_capture,
-        .data_1 = @bitCast(capture.name),
-        .data_2 = capture.scope_depth,
-        .data_3 = @intFromEnum(capture.pattern_idx),
     };
+    node.setPayload(.{ .lambda_capture = .{
+        .name = @bitCast(capture.name),
+        .scope_depth = capture.scope_depth,
+        .pattern_idx = @intFromEnum(capture.pattern_idx),
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -2674,12 +2681,17 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) Allocator.Error!CIR.ExposedItem.Idx {
-    const node = Node{
-        .data_1 = @bitCast(exposedItem.name),
-        .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .data_3 = @intFromBool(exposedItem.is_wildcard),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .exposed_item,
     };
+    node.setPayload(.{ .exposed_item = .{
+        .name = @bitCast(exposedItem.name),
+        .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
+        .is_wildcard = @intFromBool(exposedItem.is_wildcard),
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
