@@ -440,18 +440,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_call => {
-            const raw = payload.raw;
-            const extra_start = raw.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
+            const p = payload.expr_call;
+            const args_span = FunctionArgs.fromU32(p.packed_args).toDataSpan();
 
             return CIR.Expr{
                 .e_call = .{
-                    .func = @enumFromInt(raw.data_1),
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .called_via = @enumFromInt(raw.data_3),
+                    .func = @enumFromInt(p.func),
+                    .args = .{ .span = args_span },
+                    .called_via = @enumFromInt(p.called_via),
                 },
             };
         },
@@ -559,36 +555,25 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_closure => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const lambda_idx = extra_data[0];
-            const capture_start = extra_data[1];
-            const capture_len = extra_data[2];
-            const tag_name: base.Ident.Idx = @bitCast(extra_data[3]);
+            const p = payload.expr_closure;
+            const captures_span = FunctionArgs.fromU32(p.packed_captures).toDataSpan();
 
             return CIR.Expr{
                 .e_closure = .{
-                    .lambda_idx = @enumFromInt(lambda_idx),
-                    .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
-                    .tag_name = tag_name,
+                    .lambda_idx = @enumFromInt(p.lambda_idx),
+                    .captures = .{ .span = captures_span },
+                    .tag_name = @bitCast(p.tag_name),
                 },
             };
         },
         .expr_lambda => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
-            const body_idx = extra_data[2];
+            const p = payload.expr_lambda;
+            const args_span = FunctionArgs.fromU32(p.packed_args).toDataSpan();
 
             return CIR.Expr{
                 .e_lambda = .{
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .body = @enumFromInt(body_idx),
+                    .args = .{ .span = args_span },
+                    .body = @enumFromInt(p.body),
                 },
             };
         },
@@ -608,59 +593,44 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_empty_list = .{} };
         },
         .expr_record => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const fields_start = extra_data[0];
-            const fields_len = extra_data[1];
-            const ext_value = extra_data[2];
-
-            const ext = if (ext_value == 0) null else @as(CIR.Expr.Idx, @enumFromInt(ext_value));
+            const p = payload.expr_record;
+            const fields_span = FunctionArgs.fromU32(p.packed_fields).toDataSpan();
+            const ext = if (p.ext_plus_one == 0) null else @as(CIR.Expr.Idx, @enumFromInt(p.ext_plus_one - 1));
 
             return CIR.Expr{
                 .e_record = .{
-                    .fields = .{ .span = .{ .start = fields_start, .len = fields_len } },
+                    .fields = .{ .span = fields_span },
                     .ext = ext,
                 },
             };
         },
         .expr_match => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
-            const branches_start = extra_data[1];
-            const branches_len = extra_data[2];
-            const exhaustive = @as(types.Var, @enumFromInt(extra_data[3]));
-            const is_try_suffix = extra_data[4] != 0;
+            const p = payload.expr_match;
+            // Unpack branches: 20 bits start, 10 bits len, 1 bit is_try_suffix, 1 bit reserved
+            const branches_start = (p.packed_branches >> 12) & 0xFFFFF; // 20 bits
+            const branches_len = (p.packed_branches >> 2) & 0x3FF;    // 10 bits
+            const is_try_suffix = (p.packed_branches & 0x2) != 0;      // 1 bit
 
             return CIR.Expr{
                 .e_match = CIR.Expr.Match{
-                    .cond = cond,
+                    .cond = @enumFromInt(p.cond),
                     .branches = .{ .span = .{ .start = branches_start, .len = branches_len } },
-                    .exhaustive = exhaustive,
+                    .exhaustive = @enumFromInt(p.exhaustive),
                     .is_try_suffix = is_try_suffix,
                 },
             };
         },
         .expr_zero_argument_tag => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
-            const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const name = @as(Ident.Idx, @bitCast(extra_data[3]));
+            const p = payload.expr_zero_argument_tag;
+            const variant_var = @as(types.Var, @enumFromInt((p.packed_vars & 0xFFFF)));
+            const ext_var = @as(types.Var, @enumFromInt((p.packed_vars >> 16) & 0xFFFF));
 
             return CIR.Expr{
                 .e_zero_argument_tag = .{
-                    .closure_name = closure_name,
+                    .closure_name = @bitCast(p.closure_name),
                     .variant_var = variant_var,
                     .ext_var = ext_var,
-                    .name = name,
+                    .name = @bitCast(p.name),
                 },
             };
         },
@@ -777,22 +747,13 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_if_then_else => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const branches_span_start: u32 = extra_data[0];
-            const branches_span_len: u32 = extra_data[1];
-            const final_else: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
-
-            const branches_span = CIR.Expr.IfBranch.Span{ .span = .{
-                .start = branches_span_start,
-                .len = branches_span_len,
-            } };
+            const p = payload.expr_if_then_else;
+            const branches_span_data = FunctionArgs.fromU32(p.packed_branches).toDataSpan();
+            const branches_span = CIR.Expr.IfBranch.Span{ .span = branches_span_data };
 
             return CIR.Expr{ .e_if = .{
                 .branches = branches_span,
-                .final_else = final_else,
+                .final_else = @enumFromInt(p.final_else),
             } };
         },
         .expr_dot_access => {
@@ -1927,54 +1888,45 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_match => |e| {
             node.tag = .expr_match;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.cond));
-            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
-            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.exhaustive));
-            _ = try store.extra_data.append(store.gpa, @intFromBool(e.is_try_suffix));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
+            // Pack branches: 20 bits start, 10 bits len, 1 bit is_try_suffix, 1 bit reserved
+            std.debug.assert(e.branches.span.start <= 0xFFFFF);  // 20 bits max
+            std.debug.assert(e.branches.span.len <= 0x3FF);      // 10 bits max
+            const packed_branches = (e.branches.span.start << 12) | (e.branches.span.len << 2) | (@intFromBool(e.is_try_suffix) << 1);
+            node.setPayload(.{ .expr_match = .{
+                .cond = @intFromEnum(e.cond),
+                .packed_branches = packed_branches,
+                .exhaustive = @intFromEnum(e.exhaustive),
             } });
         },
         .e_if => |e| {
             node.tag = .expr_if_then_else;
-            const extra_start = store.extra_data.len();
-            const num_extra_items = 3;
-            _ = try store.extra_data.append(store.gpa, e.branches.span.start);
-            _ = try store.extra_data.append(store.gpa, e.branches.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.final_else));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_start),
-                .data_2 = @intCast(extra_start + num_extra_items),
-                .data_3 = 0,
+            std.debug.assert(FunctionArgs.canFit(e.branches.span));
+            const packed_branches = FunctionArgs.fromDataSpanUnchecked(e.branches.span).toU32();
+            node.setPayload(.{ .expr_if_then_else = .{
+                .packed_branches = packed_branches,
+                .final_else = @intFromEnum(e.final_else),
+                ._unused = 0,
             } });
-            std.debug.assert(extra_start + num_extra_items == store.extra_data.len());
         },
         .e_call => |e| {
             node.tag = .expr_call;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, e.args.span.start);
-            _ = try store.extra_data.append(store.gpa, e.args.span.len);
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.func),
-                .data_2 = @intCast(extra_data_start),
-                .data_3 = @intFromEnum(e.called_via),
+            std.debug.assert(FunctionArgs.canFit(e.args.span));
+            const packed_args = FunctionArgs.fromDataSpanUnchecked(e.args.span).toU32();
+            node.setPayload(.{ .expr_call = .{
+                .func = @intFromEnum(e.func),
+                .packed_args = packed_args,
+                .called_via = @intFromEnum(e.called_via),
             } });
         },
         .e_record => |e| {
             node.tag = .expr_record;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, e.fields.span.start);
-            _ = try store.extra_data.append(store.gpa, e.fields.span.len);
-            const ext_value = if (e.ext) |ext| @intFromEnum(ext) else 0;
-            _ = try store.extra_data.append(store.gpa, ext_value);
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
+            std.debug.assert(FunctionArgs.canFit(e.fields.span));
+            const packed_fields = FunctionArgs.fromDataSpanUnchecked(e.fields.span).toU32();
+            const ext_plus_one = if (e.ext) |ext| @intFromEnum(ext) + 1 else 0;
+            node.setPayload(.{ .expr_record = .{
+                .packed_fields = packed_fields,
+                .ext_plus_one = ext_plus_one,
+                ._unused = 0,
             } });
         },
         .e_empty_record => |_| {
@@ -1987,40 +1939,31 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_zero_argument_tag => |e| {
             node.tag = .expr_zero_argument_tag;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
+            const packed_vars = (@as(u32, @intFromEnum(e.ext_var)) << 16) | @as(u32, @intFromEnum(e.variant_var));
+            node.setPayload(.{ .expr_zero_argument_tag = .{
+                .closure_name = @bitCast(e.closure_name),
+                .packed_vars = packed_vars,
+                .name = @bitCast(e.name),
             } });
         },
         .e_closure => |e| {
             node.tag = .expr_closure;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
-            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
-            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.tag_name));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
+            std.debug.assert(FunctionArgs.canFit(e.captures.span));
+            const packed_captures = FunctionArgs.fromDataSpanUnchecked(e.captures.span).toU32();
+            node.setPayload(.{ .expr_closure = .{
+                .lambda_idx = @intFromEnum(e.lambda_idx),
+                .packed_captures = packed_captures,
+                .tag_name = @bitCast(e.tag_name),
             } });
         },
         .e_lambda => |e| {
             node.tag = .expr_lambda;
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, e.args.span.start);
-            _ = try store.extra_data.append(store.gpa, e.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.body));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
+            std.debug.assert(FunctionArgs.canFit(e.args.span));
+            const packed_args = FunctionArgs.fromDataSpanUnchecked(e.args.span).toU32();
+            node.setPayload(.{ .expr_lambda = .{
+                .body = @intFromEnum(e.body),
+                .packed_args = packed_args,
+                ._unused = 0,
             } });
         },
         .e_binop => |e| {
