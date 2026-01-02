@@ -2666,10 +2666,15 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov on parse unit tests (filter to only src/parse files, excluding zig stdlib)
-            const run_parse_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-pattern=/src/parse/",
+            // Run kcov on parse unit tests
+            const run_parse_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            // On macOS, kcov's Mach-O parser includes all compiled files (including zig stdlib).
+            // Use --include-pattern to filter to only src/parse files.
+            // Linux kcov doesn't need this filter (it already excludes stdlib via DWARF parsing).
+            if (target.result.os.tag == .macos) {
+                run_parse_coverage.addArg("--include-pattern=/src/parse/");
+            }
+            run_parse_coverage.addArgs(&.{
                 "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
