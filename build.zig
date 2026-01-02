@@ -1039,9 +1039,9 @@ const CoverageSummaryStep = struct {
         const self: *CoverageSummaryStep = @fieldParentPtr("step", step);
 
         // Read kcov JSON output
-        // kcov creates a subdirectory named after the executable (e.g., snapshot_coverage/)
+        // kcov creates a subdirectory named after the executable (e.g., parse_unit_coverage/)
         // which contains the coverage.json file
-        const json_path = try std.fmt.allocPrint(allocator, "{s}/kcov-merged/coverage.json", .{self.coverage_dir});
+        const json_path = try std.fmt.allocPrint(allocator, "{s}/parse_unit_coverage/coverage.json", .{self.coverage_dir});
         defer allocator.free(json_path);
 
         const json_file = std.fs.cwd().openFile(json_path, .{}) catch |err| {
@@ -2621,32 +2621,10 @@ pub fn build(b: *std.Build) void {
         // where dependencies added to a step outside the lazy block are not executed when the step
         // also has dependencies added inside the lazy block.
         if (b.lazyDependency("kcov", .{})) |kcov_dep| {
-            // Create test artifacts INSIDE the lazy block
-            const snapshot_coverage_test = b.addTest(.{
-                .name = "snapshot_coverage",
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/snapshot_tool/main.zig"),
-                    .target = target,
-                    .optimize = .Debug, // Debug required for DWARF debug info
-                    .link_libc = true,
-                }),
-            });
-
-            // Add all module dependencies (snapshot tool uses parse, can, check, etc.)
-            roc_modules.addAll(snapshot_coverage_test);
-            snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
-            snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
-
-            // Add LLVM support (snapshot_tool uses llvm_compile for dual-mode testing)
-            const llvm_paths_cov = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-            snapshot_coverage_test.addLibraryPath(.{ .cwd_relative = llvm_paths_cov.lib });
-            snapshot_coverage_test.addIncludePath(.{ .cwd_relative = llvm_paths_cov.include });
-            try addStaticLlvmOptionsToModule(snapshot_coverage_test.root_module);
-            snapshot_coverage_test.root_module.addAnonymousImport("llvm_compile", .{
-                .root_source_file = b.path("src/llvm_compile/mod.zig"),
-            });
-
-            // Also run parse module unit tests for additional coverage
+            // Create parse module unit tests for coverage
+            // We only use the parse unit tests (not snapshot tool) because:
+            // 1. They test the parser directly
+            // 2. They don't require LLVM dependencies
             const parse_unit_test = b.addTest(.{
                 .name = "parse_unit_coverage",
                 .root_module = b.createModule(.{
@@ -2658,7 +2636,6 @@ pub fn build(b: *std.Build) void {
             roc_modules.addModuleDependencies(parse_unit_test, .parse);
 
             // Install all artifacts
-            const install_snapshot_test = b.addInstallArtifact(snapshot_coverage_test, .{});
             const install_parse_test = b.addInstallArtifact(parse_unit_test, .{});
 
             const kcov_exe = kcov_dep.artifact("kcov");
@@ -2666,7 +2643,6 @@ pub fn build(b: *std.Build) void {
 
             // Create a step for building all coverage binaries
             const build_cov_tests = b.step("build-coverage-tests", "Build coverage test binaries to zig-out/bin/");
-            build_cov_tests.dependOn(&install_snapshot_test.step);
             build_cov_tests.dependOn(&install_parse_test.step);
             build_cov_tests.dependOn(&install_kcov.step);
 
@@ -2674,7 +2650,7 @@ pub fn build(b: *std.Build) void {
             coverage_step.dependOn(build_cov_tests);
 
             // Create output directories before running kcov
-            const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser-snapshot-tests", "kcov-output/parser-unit-tests" });
+            const mkdir_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/parser" });
             mkdir_step.setCwd(b.path("."));
             mkdir_step.step.dependOn(build_cov_tests);
 
@@ -2690,42 +2666,20 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov on snapshot tests (filter to only src/parse files)
-            const run_snapshot_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--include-path=src/parse",
-                "kcov-output/parser-snapshot-tests",
-                "zig-out/bin/snapshot_coverage",
-            });
-            run_snapshot_coverage.setCwd(b.path("."));
-            run_snapshot_coverage.step.dependOn(&mkdir_step.step);
-            run_snapshot_coverage.step.dependOn(&install_snapshot_test.step);
-            run_snapshot_coverage.step.dependOn(&install_kcov.step);
-
+            // Run kcov on parse unit tests
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
                 "--include-path=src/parse",
-                "kcov-output/parser-unit-tests",
+                "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
             run_parse_coverage.setCwd(b.path("."));
-            run_parse_coverage.step.dependOn(&run_snapshot_coverage.step);
+            run_parse_coverage.step.dependOn(&mkdir_step.step);
             run_parse_coverage.step.dependOn(&install_parse_test.step);
 
-            // Merge coverage results into kcov-output/parser/
-            const merge_coverage = b.addSystemCommand(&.{
-                "zig-out/bin/kcov",
-                "--merge",
-                "kcov-output/parser",
-                "kcov-output/parser-snapshot-tests",
-                "kcov-output/parser-unit-tests",
-            });
-            merge_coverage.setCwd(b.path("."));
-            merge_coverage.step.dependOn(&run_parse_coverage.step);
-
-            // Add coverage summary step that parses merged kcov JSON output
+            // Add coverage summary step that parses kcov JSON output
             const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser");
-            summary_step.step.dependOn(&merge_coverage.step);
+            summary_step.step.dependOn(&run_parse_coverage.step);
 
             // Cross-compile for Windows to verify comptime branches compile
             // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
@@ -2749,7 +2703,6 @@ pub fn build(b: *std.Build) void {
 
             // Add explicit dependencies on install steps to coverage_step itself
             // to work around Zig 0.15.2 lazy dependency issues
-            coverage_step.dependOn(&install_snapshot_test.step);
             coverage_step.dependOn(&install_parse_test.step);
             coverage_step.dependOn(&install_kcov.step);
 

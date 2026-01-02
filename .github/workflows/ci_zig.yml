@@ -255,11 +255,16 @@ jobs:
               exit 1
           }
 
-      # Parser code coverage - only on macos-15 where kcov works properly with Zig's DWARF format
-      - name: Parser Code Coverage
-        if: matrix.os == 'macos-15'
+      # Parser code coverage - on native Linux where kcov is much faster than macOS
+      - name: Install kcov dependencies
+        if: matrix.os == 'ubuntu-24.04'
         run: |
-          brew install libdwarf
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libdw-dev libelf-dev zlib1g-dev pkg-config
+
+      - name: Parser Code Coverage
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
           zig build coverage
 
       - name: Test inside nix too
