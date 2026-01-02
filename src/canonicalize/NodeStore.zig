@@ -3138,12 +3138,17 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const node = Node{
-        .data_1 = @intFromEnum(if_branch.cond),
-        .data_2 = @intFromEnum(if_branch.body),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
         .data_3 = 0,
         .tag = .if_branch,
     };
+    node.setPayload(.{ .if_branch = .{
+        .cond = @intFromEnum(if_branch.cond),
+        .body = @intFromEnum(if_branch.body),
+        ._unused = 0,
+    } });
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
