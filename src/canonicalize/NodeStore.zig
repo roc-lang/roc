@@ -852,12 +852,18 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
     _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
 
-    store.nodes.set(node_idx, .{
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .expr_num,
-        .data_1 = @intFromEnum(num_kind),
-        .data_2 = @intFromEnum(value.kind),
-        .data_3 = @intCast(extra_data_start),
-    });
+    };
+    node.setPayload(.{ .expr_num = .{
+        .kind = @intFromEnum(num_kind),
+        .val_kind = @intFromEnum(value.kind),
+        .value_idx = @intCast(extra_data_start),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_zero_argument_tag expression in-place.
@@ -880,12 +886,18 @@ pub fn replaceExprWithZeroArgumentTag(
     _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
     _ = try store.extra_data.append(store.gpa, @bitCast(name));
 
-    store.nodes.set(node_idx, .{
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .expr_zero_argument_tag,
+    };
+    node.setPayload(.{ .raw = .{
         .data_1 = @intCast(extra_data_start),
         .data_2 = 0,
         .data_3 = 0,
-    });
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_tuple expression in-place.
@@ -906,12 +918,18 @@ pub fn replaceExprWithTuple(
         _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
     }
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_tuple,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = @intCast(elem_indices.len),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
         .data_3 = 0,
-    });
+        .tag = .expr_tuple,
+    };
+    node.setPayload(.{ .expr_tuple = .{
+        .elems_start = @intCast(extra_data_start),
+        .elems_len = @intCast(elem_indices.len),
+        ._unused = 0,
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_tag expression in-place.
@@ -933,12 +951,18 @@ pub fn replaceExprWithTag(
         _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
     }
 
-    store.nodes.set(node_idx, .{
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .expr_tag,
-        .data_1 = @bitCast(name),
-        .data_2 = @intCast(extra_data_start),
-        .data_3 = @intCast(arg_indices.len),
-    });
+    };
+    node.setPayload(.{ .expr_tag = .{
+        .name = @bitCast(name),
+        .args_start = @intCast(extra_data_start),
+        .args_len = @intCast(arg_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Get the more-specific expr index. Used to make error messages nicer.
@@ -2085,12 +2109,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) Allocator.Error!CIR.RecordField.Idx {
-    const node = Node{
-        .data_1 = @bitCast(recordField.name),
-        .data_2 = @intFromEnum(recordField.value),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
         .data_3 = 0,
         .tag = .record_field,
     };
+    node.setPayload(.{ .record_field = .{
+        .name = @bitCast(recordField.name),
+        .expr = @intFromEnum(recordField.value),
+        ._unused = 0,
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -2180,12 +2209,17 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    const node = Node{
-        .data_1 = @intFromEnum(branchPattern.pattern),
-        .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
+    var node = Node{
+        .data_1 = 0,
+        .data_2 = 0,
         .data_3 = 0,
         .tag = .match_branch_pattern,
     };
+    node.setPayload(.{ .match_branch_pattern = .{
+        .pattern = @intFromEnum(branchPattern.pattern),
+        .degenerate = @as(u32, @intFromBool(branchPattern.degenerate)),
+        ._unused = 0,
+    } });
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
