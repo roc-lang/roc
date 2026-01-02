@@ -4903,10 +4903,6 @@ fn checkBinopExpr(
 
     switch (binop.op) {
         .add, .sub, .mul, .div, .rem, .div_trunc => {
-            // For numeric binops, lhs and rhs can have different types.
-            // This allows patterns like `my_duration * 5` where Duration.times : Duration, I64 -> Duration
-            // The return type is constrained to equal lhs (the receiver) - the method signature
-            // determines the actual types once the constraint is resolved.
             const method_name =
                 switch (binop.op) {
                     .add => self.cir.idents.plus,
@@ -4918,10 +4914,10 @@ fn checkBinopExpr(
                     else => unreachable,
                 };
 
-            // Return type equals lhs type - the method signature may refine this
+            // Return type equals lhs type - e.g. Duration.times : Duration, I64 -> Duration
             const ret_var = lhs_var;
 
-            // Create the binop static dispatch function: lhs.method(rhs) -> lhs
+            // Create the binop static dispatch function: lhs.method(rhs) -> ret
             try self.mkBinopConstraint(
                 lhs_var,
                 rhs_var,
@@ -5427,18 +5423,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Get the deferred constraints to validate against
             const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
 
-            // First, special case if this rigid has no constraints
-            if (deferred_constraints.len > 0 and rigid_constraints.len == 0) {
-                const constraint = deferred_constraints[0];
-                try self.reportConstraintError(
-                    deferred_constraint.var_,
-                    constraint,
-                    .{ .missing_method = .rigid },
-                    env,
-                );
-                continue;
-            }
-
             // Build a map of constraints the rigid has
             self.ident_to_var_map.clearRetainingCapacity();
             try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
@@ -5476,9 +5460,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     continue;
                 }
             }
-        } else if (dispatcher_content == .flex) {
-            // If the root type is aa flex, then we there's nothing to check
-            continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // If the root type is a nominal type, then this is valid static dispatch
             const nominal_type = dispatcher_content.structure.nominal_type;
