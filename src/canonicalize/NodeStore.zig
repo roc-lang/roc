@@ -805,10 +805,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    const extra_data_start = store.extra_data.len();
-    const value_as_i128: i128 = @bitCast(value.bytes);
-    const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-    _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
+    const value_i128: i128 = @bitCast(value.bytes);
+    const value_idx = store.int_values.len();
+    _ = try store.int_values.append(store.gpa, value_i128);
 
     var node = Node{
         .data_1 = 0,
@@ -819,7 +818,7 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     node.setPayload(.{ .expr_num = .{
         .kind = @intFromEnum(num_kind),
         .val_kind = @intFromEnum(value.kind),
-        .value_idx = @intCast(extra_data_start),
+        .value_idx = @intCast(value_idx),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -838,11 +837,7 @@ pub fn replaceExprWithZeroArgumentTag(
 ) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
-    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+    const packed_vars = (@as(u32, @intFromEnum(ext_var)) << 16) | @as(u32, @intFromEnum(variant_var));
 
     var node = Node{
         .data_1 = 0,
@@ -850,10 +845,10 @@ pub fn replaceExprWithZeroArgumentTag(
         .data_3 = 0,
         .tag = .expr_zero_argument_tag,
     };
-    node.setPayload(.{ .raw = .{
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = 0,
-        .data_3 = 0,
+    node.setPayload(.{ .expr_zero_argument_tag = .{
+        .closure_name = @bitCast(closure_name),
+        .packed_vars = packed_vars,
+        .name = @bitCast(name),
     } });
     store.nodes.set(node_idx, node);
 }
