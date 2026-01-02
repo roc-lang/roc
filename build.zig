@@ -2667,10 +2667,10 @@ pub fn build(b: *std.Build) void {
             }
 
             // Run kcov on parse unit tests
-            // Use --include-pattern for substring matching since DWARF paths are absolute
+            // Note: No include filter for now - let kcov capture all coverage data
+            // to debug why filtering wasn't capturing anything
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
-                "--include-pattern=src/parse",
                 "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
