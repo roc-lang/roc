@@ -2666,9 +2666,10 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov on parse unit tests
+            // Run kcov on parse unit tests (filter to only src/parse files, excluding zig stdlib)
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
+                "--include-pattern=/src/parse/",
                 "kcov-output/parser",
                 "zig-out/bin/parse_unit_coverage",
             });
