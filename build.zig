@@ -1017,7 +1017,7 @@ const CoverageSummaryStep = struct {
     /// Minimum required coverage percentage. Build fails if coverage drops below this.
     /// This threshold should be gradually increased as more tests are added.
     /// CI runs coverage on macOS where kcov works correctly with Zig's Mach-O format.
-    const MIN_COVERAGE_PERCENT: f64 = 100.0; // Temporarily set to 100% to verify CI enforcement works
+    const MIN_COVERAGE_PERCENT: f64 = 84.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
@@ -2690,9 +2690,10 @@ pub fn build(b: *std.Build) void {
                 mkdir_step.step.dependOn(&codesign.step);
             }
 
-            // Run kcov on snapshot tests
+            // Run kcov on snapshot tests (filter to only src/parse files)
             const run_snapshot_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
+                "--include-path=src/parse",
                 "kcov-output/parser-snapshot-tests",
                 "zig-out/bin/snapshot_coverage",
             });
@@ -2703,6 +2704,7 @@ pub fn build(b: *std.Build) void {
 
             const run_parse_coverage = b.addSystemCommand(&.{
                 "zig-out/bin/kcov",
+                "--include-path=src/parse",
                 "kcov-output/parser-unit-tests",
                 "zig-out/bin/parse_unit_coverage",
             });

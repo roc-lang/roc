@@ -259,6 +259,7 @@ jobs:
       - name: Parser Code Coverage
         if: matrix.os == 'macos-15'
         run: |
+          brew install libdwarf
           zig build coverage
 
       - name: Test inside nix too
