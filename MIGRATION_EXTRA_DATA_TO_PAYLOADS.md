@@ -14,7 +14,9 @@ This refactoring has **two hard constraints**:
 
 ## Overview
 
-This document describes an ongoing refactoring effort in the Roc compiler to improve type safety and maintainability of AST (Abstract Syntax Tree) node storage. The goal is to replace a generic, untyped `extra_data` buffer with purpose-built, typed data structures **while maintaining identical production memory usage**.
+This document describes an ongoing refactoring effort in the Roc compiler to improve type safety and maintainability of AST (Abstract Syntax Tree) node storage. The goal is to **completely eliminate** the generic, untyped `extra_data` buffer by replacing all uses with purpose-built, typed data structures **while maintaining identical production memory usage**.
+
+The `extra_data` field will be completely removed from NodeStore once the migration is complete. This is not optional.
 
 **Status**: In Progress  
 **Branch**: `remove-extra-data`  
@@ -228,6 +230,12 @@ The migration has been started but not fully completed. The `extra_data` field s
 
 ## What Needs to Be Done
 
+### ⚠️ Critical: extra_data Will Be Completely Removed
+
+The goal is **NOT** to maintain extra_data indefinitely. The goal is to **delete it entirely** from NodeStore once all nodes are migrated.
+
+Every single node type MUST be migrated completely away from extra_data. There are no exceptions. If a node type is "too complex," you must find a way to make it fit in 12 bytes. Falling back to extra_data is **not an option** for the final migration.
+
 ### ⚠️ Important: Respect Memory Constraints
 
 Before starting work on ANY node type migration:
@@ -237,6 +245,7 @@ Before starting work on ANY node type migration:
 - **Calculate the bits needed** for each field
 - **If it doesn't fit**, use specialized typed lists instead of extra_data
 - **Assume extra_data is forbidden** - find another way or the migration is incomplete
+- **Remember**: This node type will be the LAST to use extra_data. Design accordingly.
 
 ### Phase 1: Complete Canonicalize Module
 
@@ -548,29 +557,55 @@ const val = if (node.main_token == 0) null else @enumFromInt(node.main_token - O
 
 ## Long-term Goal
 
-Once complete, the migration will deliver:
+The **FINAL** state of the codebase must be:
 
 - ✓ Type-safe node access (zero runtime cost)
 - ✓ Self-documenting code (field names instead of data_1, data_2, data_3)
 - ✓ Easier refactoring (strongly typed structs)
 - ✓ Fewer runtime errors (compiler-enforced field access)
 - ✓ Better compiler error messages (clear struct names)
-- ✓ **Complete removal of `extra_data` buffer** (MANDATORY)
+- ✓ **The `extra_data` field is completely removed from NodeStore**
 
 ### Success Definition
 
 The migration is **SUCCESSFUL** if and only if:
 
-1. **ZERO extra_data references remain** in production code (release builds)
-2. **ZERO byte increase** in compiled code size or runtime memory
-3. **All tests pass** without regression
-4. Every node type uses a typed payload struct, never `.raw`
+1. **The `extra_data` field does NOT exist** in the final NodeStore struct
+   - Not "empty" or "unused"
+   - Not "kept for compatibility"
+   - **Completely removed from the code**
 
-The migration is a **FAILURE** if:
-- ❌ Even one `extra_data` reference remains in release builds
+2. **ZERO references to `extra_data`** anywhere in the codebase (release or debug)
+   - Not in getters, not in setters, nowhere
+   - No conditional paths that access it
+   - No "fallback" usage
+
+3. **ZERO byte increase** in compiled code size or runtime memory
+
+4. **All tests pass** without regression
+
+5. **Every node type uses a typed payload struct**, never `.raw`
+
+### Failure Criteria
+
+The migration is a **FAILURE** if ANY of these remain:
+
+- ❌ The `extra_data: SafeList(u32)` field exists in NodeStore
+- ❌ Even one line of code accesses `store.extra_data`
+- ❌ Even one `extra_data` reference remains anywhere
 - ❌ Compiled code is larger by even 1 byte
 - ❌ Runtime memory usage increases by even 1 byte
 - ❌ Any node type still uses `.raw` payload access
+- ❌ Any node type falls back to `extra_data` as a workaround
+
+### Critical Clarification
+
+The `extra_data` field and buffer are **temporary during the migration only**. They must be **completely eliminated** in the final codebase.
+
+- ❌ **NOT ACCEPTABLE**: Keep `extra_data` around with some nodes using it
+- ❌ **NOT ACCEPTABLE**: Leave `extra_data` field in NodeStore but unused
+- ✅ **ACCEPTABLE**: Intermediate state where 50% of nodes are migrated
+- ✅ **ACCEPTABLE**: Final state where `extra_data` is gone entirely
 
 This is not a "nice to have" improvement—it's a fundamental refactoring with hard success/failure criteria.
 
