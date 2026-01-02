@@ -302,27 +302,37 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             } };
         },
         .statement_import => {
-            const p = payload.raw;
-            const extra_start = p.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+           const p = payload.statement_import;
+           
+           // Extra data structure:
+           // [0] = alias_data (u32 bitcast Ident.Idx or 0)
+           // [1] = qualifier_data (u32 bitcast Ident.Idx or 0)
+           // [2] = flags (2 bits: has_alias, has_qualifier)
+           // [3] = exposes_start (u32)
+           // [4] = exposes_len (u32)
+           const extra_start = p.packed_idents;
+           const extra_data = store.extra_data.items.items[extra_start..];
+           
+           const alias_data = extra_data[0];
+           const qualifier_data = extra_data[1];
+           const flags = extra_data[2];
+           const exposes_start = extra_data[3];
+           const exposes_len = extra_data[4];
+           
+           const has_alias = (flags & 1) != 0;
+           const has_qualifier = (flags & 2) != 0;
+           
+           const alias_tok = if (has_alias) @as(?Ident.Idx, @bitCast(alias_data)) else null;
+           const qualifier_tok = if (has_qualifier) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
 
-            const alias_data = extra_data[0];
-            const qualifier_data = extra_data[1];
-            const flags = extra_data[2];
-            const exposes_start = extra_data[3];
-            const exposes_len = extra_data[4];
-
-            const alias_tok = if (flags & 1 != 0) @as(?Ident.Idx, @bitCast(alias_data)) else null;
-            const qualifier_tok = if (flags & 2 != 0) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
-
-            return CIR.Statement{
-                .s_import = .{
-                    .module_name_tok = @bitCast(p.data_1),
-                    .qualifier_tok = qualifier_tok,
-                    .alias_tok = alias_tok,
-                    .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
-                },
-            };
+           return CIR.Statement{
+               .s_import = .{
+                   .module_name_tok = @bitCast(p.module_name_tok),
+                   .qualifier_tok = qualifier_tok,
+                   .alias_tok = alias_tok,
+                   .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
+               },
+           };
         },
         .statement_alias_decl => {
             const p = payload.statement_alias_decl;
@@ -1605,31 +1615,31 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_import => |s| {
             node.tag = .statement_import;
 
-            // Store optional fields in extra_data
+            // Store all data in extra_data
             const extra_start = store.extra_data.len();
-
-            // Store alias_tok (nullable)
+            
+            // Store alias_tok
             const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
             _ = try store.extra_data.append(store.gpa, alias_data);
-
-            // Store qualifier_tok (nullable)
+            
+            // Store qualifier_tok
             const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
             _ = try store.extra_data.append(store.gpa, qualifier_data);
-
-            // Store flags indicating which fields are present
+            
+            // Store flags
             var flags: u32 = 0;
             if (s.alias_tok != null) flags |= 1;
             if (s.qualifier_tok != null) flags |= 2;
             _ = try store.extra_data.append(store.gpa, flags);
-
-            // Store exposes span in extra_data
+            
+            // Store exposes span
             _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
             _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
 
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(s.module_name_tok),
-                .data_2 = @intCast(extra_start),
-                .data_3 = 0,
+            node.setPayload(.{ .statement_import = .{
+                .module_name_tok = @bitCast(s.module_name_tok),
+                .packed_idents = @intCast(extra_start),
+                .packed_exposes_and_flags = 0, // Unused in new design
             } });
         },
         .s_alias_decl => |s| {
