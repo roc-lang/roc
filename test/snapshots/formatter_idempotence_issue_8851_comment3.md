@@ -1,31 +1,29 @@
 # META
 ~~~ini
-description=Formatter idempotence test for issue 8851 comment 1 - multiline dispatch with field access
+description=Formatter idempotence test for issue 8851 comment 3 - dispatch with space before field access
 type=snippet
 ~~~
 # SOURCE
 ~~~roc
-a=0->b
-      .c()
+a=0->b .c()
 ~~~
 # EXPECTED
-UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment1.md:1:6:1:7
+UNDEFINED VARIABLE - formatter_idempotence_issue_8851_comment3.md:1:6:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `b` in this scope.
 Is there an `import` or `exposing` missing up-top?
 
-**formatter_idempotence_issue_8851_comment1.md:1:6:1:7:**
+**formatter_idempotence_issue_8851_comment3.md:1:6:1:7:**
 ```roc
-a=0->b
+a=0->b .c()
 ```
      ^
 
 
 # TOKENS
 ~~~zig
-LowerIdent,OpAssign,Int,OpArrow,LowerIdent,
-DotLowerIdent,NoSpaceOpenRound,CloseRound,
+LowerIdent,OpAssign,Int,OpArrow,LowerIdent,DotLowerIdent,NoSpaceOpenRound,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
@@ -44,8 +42,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-a = 0->b()
-	.c()
+a = 0->b().c()
 ~~~
 # CANONICALIZE
 ~~~clojure
