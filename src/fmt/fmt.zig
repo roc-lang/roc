@@ -1022,30 +1022,23 @@ const Formatter = struct {
                     const ld = left_expr.local_dispatch;
                     const ld_right_initial = fmt.ast.store.getExpr(ld.right);
 
-                    // Check if we need to add parens after the local_dispatch right side
-                    const needs_parens = switch (ld_right_initial) {
-                        // Plain identifier needs parens: `0->b .c` -> `0->b().c`
+                    // Check if we need to ensure parens after the local_dispatch right side.
+                    // When followed by field_access, the ld.right must NOT end with just an
+                    // identifier, or the following `.` will make it parse as a qualified identifier.
+                    //
+                    // Cases that need special handling:
+                    // 1. ld.right is plain ident: `0->b .c` -> need to add `()` -> `0->b().c`
+                    // 2. ld.right is zero-arg apply: `0->b().c` -> need to preserve `()` (don't strip)
+                    //
+                    // For applies with args or nested applies, format normally.
+                    const needs_manual_format = switch (ld_right_initial) {
                         .ident => true,
-                        // Zero-arg apply also needs parens preserved
-                        .apply => |apply_initial| fmt.ast.store.exprSlice(apply_initial.args).len == 0,
+                        .apply => |apply| fmt.ast.store.exprSlice(apply.args).len == 0,
                         else => false,
                     };
 
-                    if (needs_parens) {
-                        // Find the innermost function (strip nested zero-arg applies)
-                        var innermost_fn = ld.right;
-                        var inner_expr = ld_right_initial;
-                        while (inner_expr == .apply) {
-                            const inner_apply = inner_expr.apply;
-                            if (fmt.ast.store.exprSlice(inner_apply.args).len == 0) {
-                                innermost_fn = inner_apply.@"fn";
-                                inner_expr = fmt.ast.store.getExpr(innermost_fn);
-                            } else {
-                                break;
-                            }
-                        }
-
-                        // Format the local_dispatch preserving one set of parens
+                    if (needs_manual_format) {
+                        // Format the local_dispatch manually to control paren handling
                         const ld_multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
                         _ = try fmt.formatExpr(ld.left);
                         if (ld_multiline and try fmt.flushCommentsBefore(ld.operator)) {
@@ -1056,11 +1049,15 @@ const Formatter = struct {
                         if (ld_multiline and try fmt.flushCommentsAfter(ld.operator)) {
                             try fmt.pushIndent();
                         }
-                        // Output the innermost function followed by () to preserve one
-                        // set of parens (prevents identifier from being parsed with following `.`
-                        // as a qualified identifier)
-                        _ = try fmt.formatExprInner(innermost_fn, .no_indent_on_access);
-                        try fmt.pushAll("()");
+
+                        if (ld_right_initial == .ident) {
+                            // Plain identifier: output it followed by () to prevent qualified ident
+                            _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                            try fmt.pushAll("()");
+                        } else {
+                            // Zero-arg apply: format normally (which includes the parens)
+                            _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                        }
                     } else {
                         _ = try fmt.formatExpr(fa.left);
                     }
@@ -2724,10 +2721,10 @@ test "issue 8851: local dispatch with space before field access is idempotent" {
 }
 
 test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
-    // a = 0->b()().c() should format stably
+    // a = 0->b()().c() should format stably - must preserve ALL levels of function application
     const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
     defer std.testing.allocator.free(result);
-    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+    try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
 }
 
 test "issue 8851: multiline local dispatch with field access is idempotent" {
