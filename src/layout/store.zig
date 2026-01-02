@@ -66,6 +66,13 @@ pub const Store = struct {
     // This allows List(RecursiveType) to use the boxed element type even after computation.
     recursive_boxed_layouts: collections.ArrayListMap(Var, Idx),
 
+    // Cache for RAW (unboxed) layouts of recursive nominal types.
+    // When a recursive nominal is encountered INSIDE a Box/List container during cycle
+    // detection, we need a placeholder for the raw layout (not the boxed placeholder).
+    // This is because the Box/List container itself provides the boxing.
+    // Keyed by Var because we need to look it up by the original nominal_var.
+    raw_layout_placeholders: collections.ArrayListMap(Var, Idx),
+
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
@@ -183,6 +190,7 @@ pub const Store = struct {
             .tag_union_data = try collections.SafeList(TagUnionData).initCapacity(env.gpa, 64),
             .layouts_by_var = layouts_by_var,
             .recursive_boxed_layouts = try collections.ArrayListMap(Var, Idx).init(env.gpa, 16),
+            .raw_layout_placeholders = try collections.ArrayListMap(Var, Idx).init(env.gpa, 16),
             .work = try Work.initCapacity(env.gpa, 32),
             .builtin_str_ident = builtin_str_ident,
             .builtin_str_plain_ident = env.idents.str,
@@ -217,6 +225,7 @@ pub const Store = struct {
         self.tag_union_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.recursive_boxed_layouts.deinit(self.env.gpa);
+        self.raw_layout_placeholders.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
 
@@ -1367,18 +1376,27 @@ pub const Store = struct {
                         // the nominal's backing type is fully computed.
                         if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
                             // We have a placeholder - but we need to check if we're inside a List/Box.
-                            // If we are, we can use the placeholder index directly since the List/Box
-                            // will reference it by index, and it will be updated later.
-                            // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
+                            // If we are inside a List/Box, we need a RAW layout placeholder, not the
+                            // boxed placeholder. This is because the List/Box container itself provides
+                            // the heap allocation - using the boxed placeholder would cause double-boxing.
                             if (self.work.pending_containers.len > 0) {
                                 const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                                 if (pending_item.container == .box or pending_item.container == .list) {
-                                    layout_idx = cached_idx;
+                                    // Get or create a raw layout placeholder for this nominal
+                                    if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                        layout_idx = raw_idx;
+                                    } else {
+                                        // Create a new placeholder for the raw layout.
+                                        // Use opaque_ptr as a temporary that can be updated later.
+                                        const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                        try self.raw_layout_placeholders.put(self.env.gpa, progress.nominal_var, raw_placeholder);
+                                        layout_idx = raw_placeholder;
+                                    }
                                     skip_layout_computation = true;
                                     break :blk;
                                 }
                             }
-                            // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
+                            // For record/tuple fields (not inside List/Box), we use the boxed placeholder.
                             // The placeholder will be updated by the time we need the actual layout.
                             layout_idx = cached_idx;
                             skip_layout_computation = true;
@@ -1986,6 +2004,10 @@ pub const Store = struct {
                                 try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
                             }
                         }
+                        // Also update the raw layout placeholder if one was created
+                        if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                            self.updateLayout(raw_idx, self.getLayout(layout_idx));
+                        }
                         // Update the cache so direct lookups get the actual layout
                         try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
                         try nominals_to_remove.append(self.env.gpa, entry.key_ptr.*);
@@ -2166,6 +2188,10 @@ pub const Store = struct {
                                 if (progress.is_recursive) {
                                     try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
                                 }
+                            }
+                            // Also update the raw layout placeholder if one was created
+                            if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                self.updateLayout(raw_idx, self.getLayout(layout_idx));
                             }
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
