@@ -258,21 +258,12 @@ jobs:
               exit 1
           }
 
-      - name: Install kcov for coverage (macOS ARM only)
-        if: ${{ runner.os == 'macOS' && runner.arch == 'ARM64' }}
-        run: brew install kcov
-
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
         run: |
           git clean -fdx
           git reset --hard HEAD
-          # Run coverage on macOS ARM (kcov works reliably there, unlike Linux with Zig binaries)
-          if [ "$RUNNER_OS" = "macOS" ] && [ "$RUNNER_ARCH" = "ARM64" ]; then
-            nix develop ./src/ -c bash -c "zig build && zig build snapshot && zig build test && zig build coverage"
-          else
-            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
-          fi
+          nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
 
   zig-cross-compile:
     needs: check-once

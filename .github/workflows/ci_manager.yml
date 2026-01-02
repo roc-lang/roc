@@ -31,6 +31,7 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
+              - '.github/workflows/ci_coverage.yml'
               - '.github/workflows/ci_cross_compile.yml'
               - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
@@ -51,6 +52,7 @@ jobs:
               - '!build.zig'
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
+              - '!.github/workflows/ci_coverage.yml'
               - '!.github/workflows/ci_cross_compile.yml'
               - '!.github/actions/flaky-retry/action.yml'
               - '!ci/zig_lints.sh'
@@ -74,6 +76,13 @@ jobs:
     needs: check-changes
     if: needs.check-changes.outputs.zig == 'true'
     uses: ./.github/workflows/ci_zig.yml
+
+  # Coverage runs in parallel but doesn't block CI (it takes 5+ hours).
+  # Results are uploaded as artifacts for review.
+  call-coverage-workflow:
+    needs: check-changes
+    if: needs.check-changes.outputs.zig == 'true'
+    uses: ./.github/workflows/ci_coverage.yml
 
   call-old-workflow:
     needs: check-changes
