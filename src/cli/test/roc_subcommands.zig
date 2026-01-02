@@ -706,3 +706,4 @@ test "roc test with nested list chunks does not panic on layout upgrade" {
         std.mem.indexOf(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
 }
+
