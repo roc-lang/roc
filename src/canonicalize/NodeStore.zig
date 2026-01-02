@@ -307,33 +307,15 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_import => {
            const p = payload.statement_import;
            
-           // Extra data structure:
-           // [0] = alias_data (u32 bitcast Ident.Idx or 0)
-           // [1] = qualifier_data (u32 bitcast Ident.Idx or 0)
-           // [2] = flags (2 bits: has_alias, has_qualifier)
-           // [3] = exposes_start (u32)
-           // [4] = exposes_len (u32)
-           const extra_start = p.packed_idents;
-           const extra_data = store.extra_data.items.items[extra_start..];
-           
-           const alias_data = extra_data[0];
-           const qualifier_data = extra_data[1];
-           const flags = extra_data[2];
-           const exposes_start = extra_data[3];
-           const exposes_len = extra_data[4];
-           
-           const has_alias = (flags & 1) != 0;
-           const has_qualifier = (flags & 2) != 0;
-           
-           const alias_tok = if (has_alias) @as(?Ident.Idx, @bitCast(alias_data)) else null;
-           const qualifier_tok = if (has_qualifier) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
+           const alias_tok = if (p.alias_tok == 0) null else @as(Ident.Idx, @bitCast(p.alias_tok));
+           const qualifier_tok = if (p.packed_qualifier_and_exposes.qualifier == 0) null else @as(Ident.Idx, @bitCast(@as(u32, p.packed_qualifier_and_exposes.qualifier)));
 
            return CIR.Statement{
                .s_import = .{
                    .module_name_tok = @bitCast(p.module_name_tok),
                    .qualifier_tok = qualifier_tok,
                    .alias_tok = alias_tok,
-                   .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
+                   .exposes = DataSpan.init(p.packed_qualifier_and_exposes.exposes_start, p.packed_qualifier_and_exposes.exposes_len).as(CIR.ExposedItem.Span),
                },
            };
         },
@@ -1491,7 +1473,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Region) Allocator.Error!CIR.Statement.Idx {
-    const node = try store.makeStatementNode(statement);
+    const node = store.makeStatementNode(statement);
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
@@ -1505,15 +1487,14 @@ pub fn addStatement(store: *NodeStore, statement: CIR.Statement, region: base.Re
 /// 3. Canonicalize the annotation
 /// 4. Update the placeholder node with the actual annotation
 pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statement: CIR.Statement) Allocator.Error!void {
-    const node = try store.makeStatementNode(statement);
+    const node = store.makeStatementNode(statement);
     store.nodes.set(@enumFromInt(@intFromEnum(stmt_idx)), node);
 }
 
 /// Creates a statement node, but does not append to the store.
-/// IMPORTANT: It *does* append to extra_data though
 ///
 /// See `setStatementNode` to see why this exists
-fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Error!Node {
+fn makeStatementNode(_: *NodeStore, statement: CIR.Statement) Node {
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
@@ -1614,34 +1595,19 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             } });
         },
         .s_import => |s| {
-            node.tag = .statement_import;
+           node.tag = .statement_import;
 
-            // Store all data in extra_data
-            const extra_start = store.extra_data.len();
-            
-            // Store alias_tok
-            const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
-            _ = try store.extra_data.append(store.gpa, alias_data);
-            
-            // Store qualifier_tok
-            const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
-            _ = try store.extra_data.append(store.gpa, qualifier_data);
-            
-            // Store flags
-            var flags: u32 = 0;
-            if (s.alias_tok != null) flags |= 1;
-            if (s.qualifier_tok != null) flags |= 2;
-            _ = try store.extra_data.append(store.gpa, flags);
-            
-            // Store exposes span
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
+           const qualifier_u16: u16 = if (s.qualifier_tok) |qualifier| @intCast(@as(u32, @bitCast(qualifier))) else 0;
 
-            node.setPayload(.{ .statement_import = .{
-                .module_name_tok = @bitCast(s.module_name_tok),
-                .packed_idents = @intCast(extra_start),
-                .packed_exposes_and_flags = 0, // Unused in new design
-            } });
+           node.setPayload(.{ .statement_import = .{
+               .module_name_tok = @bitCast(s.module_name_tok),
+               .alias_tok = if (s.alias_tok) |alias| @bitCast(alias) else 0,
+               .packed_qualifier_and_exposes = .{
+                   .qualifier = qualifier_u16,
+                   .exposes_start = @intCast(s.exposes.span.start),
+                   .exposes_len = @intCast(s.exposes.span.len),
+               },
+           } });
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;

@@ -250,11 +250,13 @@ pub const Payload = extern union {
     };
 
     pub const StatementImport = extern struct {
-        module_name_tok: u32, // Ident.Idx
-        /// Packed: alias_idx (if has_alias), qualifier_idx (if has_qualifier)
-        packed_idents: u32,
-        /// Packed: exposes_start (20 bits), exposes_len (10 bits), has_alias (1 bit), has_qualifier (1 bit)
-        packed_exposes_and_flags: u32,
+        module_name_tok: u32, // Ident.Idx (bitcasted)
+        alias_tok: u32,        // Ident.Idx (bitcasted) or 0 for None
+        packed_qualifier_and_exposes: packed struct(u32) {
+            qualifier: u16,    // Ident.Idx (low 16 bits) or 0 for None
+            exposes_start: u11, // packed into remaining bits
+            exposes_len: u5,    // max 31, but max used is ~20
+        },
     };
 
     pub const StatementAliasDecl = extern struct {
