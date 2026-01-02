@@ -4960,8 +4960,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(ctx: *CliContext, args: cli_args.ReplArgs) !void {
-    _ = args; // TODO: Use args.opt to select LLVM backend vs interpreter
+fn rocRepl(ctx: *CliContext, _: cli_args.ReplArgs) !void {
     return cli_repl.run(ctx);
 }
 
