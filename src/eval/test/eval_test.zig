@@ -1814,6 +1814,31 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     , 15, .no_trace);
 }
 
+test "issue 8814: List.get with numeric literal on function parameter - regression" {
+    // Regression test for GitHub issue #8814: interpreter crash when calling
+    // list.get(0) on a list passed as a function parameter.
+    //
+    // The bug occurred because when collecting arguments for a static dispatch
+    // method call, the expected type for the numeric literal 0 wasn't being
+    // set from the method's signature (U64). This caused the interpreter to
+    // fail when trying to evaluate the numeric literal without a concrete type.
+    //
+    // The fix: extract expected parameter types from the method's function
+    // signature and use them when evaluating arguments. This allows numeric
+    // literals to correctly infer their concrete types (like U64 for List.get).
+    try runExpectStr(
+        \\{
+        \\    process = |args| {
+        \\        match args.get(0) {
+        \\            Ok(x) => x
+        \\            Err(_) => "error"
+        \\        }
+        \\    }
+        \\    process(["hello", "world"])
+        \\}
+    , "hello", .no_trace);
+}
+
 // TODO: Enable this test once cross-module type variable dispatch is fixed.
 // The issue is that the flex_type_context mapping needs to properly connect
 // the parameter's type variable to the type alias's type variable.
@@ -1884,4 +1909,35 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\    f(1000)
         \\}
     , 500500, .no_trace);
+}
+
+test "issue 8872: polymorphic tag union payload layout in match expressions" {
+    // Regression test for GitHub issue #8872: when using a polymorphic function
+    // that transforms Err(a) to Err(b) via a lambda, the Str payload was being
+    // corrupted because the layout was computed from a flex var (defaulting to
+    // Dec = 16 bytes) instead of the actual Str type (24 bytes).
+    //
+    // The bug manifested when:
+    // 1. A polymorphic function takes a lambda that returns type `b`
+    // 2. The function wraps the lambda result in Err(b)
+    // 3. The match expression extracts the Err payload
+    // 4. The extracted value is corrupted due to wrong layout
+    try runExpectStr(
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
 }

@@ -1645,6 +1645,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var output = tokenizer.finishAndDeinit();
     defer output.tokens.deinit(gpa);
 
+    // Debug output (excluded from coverage via --exclude-line=std.debug.print)
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
@@ -1705,6 +1706,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         same = same and (length1 == length2);
     }
 
+    // Diagnostic output when tokens don't match (excluded from coverage via --exclude-line)
     if (!same) {
         var prefix_len: usize = 0;
         var suffix_len: usize = 0;
