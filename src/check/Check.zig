@@ -6040,8 +6040,7 @@ pub fn createImportMapping(
                     const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
 
                     // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                    const stmt_idx_int = @intFromEnum(stmt_idx);
-                    if (stmt_idx_int != 0) {
+                    if (@intFromEnum(stmt_idx) != 0) {
                         const stmt = builtin_env.store.getStatement(stmt_idx);
                         const header_idx = switch (stmt) {
                             .s_nominal_decl => |decl| decl.header,
