@@ -736,8 +736,8 @@ pub const Payload = extern union {
 
     pub const PatternDecLiteral = extern struct {
         value_idx: u32, // index into dec_values list
-        _unused1: u32,
-        _unused2: u32,
+        has_suffix: u32, // 0 or 1
+        _unused: u32,
     };
 
     pub const PatternF32Literal = extern struct {

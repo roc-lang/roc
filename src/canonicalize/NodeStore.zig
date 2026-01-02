@@ -31,6 +31,8 @@ gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: collections.SafeList(u32),
+int_values: collections.SafeList(i128),
+dec_values: collections.SafeList(RocDec),
 match_branch_redundant_data: collections.SafeList(types.Var),
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -109,6 +111,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
+        .int_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 32),
+        .dec_values = try collections.SafeList(RocDec).initCapacity(gpa, capacity / 32),
         .match_branch_redundant_data = try collections.SafeList(types.Var).initCapacity(gpa, capacity / 8),
         .scratch = try Scratch.init(gpa),
     };
@@ -119,6 +123,8 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
+    store.int_values.deinit(store.gpa);
+    store.dec_values.deinit(store.gpa);
     store.match_branch_redundant_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -131,6 +137,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
     store.extra_data.relocate(offset);
+    store.int_values.relocate(offset);
+    store.dec_values.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -414,11 +422,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_num;
             const kind: CIR.NumKind = @enumFromInt(p.kind);
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
-            const value_as_u32s = store.extra_data.items.items[p.value_idx..][0..4];
+            const value_i128 = store.int_values.items.items[p.value_idx];
 
             return CIR.Expr{
                 .e_num = .{
-                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = val_kind },
+                    .value = .{ .bytes = @bitCast(value_i128), .kind = val_kind },
                     .kind = kind,
                 },
             };
@@ -469,12 +477,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dec => {
             const p = payload.expr_dec;
-            const value_as_u32s = store.extra_data.items.items[p.value_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const value = store.dec_values.items.items[p.value_idx];
 
             return CIR.Expr{
                 .e_dec = .{
-                    .value = RocDec{ .num = value_as_i128 },
+                    .value = value,
                     .has_suffix = p.has_suffix != 0,
                 },
             };
@@ -1096,31 +1103,33 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_list => {
-            const raw = payload.raw;
-            const extra_start = raw.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const patterns_start = extra_data[0];
-            const patterns_len = extra_data[1];
-
-            // Load rest_info
-            const has_rest_info = extra_data[2] != 0;
-            const rest_info = if (has_rest_info) blk: {
-                const rest_index = extra_data[3];
-                const has_pattern = extra_data[4] != 0;
-                const rest_pattern = if (has_pattern)
-                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[5]))
-                else
-                    null;
-                break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
-                    .index = rest_index,
-                    .pattern = rest_pattern,
-                });
-            } else null;
+            const p = payload.pattern_list;
+            const patterns_span_data = FunctionArgs.fromU32(p.packed_patterns).toDataSpan();
+            
+            // Unpack rest_info
+            // Encoding: 0 = no rest_info
+            // 1 = rest_info exists with no pattern
+            // rest_index + 2 (i.e., >= 2) = rest_info exists with pattern at rest_pattern_idx
+            const rest_info = if (p.rest_info == 0) null else blk: {
+                if (p.rest_info == 1) {
+                    break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                        .index = undefined,
+                        .pattern = null,
+                    });
+                } else {
+                    // Unpack: rest_index in high 16 bits, rest_pattern_idx in low 16 bits
+                    const rest_index = (p.rest_info >> 16) & 0xFFFF;
+                    const rest_pattern_idx = p.rest_info & 0xFFFF;
+                    break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
+                        .index = rest_index,
+                        .pattern = @enumFromInt(rest_pattern_idx),
+                    });
+                }
+            };
 
             return CIR.Pattern{
                 .list = .{
-                    .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
+                    .patterns = DataSpan.init(patterns_span_data.start, patterns_span_data.len).as(CIR.Pattern.Span),
                     .rest_info = rest_info,
                 },
             };
@@ -1135,13 +1144,11 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_num_literal => {
             const p = payload.pattern_num_literal;
-            const extra_data_idx = p.value_idx;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const value_i128 = store.int_values.items.items[p.value_idx];
 
             return CIR.Pattern{
                 .num_literal = .{
-                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = @enumFromInt(p.val_kind) },
+                    .value = .{ .bytes = @bitCast(value_i128), .kind = @enumFromInt(p.val_kind) },
                     .kind = @enumFromInt(p.kind),
                 },
             };
@@ -1161,17 +1168,13 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_dec_literal => {
-            const raw = payload.raw;
-            const extra_data_idx = raw.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
-
-            const has_suffix = raw.data_2 != 0;
+            const p = payload.pattern_dec_literal;
+            const value = store.dec_values.items.items[p.value_idx];
 
             return CIR.Pattern{
                 .dec_literal = .{
-                    .value = RocDec{ .num = value_as_i128 },
-                    .has_suffix = has_suffix,
+                    .value = value,
+                    .has_suffix = p.has_suffix != 0,
                 },
             };
         },
@@ -1659,21 +1662,15 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_num => |e| {
             node.tag = .expr_num;
 
-            // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.len();
-
-            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
-            // We always store as i128 internally
-            const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
+            // Store i128 value in int_values list
+            const value_i128: i128 = @bitCast(e.value.bytes);
+            const value_idx = store.int_values.len();
+            _ = try store.int_values.append(store.gpa, value_i128);
 
             node.setPayload(.{ .expr_num = .{
                 .kind = @intFromEnum(e.kind),
                 .val_kind = @intFromEnum(e.value.kind),
-                .value_idx = @intCast(extra_data_start),
+                .value_idx = @intCast(value_idx),
             } });
         },
         .e_list => |e| {
@@ -1720,16 +1717,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dec => |e| {
             node.tag = .expr_dec;
 
-            // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_i128: i128 = e.value.num;
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
+            // Store the RocDec value in dec_values list
+            const value_idx = store.dec_values.len();
+            _ = try store.dec_values.append(store.gpa, e.value);
 
             node.setPayload(.{ .expr_dec = .{
-                .value_idx = @intCast(extra_data_start),
+                .value_idx = @intCast(value_idx),
                 .has_suffix = @intFromBool(e.has_suffix),
                 ._unused = 0,
             } });
@@ -2268,32 +2261,30 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             } });
         },
         .list => |p| {
-            node.tag = .pattern_list;
-
-            // Store list pattern data in extra_data
-            const extra_data_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.start);
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.len);
-
-            // Store rest_info
-            if (p.rest_info) |rest| {
-                _ = try store.extra_data.append(store.gpa, 1); // has rest_info
-                _ = try store.extra_data.append(store.gpa, rest.index);
-                if (rest.pattern) |pattern_idx| {
-                    _ = try store.extra_data.append(store.gpa, 1); // has pattern
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-                } else {
-                    _ = try store.extra_data.append(store.gpa, 0); // no pattern
-                }
-            } else {
-                _ = try store.extra_data.append(store.gpa, 0); // no rest_info
-            }
-
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = 0,
-                .data_3 = 0,
-            } });
+           node.tag = .pattern_list;
+           
+           std.debug.assert(FunctionArgs.canFit(p.patterns.span));
+           const packed_patterns = FunctionArgs.fromDataSpanUnchecked(p.patterns.span).toU32();
+           
+           // Pack rest_info into one u32:
+           // 0 = no rest_info
+           // 1 = rest_info with no pattern
+           // (rest_index << 16) | rest_pattern_idx = rest_info with pattern
+           const rest_info: u32 = if (p.rest_info) |rest| blk: {
+               if (rest.pattern) |pattern_idx| {
+                   const rest_index = rest.index;
+                   const pattern_idx_u32 = @intFromEnum(pattern_idx);
+                   break :blk (rest_index << 16) | pattern_idx_u32;
+               } else {
+                   break :blk 1; // has rest but no pattern
+               }
+           } else 0;
+           
+           node.setPayload(.{ .pattern_list = .{
+               .packed_patterns = packed_patterns,
+               .rest_info = rest_info,
+               ._unused = 0,
+           } });
         },
         .tuple => |p| {
             node.tag = .pattern_tuple;
@@ -2305,16 +2296,15 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
+            const value_i128: i128 = @bitCast(p.value.bytes);
+            const value_idx = store.int_values.len();
+            _ = try store.int_values.append(store.gpa, value_i128);
+            
             node.setPayload(.{ .pattern_num_literal = .{
                 .kind = @intFromEnum(p.kind),
                 .val_kind = @intFromEnum(p.value.kind),
-                .value_idx = @intCast(store.extra_data.len()),
+                .value_idx = @intCast(value_idx),
             } });
-
-            const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
@@ -2326,16 +2316,14 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
-            // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_u32s: [4]u32 = @bitCast(p.value.num);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = @intFromBool(p.has_suffix),
-                .data_3 = 0,
+            // Store the RocDec value in dec_values list
+            const value_idx = store.dec_values.len();
+            _ = try store.dec_values.append(store.gpa, p.value);
+            
+            node.setPayload(.{ .pattern_dec_literal = .{
+                .value_idx = @intCast(value_idx),
+                .has_suffix = @intFromBool(p.has_suffix),
+                ._unused = 0,
             } });
         },
         .str_literal => |p| {
