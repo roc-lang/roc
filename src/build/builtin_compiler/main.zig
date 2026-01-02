@@ -1835,16 +1835,16 @@ fn findTypeDeclaration(env: *const ModuleEnv, type_name: []const u8) !CIR.Statem
     const all_stmts = env.store.sliceStatements(env.all_statements);
     for (all_stmts) |stmt_idx| {
         const stmt = env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_nominal_decl => |decl| {
-                const header = env.store.getTypeHeader(decl.header);
-                const ident_idx = header.name;
-                const ident_text = env.getIdentText(ident_idx);
-                if (std.mem.eql(u8, ident_text, qualified_name)) {
-                    return stmt_idx;
-                }
-            },
+        const header_idx = switch (stmt) {
+            .s_nominal_decl => |decl| decl.header,
+            .s_alias_decl => |alias| alias.header,
             else => continue,
+        };
+        const header = env.store.getTypeHeader(header_idx);
+        const ident_idx = header.name;
+        const ident_text = env.getIdentText(ident_idx);
+        if (std.mem.eql(u8, ident_text, qualified_name)) {
+            return stmt_idx;
         }
     }
 
