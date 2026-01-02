@@ -5,44 +5,22 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-[1u8, 2u8, 300]
+[1.U8, 2.U8, 300]
 ~~~
 # EXPECTED
-DEPRECATED NUMBER SUFFIX - can_list_number_doesnt_fit.md:1:2:1:5
-DEPRECATED NUMBER SUFFIX - can_list_number_doesnt_fit.md:1:7:1:10
+NIL
 # PROBLEMS
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**can_list_number_doesnt_fit.md:1:2:1:5:**
-```roc
-[1u8, 2u8, 300]
-```
- ^^^
-
-The `u8` suffix is no longer supported. Use `1.U8` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**can_list_number_doesnt_fit.md:1:7:1:10:**
-```roc
-[1u8, 2u8, 300]
-```
-      ^^^
-
-The `u8` suffix is no longer supported. Use `2.U8` instead.
-
+NIL
 # TOKENS
 ~~~zig
-OpenSquare,Int,Comma,Int,Comma,Int,CloseSquare,
+OpenSquare,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,CloseSquare,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-list
-	(e-int (raw "1u8"))
-	(e-int (raw "2u8"))
+	(e-typed-int (raw "1") (type ".U8"))
+	(e-typed-int (raw "2") (type ".U8"))
 	(e-int (raw "300")))
 ~~~
 # FORMATTED
@@ -53,8 +31,8 @@ NO CHANGE
 ~~~clojure
 (e-list
 	(elems
-		(e-num (value "1"))
-		(e-num (value "2"))
+		(e-typed-int (value "1") (type "U8"))
+		(e-typed-int (value "2") (type "U8"))
 		(e-num (value "300"))))
 ~~~
 # TYPES

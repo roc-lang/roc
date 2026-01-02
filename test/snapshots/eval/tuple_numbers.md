@@ -5,187 +5,33 @@ type=expr
 ~~~
 # SOURCE
 ~~~roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
+(1.U8, 2.I8, 3.U16, 4.I16, 5.U32, 6.I32, 7.U64, 8.I64, 9.U128, 10.I128, 11.0.F32, 12.0.F64, 13.0.Dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
 ~~~
 # EXPECTED
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:2:1:5
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:7:1:10
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:12:1:16
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:18:1:22
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:24:1:28
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:30:1:34
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:36:1:40
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:42:1:46
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:48:1:53
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:55:1:61
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:63:1:70
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:72:1:79
-DEPRECATED NUMBER SUFFIX - tuple_numbers.md:1:81:1:88
+NIL
 # PROBLEMS
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:2:1:5:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
- ^^^
-
-The `u8` suffix is no longer supported. Use `1.U8` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:7:1:10:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-      ^^^
-
-The `i8` suffix is no longer supported. Use `2.I8` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:12:1:16:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-           ^^^^
-
-The `u16` suffix is no longer supported. Use `3.U16` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:18:1:22:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                 ^^^^
-
-The `i16` suffix is no longer supported. Use `4.I16` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:24:1:28:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                       ^^^^
-
-The `u32` suffix is no longer supported. Use `5.U32` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:30:1:34:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                             ^^^^
-
-The `i32` suffix is no longer supported. Use `6.I32` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:36:1:40:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                   ^^^^
-
-The `u64` suffix is no longer supported. Use `7.U64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:42:1:46:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                         ^^^^
-
-The `i64` suffix is no longer supported. Use `8.I64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:48:1:53:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                               ^^^^^
-
-The `u128` suffix is no longer supported. Use `9.U128` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:55:1:61:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                                      ^^^^^^
-
-The `i128` suffix is no longer supported. Use `10.I128` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:63:1:70:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                                              ^^^^^^^
-
-The `f32` suffix is no longer supported. Use `11.0.F32` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:72:1:79:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                                                       ^^^^^^^
-
-The `f64` suffix is no longer supported. Use `12.0.F64` instead.
-
-**DEPRECATED NUMBER SUFFIX**
-This number literal uses a deprecated suffix syntax:
-
-**tuple_numbers.md:1:81:1:88:**
-```roc
-(1u8, 2i8, 3u16, 4i16, 5u32, 6i32, 7u64, 8i64, 9u128, 10i128, 11.0f32, 12.0f64, 13.0dec, 0xE, 0xf, 0x20, 0b10001, 0b1_0010, 19, 20.0, 21_000, 22_000_000, 0.0, -0.1, 2e4, 3E2, -0.2e-2)
-```
-                                                                                ^^^^^^^
-
-The `dec` suffix is no longer supported. Use `13.0.Dec` instead.
-
+NIL
 # TOKENS
 ~~~zig
-OpenRound,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Float,Comma,Float,Comma,Float,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Float,Comma,Int,Comma,Int,Comma,Float,Comma,Float,Comma,Float,Comma,Float,Comma,Float,CloseRound,
+OpenRound,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Int,NoSpaceDotUpperIdent,Comma,Float,NoSpaceDotUpperIdent,Comma,Float,NoSpaceDotUpperIdent,Comma,Float,NoSpaceDotUpperIdent,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Int,Comma,Float,Comma,Int,Comma,Int,Comma,Float,Comma,Float,Comma,Float,Comma,Float,Comma,Float,CloseRound,
 EndOfFile,
 ~~~
 # PARSE
 ~~~clojure
 (e-tuple
-	(e-int (raw "1u8"))
-	(e-int (raw "2i8"))
-	(e-int (raw "3u16"))
-	(e-int (raw "4i16"))
-	(e-int (raw "5u32"))
-	(e-int (raw "6i32"))
-	(e-int (raw "7u64"))
-	(e-int (raw "8i64"))
-	(e-int (raw "9u128"))
-	(e-int (raw "10i128"))
-	(e-frac (raw "11.0f32"))
-	(e-frac (raw "12.0f64"))
-	(e-frac (raw "13.0dec"))
+	(e-typed-int (raw "1") (type ".U8"))
+	(e-typed-int (raw "2") (type ".I8"))
+	(e-typed-int (raw "3") (type ".U16"))
+	(e-typed-int (raw "4") (type ".I16"))
+	(e-typed-int (raw "5") (type ".U32"))
+	(e-typed-int (raw "6") (type ".I32"))
+	(e-typed-int (raw "7") (type ".U64"))
+	(e-typed-int (raw "8") (type ".I64"))
+	(e-typed-int (raw "9") (type ".U128"))
+	(e-typed-int (raw "10") (type ".I128"))
+	(e-typed-frac (raw "11.0") (type ".F32"))
+	(e-typed-frac (raw "12.0") (type ".F64"))
+	(e-typed-frac (raw "13.0") (type ".Dec"))
 	(e-int (raw "0xE"))
 	(e-int (raw "0xf"))
 	(e-int (raw "0x20"))
@@ -209,19 +55,19 @@ NO CHANGE
 ~~~clojure
 (e-tuple
 	(elems
-		(e-num (value "1"))
-		(e-num (value "2"))
-		(e-num (value "3"))
-		(e-num (value "4"))
-		(e-num (value "5"))
-		(e-num (value "6"))
-		(e-num (value "7"))
-		(e-num (value "8"))
-		(e-num (value "9"))
-		(e-num (value "10"))
-		(e-frac-f32 (value "11"))
-		(e-frac-f64 (value "12"))
-		(e-dec-small (numerator "130") (denominator-power-of-ten "1") (value "13"))
+		(e-typed-int (value "1") (type "U8"))
+		(e-typed-int (value "2") (type "I8"))
+		(e-typed-int (value "3") (type "U16"))
+		(e-typed-int (value "4") (type "I16"))
+		(e-typed-int (value "5") (type "U32"))
+		(e-typed-int (value "6") (type "I32"))
+		(e-typed-int (value "7") (type "U64"))
+		(e-typed-int (value "8") (type "I64"))
+		(e-typed-int (value "9") (type "U128"))
+		(e-typed-int (value "10") (type "I128"))
+		(e-typed-frac (value "11000000000000000000") (type "F32"))
+		(e-typed-frac (value "12000000000000000000") (type "F64"))
+		(e-typed-frac (value "13000000000000000000") (type "Dec"))
 		(e-num (value "14"))
 		(e-num (value "15"))
 		(e-num (value "32"))
