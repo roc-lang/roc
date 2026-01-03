@@ -1250,31 +1250,3 @@ test "fx platform issue8826 large file type checking" {
         return error.ExpectedTypeErrors;
     }
 }
-
-test "issue8899 closure decref index out of bounds" {
-    // Regression test for issue #8899: panic "index out of bounds: index 131, len 73"
-    // when running roc test on code with closures and for loops.
-    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
-    // instead of using the layout parameter.
-    const allocator = testing.allocator;
-
-    const run_result = try runRoc(allocator, "test/fx/issue8899.roc", .{ .extra_args = &[_][]const u8{"test"} });
-    defer allocator.free(run_result.stdout);
-    defer allocator.free(run_result.stderr);
-
-    // The test should run without panicking. A signal termination indicates the panic.
-    switch (run_result.term) {
-        .Signal => |sig| {
-            std.debug.print("Process terminated by signal: {} (likely the index out of bounds panic)\n", .{sig});
-            std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            return error.SegFault;
-        },
-        else => {},
-    }
-
-    // Check for panic messages in stderr that indicate the original bug
-    if (std.mem.indexOf(u8, run_result.stderr, "index out of bounds") != null) {
-        std.debug.print("Detected index out of bounds panic in stderr:\n{s}\n", .{run_result.stderr});
-        return error.IndexOutOfBounds;
-    }
-}

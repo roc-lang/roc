@@ -1941,3 +1941,28 @@ test "issue 8872: polymorphic tag union payload layout in match expressions" {
         \\}
     , "hello", .no_trace);
 }
+
+test "issue 8899: closure decref index out of bounds in for loop" {
+    // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
+    // when running roc test on code with closures and for loops.
+    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
+    // instead of using the layout parameter.
+    //
+    // The original code was a compress function that removes consecutive duplicates.
+    // The issue manifested when closures were created inside the for loop (match branches)
+    // and List operations like List.last and List.append were used.
+    try runExpectI64(
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0i64
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
