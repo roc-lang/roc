@@ -24,6 +24,16 @@ const Ident = base.Ident;
 /// packing optional data into u32 fields where 0 would otherwise be ambiguous.
 const OPTIONAL_VALUE_OFFSET: u32 = 1;
 
+/// Auxiliary data for def nodes (stored when data exceeds 12 bytes)
+const DefData = extern struct {
+    pattern: u32,        // CIR.Pattern.Idx
+    expr: u32,           // CIR.Expr.Idx
+    kind_tag: u8,        // 0=let, 1=stmt, 2=ignored
+    _pad: [3]u8,
+    kind_var: u32,       // TypeVar (only valid if kind_tag != 0)
+    annotation: u32,     // CIR.Annotation.Idx or 0
+};
+
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -32,6 +42,7 @@ regions: Region.List,
 extra_data: collections.SafeList(u32),
 int_values: collections.SafeList(i128),
 dec_values: collections.SafeList(RocDec),
+def_data: collections.SafeList(DefData), // Specialized list for def node data
 diag_region_data: collections.SafeList(Region), // Specialized list for diagnostic regions
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -112,6 +123,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
         .int_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 32),
         .dec_values = try collections.SafeList(RocDec).initCapacity(gpa, capacity / 32),
+        .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 16),
         .diag_region_data = try collections.SafeList(Region).initCapacity(gpa, 64),
         .scratch = try Scratch.init(gpa),
     };
@@ -124,6 +136,7 @@ pub fn deinit(store: *NodeStore) void {
     store.extra_data.deinit(store.gpa);
     store.int_values.deinit(store.gpa);
     store.dec_values.deinit(store.gpa);
+    store.def_data.deinit(store.gpa);
     store.diag_region_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -138,6 +151,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.extra_data.relocate(offset);
     store.int_values.relocate(offset);
     store.dec_values.relocate(offset);
+    store.def_data.relocate(offset);
     store.diag_region_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
@@ -2602,31 +2616,33 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Error!CIR.Def.Idx {
+    // Store def data in the def_data list
+    const kind_encoded = def.kind.encode();
+    const def_data_idx = @as(u32, @intCast(store.def_data.len()));
+    
+    const def_data = DefData{
+        .pattern = @intFromEnum(def.pattern),
+        .expr = @intFromEnum(def.expr),
+        .kind_tag = @as(u8, @truncate(kind_encoded[0])),
+        ._pad = .{ 0, 0, 0 },
+        .kind_var = kind_encoded[1],
+        .annotation = if (def.annotation) |anno| @intFromEnum(anno) else 0,
+    };
+    
+    _ = try store.def_data.append(store.gpa, def_data);
+
     var node = Node{
         .data_1 = 0,
         .data_2 = 0,
         .data_3 = 0,
         .tag = .def,
     };
-
-    // Store def data in extra_data
-    const extra_start = store.extra_data.len();
-
-    // Store pattern idx
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
-    // Store expr idx
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.expr));
-    // Store kind tag as two u32's
-    const kind_encoded = def.kind.encode();
-    _ = try store.extra_data.append(store.gpa, kind_encoded[0]);
-    _ = try store.extra_data.append(store.gpa, kind_encoded[1]);
-    // Store annotation idx (0 if null)
-    const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
-    _ = try store.extra_data.append(store.gpa, anno_idx);
-
-    // Store the extra data range in the node
-    node.data_1 = @intCast(extra_start);
-    node.data_2 = 5; // Number of extra data items
+    
+    node.setPayload(.{ .def = .{
+        .def_data_idx = def_data_idx,
+        ._unused1 = 0,
+        ._unused2 = 0,
+    } });
 
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -2640,15 +2656,14 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
 
     std.debug.assert(node.tag == .def);
 
-    const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const payload = node.getPayload().def;
+    const def_data = store.def_data.get(@enumFromInt(payload.def_data_idx));
 
-    const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
-    const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
-    const kind_encoded = [_]u32{ extra_data[2], extra_data[3] };
+    const pattern: CIR.Pattern.Idx = @enumFromInt(def_data.pattern);
+    const expr: CIR.Expr.Idx = @enumFromInt(def_data.expr);
+    const kind_encoded = [_]u32{ def_data.kind_tag, def_data.kind_var };
     const kind = CIR.Def.Kind.decode(kind_encoded);
-    const anno_idx = extra_data[4];
-    const annotation = if (anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(anno_idx));
+    const annotation = if (def_data.annotation == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(def_data.annotation));
 
     return CIR.Def{
         .pattern = pattern,
@@ -2666,10 +2681,10 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
 
     std.debug.assert(node.tag == .def);
 
-    const extra_start = node.data_1;
-    // The expr field is at offset 1 in the extra_data layout for Def
-    // Layout: [0]=pattern, [1]=expr, [2-3]=kind, [4]=annotation
-    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
+    const payload = node.getPayload().def;
+    const def_data_idx: collections.SafeList(DefData).Idx = @enumFromInt(payload.def_data_idx);
+    const def_data = store.def_data.get(def_data_idx);
+    def_data.expr = @intFromEnum(new_expr);
 }
 
 /// Retrieves a capture from the store.
@@ -3877,6 +3892,7 @@ pub const Serialized = extern struct {
     extra_data: collections.SafeList(u32).Serialized,
     int_values: collections.SafeList(i128).Serialized,
     dec_values: collections.SafeList(RocDec).Serialized,
+    def_data: collections.SafeList(DefData).Serialized,
     diag_region_data: collections.SafeList(Region).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
@@ -3897,6 +3913,8 @@ pub const Serialized = extern struct {
         try self.int_values.serialize(&store.int_values, allocator, writer);
         // Serialize dec_values
         try self.dec_values.serialize(&store.dec_values, allocator, writer);
+        // Serialize def_data
+        try self.def_data.serialize(&store.def_data, allocator, writer);
         // Serialize diag_region_data
         try self.diag_region_data.serialize(&store.diag_region_data, allocator, writer);
     }
@@ -3908,19 +3926,20 @@ pub const Serialized = extern struct {
         // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
-
+    
         // Deserialize in reverse order: extra_data, regions, then nodes
         const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
         const deserialized_regions = self.regions.deserialize(base_addr).*;
         const deserialized_nodes = self.nodes.deserialize(base_addr).*;
         const deserialized_int_values = self.int_values.deserialize(base_addr).*;
         const deserialized_dec_values = self.dec_values.deserialize(base_addr).*;
-
+        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
+    
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
-
+    
         const deserialized_diag_region_data = self.diag_region_data.deserialize(base_addr).*;
-
+    
         store.* = NodeStore{
             .gpa = gpa,
             .nodes = deserialized_nodes,
@@ -3928,10 +3947,11 @@ pub const Serialized = extern struct {
             .extra_data = deserialized_extra_data,
             .int_values = deserialized_int_values,
             .dec_values = deserialized_dec_values,
+            .def_data = deserialized_def_data,
             .diag_region_data = deserialized_diag_region_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
-
+    
         return store;
     }
 };

@@ -780,10 +780,9 @@ pub const Payload = extern union {
 
     // Definition
     pub const Def = extern struct {
-        pattern: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        /// Packed: kind (2 bits), kind_data (14 bits), anno_plus_one (16 bits)
-        packed_kind_and_anno: u32,
+        def_data_idx: u32,   // Index into def_data list
+        _unused1: u32,
+        _unused2: u32,
     };
 
     // Exposed Item
