@@ -298,12 +298,12 @@ Then spans point into these typed lists instead of generic extra_data.
 
 For each node type:
 
-- [ ] **pattern_record_destruct** - Pack 2 u32s into payload (EASY)
-- [ ] **def** - Add `def_data` auxiliary list
-- [ ] **match_branch** - Add `match_branch_data` auxiliary list
-- [ ] **where_method** - Add `where_method_data` auxiliary list
-- [ ] **expr_typed_int** - Use typed value list
-- [ ] **expr_typed_frac** - Use typed value list
+- [x] **pattern_record_destruct** - Pack 2 u32s into payload (EASY)
+- [x] **def** - Add `def_data` auxiliary list
+- [x] **match_branch** - Add `match_branch_data` auxiliary list
+- [x] **where_method** - Add `where_method_data` auxiliary list
+- [x] **expr_typed_int** - Use typed value list
+- [x] **expr_typed_frac** - Use typed value list
 - [ ] **spanFrom / variable-length** - Use typed span lists
 
 ## After Migration
@@ -320,17 +320,26 @@ Once all uses are migrated:
 
 ## Current Status (as of this writing)
 
-```bash
-# References to data_1/data_2/data_3 in NodeStore.zig:
-$ grep -c "\.data_1\|\.data_2\|\.data_3" src/canonicalize/NodeStore.zig
-278
+### Completed Migrations:
+- ✅ **pattern_record_destruct** - Pack kind and pattern into single u32
+- ✅ **def** - Add `def_data` auxiliary list (5 entries eliminated)
+- ✅ **match_branch** - Add `match_branch_data` auxiliary list (5 entries eliminated)
+- ✅ **where_method** - Add `where_method_data` auxiliary list (3 entries eliminated)
+- ✅ **expr_typed_int** - Use `int_values` list (4 entries eliminated)
+- ✅ **expr_typed_frac** - Use `int_values` list (4 entries eliminated)
 
-# References to extra_data in NodeStore.zig:
+### Remaining Work:
+```bash
+# References to data_1/data_2/data_3 still in NodeStore.zig:
+$ grep -c "\.data_1\|\.data_2\|\.data_3" src/canonicalize/NodeStore.zig
+~285 (includes uses in payload setup which are now using setPayload)
+
+# References to extra_data still in NodeStore.zig:
 $ grep -c "extra_data" src/canonicalize/NodeStore.zig
-99
+~99 (mostly in variable-length/spanFrom code)
 ```
 
-**All 377 of these references must be eliminated.**
+The majority of remaining references are in the `spanFrom` function and variable-length data handling (Category 3).
 
 ## Final Verification Command
 
