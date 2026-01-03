@@ -1068,20 +1068,18 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_nominal_external => {
-            const raw = payload.raw;
-            const module_idx: CIR.Import.Idx = @enumFromInt(raw.data_1);
-            const target_node_idx: u16 = @intCast(raw.data_2);
-
-            const extra_data_idx = raw.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
-            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
-            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
-
+            const p = payload.pattern_nominal_external;
+            
+            // Unpack: target_node_idx (16 bits low), backing_type (16 bits high)
+            const target_node_idx: u16 = @truncate(p.packed_target_and_type);
+            const backing_type_bits: u16 = @intCast(p.packed_target_and_type >> 16);
+            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(backing_type_bits);
+        
             return CIR.Pattern{
                 .nominal_external = .{
-                    .module_idx = module_idx,
+                    .module_idx = @enumFromInt(p.module_idx),
                     .target_node_idx = target_node_idx,
-                    .backing_pattern = backing_pattern,
+                    .backing_pattern = @enumFromInt(p.backing_pattern),
                     .backing_type = backing_type,
                 },
             };
@@ -1169,11 +1167,10 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_small_dec_literal => {
             const p = payload.pattern_small_dec_literal;
-            const raw = payload.raw;
             const numerator: i16 = @intCast(@as(i32, @bitCast(p.numerator)));
             const denominator_power_of_ten: u8 = @intCast(p.denominator_power & 0xFF);
 
-            const has_suffix = raw.data_3 != 0;
+            const has_suffix = p.has_suffix != 0;
 
             return CIR.Pattern{
                 .small_dec_literal = .{
@@ -1186,9 +1183,9 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_str_literal => {
-            const raw = payload.raw;
+            const p = payload.pattern_str_literal;
             return CIR.Pattern{ .str_literal = .{
-                .literal = @enumFromInt(raw.data_1),
+                .literal = @enumFromInt(p.literal),
             } };
         },
 
@@ -2211,13 +2208,16 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .nominal_external => |n| {
             node.tag = .pattern_nominal_external;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(n.module_idx),
-                .data_2 = @intCast(n.target_node_idx),
-                .data_3 = @intCast(store.extra_data.len()),
+            
+            // Pack: target_node_idx (16 bits low), backing_type (16 bits high)
+            const packed_target_and_type = (@as(u32, n.target_node_idx) & 0xFFFF) | 
+                                           ((@as(u32, @intFromEnum(n.backing_type)) & 0xFFFF) << 16);
+            
+            node.setPayload(.{ .pattern_nominal_external = .{
+                .module_idx = @intFromEnum(n.module_idx),
+                .packed_target_and_type = packed_target_and_type,
+                .backing_pattern = @intFromEnum(n.backing_pattern),
             } });
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
         },
         .record_destructure => |p| {
             node.tag = .pattern_record_destructure;
@@ -2272,10 +2272,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @as(u32, @bitCast(@as(i32, p.value.numerator))),
-                .data_2 = @as(u32, p.value.denominator_power_of_ten),
-                .data_3 = @intFromBool(p.has_suffix),
+            node.setPayload(.{ .pattern_small_dec_literal = .{
+                .numerator = @as(u32, @bitCast(@as(i32, p.value.numerator))),
+                .denominator_power = @as(u32, p.value.denominator_power_of_ten),
+                .has_suffix = @intFromBool(p.has_suffix),
             } });
         },
         .dec_literal => |p| {
@@ -2291,10 +2291,10 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .str_literal => |p| {
             node.tag = .pattern_str_literal;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(p.literal),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .pattern_str_literal = .{
+                .literal = @intFromEnum(p.literal),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .frac_f32_literal => |p| {

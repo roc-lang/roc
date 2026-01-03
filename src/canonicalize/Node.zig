@@ -755,12 +755,11 @@ pub const Payload = extern union {
     pub const PatternSmallDecLiteral = extern struct {
         numerator: u32,
         denominator_power: u32,
-        _unused: u32,
+        has_suffix: u32,
     };
 
     pub const PatternStrLiteral = extern struct {
-        /// Packed: segments_start (20 bits), segments_len (12 bits)
-        packed_segments: u32,
+        literal: u32, // CIR.StrLiteral.Idx
         _unused1: u32,
         _unused2: u32,
     };
