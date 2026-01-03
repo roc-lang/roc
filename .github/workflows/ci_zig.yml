@@ -273,9 +273,16 @@ jobs:
           readelf --debug-dump=info zig-out/bin/parse_unit_coverage 2>/dev/null | head -50 || true
           echo "Running coverage..."
           zig build coverage
-          # Debug: show what file paths kcov captured
-          echo "Files tracked by kcov:"
-          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -30
+          # Debug: show file counts and paths
+          echo "=== Coverage Debug Info ==="
+          echo "Total file count:"
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '.files | length'
+          echo "Files containing 'parse':"
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | grep -i parse || echo "NONE FOUND"
+          echo "Files containing 'roc':"
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | grep -i roc || echo "NONE FOUND"
+          echo "First 10 files:"
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
