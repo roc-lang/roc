@@ -8,21 +8,26 @@ type=expr
 [1, "hello"]
 ~~~
 # EXPECTED
-MISSING METHOD - can_list_two_elements.md:1:2:1:3
+TYPE MISMATCH - can_list_two_elements.md:1:2:1:3
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **can_list_two_elements.md:1:2:1:3:**
 ```roc
 [1, "hello"]
 ```
  ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**can_list_two_elements.md:1:5:1:12:**
+```roc
+[1, "hello"]
+```
+    ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

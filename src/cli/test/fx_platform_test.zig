@@ -809,12 +809,13 @@ test "fx platform issue8433" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail compilation with a MISSING METHOD error
+    // This file is expected to fail compilation with a TYPE MISMATCH error
+    // (number literal used where Str is expected in string interpolation)
     switch (run_result.term) {
         .Exited => |code| {
             if (code != 0) {
-                // Expected to fail - check for missing method error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+                // Expected to fail - check for type mismatch error message
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -824,7 +825,7 @@ test "fx platform issue8433" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
         },
     }
 }
