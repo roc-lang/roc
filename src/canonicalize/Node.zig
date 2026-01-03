@@ -528,15 +528,9 @@ pub const Payload = extern union {
     };
 
     pub const MatchBranch = extern struct {
-        patterns: packed struct(u32) {
-            start: u20,
-            len: u12,
-        },
-        value: u32, // CIR.Expr.Idx
-        guard_and_redundant_idx: packed struct(u32) {
-            guard_plus_one: u16,
-            redundant_data_idx: u16,
-        },
+        branch_data_idx: u32,  // Index into match_branch_data list
+        _unused1: u32,
+        _unused2: u32,
     };
 
     pub const MatchBranchPattern = extern struct {
