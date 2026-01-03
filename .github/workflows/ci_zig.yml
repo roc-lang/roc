@@ -261,33 +261,25 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libdw-dev libelf-dev zlib1g-dev pkg-config
+          # Install system kcov instead of building from source - the Zig-built kcov
+          # has issues parsing DWARF line info for Zig-compiled binaries on Linux
+          sudo apt-get install -y kcov
 
       - name: Parser Code Coverage
         if: matrix.os == 'ubuntu-24.04'
         run: |
-          # Debug: Run kcov without filter to see what files it finds
-          echo "=== Building coverage binary ==="
+          # Build just the test binary (not kcov - we use system kcov)
           zig build build-coverage-tests
 
-          echo "=== Checking DWARF info for parse files ==="
-          readelf --debug-dump=info zig-out/bin/parse_unit_coverage 2>/dev/null | grep -E "DW_AT_comp_dir|DW_AT_name" | grep -i parse | head -10 || echo "No parse files in DWARF"
+          echo "=== Running coverage with system kcov ==="
+          mkdir -p kcov-output/parser
+          kcov --include-pattern=/src/parse/ kcov-output/parser zig-out/bin/parse_unit_coverage
 
-          echo "=== Running kcov WITHOUT filter ==="
-          mkdir -p kcov-debug
-          zig-out/bin/kcov kcov-debug zig-out/bin/parse_unit_coverage || true
+          echo "=== Coverage summary ==="
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
 
-          echo "=== Files found by kcov (looking for parse) ==="
-          cat kcov-debug/parse_unit_coverage/coverage.json 2>/dev/null | jq -r '.files[].file' | grep -i parse | head -20 || echo "No parse files found"
-
-          echo "=== First 10 files found by kcov ==="
-          cat kcov-debug/parse_unit_coverage/coverage.json 2>/dev/null | jq -r '.files[].file' | head -10 || echo "No coverage data"
-
-          echo "=== Total file count ==="
-          cat kcov-debug/parse_unit_coverage/coverage.json 2>/dev/null | jq '.files | length' || echo "No coverage data"
-
-          echo "=== Now running normal coverage build ==="
-          zig build coverage
+          echo "=== Files found ==="
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
