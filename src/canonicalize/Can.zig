@@ -4891,6 +4891,17 @@ pub fn canonicalizeExpr(
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
             };
 
+            // Check that the type is in scope
+            if (self.scopeLookupTypeBinding(type_ident) == null) {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = type_ident,
+                        .region = region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            }
+
             const expr_idx = try self.env.addExpr(
                 CIR.Expr{ .e_typed_int = .{
                     .value = int_value,
@@ -4937,6 +4948,17 @@ pub fn canonicalizeExpr(
                 const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_num_literal = .{ .region = region } });
                 return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
             };
+
+            // Check that the type is in scope
+            if (self.scopeLookupTypeBinding(type_ident) == null) {
+                return CanonicalizedExpr{
+                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .undeclared_type = .{
+                        .name = type_ident,
+                        .region = region,
+                    } }),
+                    .free_vars = DataSpan.empty(),
+                };
+            }
 
             const expr_idx = try self.env.addExpr(
                 CIR.Expr{ .e_typed_frac = .{
