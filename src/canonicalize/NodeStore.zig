@@ -708,18 +708,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_type_var_dispatch => {
-            const raw = payload.raw;
-            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(raw.data_1);
-            const method_name: base.Ident.Idx = @bitCast(raw.data_2);
-            const extra_start = raw.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
+            const p = payload.expr_type_var_dispatch;
+            
+            // Unpack: args_start (20 bits), args_len (12 bits)
+            const args_start: u32 = p.packed_args & 0xFFFFF;
+            const args_len: u32 = (p.packed_args >> 20) & 0xFFF;
 
             return CIR.Expr{ .e_type_var_dispatch = .{
-                .type_var_alias_stmt = type_var_alias_stmt,
-                .method_name = method_name,
+                .type_var_alias_stmt = @enumFromInt(p.type_var_alias_stmt),
+                .method_name = @bitCast(p.method_name),
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
             } };
         },
