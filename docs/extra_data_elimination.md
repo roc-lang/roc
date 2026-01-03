@@ -1,25 +1,53 @@
-# Eliminating extra_data: A Step-by-Step Guide
+# Eliminating extra_data AND data_* Fields: Complete Migration Guide
 
-## CRITICAL CONSTRAINT
+## SUCCESS CRITERIA
 
-**Memory usage MUST be EXACTLY THE SAME after this migration.**
+This migration is **ONLY successful** when ALL of the following are true:
 
-This is not optional. This is not a suggestion. If even ONE MORE BYTE of memory is used after this migration, the migration has COMPLETELY FAILED.
+1. **ZERO references to `extra_data`** remain in the codebase
+2. **ZERO references to `data_1`, `data_2`, `data_3`** remain in the codebase
+3. **Memory usage is EXACTLY THE SAME** (or less) as before the migration
+
+If even ONE MORE BYTE of memory is used, the migration has COMPLETELY FAILED.
 
 Why? Because **that's how unions work**. A union reinterprets existing bytes - it doesn't add new ones. Every "typed payload" is just a different view of the same 12 bytes that were always there.
 
-## Background
+## The Problem
 
-The `NodeStore` has a field called `extra_data: SafeList(u32)` that serves as a catch-all dumping ground for data that doesn't fit in a node's 12-byte payload (3 × u32). This is:
+The codebase currently has TWO types of untyped garbage:
 
-1. **Untyped** - Just a bag of u32s with no structure
-2. **Error-prone** - Easy to read/write wrong offsets
-3. **Hard to understand** - Must trace code to know what each u32 means
+### 1. The `extra_data` list
+A catch-all dumping ground for data that doesn't fit in a node's 12-byte payload:
+- **Untyped** - Just a bag of u32s with no structure
+- **Error-prone** - Easy to read/write wrong offsets
+- **Hard to understand** - Must trace code to know what each u32 means
 
-The goal is to eliminate `extra_data` entirely by using:
-- **Typed payload unions** for data ≤12 bytes
-- **Specialized typed lists** for data >12 bytes
-- **Existing scratch array spans** for variable-length data
+### 2. The `data_1`, `data_2`, `data_3` fields
+Generic field names that tell you NOTHING about what they contain:
+- `node.data_1` - What is this? A pattern? An expression? An index?
+- `node.data_2` - No idea without reading the code
+- `node.data_3` - Completely meaningless
+
+## The Solution
+
+Replace ALL of this with:
+- **Typed payload unions** with semantic field names (for data ≤12 bytes)
+- **Specialized typed lists** with semantic field names (for data >12 bytes)
+- **Existing scratch array spans** (for variable-length data)
+
+After migration, code should read like:
+```zig
+// BEFORE (garbage):
+node.data_1 = @intFromEnum(pattern);
+node.data_2 = @intFromEnum(expr);
+
+// AFTER (readable):
+node.setPayload(.{ .def = .{
+    .pattern = pattern,
+    .expr = expr,
+    .kind = kind,
+}});
+```
 
 ## How Node Payloads Work
 
@@ -52,29 +80,29 @@ These are using extra_data for NO GOOD REASON. The data fits in 12 bytes and sho
 
 #### 1.1 `pattern_record_destruct` (2 u32s in extra_data)
 
-**Current layout:**
-- `data_1`: label (Ident.Idx)
-- `data_2`: ident (Ident.Idx)
-- `data_3`: extra_data index
+**Current layout (GARBAGE):**
+- `data_1`: label (Ident.Idx) ← meaningless name
+- `data_2`: ident (Ident.Idx) ← meaningless name
+- `data_3`: extra_data index ← meaningless name
 - `extra_data[0]`: kind tag (0=Required, 1=SubPattern)
 - `extra_data[1]`: pattern index
 
-**Fix:** Pack kind into `data_3`:
+**Fix:** Use typed payload with semantic names:
 ```zig
-pub const RecordDestruct = extern struct {
-    label: u32,      // Ident.Idx
-    ident: u32,      // Ident.Idx
-    // bit 0: kind tag (0=Required, 1=SubPattern)
-    // bits 1-31: pattern index
-    packed_kind: u32,
+pub const PatternRecordDestruct = extern struct {
+    label: u32,           // Ident.Idx - the field label being destructured
+    ident: u32,           // Ident.Idx - the identifier binding
+    /// Packed: bit 0 = kind tag (0=Required, 1=SubPattern), bits 1-31 = pattern index
+    kind_and_pattern: u32,
 };
 ```
 
 **Files to modify:**
-- `Node.zig`: Add `RecordDestruct` payload struct to the Payload union
+- `Node.zig`: Add `PatternRecordDestruct` payload struct to the Payload union (with semantic field names!)
 - `NodeStore.zig`:
-  - `addRecordDestruct` (line 2067): Update to use packed payload
-  - `getRecordDestruct` (line 2697): Update to read from packed payload
+  - `addRecordDestruct` (line 2067): Use `node.setPayload(.{ .pattern_record_destruct = ... })`
+  - `getRecordDestruct` (line 2697): Use `node.getPayload().pattern_record_destruct`
+  - Delete ALL references to `data_1`, `data_2`, `data_3` in these functions
 
 ---
 
@@ -282,11 +310,36 @@ For each node type:
 
 Once all uses are migrated:
 
-1. **Delete the extra_data field** from NodeStore
-2. **Delete extra_data from Serialized** struct
-3. **Update serialization_size_check.zig** expected sizes
-4. **Run all tests** - they must pass
-5. **Verify memory usage** - must be EXACTLY the same or LESS
+1. **Delete the `extra_data` field** from NodeStore
+2. **Delete `data_1`, `data_2`, `data_3` fields** from Node struct
+3. **Delete `extra_data` from Serialized** struct
+4. **Update serialization_size_check.zig** expected sizes
+5. **Run `grep -rn "data_1\|data_2\|data_3\|extra_data" src/`** - must return ZERO results
+6. **Run all tests** - they must pass
+7. **Verify memory usage** - must be EXACTLY the same or LESS
+
+## Current Status (as of this writing)
+
+```bash
+# References to data_1/data_2/data_3 in NodeStore.zig:
+$ grep -c "\.data_1\|\.data_2\|\.data_3" src/canonicalize/NodeStore.zig
+278
+
+# References to extra_data in NodeStore.zig:
+$ grep -c "extra_data" src/canonicalize/NodeStore.zig
+99
+```
+
+**All 377 of these references must be eliminated.**
+
+## Final Verification Command
+
+```bash
+# This command must return ZERO lines for the migration to be complete:
+grep -rn "\.data_1\|\.data_2\|\.data_3\|extra_data" src/canonicalize/
+
+# If this returns ANY results, the migration is NOT DONE.
+```
 
 ## Verification
 
