@@ -46,6 +46,12 @@ Builtin :: [].{
 		encode = |self, format| {
 			format.encode_str(self)
 		}
+
+		decode : src, fmt -> (Try(Str, err), src)
+			where [fmt.decode_str : fmt, src -> (Try(Str, err), src)]
+		decode = |source, format| {
+			format.decode_str(source)
+		}
 	}
 
 	List(_item) :: [ProvidedByCompiler].{
@@ -269,6 +275,17 @@ Builtin :: [].{
 			format.encode_list(self, |elem, f| elem.encode(f))
 		}
 
+		# Decode a list using a format that provides decode_list
+		decode : src, fmt -> (Try(List(item), err), src)
+			where [
+				fmt.decode_list : fmt, src, (src, fmt -> (Try(item, err), src)) -> (Try(List(item), err), src),
+				item.decode : src, fmt -> (Try(item, err), src),
+			]
+		decode = |source, format| {
+			Item : item
+			format.decode_list(source, |s, f| Item.decode(s, f))
+		}
+
 	}
 
 	Bool := [False, True].{
@@ -285,6 +302,12 @@ Builtin :: [].{
 			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
 		encode = |self, format| {
 			format.encode_bool(self)
+		}
+
+		decode : src, fmt -> (Try(Bool, err), src)
+			where [fmt.decode_bool : fmt, src -> (Try(Bool, err), src)]
+		decode = |source, format| {
+			format.decode_bool(source)
 		}
 	}
 
@@ -465,6 +488,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_u8(self)
 			}
+
+			decode : src, fmt -> (Try(U8, err), src)
+				where [fmt.decode_u8 : fmt, src -> (Try(U8, err), src)]
+			decode = |source, format| {
+				format.decode_u8(source)
+			}
 		}
 
 		I8 :: [].{
@@ -541,6 +570,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_i8(self)
 			}
+
+			decode : src, fmt -> (Try(I8, err), src)
+				where [fmt.decode_i8 : fmt, src -> (Try(I8, err), src)]
+			decode = |source, format| {
+				format.decode_i8(source)
+			}
 		}
 
 		U16 :: [].{
@@ -610,6 +645,12 @@ Builtin :: [].{
 				where [fmt.encode_u16 : fmt, U16 -> Try(encoded, err)]
 			encode = |self, format| {
 				format.encode_u16(self)
+			}
+
+			decode : src, fmt -> (Try(U16, err), src)
+				where [fmt.decode_u16 : fmt, src -> (Try(U16, err), src)]
+			decode = |source, format| {
+				format.decode_u16(source)
 			}
 		}
 
@@ -688,6 +729,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_i16(self)
 			}
+
+			decode : src, fmt -> (Try(I16, err), src)
+				where [fmt.decode_i16 : fmt, src -> (Try(I16, err), src)]
+			decode = |source, format| {
+				format.decode_i16(source)
+			}
 		}
 
 		U32 :: [].{
@@ -759,6 +806,12 @@ Builtin :: [].{
 				where [fmt.encode_u32 : fmt, U32 -> Try(encoded, err)]
 			encode = |self, format| {
 				format.encode_u32(self)
+			}
+
+			decode : src, fmt -> (Try(U32, err), src)
+				where [fmt.decode_u32 : fmt, src -> (Try(U32, err), src)]
+			decode = |source, format| {
+				format.decode_u32(source)
 			}
 		}
 
@@ -838,6 +891,13 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_i32(self)
 			}
+
+			# Decode an I32 using a format that provides decode_i32
+			decode : src, fmt -> (Try(I32, err), src)
+				where [fmt.decode_i32 : fmt, src -> (Try(I32, err), src)]
+			decode = |source, format| {
+				format.decode_i32(source)
+			}
 		}
 
 		U64 :: [].{
@@ -911,6 +971,12 @@ Builtin :: [].{
 				where [fmt.encode_u64 : fmt, U64 -> Try(encoded, err)]
 			encode = |self, format| {
 				format.encode_u64(self)
+			}
+
+			decode : src, fmt -> (Try(U64, err), src)
+				where [fmt.decode_u64 : fmt, src -> (Try(U64, err), src)]
+			decode = |source, format| {
+				format.decode_u64(source)
 			}
 		}
 
@@ -991,6 +1057,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_i64(self)
 			}
+
+			decode : src, fmt -> (Try(I64, err), src)
+				where [fmt.decode_i64 : fmt, src -> (Try(I64, err), src)]
+			decode = |source, format| {
+				format.decode_i64(source)
+			}
 		}
 
 		U128 :: [].{
@@ -1068,6 +1140,12 @@ Builtin :: [].{
 				where [fmt.encode_u128 : fmt, U128 -> Try(encoded, err)]
 			encode = |self, format| {
 				format.encode_u128(self)
+			}
+
+			decode : src, fmt -> (Try(U128, err), src)
+				where [fmt.decode_u128 : fmt, src -> (Try(U128, err), src)]
+			decode = |source, format| {
+				format.decode_u128(source)
 			}
 		}
 
@@ -1151,6 +1229,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_i128(self)
 			}
+
+			decode : src, fmt -> (Try(I128, err), src)
+				where [fmt.decode_i128 : fmt, src -> (Try(I128, err), src)]
+			decode = |source, format| {
+				format.decode_i128(source)
+			}
 		}
 
 		Dec :: [].{
@@ -1229,6 +1313,12 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_dec(self)
 			}
+
+			decode : src, fmt -> (Try(Dec, err), src)
+				where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]
+			decode = |source, format| {
+				format.decode_dec(source)
+			}
 		}
 
 		F32 :: [].{
@@ -1291,6 +1381,12 @@ Builtin :: [].{
 				where [fmt.encode_f32 : fmt, F32 -> Try(encoded, err)]
 			encode = |self, format| {
 				format.encode_f32(self)
+			}
+
+			decode : src, fmt -> (Try(F32, err), src)
+				where [fmt.decode_f32 : fmt, src -> (Try(F32, err), src)]
+			decode = |source, format| {
+				format.decode_f32(source)
 			}
 		}
 
@@ -1365,38 +1461,15 @@ Builtin :: [].{
 			encode = |self, format| {
 				format.encode_f64(self)
 			}
-		}
-	}
 
-	# A decoder is a function that takes a source and returns a decode result.
-	# The format is captured via closure when creating the decoder.
-	Decoder(src, val, err) :: { decode : (src -> { result : Try(val, err), rest : src }) }.{
-		# Create a decoder from a decode function
-		decoder : (src -> { result : Try(val, err), rest : src }) -> Decoder(src, val, err)
-		decoder = |decode_fn| { decode: decode_fn }
-
-		# Run a decoder on a source
-		decode : Decoder(src, val, err), src -> { result : Try(val, err), rest : src }
-		decode = |dec, source| {
-			decode_fn = dec.decode
-			decode_fn(source)
-		}
-
-		# Decode and return just the result - fails if there are leftover bytes
-		decode_exact : Decoder(List(U8), val, err), List(U8) -> Try(val, [Leftover(List(U8)), DecodeFailed(err)])
-		decode_exact = |dec, bytes| {
-			decode_fn = dec.decode
-			decode_result = decode_fn(bytes)
-			if List.is_empty(decode_result.rest) {
-				match decode_result.result {
-					Ok(val) => Ok(val)
-					Err(e) => Err(DecodeFailed(e))
-				}
-			} else {
-				Err(Leftover(decode_result.rest))
+			decode : src, fmt -> (Try(F64, err), src)
+				where [fmt.decode_f64 : fmt, src -> (Try(F64, err), src)]
+			decode = |source, format| {
+				format.decode_f64(source)
 			}
 		}
 	}
+
 }
 
 range_to = |var $current, end| {

@@ -17142,6 +17142,173 @@ pub const Interpreter = struct {
                 };
 
                 if (nominal_info == null) {
+                    // For where clause constrained types, check the compile-time type for method info
+                    // Get the original e_dot_access expression to find the receiver's compile-time type
+                    const dot_access_expr = self.env.store.getExpr(da.expr_idx);
+                    const receiver_expr_idx: ?can.CIR.Expr.Idx = if (dot_access_expr == .e_dot_access)
+                        dot_access_expr.e_dot_access.receiver
+                    else
+                        null;
+
+                    const ct_nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = blk: {
+                        const ct_receiver_var = if (receiver_expr_idx) |recv_idx|
+                            can.ModuleEnv.varFrom(recv_idx)
+                        else
+                            break :blk null;
+
+                        const ct_resolved = self.env.types.resolveVar(ct_receiver_var);
+
+                        switch (ct_resolved.desc.content) {
+                            .structure => |s| switch (s) {
+                                .nominal_type => |nom| break :blk .{
+                                    .origin = nom.origin_module,
+                                    .ident = nom.ident.ident_idx,
+                                },
+                                else => {},
+                            },
+                            .flex => |flex| {
+                                // Check if this flex var has static dispatch constraints (from where clause)
+                                // If so, we need to resolve the method from the actual value's type
+                                if (!flex.constraints.isEmpty()) {
+                                    // The method is from a where clause - check the runtime type for nominal info
+                                    const value_rt_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                                    switch (value_rt_resolved.desc.content) {
+                                        .flex => |rt_flex| {
+                                            // Check if the runtime flex var has constraints with the matching method
+                                            if (!rt_flex.constraints.isEmpty()) {
+                                                const field_name_str = self.env.getIdent(da.field_name);
+                                                for (self.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints)) |constraint| {
+                                                    const constraint_fn_name = self.runtime_layout_store.env.getIdent(constraint.fn_name);
+                                                    if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
+                                                        // Found a matching constraint - check its fn_var for nominal type
+                                                        const fn_resolved = self.runtime_types.resolveVar(constraint.fn_var);
+                                                        if (fn_resolved.desc.content == .structure and
+                                                            fn_resolved.desc.content.structure == .nominal_type)
+                                                        {
+                                                            const nom = fn_resolved.desc.content.structure.nominal_type;
+                                                            break :blk .{
+                                                                .origin = nom.origin_module,
+                                                                .ident = nom.ident.ident_idx,
+                                                            };
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        .structure => |s| switch (s) {
+                                            .nominal_type => |nom| break :blk .{
+                                                .origin = nom.origin_module,
+                                                .ident = nom.ident.ident_idx,
+                                            },
+                                            else => {},
+                                        },
+                                        else => {},
+                                    }
+                                }
+                            },
+                            .rigid => |rigid| {
+                                // Same logic for rigid vars with constraints
+                                if (!rigid.constraints.isEmpty()) {
+                                    // First check if runtime type has the nominal wrapper
+                                    const value_rt_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                                    switch (value_rt_resolved.desc.content) {
+                                        .structure => |s| switch (s) {
+                                            .nominal_type => |nom| break :blk .{
+                                                .origin = nom.origin_module,
+                                                .ident = nom.ident.ident_idx,
+                                            },
+                                            else => {},
+                                        },
+                                        .flex => |rt_flex| {
+                                            if (!rt_flex.constraints.isEmpty()) {
+                                                const field_name_str = self.env.getIdent(da.field_name);
+                                                for (self.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints)) |constraint| {
+                                                    const constraint_fn_name = self.runtime_layout_store.env.getIdent(constraint.fn_name);
+                                                    if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
+                                                        const fn_resolved = self.runtime_types.resolveVar(constraint.fn_var);
+                                                        if (fn_resolved.desc.content == .structure and
+                                                            fn_resolved.desc.content.structure == .nominal_type)
+                                                        {
+                                                            const nom = fn_resolved.desc.content.structure.nominal_type;
+                                                            break :blk .{
+                                                                .origin = nom.origin_module,
+                                                                .ident = nom.ident.ident_idx,
+                                                            };
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        else => {},
+                                    }
+
+                                    // If runtime type doesn't have nominal info, check the compile-time constraints
+                                    // Note: This currently doesn't work because where clause constraints
+                                    // don't store which type satisfies them - they only store the method
+                                    // signature. This needs type system changes to fix properly.
+                                    const field_name_str = self.env.getIdent(da.field_name);
+                                    for (self.env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
+                                        const constraint_fn_name = self.env.getIdent(constraint.fn_name);
+                                        if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
+                                            // Found matching constraint - translate and check fn_var for nominal type
+                                            const rt_fn_var = self.translateTypeVar(self.env, constraint.fn_var) catch continue;
+                                            const fn_resolved = self.runtime_types.resolveVar(rt_fn_var);
+                                            if (fn_resolved.desc.content == .structure and
+                                                fn_resolved.desc.content.structure == .nominal_type)
+                                            {
+                                                const nom = fn_resolved.desc.content.structure.nominal_type;
+                                                break :blk .{
+                                                    .origin = nom.origin_module,
+                                                    .ident = nom.ident.ident_idx,
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                        break :blk null;
+                    };
+
+                    if (ct_nominal_info) |info| {
+                        // Found nominal info from compile-time type - use it for dispatch
+                        const method_func = self.resolveMethodFunction(
+                            info.origin,
+                            info.ident,
+                            da.field_name,
+                            roc_ops,
+                            effective_receiver_rt_var,
+                        ) catch |err| {
+                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                            return err;
+                        };
+
+                        // Similar to main method dispatch path: push receiver and func, then collect args
+                        try value_stack.push(receiver_value);
+                        try value_stack.push(method_func);
+
+                        try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
+                            .method_name = da.field_name,
+                            .collected_count = 0,
+                            .remaining_args = arg_exprs,
+                            .receiver_rt_var = effective_receiver_rt_var,
+                            .expr_idx = da.expr_idx,
+                            .expected_arg_rt_vars = null, // No expected types for where clause methods
+                        } } });
+
+                        // Start evaluating first arg
+                        if (arg_exprs.len > 0) {
+                            const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
+                            const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
+                            try work_stack.push(.{ .eval_expr = .{
+                                .expr_idx = arg_exprs[0],
+                                .expected_rt_var = first_arg_rt_var,
+                            } });
+                        }
+                        return true;
+                    }
+
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.InvalidMethodReceiver;
                 }

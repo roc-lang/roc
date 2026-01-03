@@ -30,12 +30,11 @@ pub const BuiltinModules = struct {
 
     /// Get an array of all builtin modules for iteration
     /// For compatibility, we expose the Builtin module for each auto-imported type
-    pub fn modules(self: *const BuiltinModules) [4]ModuleInfo {
+    pub fn modules(self: *const BuiltinModules) [3]ModuleInfo {
         return .{
             .{ .name = "Bool", .module = &self.builtin_module },
             .{ .name = "Try", .module = &self.builtin_module },
             .{ .name = "Str", .module = &self.builtin_module },
-            .{ .name = "Decoder", .module = &self.builtin_module },
         };
     }
 
