@@ -84,6 +84,8 @@ pub const Payload = extern union {
     expr_frac_f64: ExprFracF64,
     expr_dec: ExprDec,
     expr_dec_small: ExprDecSmall,
+    expr_typed_int: ExprTypedInt,
+    expr_typed_frac: ExprTypedFrac,
     expr_tag: ExprTag,
     expr_nominal: ExprNominal,
     expr_nominal_external: ExprNominalExternal,
@@ -401,6 +403,18 @@ pub const Payload = extern union {
         /// denominator_power_of_ten in lower 8 bits
         denominator_power: u32,
         has_suffix: u32,
+    };
+
+    pub const ExprTypedInt = extern struct {
+        type_name: u32,      // Ident.Idx
+        value_kind: u32,     // CIR.IntValue.IntKind
+        value_idx: u32,      // Index into int_values list
+    };
+
+    pub const ExprTypedFrac = extern struct {
+        type_name: u32,      // Ident.Idx
+        value_kind: u32,     // CIR.IntValue.IntKind
+        value_idx: u32,      // Index into int_values list
     };
 
     pub const ExprTag = extern struct {

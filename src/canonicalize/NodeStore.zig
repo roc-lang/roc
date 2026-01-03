@@ -544,30 +544,28 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_typed_int => {
-            // Unpack typed int: value in extra_data, type_name in data_1
-            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const p = node.getPayload().expr_typed_int;
+            const value_i128 = store.int_values.items.items[p.value_idx];
             return CIR.Expr{
                 .e_typed_int = .{
                     .value = .{
-                        .bytes = @bitCast(value_as_i128),
-                        .kind = @enumFromInt(node.data_2),
+                        .bytes = @bitCast(value_i128),
+                        .kind = @enumFromInt(p.value_kind),
                     },
-                    .type_name = @bitCast(node.data_1),
+                    .type_name = @bitCast(p.type_name),
                 },
             };
         },
         .expr_typed_frac => {
-            // Unpack typed frac: value in extra_data, type_name in data_1
-            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const p = node.getPayload().expr_typed_frac;
+            const value_i128 = store.int_values.items.items[p.value_idx];
             return CIR.Expr{
                 .e_typed_frac = .{
                     .value = .{
-                        .bytes = @bitCast(value_as_i128),
-                        .kind = @enumFromInt(node.data_2),
+                        .bytes = @bitCast(value_i128),
+                        .kind = @enumFromInt(p.value_kind),
                     },
-                    .type_name = @bitCast(node.data_1),
+                    .type_name = @bitCast(p.type_name),
                 },
             };
         },
@@ -1761,32 +1759,30 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
 
-            // Store type_name in data_1, value kind in data_2, value in extra_data
-            node.data_1 = @bitCast(e.type_name);
-            node.data_2 = @intFromEnum(e.value.kind);
-
-            const extra_data_start = store.extra_data.len();
+            // Store value in int_values list
+            const value_idx = store.int_values.len();
             const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-            node.data_3 = @intCast(extra_data_start);
+            _ = try store.int_values.append(store.gpa, value_as_i128);
+
+            node.setPayload(.{ .expr_typed_int = .{
+                .type_name = @bitCast(e.type_name),
+                .value_kind = @intFromEnum(e.value.kind),
+                .value_idx = @intCast(value_idx),
+            } });
         },
         .e_typed_frac => |e| {
             node.tag = .expr_typed_frac;
 
-            // Store type_name in data_1, value kind in data_2, value in extra_data
-            node.data_1 = @bitCast(e.type_name);
-            node.data_2 = @intFromEnum(e.value.kind);
-
-            const extra_data_start = store.extra_data.len();
+            // Store value in int_values list
+            const value_idx = store.int_values.len();
             const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-            node.data_3 = @intCast(extra_data_start);
+            _ = try store.int_values.append(store.gpa, value_as_i128);
+
+            node.setPayload(.{ .expr_typed_frac = .{
+                .type_name = @bitCast(e.type_name),
+                .value_kind = @intFromEnum(e.value.kind),
+                .value_idx = @intCast(value_idx),
+            } });
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
