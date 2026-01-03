@@ -2727,3 +2727,46 @@ test "comptime eval - attached methods on tag union type aliases (issue #8637)" 
     try testing.expect(summary.evaluated >= 3);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+// Issue #8901: Recursive nominal type with Box where one variant has no payload
+// The interpreter crashed at extractTagValue when matching on such types.
+test "comptime eval - issue 8901: recursive nominal with Box and no-payload variant" {
+    // Test 1: Create Nat.Zero - a no-payload variant of a recursive nominal type
+    const src1 =
+        \\Nat := [Zero, Suc(Box(Nat))]
+        \\
+        \\zero_val = Nat.Zero
+    ;
+
+    var res1 = try parseCheckAndEvalModule(src1);
+    defer cleanupEvalModule(&res1);
+
+    const summary1 = try res1.evaluator.evalAll();
+
+    // Creating Zero should not crash
+    try testing.expect(summary1.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary1.crashed);
+}
+
+test "comptime eval - issue 8901: pattern matching on nominal type" {
+    // Test pattern matching on a nominal type with no-payload variant
+    const src =
+        \\Color := [Red, Green, Blue]
+        \\
+        \\color = Color.Red
+        \\
+        \\result = match color {
+        \\    Color.Red -> 1
+        \\    _ -> 0
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Pattern matching on no-payload variant should not crash
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
