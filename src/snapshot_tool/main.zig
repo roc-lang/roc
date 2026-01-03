@@ -2701,6 +2701,11 @@ fn getDefaultedTypeStringWithSeen(
     // Use TypeWriter for all other cases - it has proper cycle detection
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
+
+    // Enable numeral defaulting for MONO output - flex vars with from_numeral
+    // constraint should display as "Dec" instead of showing the constraint
+    type_writer.setDefaultNumeralsToDec(true);
+
     if (is_top_level) {
         try type_writer.write(type_var, .one_line);
     } else {
