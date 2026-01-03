@@ -17179,27 +17179,10 @@ pub const Interpreter = struct {
                                     // The method is from a where clause - check the runtime type for nominal info
                                     const value_rt_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
                                     switch (value_rt_resolved.desc.content) {
-                                        .flex => |rt_flex| {
-                                            // Check if the runtime flex var has constraints with the matching method
-                                            if (!rt_flex.constraints.isEmpty()) {
-                                                const field_name_str = self.env.getIdent(da.field_name);
-                                                for (self.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints)) |constraint| {
-                                                    const constraint_fn_name = self.runtime_layout_store.env.getIdent(constraint.fn_name);
-                                                    if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
-                                                        // Found a matching constraint - check its fn_var for nominal type
-                                                        const fn_resolved = self.runtime_types.resolveVar(constraint.fn_var);
-                                                        if (fn_resolved.desc.content == .structure and
-                                                            fn_resolved.desc.content.structure == .nominal_type)
-                                                        {
-                                                            const nom = fn_resolved.desc.content.structure.nominal_type;
-                                                            break :blk .{
-                                                                .origin = nom.origin_module,
-                                                                .ident = nom.ident.ident_idx,
-                                                            };
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                        .flex => {
+                                            // TODO: Runtime flex vars with constraints require cross-environment
+                                            // ident comparison which is not yet implemented. The decode tests
+                                            // are skipped until where clause method dispatch is properly implemented.
                                         },
                                         .structure => |s| switch (s) {
                                             .nominal_type => |nom| break :blk .{
@@ -17225,25 +17208,10 @@ pub const Interpreter = struct {
                                             },
                                             else => {},
                                         },
-                                        .flex => |rt_flex| {
-                                            if (!rt_flex.constraints.isEmpty()) {
-                                                const field_name_str = self.env.getIdent(da.field_name);
-                                                for (self.runtime_types.sliceStaticDispatchConstraints(rt_flex.constraints)) |constraint| {
-                                                    const constraint_fn_name = self.runtime_layout_store.env.getIdent(constraint.fn_name);
-                                                    if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
-                                                        const fn_resolved = self.runtime_types.resolveVar(constraint.fn_var);
-                                                        if (fn_resolved.desc.content == .structure and
-                                                            fn_resolved.desc.content.structure == .nominal_type)
-                                                        {
-                                                            const nom = fn_resolved.desc.content.structure.nominal_type;
-                                                            break :blk .{
-                                                                .origin = nom.origin_module,
-                                                                .ident = nom.ident.ident_idx,
-                                                            };
-                                                        }
-                                                    }
-                                                }
-                                            }
+                                        .flex => {
+                                            // TODO: Runtime flex vars with constraints require cross-environment
+                                            // ident comparison which is not yet implemented. The decode tests
+                                            // are skipped until where clause method dispatch is properly implemented.
                                         },
                                         else => {},
                                     }
@@ -17252,10 +17220,9 @@ pub const Interpreter = struct {
                                     // Note: This currently doesn't work because where clause constraints
                                     // don't store which type satisfies them - they only store the method
                                     // signature. This needs type system changes to fix properly.
-                                    const field_name_str = self.env.getIdent(da.field_name);
                                     for (self.env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                                        const constraint_fn_name = self.env.getIdent(constraint.fn_name);
-                                        if (std.mem.eql(u8, constraint_fn_name, field_name_str)) {
+                                        // Both fn_name and field_name are from self.env, so compare indices directly
+                                        if (constraint.fn_name == da.field_name) {
                                             // Found matching constraint - translate and check fn_var for nominal type
                                             const rt_fn_var = self.translateTypeVar(self.env, constraint.fn_var) catch continue;
                                             const fn_resolved = self.runtime_types.resolveVar(rt_fn_var);
@@ -17294,14 +17261,18 @@ pub const Interpreter = struct {
                         try value_stack.push(receiver_value);
                         try value_stack.push(method_func);
 
-                        try work_stack.push(.{ .apply_continuation = .{ .dot_access_collect_args = .{
-                            .method_name = da.field_name,
-                            .collected_count = 0,
-                            .remaining_args = arg_exprs,
-                            .receiver_rt_var = effective_receiver_rt_var,
-                            .expr_idx = da.expr_idx,
-                            .expected_arg_rt_vars = null, // No expected types for where clause methods
-                        } } });
+                        try work_stack.push(.{
+                            .apply_continuation = .{
+                                .dot_access_collect_args = .{
+                                    .method_name = da.field_name,
+                                    .collected_count = 0,
+                                    .remaining_args = arg_exprs,
+                                    .receiver_rt_var = effective_receiver_rt_var,
+                                    .expr_idx = da.expr_idx,
+                                    .expected_arg_rt_vars = null, // No expected types for where clause methods
+                                },
+                            },
+                        });
 
                         // Start evaluating first arg
                         if (arg_exprs.len > 0) {
