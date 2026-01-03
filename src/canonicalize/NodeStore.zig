@@ -18,7 +18,6 @@ const RocDec = builtins.dec.RocDec;
 const DataSpan = base.DataSpan;
 const Region = base.Region;
 const Ident = base.Ident;
-const FunctionArgs = base.FunctionArgs;
 
 /// When storing optional indices/values where 0 is a valid value, we add this offset
 /// to distinguish "value is 0" from "value is null". This is a common pattern when
