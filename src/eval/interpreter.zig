@@ -13162,6 +13162,23 @@ pub const Interpreter = struct {
                 return error.Crash;
             }
             return dest;
+        } else if (layout_val.tag == .tag_union) {
+            // Tag union layout with proper variant info - for recursive types like Nat := [Zero, Suc(Box(Nat))]
+            var dest = try self.pushRaw(layout_val, 0, rt_var);
+            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+            if (dest.ptr) |base_ptr| {
+                const ptr_u8: [*]u8 = @ptrCast(base_ptr);
+                // Clear the entire payload area first (ZST variant has no payload but we still need to clear)
+                const total_size = self.runtime_layout_store.layoutSize(layout_val);
+                if (total_size > 0) {
+                    @memset(ptr_u8[0..total_size], 0);
+                }
+                tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(tag_index));
+            }
+            dest.is_initialized = true;
+            return dest;
         }
         self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
         return error.Crash;
