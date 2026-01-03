@@ -1016,8 +1016,18 @@ const CoverageSummaryStep = struct {
 
     /// Minimum required coverage percentage. Build fails if coverage drops below this.
     /// This threshold should be gradually increased as more tests are added.
-    /// CI runs coverage on macOS where kcov works correctly with Zig's Mach-O format.
-    const MIN_COVERAGE_PERCENT: f64 = 10.0;
+    ///
+    /// Coverage is supported on:
+    /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
+    /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
+    ///
+    /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
+    /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
+    /// .debug_line section" when parsing user code compilation units, while stdlib
+    /// CUs parse successfully. This causes kcov to find only stdlib files, not user
+    /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
+    /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
+    const MIN_COVERAGE_PERCENT: f64 = 28.0;
 
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
