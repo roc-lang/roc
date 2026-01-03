@@ -352,10 +352,10 @@ pub const Payload = extern union {
         receiver: u32, // CIR.Expr.Idx
         field_name: u32, // Ident.Idx
         /// Packed (from LSB to MSB):
-        /// - bits 0-11: region_idx into diag_region_data (12 bits, max 4K)
-        /// - bit 12: has_args flag
-        /// - bits 13-23: args_start (11 bits, max 2K)
-        /// - bits 24-31: args_len (8 bits, max 255)
+        /// - bits 0-9: region_idx into diag_region_data (10 bits, max 1K)
+        /// - bit 10: has_args flag
+        /// - bits 11-26: args_start (16 bits, max 64K)
+        /// - bits 27-31: args_len (5 bits, max 31)
         packed_region_and_args: u32,
     };
 

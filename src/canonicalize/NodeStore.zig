@@ -775,11 +775,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const p = payload.expr_dot_access;
-            // Unpack: region_idx (12 bits), has_args (1 bit), args_start (11 bits), args_len (8 bits)
-            const region_idx: u32 = p.packed_region_and_args & 0xFFF;
-            const has_args: bool = ((p.packed_region_and_args >> 12) & 1) != 0;
-            const args_start: u32 = (p.packed_region_and_args >> 13) & 0x7FF;
-            const args_len: u32 = (p.packed_region_and_args >> 24) & 0xFF;
+            // Unpack: region_idx (10 bits), has_args (1 bit), args_start (16 bits), args_len (5 bits)
+            const region_idx: u32 = p.packed_region_and_args & 0x3FF;
+            const has_args: bool = ((p.packed_region_and_args >> 10) & 1) != 0;
+            const args_start: u32 = (p.packed_region_and_args >> 11) & 0xFFFF;
+            const args_len: u32 = (p.packed_region_and_args >> 27) & 0x1F;
 
             const field_name_region = store.diag_region_data.items.items[region_idx];
             const args_span = if (has_args)
@@ -823,6 +823,7 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     _ = try store.int_values.append(store.gpa, value_as_i128);
 
     var node = store.nodes.get(node_idx);
+    node.tag = .expr_num;
     node.setPayload(.{ .expr_num = .{
         .kind = @intFromEnum(num_kind),
         .val_kind = @intFromEnum(value.kind),
@@ -849,6 +850,7 @@ pub fn replaceExprWithZeroArgumentTag(
     const packed_vars = (@as(u32, @intFromEnum(ext_var)) << 16) | @as(u32, @intFromEnum(variant_var));
 
     var node = store.nodes.get(node_idx);
+    node.tag = .expr_zero_argument_tag;
     node.setPayload(.{ .expr_zero_argument_tag = .{
         .closure_name = @bitCast(closure_name),
         .packed_vars = packed_vars,
@@ -1745,16 +1747,17 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_dot_access;
             // Store region in diag_region_data
             const region_idx: u32 = @intCast(store.diag_region_data.len());
+            std.debug.assert(region_idx <= 0x3FF); // 10 bits max
             _ = try store.diag_region_data.append(store.gpa, e.field_name_region);
 
-            // Pack: region_idx (12 bits), has_args (1 bit), args_start (11 bits), args_len (8 bits)
-            var packed_data: u32 = region_idx & 0xFFF;
+            // Pack: region_idx (10 bits), has_args (1 bit), args_start (16 bits), args_len (5 bits)
+            var packed_data: u32 = region_idx & 0x3FF;
             if (e.args) |args| {
-                std.debug.assert(args.span.start <= 0x7FF); // 11 bits max
-                std.debug.assert(args.span.len <= 0xFF); // 8 bits max
-                packed_data |= (1 << 12); // has_args flag
-                packed_data |= ((args.span.start & 0x7FF) << 13);
-                packed_data |= ((args.span.len & 0xFF) << 24);
+                std.debug.assert(args.span.start <= 0xFFFF); // 16 bits max
+                std.debug.assert(args.span.len <= 0x1F); // 5 bits max
+                packed_data |= (1 << 10); // has_args flag
+                packed_data |= ((args.span.start & 0xFFFF) << 11);
+                packed_data |= ((args.span.len & 0x1F) << 27);
             }
             node.setPayload(.{ .expr_dot_access = .{
                 .receiver = @intFromEnum(e.receiver),
