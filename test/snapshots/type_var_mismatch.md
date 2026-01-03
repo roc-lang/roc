@@ -23,21 +23,19 @@ process = |list| {
 main! = |_| {}
 ~~~
 # EXPECTED
-MISSING METHOD - type_var_mismatch.md:7:9:7:11
+TYPE MISMATCH - type_var_mismatch.md:7:9:7:11
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **type_var_mismatch.md:7:9:7:11:**
 ```roc
 	item = 42
 ```
 	       ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     item
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
