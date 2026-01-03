@@ -2282,13 +2282,14 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        // Get the region of the number literal
-        const num_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.fn_var)));
-        const num_region_info = self.module_env.calcRegionInfo(num_region.*);
+        // Get the region of the number literal from the num_literal info
+        const num_literal = data.num_literal.?;
+        const num_region = num_literal.region;
+        const num_region_info = self.module_env.calcRegionInfo(num_region);
 
         // Get the region of the dispatcher (the type that was expected)
-        // This might be different if the type came from somewhere else
-        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var)));
+        // This might be different if the type came from somewhere else (e.g., a type annotation)
+        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
 
         try report.document.addReflowingText("This number is being used where a non-number type is needed:");
         try report.document.addLineBreak();
@@ -2306,7 +2307,7 @@ pub const ReportBuilder = struct {
         if (dispatcher_region.start.offset != num_region.start.offset or
             dispatcher_region.end.offset != num_region.end.offset)
         {
-            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region.*);
+            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region);
             try report.document.addReflowingText("The type was determined to be non-numeric here:");
             try report.document.addLineBreak();
 
