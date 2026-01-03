@@ -1641,8 +1641,9 @@ test "check type - for" {
 
 test "check type - for mismatch" {
     const source =
+        \\main : I64
         \\main = {
-        \\  var result = 0
+        \\  var result = 0.I64
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1652,7 +1653,7 @@ test "check type - for mismatch" {
     try checkTypesModule(
         source,
         .fail_first,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
