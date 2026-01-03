@@ -2687,3 +2687,17 @@ test "issue 8851: chained field access after local dispatch is idempotent" {
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
 }
+
+test "issue 8894: typed integer literal formats correctly" {
+    // Typed integer literals like 0.F or 123.U64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 0.F", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 0.F\n", result);
+}
+
+test "issue 8894: typed frac literal formats correctly" {
+    // Typed frac literals like 3.14.F64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
