@@ -938,8 +938,9 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .apply = .{
             .name = rand_ident_idx(),
+            // external: module_idx (14 bits), target_node_idx (16 bits)
             .base = .{ .external = .{
-                .module_idx = rand_idx(CIR.Import.Idx),
+                .module_idx = @enumFromInt(rand.random().int(u14)),
                 .target_node_idx = rand.random().int(u16),
             } },
             .args = CIR.TypeAnno.Span{ .span = rand_span() },
@@ -976,8 +977,9 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .lookup = .{
             .name = rand_ident_idx(),
+            // external: module_idx (14 bits), target_node_idx (16 bits)
             .base = .{ .external = .{
-                .module_idx = rand_idx(CIR.Import.Idx),
+                .module_idx = @enumFromInt(rand.random().int(u14)),
                 .target_node_idx = rand.random().int(u16),
             } },
         },

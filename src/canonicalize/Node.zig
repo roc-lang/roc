@@ -115,7 +115,6 @@ pub const Payload = extern union {
 
     // Type Annotations
     ty_apply: TyApply,
-    ty_apply_external: TyApplyExternal,
     ty_rigid_var: TyRigidVar,
     ty_lookup: TyLookup,
     ty_underscore: TyUnderscore,
@@ -563,19 +562,14 @@ pub const Payload = extern union {
 
     // Type Annotation payload types
     pub const TyApply = extern struct {
-        /// Packed: local/external discriminant (1 bit) and data (31 bits)
-        local_or_external: u32,
+        name: u32, // Ident.Idx
         /// Packed: args_start (20 bits), args_len (12 bits)
         packed_args: u32,
-        /// For external: additional module info
-        external_data: u32,
-    };
-
-    pub const TyApplyExternal = extern struct {
-        module_idx: u32, // CIR.Import.Idx
-        target_node_idx: u32,
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
+        /// Packed: tag (2 bits in high), data (30 bits in low)
+        /// - tag 0 (builtin): builtin_type in low 8 bits
+        /// - tag 1 (local): decl_idx in low 30 bits
+        /// - tag 2 (external): module_idx (low 14 bits), target_node_idx (bits 14-29)
+        packed_base: u32,
     };
 
     pub const TyRigidVar = extern struct {
@@ -585,10 +579,12 @@ pub const Payload = extern union {
     };
 
     pub const TyLookup = extern struct {
-        /// Packed: local/external discriminant (1 bit) and data (31 bits)
-        local_or_external: u32,
-        /// For external: module info
-        external_data: u32,
+        name: u32, // Ident.Idx
+        /// Packed: tag (2 bits in high), data (30 bits in low)
+        /// - tag 0 (builtin): builtin_type in low 8 bits
+        /// - tag 1 (local): decl_idx in low 30 bits
+        /// - tag 2 (external): module_idx (low 14 bits), target_node_idx (bits 14-29)
+        packed_base: u32,
         _unused: u32,
     };
 

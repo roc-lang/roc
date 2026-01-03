@@ -1202,32 +1202,24 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
 
     switch (node.tag) {
         .ty_apply => {
-            const p = payload.raw;
-            const name: Ident.Idx = @bitCast(p.data_1);
-            const args_start = p.data_2;
-
-            const extra_data = store.extra_data.items.items[p.data_3..];
-            const args_len = extra_data[0];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
-            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
-                switch (base_enum) {
-                    .builtin => {
-                        break :blk .{ .builtin = @enumFromInt(extra_data[2]) };
-                    },
-                    .local => {
-                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[2]) } };
-                    },
-                    .external => {
-                        break :blk .{ .external = .{
-                            .module_idx = @enumFromInt(extra_data[2]),
-                            .target_node_idx = @intCast(extra_data[3]),
-                        } };
-                    },
-                }
+            const p = payload.ty_apply;
+            // Unpack args: start (20 bits), len (12 bits)
+            const args_start: u32 = p.packed_args & 0xFFFFF;
+            const args_len: u32 = (p.packed_args >> 20) & 0xFFF;
+            // Unpack base: tag (2 bits high), data (30 bits low)
+            const tag: u2 = @intCast((p.packed_base >> 30) & 0x3);
+            const type_base: CIR.TypeAnno.LocalOrExternal = switch (tag) {
+                0 => .{ .builtin = @enumFromInt(p.packed_base & 0xFF) },
+                1 => .{ .local = .{ .decl_idx = @enumFromInt(p.packed_base & 0x3FFFFFFF) } },
+                2 => .{ .external = .{
+                    .module_idx = @enumFromInt(p.packed_base & 0x3FFF),
+                    .target_node_idx = @intCast((p.packed_base >> 14) & 0xFFFF),
+                } },
+                3 => unreachable,
             };
 
             return CIR.TypeAnno{ .apply = .{
-                .name = name,
+                .name = @bitCast(p.name),
                 .base = type_base,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
             } };
@@ -1246,30 +1238,21 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_lookup => {
-            const p = payload.raw;
-            const name: Ident.Idx = @bitCast(p.data_1);
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(p.data_2);
-
-            const extra_data = store.extra_data.items.items[p.data_3..];
-            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
-                switch (base_enum) {
-                    .builtin => {
-                        break :blk .{ .builtin = @enumFromInt(extra_data[0]) };
-                    },
-                    .local => {
-                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[0]) } };
-                    },
-                    .external => {
-                        break :blk .{ .external = .{
-                            .module_idx = @enumFromInt(extra_data[0]),
-                            .target_node_idx = @intCast(extra_data[1]),
-                        } };
-                    },
-                }
+            const p = payload.ty_lookup;
+            // Unpack base: tag (2 bits high), data (30 bits low)
+            const tag: u2 = @intCast((p.packed_base >> 30) & 0x3);
+            const type_base: CIR.TypeAnno.LocalOrExternal = switch (tag) {
+                0 => .{ .builtin = @enumFromInt(p.packed_base & 0xFF) },
+                1 => .{ .local = .{ .decl_idx = @enumFromInt(p.packed_base & 0x3FFFFFFF) } },
+                2 => .{ .external = .{
+                    .module_idx = @enumFromInt(p.packed_base & 0x3FFF),
+                    .target_node_idx = @intCast((p.packed_base >> 14) & 0xFFFF),
+                } },
+                3 => unreachable,
             };
 
             return CIR.TypeAnno{ .lookup = .{
-                .name = name,
+                .name = @bitCast(p.name),
                 .base = type_base,
             } };
         },
@@ -2346,26 +2329,19 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 
     switch (typeAnno) {
         .apply => |a| {
-            const ed_start = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, a.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(a.base))));
-            switch (a.base) {
-                .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
-                },
-                .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
-                },
-                .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
-                },
-            }
-
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(a.name),
-                .data_2 = a.args.span.start,
-                .data_3 = @intCast(ed_start),
+            // Pack args: start (20 bits), len (12 bits)
+            const packed_args = (a.args.span.start & 0xFFFFF) | ((a.args.span.len & 0xFFF) << 20);
+            // Pack base: tag (2 bits high), data (30 bits low)
+            const packed_base: u32 = switch (a.base) {
+                .builtin => |builtin_type| @intFromEnum(builtin_type) | (0 << 30),
+                .local => |local| (@intFromEnum(local.decl_idx) & 0x3FFFFFFF) | (1 << 30),
+                .external => |ext| (@intFromEnum(ext.module_idx) & 0x3FFF) |
+                    ((@as(u32, ext.target_node_idx) & 0xFFFF) << 14) | (2 << 30),
+            };
+            node.setPayload(.{ .ty_apply = .{
+                .name = @bitCast(a.name),
+                .packed_args = packed_args,
+                .packed_base = packed_base,
             } });
             node.tag = .ty_apply;
         },
@@ -2394,24 +2370,17 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.tag = .ty_underscore;
         },
         .lookup => |t| {
-            const ed_start = store.extra_data.len();
-            switch (t.base) {
-                .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
-                },
-                .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
-                },
-                .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
-                },
-            }
-
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(t.name),
-                .data_2 = @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base))),
-                .data_3 = @intCast(ed_start),
+            // Pack base: tag (2 bits high), data (30 bits low)
+            const packed_base: u32 = switch (t.base) {
+                .builtin => |builtin_type| @intFromEnum(builtin_type) | (0 << 30),
+                .local => |local| (@intFromEnum(local.decl_idx) & 0x3FFFFFFF) | (1 << 30),
+                .external => |ext| (@intFromEnum(ext.module_idx) & 0x3FFF) |
+                    ((@as(u32, ext.target_node_idx) & 0xFFFF) << 14) | (2 << 30),
+            };
+            node.setPayload(.{ .ty_lookup = .{
+                .name = @bitCast(t.name),
+                .packed_base = packed_base,
+                ._unused = 0,
             } });
             node.tag = .ty_lookup;
         },
