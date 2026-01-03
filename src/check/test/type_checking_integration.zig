@@ -99,7 +99,8 @@ test "check type - number annotation mismatch with string" {
         \\x : Str
         \\x = 42
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - i64 annotation with fractional literal passes type checking" {
@@ -115,12 +116,11 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 
 test "check type - string plus number should fail" {
     // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
-    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
-    // The plus dispatch on Str also fails with MISSING METHOD.
+    // gets applied to Str. Since Str doesn't have from_numeral, we get TYPE MISMATCH.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "MISSING METHOD");
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
 
 test "check type - string plus string should fail (no plus method)" {
@@ -242,7 +242,8 @@ test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected (first elem determines list type)
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // number requirements //
@@ -564,7 +565,8 @@ test "check type - def - func with annotation 2" {
     ;
     // The type annotation says _a is unconstrained, but the implementation returns
     // a numeric literal which requires from_numeral method. This is a type error.
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where unconstrained type is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - def - nested lambda" {
@@ -722,7 +724,8 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 42 used where Str is expected (function type unified from both calls)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -758,7 +761,8 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 15 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // nominal types //
@@ -878,7 +882,8 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -956,7 +961,8 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if 5 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 5 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -964,7 +970,8 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -979,21 +986,24 @@ test "check type - if else - different branch types 1" {
     const source =
         \\x = if True "true" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected (first branch type)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // match
@@ -1028,7 +1038,8 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 100 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // unary not
@@ -1201,10 +1212,11 @@ test "check type - record - update fail" {
         \\
         \\updated = set_data({ data: "hello" }, 10)
     ;
+    // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
@@ -1463,7 +1475,8 @@ test "check type - expect not bool" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // crash //
