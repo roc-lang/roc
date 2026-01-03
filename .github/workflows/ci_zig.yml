@@ -267,12 +267,9 @@ jobs:
       - name: Parser Code Coverage
         if: matrix.os == 'ubuntu-24.04-arm'
         run: |
-          # Build kcov and the test binary
-          zig build build-coverage
-
-          echo "=== Running coverage with kcov ==="
-          mkdir -p kcov-output/parser
-          zig-out/bin/kcov --include-pattern=/src/parse/ kcov-output/parser zig-out/bin/parse_unit_coverage
+          # Build kcov and the test binary via the coverage step
+          # (coverage step runs kcov and generates the report)
+          zig build coverage
 
           echo "=== Coverage summary ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
