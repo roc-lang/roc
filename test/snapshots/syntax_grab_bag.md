@@ -269,6 +269,9 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
+TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
+MISSING METHOD - syntax_grab_bag.md:176:12:176:22
++ - :0:0:0:0
 UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
@@ -974,6 +977,32 @@ This argument has the type:
 But `add_one` needs the first argument to be:
 
     U64
+
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**syntax_grab_bag.md:146:15:146:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+Other code expects this to have the type:
+
+    Str
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**syntax_grab_bag.md:176:12:176:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    Str
+
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:

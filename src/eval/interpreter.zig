@@ -11976,7 +11976,9 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-                const layout_val = try self.getRuntimeLayout(rt_var);
+                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
+                // This ensures we get the actual tag union layout instead of a box wrapper.
+                const layout_val = try self.getRuntimeLayout(resolved.var_);
 
                 if (layout_val.tag == .scalar) {
                     // No payload union - just set discriminant
@@ -11990,6 +11992,10 @@ pub const Interpreter = struct {
                         self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
                         return error.Crash;
                     }
+                } else if (layout_val.tag == .zst) {
+                    // Zero-sized tag union (single variant with no payload) - just push ZST value
+                    const dest = try self.pushRaw(layout_val, 0, rt_var);
+                    try value_stack.push(dest);
                 } else if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;

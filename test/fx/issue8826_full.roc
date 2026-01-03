@@ -249,7 +249,7 @@ get_next_token = |file, index| {
 
 format_error : List(U8), Try(TokenContents, TokenizerError), U64, List(Str) -> Str
 format_error = |code, result, index, possibilities| {
-    (line, col) = code.sublist({start: 0, len: index}).fold((1u64, 1u64), |(l, c), char| {
+    (line, col) = code.sublist({start: 0, len: index}).fold((1.U64, 1.U64), |(l, c), char| {
         if char == '\n' {
             (l+1, 1)
         } else {

@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» -2i32.until(2i32)
-» 1i32.until(1i32)
-» 3i32.until(1i32)
+» -2.I32.until(2.I32)
+» 1.I32.until(1.I32)
+» 3.I32.until(1.I32)
 ~~~
 # OUTPUT
 [-2, -1, 0, 1]

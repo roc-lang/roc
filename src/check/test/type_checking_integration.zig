@@ -21,14 +21,24 @@ test "check type - num - unbound" {
 
 test "check type - num - int suffix 1" {
     const source =
-        \\10u8
+        \\{
+        \\  x : U8
+        \\  x = 10
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "U8");
 }
 
 test "check type - num - int suffix 2" {
     const source =
-        \\10i128
+        \\{
+        \\  x : I128
+        \\  x = 10
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "I128");
 }
@@ -58,21 +68,36 @@ test "check type - num - float" {
 
 test "check type - num - float suffix 1" {
     const source =
-        \\10.1f32
+        \\{
+        \\  x : F32
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
 }
 
 test "check type - num - float suffix 2" {
     const source =
-        \\10.1f64
+        \\{
+        \\  x : F64
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
 }
 
 test "check type - num - float suffix 3" {
     const source =
-        \\10.1dec
+        \\{
+        \\  x : Dec
+        \\  x = 10.1
+        \\
+        \\  x
+        \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
 }
@@ -99,7 +124,8 @@ test "check type - number annotation mismatch with string" {
         \\x : Str
         \\x = 42
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - i64 annotation with fractional literal passes type checking" {
@@ -114,9 +140,9 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 }
 
 test "check type - string plus number should fail" {
-    // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
-    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
-    // The plus dispatch on Str also fails with MISSING METHOD.
+    // Str + number: the `+` operator desugars to calling the `.plus` method on the left operand.
+    // Since Str doesn't have a `plus` method, we get MISSING METHOD before even checking
+    // the from_numeral constraint on the number literal.
     const source =
         \\x = "hello" + 123
     ;
@@ -134,35 +160,52 @@ test "check type - string plus string should fail (no plus method)" {
 
 test "check type - binop operands must have same type - I64 plus I32 should fail" {
     const source =
-        \\x = 1i64 + 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a + b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 minus I32 should fail" {
     const source =
-        \\x = 1i64 - 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a - b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - I64 times I32 should fail" {
     const source =
-        \\x = 1i64 * 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a * b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands must have same type - F64 divide F32 should fail" {
     const source =
-        \\x = 1.0f64 / 2.0f32
+        \\a : F64
+        \\a = 1.0
+        \\b : F32
+        \\b = 2.0
+        \\x = a / b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binop operands same type works - I64 plus I64" {
     const source =
-        \\x = 1i64 + 2i64
+        \\x : I64
+        \\x = 1 + 2
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
@@ -177,7 +220,8 @@ test "check type - binop operands same type works - unbound plus unbound" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -185,14 +229,22 @@ test "check type - binop operands same type works - unbound plus unbound" {
 
 test "check type - is_eq operands must have same type - I64 eq I32 should fail" {
     const source =
-        \\x = 1i64 == 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a == b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - comparison operands must have same type - I64 lt I32 should fail" {
     const source =
-        \\x = 1i64 < 2i32
+        \\a : I64
+        \\a = 1
+        \\b : I32
+        \\b = 2
+        \\x = a < b
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
@@ -226,14 +278,24 @@ test "check type - list - same elems 2" {
 
 test "check type - list - 1st elem more specific coreces 2nd elem" {
     const source =
-        \\[100u64, 200]
+        \\{
+        \\  x : U64
+        \\  x = 100
+        \\
+        \\  [x, 200]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U64)");
 }
 
 test "check type - list - 2nd elem more specific coreces 1st elem" {
     const source =
-        \\[100, 200u32]
+        \\{
+        \\  x : U32
+        \\  x = 200
+        \\
+        \\  [100, x]
+        \\}
     ;
     try checkTypesExpr(source, .pass, "List(U32)");
 }
@@ -242,7 +304,8 @@ test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected (first elem determines list type)
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // number requirements //
@@ -564,7 +627,8 @@ test "check type - def - func with annotation 2" {
     ;
     // The type annotation says _a is unconstrained, but the implementation returns
     // a numeric literal which requires from_numeral method. This is a type error.
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where unconstrained type is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - def - nested lambda" {
@@ -577,7 +641,8 @@ test "check type - def - nested lambda" {
         \\d
         \\  where [
         \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
-        \\    d.plus : d, d -> d,
+        \\    d.plus : d, e -> d,
+        \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -722,7 +787,8 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 42 used where Str is expected (function type unified from both calls)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -758,7 +824,8 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 15 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // nominal types //
@@ -878,7 +945,8 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -956,7 +1024,8 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if 5 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 5 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -964,7 +1033,8 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -979,21 +1049,24 @@ test "check type - if else - different branch types 1" {
     const source =
         \\x = if True "true" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected (first branch type)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // match
@@ -1028,7 +1101,8 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 100 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // unary not
@@ -1073,9 +1147,21 @@ test "check type - unary minus mismatch" {
 
 test "check type - binops math plus" {
     const source =
-        \\x = 10 + 10u32
+        \\y : U32
+        \\y = 10
+        \\x = 10 + y
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "U32");
+    // With flexible binops, the lhs stays polymorphic until constraint resolution
+    try checkTypesModule(
+        source,
+        .{ .pass = .last_def },
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, U32 -> a,
+        \\  ]
+        ,
+    );
 }
 
 test "check type - binops math sub" {
@@ -1088,7 +1174,8 @@ test "check type - binops math sub" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.minus : a, a -> a,
+        \\    a.minus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -1096,9 +1183,14 @@ test "check type - binops math sub" {
 
 test "check type - binops ord" {
     const source =
-        \\x = 10.0f32 > 15
+        \\{
+        \\  a : F32
+        \\  a = 10.0
+        \\
+        \\  a > 15
+        \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+    try checkTypesExpr(source, .pass, "Bool");
 }
 
 test "check type - binops and" {
@@ -1201,10 +1293,11 @@ test "check type - record - update fail" {
         \\
         \\updated = set_data({ data: "hello" }, 10)
     ;
+    // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
@@ -1294,13 +1387,15 @@ test "check type - patterns num" {
 }
 
 test "check type - patterns int mismatch" {
+    // Test that matching a tag against incompatible tag patterns fails
     const source =
         \\{
-        \\  x = 10u8
+        \\  x : [Ok(I64), Err(Str)]
+        \\  x = Ok(42)
         \\
         \\  match(x) {
-        \\    10u32 => "true",
-        \\    _ => "false",
+        \\    Some(_) => "found",
+        \\    None => "empty",
         \\  }
         \\}
     ;
@@ -1310,10 +1405,13 @@ test "check type - patterns int mismatch" {
 test "check type - patterns frac 1" {
     const source =
         \\{
-        \\  match(20) {
-        \\    10dec as x => x,
+        \\  result : Dec
+        \\  result = match(20) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "Dec");
@@ -1322,10 +1420,13 @@ test "check type - patterns frac 1" {
 test "check type - patterns frac 2" {
     const source =
         \\{
-        \\  match(10) {
-        \\    10f32 as x => x,
+        \\  result : F32
+        \\  result = match(10) {
+        \\    10 as x => x,
         \\    _ => 15,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F32");
@@ -1334,11 +1435,14 @@ test "check type - patterns frac 2" {
 test "check type - patterns frac 3" {
     const source =
         \\{
-        \\  match(50) {
+        \\  result : F64
+        \\  result = match(50) {
         \\    10 as x => x,
-        \\    15f64 as x => x,
+        \\    15 as x => x,
         \\    _ => 20,
         \\  }
+        \\
+        \\  result
         \\}
     ;
     try checkTypesExpr(source, .pass, "F64");
@@ -1424,7 +1528,8 @@ test "check type - var reassignment" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -1463,7 +1568,8 @@ test "check type - expect not bool" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // crash //
@@ -1480,10 +1586,16 @@ test "check type - crash" {
         \\  x + y
         \\}
     ;
+    // With flexible binops, lhs stays polymorphic
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "U64",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, U64 -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1507,7 +1619,12 @@ test "check type - dbg" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "main" } },
-        "U64",
+        \\a
+        \\  where [
+        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
+        \\    a.plus : a, U64 -> a,
+        \\  ]
+        ,
     );
 }
 
@@ -1529,7 +1646,8 @@ test "check type - for" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -1537,8 +1655,9 @@ test "check type - for" {
 
 test "check type - for mismatch" {
     const source =
+        \\main : I64
         \\main = {
-        \\  var result = 0u8
+        \\  var result = 0.I64
         \\  for x in ["a", "b", "c"] {
         \\    result = result + x
         \\  }
@@ -1547,7 +1666,7 @@ test "check type - for mismatch" {
     ;
     try checkTypesModule(
         source,
-        .fail,
+        .fail_first,
         "TYPE MISMATCH",
     );
 }
@@ -1926,7 +2045,8 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, c -> a,
+        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -1985,7 +2105,8 @@ test "check type - comprehensive - static dispatch with multiple methods 2" {
         \\Container(b)
         \\  where [
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, b -> b,
+        \\    b.plus : b, c -> b,
+        \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -1999,7 +2120,8 @@ test "check type - segfault minimal 1 - just annotated plus" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(1u32, 2u32)
+        \\func : U32
+        \\func = my_plus(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2017,7 +2139,8 @@ test "check type - segfault minimal 2 - plus with inferred caller" {
         \\
         \\add_two = |a, b| my_plus(a, b)
         \\
-        \\func = add_two(1u32, 2u32)
+        \\func : U32
+        \\func = add_two(1, 2)
     ;
     try checkTypesModule(
         source,
@@ -2033,7 +2156,8 @@ test "check type - segfault minimal 3a - nested direct - SEGFAULTS" {
         \\my_plus : a, a -> a where [a.plus : a, a -> a]
         \\my_plus = |x, y| x + y
         \\
-        \\func = my_plus(my_plus(1u32, 2u32), 3u32)
+        \\func : U32
+        \\func = my_plus(my_plus(1, 2), 3)
     ;
     try checkTypesModule(
         source,
@@ -2051,7 +2175,8 @@ test "check type - segfault minimal 3b - nested in lambda - SEGFAULTS" {
         \\
         \\add_three = |a, b, c| my_plus(my_plus(a, b), c)
         \\
-        \\func = add_three(1u32, 2u32, 3u32)
+        \\func : U32
+        \\func = add_three(1, 2, 3)
     ;
     try checkTypesModule(
         source,
@@ -2073,9 +2198,9 @@ test "check type - segfault minimal 4 - full original - SEGFAULTS" {
         \\
         \\# Annotated function using inferred one
         \\compute : U32 -> U32
-        \\compute = |x| add_three(x, 1u32, 2u32)
+        \\compute = |x| add_three(x, 1, 2)
         \\
-        \\func = compute(10u32)
+        \\func = compute(10)
     ;
     try checkTypesModule(
         source,
@@ -2208,11 +2333,14 @@ test "check type - comprehensive: polymorphism + lambdas + dispatch + annotation
         \\    a.plus : a, a -> a,
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
-        \\    b.plus : b, b -> b,
-        \\    b.plus : b, b -> b,
+        \\    b.plus : b, h -> b,
+        \\    b.plus : b, i -> b,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
-        \\    c.plus : c, c -> c,
+        \\    c.plus : c, j -> c,
         \\    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),
+        \\    h.from_numeral : Numeral -> Try(h, [InvalidNumeral(Str)]),
+        \\    i.from_numeral : Numeral -> Try(i, [InvalidNumeral(Str)]),
+        \\    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -2413,10 +2541,11 @@ test "List.fold works as builtin associated item" {
     try checkTypesModule(
         source,
         .{ .pass = .{ .def = "x" } },
-        \\item
+        \\state
         \\  where [
         \\    item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)]),
-        \\    item.plus : item, item -> item,
+        \\    state.from_numeral : Numeral -> Try(state, [InvalidNumeral(Str)]),
+        \\    state.plus : state, item -> state,
         \\  ]
         ,
     );
@@ -2542,7 +2671,16 @@ test "check type - static dispatch method type mismatch - REGRESSION TEST" {
         \\fn : a, a -> Bool where [a.is_eq : a, a -> Bool]
         \\fn = |x, y| x.is_eq(y)
         \\
-        \\result = fn(1u64, 2u64) == fn(3u64, 4u64)
+        \\a : U64
+        \\a = 1
+        \\b : U64
+        \\b = 2
+        \\c : U64
+        \\c = 3
+        \\d : U64
+        \\d = 4
+        \\
+        \\result = fn(a, b) == fn(c, d)
     ;
 
     // This should pass - both calls use the same types
@@ -2910,7 +3048,8 @@ test "check type - lambda capturing top-level constant with plus - mono_pure_lam
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -2929,7 +3068,8 @@ test "check type - simple function call should have return type" {
         \\a
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -2957,12 +3097,12 @@ test "check type - range inferred" {
         .{ .pass = .last_def },
         \\a, a -> List(a)
         \\  where [
-        \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.is_lt : a, a -> Bool,
         \\    a.is_lte : a, a -> Bool,
         \\    a.minus : a, a -> a,
-        \\    a.plus : a, a -> a,
+        \\    a.plus : a, b -> a,
         \\    a.to_u64 : a -> U64,
+        \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );

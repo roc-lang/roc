@@ -424,7 +424,7 @@ Builtin :: [].{
 
 		U8 :: [].{
 			default : () -> U8
-			default = || 0u8
+			default = || 0
 
 			to_str : U8 -> Str
 			is_zero : U8 -> Bool
@@ -498,7 +498,7 @@ Builtin :: [].{
 
 		I8 :: [].{
 			default : () -> I8
-			default = || 0i8
+			default = || 0
 
 			to_str : I8 -> Str
 			is_zero : I8 -> Bool
@@ -580,7 +580,7 @@ Builtin :: [].{
 
 		U16 :: [].{
 			default : () -> U16
-			default = || 0u16
+			default = || 0
 
 			to_str : U16 -> Str
 			is_zero : U16 -> Bool
@@ -656,7 +656,7 @@ Builtin :: [].{
 
 		I16 :: [].{
 			default : () -> I16
-			default = || 0i16
+			default = || 0
 
 			to_str : I16 -> Str
 			is_zero : I16 -> Bool
@@ -739,7 +739,7 @@ Builtin :: [].{
 
 		U32 :: [].{
 			default : () -> U32
-			default = || 0u32
+			default = || 0
 
 			to_str : U32 -> Str
 			is_zero : U32 -> Bool
@@ -817,7 +817,7 @@ Builtin :: [].{
 
 		I32 :: [].{
 			default : () -> I32
-			default = || 0i32
+			default = || 0
 
 			to_str : I32 -> Str
 			is_zero : I32 -> Bool
@@ -902,7 +902,7 @@ Builtin :: [].{
 
 		U64 :: [].{
 			default : () -> U64
-			default = || 0u64
+			default = || 0
 
 			to_str : U64 -> Str
 			is_zero : U64 -> Bool
@@ -982,7 +982,7 @@ Builtin :: [].{
 
 		I64 :: [].{
 			default : () -> I64
-			default = || 0i64
+			default = || 0
 
 			to_str : I64 -> Str
 			is_zero : I64 -> Bool
@@ -1067,7 +1067,7 @@ Builtin :: [].{
 
 		U128 :: [].{
 			default : () -> U128
-			default = || 0u128
+			default = || 0
 
 			to_str : U128 -> Str
 			is_zero : U128 -> Bool
@@ -1151,7 +1151,7 @@ Builtin :: [].{
 
 		I128 :: [].{
 			default : () -> I128
-			default = || 0i128
+			default = || 0
 
 			to_str : I128 -> Str
 			is_zero : I128 -> Bool
@@ -1239,7 +1239,7 @@ Builtin :: [].{
 
 		Dec :: [].{
 			default : () -> Dec
-			default = || 0.0dec
+			default = || 0.0
 
 			to_str : Dec -> Str
 			is_zero : Dec -> Bool
@@ -1323,7 +1323,7 @@ Builtin :: [].{
 
 		F32 :: [].{
 			default : () -> F32
-			default = || 0.0f32
+			default = || 0.0
 
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
@@ -1392,7 +1392,7 @@ Builtin :: [].{
 
 		F64 :: [].{
 			default : () -> F64
-			default = || 0.0f64
+			default = || 0.0
 
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool

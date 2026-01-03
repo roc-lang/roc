@@ -286,15 +286,21 @@ const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
+/// Counts of errors and warnings from type checking.
+const ProblemCounts = struct {
+    error_count: usize,
+    warning_count: usize,
+};
+
 /// Render type checking problems as diagnostic reports to stderr.
-/// Returns the count of errors (fatal/runtime_error severity).
+/// Returns counts of errors and warnings.
 /// This is shared between rocCheck and rocRun to ensure consistent error reporting.
 fn renderTypeProblems(
     ctx: *CliContext,
     checker: *Check,
     module_env: *ModuleEnv,
     filename: []const u8,
-) usize {
+) ProblemCounts {
     const stderr = ctx.io.stderr();
 
     var rb = ReportBuilder.init(
@@ -356,7 +362,10 @@ fn renderTypeProblems(
     // Flush stderr to ensure all error output is visible
     ctx.io.flush();
 
-    return error_count;
+    return ProblemCounts{
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
 }
 
 /// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
@@ -1239,6 +1248,12 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
     }
     std.log.debug("Interpreter execution completed", .{});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (shm_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -1565,11 +1580,12 @@ pub const SharedMemoryHandle = struct {
 };
 
 /// Result of setting up shared memory with type checking information.
-/// Contains both the shared memory handle for the compiled modules and
-/// a count of type errors encountered during compilation.
+/// Contains the shared memory handle for the compiled modules and
+/// counts of errors and warnings encountered during compilation.
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     error_count: usize,
+    warning_count: usize,
 };
 
 /// Write data to shared memory for inter-process communication.
@@ -1914,6 +1930,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     try app_env.common.calcLineStarts(shm_allocator);
 
     var error_count: usize = 0;
+    var warning_count: usize = 0;
 
     var app_parse_ast = try parse.parse(&app_env.common, ctx.gpa);
     defer app_parse_ast.deinit(ctx.gpa);
@@ -1940,6 +1957,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                     .size = shm.getUsedSize(),
                 },
                 .error_count = error_count,
+                .warning_count = warning_count,
             };
         }
     }
@@ -2231,10 +2249,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Render all type problems (errors and warnings) exactly as roc check would
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    error_count += if (!builtin.is_test)
-        renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path)
-    else
-        0;
+    if (!builtin.is_test) {
+        const problem_counts = renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path);
+        error_count += problem_counts.error_count;
+        warning_count += problem_counts.warning_count;
+    }
 
     app_env_ptr.* = app_env;
 
@@ -2247,6 +2266,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .size = shm.getUsedSize(),
         },
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -2774,6 +2794,8 @@ const CompiledModule = struct {
     is_app: bool,
     /// Number of errors found during compilation (from parsing, canonicalization, type checking)
     error_count: usize,
+    /// Number of warnings found during compilation
+    warning_count: usize,
 };
 
 /// Result of compiling and serializing modules for embedding.
@@ -2784,6 +2806,8 @@ const SerializedModulesResult = struct {
     entry_def_indices: []const u32,
     /// Number of compilation errors encountered
     error_count: usize,
+    /// Number of compilation warnings encountered
+    warning_count: usize,
 };
 
 /// Compile a single module to a ModuleEnv using a regular allocator.
@@ -3043,6 +3067,7 @@ fn compileModuleForSerialization(
         .is_platform_main = false,
         .is_app = false,
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -3053,8 +3078,9 @@ fn compileAndSerializeModulesForEmbedding(
     roc_file_path: []const u8,
     allow_errors: bool,
 ) !SerializedModulesResult {
-    // Track total errors across all modules
+    // Track total errors and warnings across all modules
     var total_error_count: usize = 0;
+    var total_warning_count: usize = 0;
 
     // Load builtin modules
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
@@ -3165,6 +3191,7 @@ fn compileAndSerializeModulesForEmbedding(
             sorted_modules[0..i], // Pass type module names for previously compiled siblings
         );
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         compiled_modules.appendAssumeCapacity(compiled);
         // Store pointer to the env we just appended (safe because we pre-allocated)
         sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
@@ -3193,6 +3220,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_platform_main = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         primary_env_index = @intCast(compiled_modules.items.len);
         try compiled_modules.append(compiled);
     }
@@ -3219,6 +3247,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         app_env_index = @intCast(compiled_modules.items.len);
         if (!has_platform) {
             primary_env_index = app_env_index;
@@ -3423,6 +3452,7 @@ fn compileAndSerializeModulesForEmbedding(
         .bytes = buffer,
         .entry_def_indices = entry_def_indices,
         .error_count = total_error_count,
+        .warning_count = total_warning_count,
     };
 }
 
@@ -4588,6 +4618,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try std.fmt.allocPrint(ctx.arena, "./{s}", .{final_output_path});
 
     try ctx.io.stdout().print("Successfully built {s}\n", .{display_path});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (compile_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Dump linker inputs to a temp directory for debugging linking issues.
@@ -5451,7 +5487,13 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
 
             // Flush before exit
             ctx.io.flush();
-            return error.CheckFailed;
+
+            // Exit with code 1 for errors, code 2 for warnings only
+            if (check_result.error_count > 0) {
+                return error.CheckFailed;
+            } else {
+                std.process.exit(2);
+            }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
