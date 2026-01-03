@@ -775,19 +775,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const p = payload.expr_dot_access;
-            const raw = payload.raw;
-            const extra_start = raw.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
-            const field_name_region = base.Region{
-                .start = .{ .offset = extra_data[0] },
-                .end = .{ .offset = extra_data[1] },
-            };
-            const args_packed = extra_data[2];
-            const args_span = if (args_packed != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(args_packed - OPTIONAL_VALUE_OFFSET);
-                const data_span = packed_span.toDataSpan();
-                break :blk CIR.Expr.Span{ .span = data_span };
-            } else null;
+            // Unpack: region_idx (12 bits), has_args (1 bit), args_start (11 bits), args_len (8 bits)
+            const region_idx: u32 = p.packed_region_and_args & 0xFFF;
+            const has_args: bool = ((p.packed_region_and_args >> 12) & 1) != 0;
+            const args_start: u32 = (p.packed_region_and_args >> 13) & 0x7FF;
+            const args_len: u32 = (p.packed_region_and_args >> 24) & 0xFF;
+
+            const field_name_region = store.diag_region_data.items.items[region_idx];
+            const args_span = if (has_args)
+                CIR.Expr.Span{ .span = .{ .start = args_start, .len = args_len } }
+            else
+                null;
 
             return CIR.Expr{ .e_dot_access = .{
                 .receiver = @enumFromInt(p.receiver),
@@ -1762,20 +1760,23 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
-            const extra_data_idx = store.extra_data.len();
-            _ = try store.extra_data.append(store.gpa, e.field_name_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, e.field_name_region.end.offset);
+            // Store region in diag_region_data
+            const region_idx: u32 = @intCast(store.diag_region_data.len());
+            _ = try store.diag_region_data.append(store.gpa, e.field_name_region);
+
+            // Pack: region_idx (12 bits), has_args (1 bit), args_start (11 bits), args_len (8 bits)
+            var packed_data: u32 = region_idx & 0xFFF;
             if (e.args) |args| {
-                std.debug.assert(FunctionArgs.canFit(args.span));
-                const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                _ = try store.extra_data.append(store.gpa, packed_span.toU32() + OPTIONAL_VALUE_OFFSET);
-            } else {
-                _ = try store.extra_data.append(store.gpa, 0);
+                std.debug.assert(args.span.start <= 0x7FF); // 11 bits max
+                std.debug.assert(args.span.len <= 0xFF); // 8 bits max
+                packed_data |= (1 << 12); // has_args flag
+                packed_data |= ((args.span.start & 0x7FF) << 13);
+                packed_data |= ((args.span.len & 0xFF) << 24);
             }
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.receiver),
-                .data_2 = @bitCast(e.field_name),
-                .data_3 = @intCast(extra_data_idx),
+            node.setPayload(.{ .expr_dot_access = .{
+                .receiver = @intFromEnum(e.receiver),
+                .field_name = @bitCast(e.field_name),
+                .packed_region_and_args = packed_data,
             } });
         },
         .e_runtime_error => |e| {

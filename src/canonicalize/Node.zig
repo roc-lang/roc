@@ -352,8 +352,12 @@ pub const Payload = extern union {
     pub const ExprDotAccess = extern struct {
         receiver: u32, // CIR.Expr.Idx
         field_name: u32, // Ident.Idx
-        /// Packed: args as FunctionArgs (20+12 bits) or 0 if no args
-        packed_args_plus_one: u32,
+        /// Packed (from LSB to MSB):
+        /// - bits 0-11: region_idx into diag_region_data (12 bits, max 4K)
+        /// - bit 12: has_args flag
+        /// - bits 13-23: args_start (11 bits, max 2K)
+        /// - bits 24-31: args_len (8 bits, max 255)
+        packed_region_and_args: u32,
     };
 
     pub const ExprString = extern struct {
