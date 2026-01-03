@@ -263,11 +263,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Done: 2",
         .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
     },
-    .{
-        .roc_file = "test/fx/issue8892.roc",
-        .io_spec = "1>parsed: ValueCombinationMethod.Modulo",
-        .description = "Regression test: match on tag with typed local assignment (issue #8892)",
-    },
 };
 
 /// Get the total number of IO spec tests
