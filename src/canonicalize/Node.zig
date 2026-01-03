@@ -654,9 +654,7 @@ pub const Payload = extern union {
     pub const WhereMethod = extern struct {
         var_: u32, // CIR.TypeAnno.Idx
         method_name: u32, // Ident.Idx
-        /// Packed: args_start (16 bits), args_len (8 bits), ret (8 bits as offset)
-        /// Actually we need full ret idx, so: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
+        method_data_idx: u32, // Index into where_method_data list
     };
 
     pub const WhereAlias = extern struct {

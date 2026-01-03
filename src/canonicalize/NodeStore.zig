@@ -43,6 +43,13 @@ const MatchBranchData = extern struct {
     redundant: u32,      // types.Var
 };
 
+/// Auxiliary data for where_method nodes
+const WhereMethodData = extern struct {
+    args_start: u32,
+    args_len: u32,
+    ret: u32,           // CIR.TypeAnno.Idx
+};
+
 const NodeStore = @This();
 
 gpa: Allocator,
@@ -53,6 +60,7 @@ int_values: collections.SafeList(i128),
 dec_values: collections.SafeList(RocDec),
 def_data: collections.SafeList(DefData), // Specialized list for def node data
 match_branch_data: collections.SafeList(MatchBranchData), // Specialized list for match_branch node data
+where_method_data: collections.SafeList(WhereMethodData), // Specialized list for where_method node data
 diag_region_data: collections.SafeList(Region), // Specialized list for diagnostic regions
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -135,6 +143,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .dec_values = try collections.SafeList(RocDec).initCapacity(gpa, capacity / 32),
         .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 16),
         .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 16),
+        .where_method_data = try collections.SafeList(WhereMethodData).initCapacity(gpa, capacity / 32),
         .diag_region_data = try collections.SafeList(Region).initCapacity(gpa, 64),
         .scratch = try Scratch.init(gpa),
     };
@@ -149,6 +158,7 @@ pub fn deinit(store: *NodeStore) void {
     store.dec_values.deinit(store.gpa);
     store.def_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
+    store.where_method_data.deinit(store.gpa);
     store.diag_region_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -165,6 +175,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.dec_values.relocate(offset);
     store.def_data.relocate(offset);
     store.match_branch_data.relocate(offset);
+    store.where_method_data.relocate(offset);
     store.diag_region_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
@@ -1032,21 +1043,14 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
 
     switch (node.tag) {
         .where_method => {
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
-            const method_name = @as(Ident.Idx, @bitCast(node.data_2));
-
-            const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
-            const ret = @as(CIR.TypeAnno.Idx, @enumFromInt(extra_data[2]));
+            const payload = node.getPayload().where_method;
+            const method_data = store.where_method_data.get(@enumFromInt(payload.method_data_idx));
 
             return CIR.WhereClause{ .w_method = .{
-                .var_ = var_,
-                .method_name = method_name,
-                .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                .ret = ret,
+                .var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(payload.var_)),
+                .method_name = @as(Ident.Idx, @bitCast(payload.method_name)),
+                .args = .{ .span = .{ .start = method_data.args_start, .len = method_data.args_len } },
+                .ret = @as(CIR.TypeAnno.Idx, @enumFromInt(method_data.ret)),
             } };
         },
         .where_alias => {
@@ -2203,20 +2207,26 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         .tag = undefined,
     };
 
-    // Store where clause data in extra_data
-    const extra_data_start = store.extra_data.len();
-
     switch (whereClause) {
         .w_method => |where_method| {
             node.tag = .where_method;
 
-            node.data_1 = @intFromEnum(where_method.var_);
-            node.data_2 = @bitCast(where_method.method_name);
-            node.data_3 = @intCast(extra_data_start);
+            // Store where_method data in the where_method_data list
+            const method_data_idx = @as(u32, @intCast(store.where_method_data.len()));
+            
+            const method_data = WhereMethodData{
+                .args_start = where_method.args.span.start,
+                .args_len = where_method.args.span.len,
+                .ret = @intFromEnum(where_method.ret),
+            };
+            
+            _ = try store.where_method_data.append(store.gpa, method_data);
 
-            _ = try store.extra_data.append(store.gpa, where_method.args.span.start);
-            _ = try store.extra_data.append(store.gpa, where_method.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(where_method.ret));
+            node.setPayload(.{ .where_method = .{
+                .var_ = @intFromEnum(where_method.var_),
+                .method_name = @bitCast(where_method.method_name),
+                .method_data_idx = method_data_idx,
+            } });
         },
         .w_alias => |mod_alias| {
             node.tag = .where_alias;
@@ -3915,6 +3925,7 @@ pub const Serialized = extern struct {
     dec_values: collections.SafeList(RocDec).Serialized,
     def_data: collections.SafeList(DefData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
+    where_method_data: collections.SafeList(WhereMethodData).Serialized,
     diag_region_data: collections.SafeList(Region).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
@@ -3939,6 +3950,8 @@ pub const Serialized = extern struct {
         try self.def_data.serialize(&store.def_data, allocator, writer);
         // Serialize match_branch_data
         try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
+        // Serialize where_method_data
+        try self.where_method_data.serialize(&store.where_method_data, allocator, writer);
         // Serialize diag_region_data
         try self.diag_region_data.serialize(&store.diag_region_data, allocator, writer);
     }
@@ -3959,10 +3972,11 @@ pub const Serialized = extern struct {
         const deserialized_dec_values = self.dec_values.deserialize(base_addr).*;
         const deserialized_def_data = self.def_data.deserialize(base_addr).*;
         const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
-    
+        const deserialized_where_method_data = self.where_method_data.deserialize(base_addr).*;
+        
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
-    
+        
         const deserialized_diag_region_data = self.diag_region_data.deserialize(base_addr).*;
     
         store.* = NodeStore{
@@ -3974,6 +3988,7 @@ pub const Serialized = extern struct {
             .dec_values = deserialized_dec_values,
             .def_data = deserialized_def_data,
             .match_branch_data = deserialized_match_branch_data,
+            .where_method_data = deserialized_where_method_data,
             .diag_region_data = deserialized_diag_region_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
