@@ -4785,17 +4785,19 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
             // Format missing patterns and store in snapshot store for lifecycle management
+            // NOTE: We use self.gpa here (not self.cir.gpa) because snapshots.deinit() uses self.gpa
+            // to free the extra strings. Using different allocators would cause invalid free.
             var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
             for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.cir.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                const formatted = try exhaustive.formatPattern(self.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
                 const idx = try self.snapshots.storeExtraString(formatted);
-                try missing_indices.append(self.cir.gpa, idx);
+                try missing_indices.append(self.gpa, idx);
             }
 
-            _ = try self.problems.appendProblem(self.cir.gpa, .{ .non_exhaustive_match = .{
+            _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_indices.toOwnedSlice(self.cir.gpa),
+                .missing_patterns = try missing_indices.toOwnedSlice(self.gpa),
             } });
         }
 
