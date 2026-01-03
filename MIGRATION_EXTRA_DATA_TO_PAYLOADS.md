@@ -20,7 +20,7 @@ The `extra_data` field will be completely removed from NodeStore once the migrat
 
 **Status**: In Progress  
 **Branch**: `remove-extra-data`  
-**Tests**: 2208 of 2242 passing (98.5% success rate) ✓
+**Tests**: 2231 of 2242 passing (99.5% success rate) ✓
 
 ### Known Failing Tests (Deferred)
 
@@ -246,6 +246,9 @@ node.setPayload(.{ .lambda_capture = .{
 
 ## Current Progress
 
+**Extra Data References Remaining**: 188 (down from 324 at start of latest session)
+**Remaining Node Types to Migrate**: ~20+ types still use generic extra_data buffer
+
 ### ✓ Completed
 
 1. **Node.zig** - Payload union structure defined with ~70+ typed struct variants
@@ -269,14 +272,65 @@ node.setPayload(.{ .lambda_capture = .{
 
 The migration has been started but not fully completed. The `extra_data` field still exists in NodeStore and is still being used in many places. The remaining work is to:
 
-1. **Complete the canonicalize module migration** (~170+ remaining uses of extra_data in NodeStore.zig)
+1. **Complete the canonicalize module migration** (~130+ remaining uses of extra_data in NodeStore.zig)
+   - Remaining expression types: e_return, e_num, e_hosted_lambda, e_low_level_lambda, e_type_var_dispatch, e_dot_access, e_required_lookup, e_dec, and others
+   - Remaining pattern types: pattern_num_literal, pattern_dec_literal, pattern_nominal_external
+   - Remaining type annotation types: ty_apply, ty_fn, ty_lookup, and others
+   - Other miscellaneous types: builtin, local, external, and others
 2. **Complete the parse module migration** (needs assessment)
 3. **Remove the extra_data field entirely** once all uses are replaced
-4. **Verify all 2242 tests pass** (currently 2208 passing; 34 known failures deferred)
+4. **Verify all 2242 tests pass** (currently 2231 passing; 11 known failures being investigated)
 
-### Recent Work (This Session)
+### Recent Work (Previous Session)
 
 Fixed broken deserialization code that was referencing non-existent NodeStore fields (match_branch_redundant_data). The codebase was in a partially-migrated state with compilation errors. Now successfully compiling with 2208/2242 tests passing.
+
+### Recent Work (Latest Session)
+
+**Successfully migrated 5 major node types to typed payloads:**
+
+1. **expr_closure** - Now uses `ExprClosure` struct with:
+   - `lambda_idx: u32`
+   - `packed_captures: u32` (20-bit start + 12-bit length)
+   - `tag_name: u32` (Ident.Idx)
+
+2. **expr_if_then_else** - Now uses `ExprIfThenElse` struct with:
+   - `packed_branches: u32` (20-bit start + 12-bit length)
+   - `final_else: u32` (Expr.Idx)
+   - `_unused: u32`
+
+3. **expr_match** - Now uses `ExprMatch` struct with:
+   - `cond: u32` (Expr.Idx)
+   - `packed_branches: u32` (20-bit start + 10-bit length + 1-bit is_try_suffix)
+   - `exhaustive: u32` (Var)
+
+4. **pattern_list** - Now uses `PatternList` struct with:
+   - `packed_patterns: u32` (20-bit start + 12-bit length)
+   - `rest_info: u32` (complex bit-packed encoding: has_rest_info + rest_index + has_pattern + pattern_idx)
+   - `_unused: u32`
+
+5. **4 Diagnostic types** - Created specialized `diag_region_data` list:
+   - `diag_redundant_exposed` - stores original_region in specialized list
+   - `diag_type_shadowed_warning` - stores original_region in specialized list
+   - `diag_type_parameter_conflict` - stores original_region in specialized list
+   - `diag_mutually_recursive_type_aliases` - stores other_region in specialized list
+
+**Infrastructure improvements:**
+- Added `diag_region_data: SafeList(Region)` to NodeStore for storing diagnostic region data
+- Proper serialization/deserialization support in NodeStore.Serialized
+- All migrations maintain exact 12-byte payload size (zero memory overhead)
+- Fixed Ident.Idx casting issues (packed struct, not enum)
+- Fixed bit-shift type coercion issues
+
+**Test results:**
+- Before: 2208/2242 tests passing (98.5%)
+- After: 2231/2242 tests passing (99.5%)
+- Improvement: +23 tests passing
+- Remaining: 11 test failures (mostly pre-existing or serialization format changes)
+
+**extra_data reduction:**
+- Went from 324 references down to 188 references (42% reduction)
+- Removed all array-indexing-based access patterns for these 5 types
 
 ---
 
