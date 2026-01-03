@@ -11976,7 +11976,9 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-                const layout_val = try self.getRuntimeLayout(rt_var);
+                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
+                // This ensures we get the actual tag union layout instead of a box wrapper.
+                const layout_val = try self.getRuntimeLayout(resolved.var_);
 
                 if (layout_val.tag == .scalar) {
                     // No payload union - just set discriminant
@@ -11990,6 +11992,10 @@ pub const Interpreter = struct {
                         self.triggerCrash("e_tag: scalar layout is not int", false, roc_ops);
                         return error.Crash;
                     }
+                } else if (layout_val.tag == .zst) {
+                    // Zero-sized tag union (single variant with no payload) - just push ZST value
+                    const dest = try self.pushRaw(layout_val, 0, rt_var);
+                    try value_stack.push(dest);
                 } else if (layout_val.tag == .record or layout_val.tag == .tuple or layout_val.tag == .tag_union) {
                     const args_exprs = self.env.store.sliceExpr(tag.args);
                     const arg_vars_range = tag_list.items[tag_index].args;
@@ -13155,6 +13161,23 @@ pub const Interpreter = struct {
                 self.triggerCrash("e_zero_argument_tag: tuple tag field is not scalar int", false, roc_ops);
                 return error.Crash;
             }
+            return dest;
+        } else if (layout_val.tag == .tag_union) {
+            // Tag union layout with proper variant info - for recursive types like Nat := [Zero, Suc(Box(Nat))]
+            var dest = try self.pushRaw(layout_val, 0, rt_var);
+            const tu_idx = layout_val.data.tag_union.idx;
+            const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+            const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+            if (dest.ptr) |base_ptr| {
+                const ptr_u8: [*]u8 = @ptrCast(base_ptr);
+                // Clear the entire payload area first (ZST variant has no payload but we still need to clear)
+                const total_size = self.runtime_layout_store.layoutSize(layout_val);
+                if (total_size > 0) {
+                    @memset(ptr_u8[0..total_size], 0);
+                }
+                tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(tag_index));
+            }
+            dest.is_initialized = true;
             return dest;
         }
         self.triggerCrash("e_zero_argument_tag: unexpected layout type", false, roc_ops);
