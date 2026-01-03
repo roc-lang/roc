@@ -251,11 +251,11 @@ pub const Payload = extern union {
 
     pub const StatementImport = extern struct {
         module_name_tok: u32, // Ident.Idx (bitcasted)
-        alias_tok: u32,        // Ident.Idx (bitcasted) or 0 for None
+        alias_tok: u32, // Ident.Idx (bitcasted) or 0 for None
         packed_qualifier_and_exposes: packed struct(u32) {
-            qualifier: u16,    // Ident.Idx (low 16 bits) or 0 for None
+            qualifier: u16, // Ident.Idx (low 16 bits) or 0 for None
             exposes_start: u11, // packed into remaining bits
-            exposes_len: u5,    // max 31, but max used is ~20
+            exposes_len: u5, // max 31, but max used is ~20
         },
     };
 
@@ -486,9 +486,10 @@ pub const Payload = extern union {
 
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32, // Ident.Idx
-        index: u32,
-        /// Packed: body (high 20 bits), args packed (low 12 bits)
-        packed_body_and_args: u32,
+        /// Packed: args_start (20 bits), args_len (12 bits)
+        packed_args: u32,
+        /// Packed: body (24 bits), index (8 bits)
+        packed_body_and_index: u32,
     };
 
     pub const ExprLowLevel = extern struct {

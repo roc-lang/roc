@@ -211,11 +211,12 @@ pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionIn
         const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
         var expr_node = env.store.nodes.get(expr_node_idx);
 
-        // For e_hosted_lambda nodes:
+        // For e_hosted_lambda nodes with typed payload:
         // data_1 = symbol_name (Ident.Idx via @bitCast)
-        // data_2 = index (u32) <- We set this here
-        // data_3 = extra_data pointer (for args and body)
-        expr_node.data_2 = @intCast(index);
+        // data_2 = packed_args (args_start 20 bits, args_len 12 bits)
+        // data_3 = packed_body_and_index (body 24 bits, index 8 bits) <- We update index here
+        // Clear top 8 bits (index) and set new index
+        expr_node.data_3 = (expr_node.data_3 & 0xFFFFFF) | ((@as(u32, @intCast(index)) & 0xFF) << 24);
 
         env.store.nodes.set(expr_node_idx, expr_node);
     }
