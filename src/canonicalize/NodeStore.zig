@@ -2065,31 +2065,33 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const extra_data_start = @as(u32, @intCast(store.extra_data.len()));
+    // Pack kind and pattern into a single u32:
+    // bit 0 = kind tag (0=Required, 1=SubPattern), bits 1-31 = pattern index
+    const kind_tag: u32 = switch (record_destruct.kind) {
+        .Required => 0,
+        .SubPattern => 1,
+    };
+    const pattern_idx: u32 = switch (record_destruct.kind) {
+        .Required => |p| @intFromEnum(p),
+        .SubPattern => |p| @intFromEnum(p),
+    };
+    const kind_and_pattern = kind_tag | (pattern_idx << 1);
+
     const node = Node{
-        .data_1 = @bitCast(record_destruct.label),
-        .data_2 = @bitCast(record_destruct.ident),
-        .data_3 = extra_data_start,
+        .data_1 = 0, // Will be set by setPayload
+        .data_2 = 0,
+        .data_3 = 0,
         .tag = .record_destruct,
     };
 
-    // Store kind in extra_data
-    switch (record_destruct.kind) {
-        .Required => |pattern_idx| {
-            // Store kind tag (0 for Required)
-            _ = try store.extra_data.append(store.gpa, 0);
-            // Store pattern index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-        },
-        .SubPattern => |pattern_idx| {
-            // Store kind tag (1 for SubPattern)
-            _ = try store.extra_data.append(store.gpa, 1);
-            // Store sub-pattern index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-        },
-    }
+    var final_node = node;
+    final_node.setPayload(.{ .record_destruct = .{
+        .label = @bitCast(record_destruct.label),
+        .ident = @bitCast(record_destruct.ident),
+        .kind_and_pattern = kind_and_pattern,
+    } });
 
-    const nid = try store.nodes.append(store.gpa, node);
+    const nid = try store.nodes.append(store.gpa, final_node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
@@ -2700,22 +2702,22 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
 
     std.debug.assert(node.tag == .record_destruct);
 
-    // Retrieve kind from extra_data if it exists
-    const kind = blk: {
-        const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..][0..2];
-        const kind_tag = extra_data[0];
+    const payload = node.getPayload().record_destruct;
 
-        break :blk switch (kind_tag) {
-            0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(extra_data[1]) },
-            1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
-            else => unreachable,
-        };
+    // Unpack kind and pattern from a single u32:
+    // bit 0 = kind tag (0=Required, 1=SubPattern), bits 1-31 = pattern index
+    const kind_tag = payload.kind_and_pattern & 1;
+    const pattern_idx: CIR.Pattern.Idx = @enumFromInt(payload.kind_and_pattern >> 1);
+
+    const kind = switch (kind_tag) {
+        0 => CIR.Pattern.RecordDestruct.Kind{ .Required = pattern_idx },
+        1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = pattern_idx },
+        else => unreachable,
     };
 
     return CIR.Pattern.RecordDestruct{
-        .label = @bitCast(node.data_1),
-        .ident = @bitCast(node.data_2),
+        .label = @bitCast(payload.label),
+        .ident = @bitCast(payload.ident),
         .kind = kind,
     };
 }

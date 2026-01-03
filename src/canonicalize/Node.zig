@@ -73,7 +73,7 @@ pub const Payload = extern union {
     expr_record: ExprRecord,
     expr_empty_record: ExprEmpty,
     record_field: RecordField,
-    record_destruct: RecordDestruct,
+    record_destruct: PatternRecordDestruct,
     expr_external_lookup: ExprExternalLookup,
     expr_required_lookup: ExprRequiredLookup,
     expr_dot_access: ExprDotAccess,
@@ -329,11 +329,11 @@ pub const Payload = extern union {
         _unused: u32,
     };
 
-    pub const RecordDestruct = extern struct {
-        ident: u32, // Ident.Idx
-        /// Packed: kind (2 bits), pattern_idx (30 bits)
-        packed_kind_and_pattern: u32,
-        _unused: u32,
+    pub const PatternRecordDestruct = extern struct {
+        label: u32, // Ident.Idx - the field label being destructured
+        ident: u32, // Ident.Idx - the identifier binding
+        /// Packed: bit 0 = kind tag (0=Required, 1=SubPattern), bits 1-31 = pattern index
+        kind_and_pattern: u32,
     };
 
     pub const ExprExternalLookup = extern struct {
