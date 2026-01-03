@@ -407,10 +407,14 @@ pub const Instantiator = struct {
             var fresh_constraints = try std.ArrayList(StaticDispatchConstraint).initCapacity(self.store.gpa, constraints.len());
             defer fresh_constraints.deinit(self.store.gpa);
 
-            // Use index-based iteration to avoid iterator invalidation
-            // (see comment in instantiateFunc for details)
+            // IMPORTANT: We must re-fetch on each iteration, not cache the slice.
+            // The slice would point into the backing ArrayList, but instantiateVar
+            // can recursively instantiate flex vars with constraints, which calls
+            // appendStaticDispatchConstraints, potentially reallocating the array
+            // and invalidating any cached slice.
             const constraints_start: usize = @intFromEnum(constraints.start);
             for (0..constraints_len) |i| {
+                // Re-fetch the constraint on each iteration since the backing array may have moved
                 const constraint = self.store.static_dispatch_constraints.items.items[constraints_start + i];
                 const fresh_constraint = try self.instantiateStaticDispatchConstraint(constraint);
                 try fresh_constraints.append(self.store.gpa, fresh_constraint);
