@@ -243,6 +243,18 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_typed_int = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 42)), .kind = .i128 },
+            .type_name = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_typed_frac = .{
+            .value = .{ .bytes = @bitCast(@as(i128, 314)), .kind = .i128 },
+            .type_name = rand_ident_idx(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_str_segment = .{
             .literal = rand_idx(StringLiteral.Idx),
         },
@@ -497,6 +509,13 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .ident_not_in_scope = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .self_referential_definition = .{
             .ident = rand_ident_idx(),
             .region = rand_region(),
         },
@@ -894,6 +913,14 @@ test "NodeStore round trip - Diagnostics" {
             .other_name = rand_ident_idx(),
             .region = rand_region(),
             .other_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .deprecated_number_suffix = .{
+            .suffix = rand_idx(StringLiteral.Idx),
+            .suggested = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
         },
     });
 

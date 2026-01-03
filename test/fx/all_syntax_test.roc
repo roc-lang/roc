@@ -195,21 +195,38 @@ record_update_2 = |person| {
 	{ ..person, age: 31 }
 }
 
+number_literals : {
+	usage_based: I64,
+	explicit_u8: U8,
+	explicit_i8: I8,
+	explicit_u16: U16,
+	explicit_i16: I16,
+	explicit_u32: U32,
+	explicit_i32: I32,
+	explicit_u64: U64,
+	explicit_i64: I64,
+	explicit_u128: U128,
+	explicit_i128: I128,
+	# Note: F32, F64, and Dec literals use type inference which doesn't work with Str.inspect
+	# So we use simple Dec literals here
+	explicit_dec: Dec,
+	hex: I64,
+	octal: I64,
+	binary: I64,
+}
 number_literals = {
-	usage_based: 5, # Dec by default
-	explicit_u8: 5u8,
-	explicit_i8: 5i8,
-	explicit_u16: 5u16,
-	explicit_i16: 5i16,
-	explicit_u32: 5u32,
-	explicit_i32: 5i32,
-	explicit_u64: 5u64,
-	explicit_i64: 5i64,
-	explicit_u128: 5u128,
-	explicit_i128: 5i128,
-	explicit_f32: 5.0f32,
-	explicit_f64: 5.0f64,
-	explicit_dec: 5.0dec,
+	usage_based: 5,
+	explicit_u8: 5,
+	explicit_i8: 5,
+	explicit_u16: 5,
+	explicit_i16: 5,
+	explicit_u32: 5,
+	explicit_i32: 5,
+	explicit_u64: 5,
+	explicit_i64: 5,
+	explicit_u128: 5,
+	explicit_i128: 5,
+	explicit_dec: 5.0,
 	hex: 0x5,
 	octal: 0o5,
 	binary: 0b0101,

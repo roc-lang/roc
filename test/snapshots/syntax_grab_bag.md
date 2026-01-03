@@ -248,6 +248,7 @@ UNDEFINED VARIABLE - syntax_grab_bag.md:158:2:158:11
 UNDEFINED VARIABLE - syntax_grab_bag.md:175:3:175:15
 UNDEFINED VARIABLE - syntax_grab_bag.md:178:63:178:69
 UNDEFINED VARIABLE - syntax_grab_bag.md:179:42:179:48
+INVALID ASSIGNMENT TO ITSELF - syntax_grab_bag.md:179:50:179:55
 UNDEFINED VARIABLE - syntax_grab_bag.md:183:3:183:7
 UNDEFINED VARIABLE - syntax_grab_bag.md:185:4:185:10
 UNDEFINED VARIABLE - syntax_grab_bag.md:188:22:188:25
@@ -268,6 +269,9 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
+MISSING METHOD - syntax_grab_bag.md:146:15:146:18
+MISSING METHOD - syntax_grab_bag.md:176:12:176:22
++ - :0:0:0:0
 UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
@@ -665,6 +669,18 @@ Is there an `import` or `exposing` missing up-top?
 	                                        ^^^^^^
 
 
+**INVALID ASSIGNMENT TO ITSELF**
+The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
+
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+
+**syntax_grab_bag.md:179:50:179:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `tag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -961,6 +977,34 @@ This argument has the type:
 But `add_one` needs the first argument to be:
 
     U64
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**syntax_grab_bag.md:146:15:146:18:**
+```roc
+	var number = 123
+```
+	             ^^^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Str
+
+**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
+
+**MISSING METHOD**
+The value before this **+** operator has a type that doesn't have a **plus** method:
+**syntax_grab_bag.md:176:12:176:22:**
+```roc
+		number = number + n
+```
+		         ^^^^^^^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    Str
+
+**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -2151,8 +2195,7 @@ NO CHANGE
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))

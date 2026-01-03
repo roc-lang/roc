@@ -107,10 +107,32 @@ pub fn parseStatement(env: *CommonEnv, gpa: std.mem.Allocator) Parser.Error!AST 
 
 test "parser tests" {
     std.testing.refAllDecls(@import("AST.zig"));
-    std.testing.refAllDecls(@import("HTML.zig"));
     std.testing.refAllDecls(@import("Node.zig"));
     std.testing.refAllDecls(@import("NodeStore.zig"));
     std.testing.refAllDecls(@import("Parser.zig"));
     std.testing.refAllDecls(@import("tokenize.zig"));
     std.testing.refAllDecls(@import("test/ast_node_store_test.zig"));
+}
+
+test {
+    // Import test files to run their tests
+    _ = @import("HTML.zig");
+    _ = @import("test/ast_node_store_test.zig");
+}
+
+test "parse error triggers errdefer cleanup" {
+    const gpa = std.testing.allocator;
+
+    // Create a deeply nested expression that exceeds MAX_NESTING_LEVELS (128)
+    // to trigger the TooNested error and exercise the errdefer cleanup paths
+    const open_parens = "(" ** 150;
+    const close_parens = ")" ** 150;
+    const source = open_parens ++ "1" ++ close_parens;
+
+    var env = try CommonEnv.init(gpa, source);
+    defer env.deinit(gpa);
+
+    // This should fail with TooNested error
+    const result = parseExpr(&env, gpa);
+    try std.testing.expectError(error.TooNested, result);
 }

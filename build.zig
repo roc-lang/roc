@@ -419,6 +419,21 @@ const CheckEnumFromIntZeroStep = struct {
         line_content: []const u8,
     };
 
+    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
+    const stdlib_copies = [_][]const u8{
+        "backend/llvm/Builder.zig",
+        "backend/llvm/ir.zig",
+        "backend/llvm/bitcode_writer.zig",
+        "backend/llvm/BitcodeReader.zig",
+    };
+
+    fn isStdlibCopy(path: []const u8) bool {
+        for (stdlib_copies) |excluded| {
+            if (std.mem.endsWith(u8, path, excluded)) return true;
+        }
+        return false;
+    }
+
     fn scanDirectoryForEnumFromIntZero(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -433,6 +448,9 @@ const CheckEnumFromIntZeroStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            // Skip Zig stdlib copies in backend/llvm
+            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -549,6 +567,21 @@ const CheckUnusedSuppressionStep = struct {
         line_content: []const u8,
     };
 
+    // Files in backend/llvm that are copies from Zig's stdlib and should be excluded
+    const stdlib_copies = [_][]const u8{
+        "backend/llvm/Builder.zig",
+        "backend/llvm/ir.zig",
+        "backend/llvm/bitcode_writer.zig",
+        "backend/llvm/BitcodeReader.zig",
+    };
+
+    fn isStdlibCopy(path: []const u8) bool {
+        for (stdlib_copies) |excluded| {
+            if (std.mem.endsWith(u8, path, excluded)) return true;
+        }
+        return false;
+    }
+
     fn scanDirectoryForUnusedSuppression(
         allocator: std.mem.Allocator,
         dir: std.fs.Dir,
@@ -563,6 +596,9 @@ const CheckUnusedSuppressionStep = struct {
             if (!std.mem.endsWith(u8, entry.path, ".zig")) continue;
 
             const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path_prefix, entry.path });
+
+            // Skip Zig stdlib copies in backend/llvm
+            if (isStdlibCopy(full_path)) continue;
 
             const file = dir.openFile(entry.path, .{}) catch continue;
             defer file.close();
@@ -978,6 +1014,10 @@ const CoverageSummaryStep = struct {
     step: Step,
     coverage_dir: []const u8,
 
+    /// Minimum required coverage percentage. Build fails if coverage drops below this.
+    /// This threshold should be gradually increased as more tests are added.
+    const MIN_COVERAGE_PERCENT: f64 = 84.0;
+
     fn create(b: *std.Build, coverage_dir: []const u8) *CoverageSummaryStep {
         const self = b.allocator.create(CoverageSummaryStep) catch @panic("OOM");
         self.* = .{
@@ -1021,14 +1061,42 @@ const CoverageSummaryStep = struct {
         defer allocator.free(json_content);
 
         // Parse and summarize coverage
-        try parseCoverageJson(allocator, json_content);
+        const result = try parseCoverageJson(allocator, json_content);
+
+        // Skip enforcement if kcov didn't capture any data
+        // This happens when kcov version is incompatible with the binary format
+        if (result.total_lines == 0) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE DATA NOT CAPTURED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("kcov reported 0 total lines - coverage data was not captured.\n", .{});
+            std.debug.print("This may be due to kcov version incompatibility with Zig binaries.\n", .{});
+            std.debug.print("Skipping coverage enforcement.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return;
+        }
+
+        // Enforce minimum coverage threshold
+        if (result.percent < MIN_COVERAGE_PERCENT) {
+            std.debug.print("\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            std.debug.print("COVERAGE CHECK FAILED\n", .{});
+            std.debug.print("=" ** 60 ++ "\n\n", .{});
+            std.debug.print("Parser coverage is {d:.2}%, minimum required is {d:.2}%\n", .{ result.percent, MIN_COVERAGE_PERCENT });
+            std.debug.print("Add more tests to improve coverage before merging.\n\n", .{});
+            std.debug.print("=" ** 60 ++ "\n", .{});
+            return step.fail("Parser coverage {d:.2}% is below minimum {d:.2}%", .{ result.percent, MIN_COVERAGE_PERCENT });
+        }
     }
 
-    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !void {
-        const parsed = std.json.parseFromSlice(std.json.Value, allocator, json_content, .{}) catch |err| {
-            std.debug.print("Failed to parse coverage JSON: {}\n", .{err});
-            return;
-        };
+    const CoverageResult = struct {
+        percent: f64,
+        total_lines: u64,
+    };
+
+    fn parseCoverageJson(allocator: std.mem.Allocator, json_content: []const u8) !CoverageResult {
+        const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_content, .{});
         defer parsed.deinit();
 
         const root = parsed.value;
@@ -1136,6 +1204,8 @@ const CoverageSummaryStep = struct {
         std.debug.print("\n" ++ "=" ** 60 ++ "\n", .{});
         std.debug.print("Full HTML report: kcov-output/parser/index.html\n", .{});
         std.debug.print("=" ** 60 ++ "\n", .{});
+
+        return .{ .percent = percent, .total_lines = total_lines };
     }
 
     const UncoveredFile = struct {
@@ -2017,8 +2087,9 @@ pub fn build(b: *std.Build) void {
     const test_filters = parsed_args.test_filters;
 
     // llvm configuration
-    const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const enable_llvm = !use_system_llvm; // removed build flag `-Dllvm`, we include LLVM libraries by default now
+    // By default, use our bundled LLVM from roc-bootstrap. Users can opt-in to system LLVM
+    // (e.g., for AFL++ fuzzing which requires system LLVM).
+    const use_system_llvm = b.option(bool, "system-llvm", "Use system-installed LLVM instead of bundled LLVM (required for AFL++)") orelse false;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
     // Since zig afl is broken currently, default to system afl.
     const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
@@ -2174,7 +2245,7 @@ pub fn build(b: *std.Build) void {
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, enable_llvm, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -2283,7 +2354,18 @@ pub fn build(b: *std.Build) void {
     roc_modules.addAll(snapshot_exe);
     snapshot_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     snapshot_exe.step.dependOn(&write_compiled_builtins.step);
-    add_tracy(b, roc_modules.build_options, snapshot_exe, target, false, flag_enable_tracy);
+
+    // Add LLVM support to snapshot tool for dual-mode testing
+    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+    snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+    snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+    try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
+    // Add llvm_compile module for LLVM compilation pipeline
+    snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
+        .root_source_file = b.path("src/llvm_compile/mod.zig"),
+    });
+
+    add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
     const playground_exe = b.addExecutable(.{
@@ -2481,7 +2563,17 @@ pub fn build(b: *std.Build) void {
         roc_modules.addAll(snapshot_test);
         snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_test.step.dependOn(&write_compiled_builtins.step);
-        add_tracy(b, roc_modules.build_options, snapshot_test, target, false, flag_enable_tracy);
+
+        // Add LLVM support for dual-mode testing
+        const llvm_paths_test = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+        snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths_test.lib });
+        snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths_test.include });
+        try addStaticLlvmOptionsToModule(snapshot_test.root_module);
+        snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
+            .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        });
+
+        add_tracy(b, roc_modules.build_options, snapshot_test, target, true, flag_enable_tracy);
 
         const run_snapshot_test = b.addRunArtifact(snapshot_test);
         if (run_args.len != 0) {
@@ -2604,10 +2696,21 @@ pub fn build(b: *std.Build) void {
         snapshot_coverage_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
         snapshot_coverage_test.step.dependOn(&write_compiled_builtins.step);
 
+        // Add LLVM support for dual-mode testing
+        const llvm_paths_coverage = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+        snapshot_coverage_test.addLibraryPath(.{ .cwd_relative = llvm_paths_coverage.lib });
+        snapshot_coverage_test.addIncludePath(.{ .cwd_relative = llvm_paths_coverage.include });
+        try addStaticLlvmOptionsToModule(snapshot_coverage_test.root_module);
+        snapshot_coverage_test.root_module.addAnonymousImport("llvm_compile", .{
+            .root_source_file = b.path("src/llvm_compile/mod.zig"),
+        });
+
         // Configure kcov execution - output to parser-snapshot-tests directory
         snapshot_coverage_test.setExecCmd(&[_]?[]const u8{
             "kcov",
             "--include-path=src/parse",
+            "--exclude-pattern=HTML.zig", // Exclude playground visualization utility
+            "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
             "kcov-output/parser-snapshot-tests",
             null, // Zig inserts test binary path here
         });
@@ -2627,6 +2730,8 @@ pub fn build(b: *std.Build) void {
         parse_unit_test.setExecCmd(&[_]?[]const u8{
             "kcov",
             "--include-path=src/parse",
+            "--exclude-pattern=HTML.zig", // Exclude playground visualization utility
+            "--exclude-line=std.debug.print,std.debug.panic", // Exclude debug code from coverage
             "kcov-output/parser-unit-tests",
             null, // Zig inserts test binary path here
         });
@@ -2900,7 +3005,6 @@ fn addMainExe(
     optimize: OptimizeMode,
     strip: bool,
     omit_frame_pointer: ?bool,
-    enable_llvm: bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
@@ -3098,19 +3202,16 @@ fn addMainExe(
     }
 
     const config = b.addOptions();
-    config.addOption(bool, "llvm", enable_llvm);
+    config.addOption(bool, "llvm", true);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
-    if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+    const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+    exe.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
+    exe.addIncludePath(.{ .cwd_relative = llvm_paths_exe.include });
+    try addStaticLlvmOptionsToModule(exe.root_module);
 
-        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(exe.root_module);
-    }
-
-    add_tracy(b, roc_modules.build_options, exe, target, enable_llvm, tracy);
+    add_tracy(b, roc_modules.build_options, exe, target, true, tracy);
 
     exe.linkLibrary(zstd.artifact("zstd"));
 
@@ -3248,8 +3349,11 @@ const LlvmPaths = struct {
     lib: []const u8,
 };
 
-// This functions is not used right now due to AFL requiring system llvm.
-// This will be used once we begin linking roc to llvm.
+/// Get LLVM library and include paths.
+/// Priority:
+/// 1. If user_llvm_path is provided, use that
+/// 2. If use_system_llvm is true, detect system LLVM via llvm-config
+/// 3. Otherwise, download from roc-bootstrap (default)
 fn llvmPaths(
     b: *std.Build,
     target: ResolvedTarget,
@@ -3261,9 +3365,18 @@ fn llvmPaths(
         std.process.exit(1);
     }
 
+    if (user_llvm_path) |llvm_path| {
+        // User specified a custom LLVM path
+        return .{
+            .include = b.pathJoin(&.{ llvm_path, "include" }),
+            .lib = b.pathJoin(&.{ llvm_path, "lib" }),
+        };
+    }
+
     if (use_system_llvm) {
+        // Detect system LLVM via llvm-config (required for AFL++)
         const llvm_config_path = b.findProgram(&.{"llvm-config"}, &.{""}) catch {
-            std.log.err("Failed to find system llvm-config binary", .{});
+            std.log.err("Failed to find system llvm-config binary. Is LLVM installed?", .{});
             std.process.exit(1);
         };
         const llvm_lib_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
@@ -3275,19 +3388,11 @@ fn llvmPaths(
         };
     }
 
-    if (user_llvm_path) |llvm_path| {
-        // We are just trust the user.
-        return .{
-            .include = b.pathJoin(&.{ llvm_path, "include" }),
-            .lib = b.pathJoin(&.{ llvm_path, "lib" }),
-        };
-    }
-
-    // No user specified llvm. Go download it from roc-bootstrap.
+    // Default: download from roc-bootstrap
     const raw_triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
     if (!supported_deps_triples.has(raw_triple)) {
         std.log.err("Target triple({s}) not supported by roc-bootstrap.\n", .{raw_triple});
-        std.log.err("Please specify the either `-Dsystem-llvm` or `-Dllvm-path`.\n", .{});
+        std.log.err("Please specify `-Dsystem-llvm` or `-Dllvm-path` to provide a custom LLVM installation.\n", .{});
         std.process.exit(1);
     }
     const triple = supported_deps_triples.get(raw_triple).?;
@@ -3321,7 +3426,7 @@ const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
     .{ "x86_64-linux-gnu", "x86_64_linux_musl" },
 });
 
-// The following is lifted from the zig compiler.
+// The following is adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     const cpp_cflags = exe_cflags ++ [_][]const u8{"-DNDEBUG=1"};
     mod.addCSourceFiles(.{

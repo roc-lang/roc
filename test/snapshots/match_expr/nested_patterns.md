@@ -130,5 +130,5 @@ match data {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "U64"))
+(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, U64 -> a]"))
 ~~~

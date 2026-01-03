@@ -123,6 +123,7 @@ pub const CommonIdents = extern struct {
 
     // Unqualified builtin type names (for checking if a type name shadows a builtin)
     num: Ident.Idx,
+    bool: Ident.Idx,
     u8: Ident.Idx,
     u16: Ident.Idx,
     u32: Ident.Idx,
@@ -154,6 +155,7 @@ pub const CommonIdents = extern struct {
     f32_type: Ident.Idx,
     f64_type: Ident.Idx,
     dec_type: Ident.Idx,
+    bool_type: Ident.Idx,
 
     // Field/tag names used during type checking and evaluation
     before_dot: Ident.Idx,
@@ -214,6 +216,7 @@ pub const CommonIdents = extern struct {
             .box = try common.insertIdent(gpa, Ident.for_text("Box")),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
+            .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
             .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
             .u16 = try common.insertIdent(gpa, Ident.for_text("U16")),
             .u32 = try common.insertIdent(gpa, Ident.for_text("U32")),
@@ -243,6 +246,7 @@ pub const CommonIdents = extern struct {
             .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
             .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
             .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
+            .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
             .provided_by_compiler = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler")),
@@ -304,6 +308,7 @@ pub const CommonIdents = extern struct {
             .box = common.findIdent("Box") orelse unreachable,
             // Unqualified builtin type names
             .num = common.findIdent("Num") orelse unreachable,
+            .bool = common.findIdent("Bool") orelse unreachable,
             .u8 = common.findIdent("U8") orelse unreachable,
             .u16 = common.findIdent("U16") orelse unreachable,
             .u32 = common.findIdent("U32") orelse unreachable,
@@ -333,6 +338,7 @@ pub const CommonIdents = extern struct {
             .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
             .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
             .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
+            .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
             .before_dot = common.findIdent("before_dot") orelse unreachable,
             .after_dot = common.findIdent("after_dot") orelse unreachable,
             .provided_by_compiler = common.findIdent("ProvidedByCompiler") orelse unreachable,
@@ -689,6 +695,31 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addKeyword("exposing");
             try report.document.addReflowingText(" missing up-top?");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .self_referential_definition => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+            const ident_name = self.getIdent(data.ident);
+
+            var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+            const owned_ident = try report.addOwnedString(ident_name);
+            try report.document.addReflowingText("The value ");
+            try report.document.addUnqualifiedSymbol(owned_ident);
+            try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
             const owned_filename = try report.addOwnedString(filename);
@@ -2018,6 +2049,37 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 self.getSourceAll(),
                 self.getLineStartsAll(),
             );
+
+            break :blk report;
+        },
+        .deprecated_number_suffix => |data| blk: {
+            const suffix = self.getString(data.suffix);
+            const suggested = self.getString(data.suggested);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+            const owned_suffix = try report.addOwnedString(suffix);
+            const owned_suggested = try report.addOwnedString(suggested);
+
+            try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            try report.document.addLineBreak();
+            try report.document.addReflowingText("The ");
+            try report.document.addInlineCode(owned_suffix);
+            try report.document.addReflowingText(" suffix is no longer supported. Use ");
+            try report.document.addInlineCode(owned_suggested);
+            try report.document.addReflowingText(" instead.");
 
             break :blk report;
         },
