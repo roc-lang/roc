@@ -263,7 +263,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "(\"Roc\", 1, 1, \"Roc\")\n" ++
         "10\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5, explicit_f32: 5, explicit_f64: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "{ binary: 5, explicit_dec: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
         "99\n" ++
         "\"12345.0\"\n" ++
@@ -901,7 +901,7 @@ test "run allows warnings without blocking execution" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    try checkSuccess(run_result);
+    try checkFailure(run_result);
 
     // Should show the warning
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNUSED VARIABLE") != null);

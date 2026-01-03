@@ -757,3 +757,19 @@ test "NodeStore round trip - Targets" {
         return err;
     };
 }
+
+test "NodeStore debug function" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    // Add some nodes to make debug output more interesting
+    _ = try store.addHeader(.{
+        .type_module = .{
+            .region = rand_region(),
+        },
+    });
+
+    // Call debug function - it should not crash
+    store.debug();
+}

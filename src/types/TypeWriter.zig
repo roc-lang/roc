@@ -62,6 +62,9 @@ scratch_record_fields: std.array_list.Managed(types_mod.RecordField),
 import_mapping: ?*const import_mapping_mod.ImportMapping,
 /// The allocator used to create owned fields
 gpa: std.mem.Allocator,
+/// When true, flex vars with from_numeral constraint are displayed as "Dec"
+/// instead of showing the constraint. Used for MONO output.
+default_numerals_to_dec: bool = false,
 
 const ByteWrite = std.array_list.Managed(u8).Writer;
 
@@ -155,6 +158,12 @@ pub fn setImportMapping(self: *TypeWriter, import_mapping: ?*const import_mappin
     self.import_mapping = import_mapping;
 }
 
+/// Enable defaulting of flex vars with from_numeral constraint to "Dec".
+/// Used for MONO output where we want to show concrete types.
+pub fn setDefaultNumeralsToDec(self: *TypeWriter, enabled: bool) void {
+    self.default_numerals_to_dec = enabled;
+}
+
 /// Reset type writer state
 pub fn reset(self: *TypeWriter) void {
     self.buf.clearRetainingCapacity();
@@ -203,6 +212,17 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Err
     if (self.static_dispatch_constraints.items.len > 0) {
         try self.writeWhereClause(&writer, var_, format);
     }
+}
+
+/// Writes a type variable to the buffer WITHOUT the where clause.
+/// Use this for nested types (function arguments, record fields, etc.) where the
+/// where clause should only appear at the top level of the complete type.
+pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.Error!void {
+    self.reset();
+
+    var writer = self.buf.writer();
+    try self.writeVar(&writer, var_, var_);
+    // Don't write where clause - constraints will be collected and written at the top level
 }
 
 /// Writes the where clause containing static dispatch constraints to the buffer.
@@ -351,14 +371,32 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
 
         switch (resolved.desc.content) {
             .flex => |flex| {
-                if (flex.name) |ident_idx| {
-                    _ = try writer.write(self.getIdent(ident_idx));
-                } else {
-                    try self.writeFlexVarName(writer, var_, context, root_var);
+                // Check if this flex var should be defaulted to Dec (has from_numeral constraint)
+                const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+                var has_numeral = false;
+                if (self.default_numerals_to_dec) {
+                    for (constraints) |constraint| {
+                        if (constraint.origin == .from_numeral) {
+                            has_numeral = true;
+                            break;
+                        }
+                    }
                 }
 
-                for (self.types.sliceStaticDispatchConstraints(flex.constraints)) |constraint| {
-                    try self.appendStaticDispatchConstraint(var_, constraint);
+                if (has_numeral) {
+                    // Default numeral types to Dec for display
+                    _ = try writer.write("Dec");
+                    // Don't add constraints for defaulted types
+                } else {
+                    if (flex.name) |ident_idx| {
+                        _ = try writer.write(self.getIdent(ident_idx));
+                    } else {
+                        try self.writeFlexVarName(writer, var_, context, root_var);
+                    }
+
+                    for (constraints) |constraint| {
+                        try self.appendStaticDispatchConstraint(var_, constraint);
+                    }
                 }
             },
             .rigid => |rigid| {

@@ -136,7 +136,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
-        .io_spec = "1>done",
+        .io_spec = "1>done: 42",
         .description = "Numeric lookup",
     },
     .{

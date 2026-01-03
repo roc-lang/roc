@@ -1910,3 +1910,34 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\}
     , 500500, .no_trace);
 }
+
+test "issue 8872: polymorphic tag union payload layout in match expressions" {
+    // Regression test for GitHub issue #8872: when using a polymorphic function
+    // that transforms Err(a) to Err(b) via a lambda, the Str payload was being
+    // corrupted because the layout was computed from a flex var (defaulting to
+    // Dec = 16 bytes) instead of the actual Str type (24 bytes).
+    //
+    // The bug manifested when:
+    // 1. A polymorphic function takes a lambda that returns type `b`
+    // 2. The function wraps the lambda result in Err(b)
+    // 3. The match expression extracts the Err payload
+    // 4. The extracted value is corrupted due to wrong layout
+    try runExpectStr(
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}

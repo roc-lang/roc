@@ -7016,6 +7016,12 @@ pub const Interpreter = struct {
                         // This is critical for opaque types returned from polymorphic functions
                         // where the field layout might not match the expected tag union layout
                         // of the opaque type's backing.
+                        //
+                        // HOWEVER: For polymorphic types where arg_var is a flex var that defaults
+                        // to Dec, the computed layout would be wrong (smaller than actual).
+                        // In this case, prefer the field_value.layout which was set correctly
+                        // during tag creation.
+                        // See https://github.com/roc-lang/roc/issues/8872
                         const arg_var = arg_vars[0];
                         const arg_resolved = self.runtime_types.resolveVar(arg_var);
                         const effective_layout = blk: {
@@ -7025,10 +7031,24 @@ pub const Interpreter = struct {
                                     break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
                                 }
                             }
+                            // For flex vars, use the actual field_value.layout which was set
+                            // correctly during tag creation. Computing layout from a flex var
+                            // would give Dec (16 bytes) which may not match the actual payload.
+                            if (arg_resolved.desc.content == .flex) {
+                                break :blk field_value.layout;
+                            }
                             // Second try: compute layout directly from arg_var
                             // This handles concrete types like opaque Item returned from polymorphic functions
                             if (self.getRuntimeLayout(arg_var)) |computed_layout| {
-                                break :blk computed_layout;
+                                // Only use computed layout if it matches or exceeds field layout size.
+                                // If computed is smaller, the type has flex vars that defaulted to
+                                // a smaller type (like Dec), but the actual data is larger.
+                                const computed_size = self.runtime_layout_store.layoutSize(computed_layout);
+                                const field_size = self.runtime_layout_store.layoutSize(field_value.layout);
+                                if (computed_size >= field_size) {
+                                    break :blk computed_layout;
+                                }
+                                // Fall through to use field_value.layout
                             } else |_| {}
                             // Fallback to field_value.layout
                             break :blk field_value.layout;
@@ -14990,9 +15010,8 @@ pub const Interpreter = struct {
                 } else {
                     // All arguments collected - finalize the tag
                     const total_count = tc.collected_count;
-                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
 
-                    // Pop all collected values
+                    // Pop all collected values first to get their concrete types
                     var values = try self.allocator.alloc(StackValue, total_count);
                     defer self.allocator.free(values);
                     var i: usize = total_count;
@@ -15001,8 +15020,17 @@ pub const Interpreter = struct {
                         values[i] = value_stack.pop() orelse return error.Crash;
                     }
 
+                    // Get the layout from the original type (tc.rt_var).
+                    // Note: For polymorphic types, this layout may have incorrect payload sizes
+                    // (e.g., flex vars default to Dec/ZST). The branches below handle this
+                    // by checking actual value sizes and using properly-typed layouts when needed.
+                    // See https://github.com/roc-lang/roc/issues/8872
+                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
+
                     if (tc.layout_type == 0) {
                         // Record layout { tag, payload }
+                        // Use layout_val (from concrete types) for memory, but tc.rt_var
+                        // (original type) for the value's type so printing works correctly.
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
                         const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
@@ -15157,15 +15185,17 @@ pub const Interpreter = struct {
                         const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
-                        // Check for layout mismatch - if the expected payload is smaller than actual
+                        // Check for layout mismatch - if the actual payload is LARGER than expected
                         // we need to use a properly-sized tuple layout to avoid corruption.
-                        // This happens with polymorphic types like Result where the type param
-                        // is a disconnected flex var that defaults to ZST layout.
+                        // This happens with polymorphic types like Try/Result where the type param
+                        // is a flex/rigid var that defaults to a smaller layout (Dec or ZST).
+                        // When actual is smaller than expected, it's fine - we just copy to the right place.
+                        // See https://github.com/roc-lang/roc/issues/8872
                         if (total_count == 1) {
                             const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
                             const expected_payload_size = disc_offset; // payload is before discriminant
-                            // Apply fix when expected payload is very small but actual is larger
-                            const needs_fix = expected_payload_size <= 1 and arg_size > expected_payload_size;
+                            // Apply fix only when actual is larger than expected (would overflow)
+                            const needs_fix = arg_size > expected_payload_size;
                             if (needs_fix) {
                                 // Layout mismatch - create a tuple layout [payload, discriminant]
                                 // This is the same approach as layout_type == 1
@@ -17225,12 +17255,18 @@ pub const Interpreter = struct {
                     const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
                     const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
 
-                    // Get the function's return type and first parameter for unification
+                    // Get the return type from the CALL SITE, not the method's internal type.
+                    // This is critical because the call site's CT type has the correct
+                    // concrete types from type inference (e.g., Result U8 [...] instead of
+                    // Result a [...]). The method's internal type may have unresolved flex vars.
+                    // This mirrors what e_call does at line 12606.
+                    const call_site_return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                    const call_site_return_rt_var = try self.translateTypeVar(saved_env, call_site_return_ct_var);
+
+                    // Unify the method's parameter with the receiver for proper type propagation
                     const effective_ret_var: types.Var = blk: {
                         const func_info = method_resolved.desc.content.unwrapFunc() orelse {
-                            // Fall back to translating from call site if not a function type
-                            const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
-                            break :blk try self.translateTypeVar(saved_env, return_ct_var);
+                            break :blk call_site_return_rt_var;
                         };
 
                         // Unify the method's first parameter with the receiver type
@@ -17250,8 +17286,8 @@ pub const Interpreter = struct {
                             );
                         }
 
-                        // Now the return type has rigid vars properly substituted
-                        break :blk func_info.ret;
+                        // Use the call site's return type - it has the correct concrete types
+                        break :blk call_site_return_rt_var;
                     };
 
                     try self.active_closures.append(method_func);

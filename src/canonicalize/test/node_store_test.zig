@@ -902,6 +902,14 @@ test "NodeStore round trip - Diagnostics" {
         },
     });
 
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .deprecated_number_suffix = .{
+            .suffix = rand_idx(StringLiteral.Idx),
+            .suggested = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
+        },
+    });
+
     // Test the round-trip for all diagnostics
     for (diagnostics.items) |diagnostic| {
         const idx = try store.addDiagnostic(diagnostic);

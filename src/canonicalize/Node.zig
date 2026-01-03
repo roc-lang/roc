@@ -221,4 +221,5 @@ pub const Tag = enum {
     diag_if_expr_without_else,
     diag_break_outside_loop,
     diag_mutually_recursive_type_aliases,
+    diag_deprecated_number_suffix,
 };
