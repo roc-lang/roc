@@ -14,14 +14,14 @@ package
 
 value1 = \\This is a "string" with just one line
 
-value2 = 
+value2 =
 	\\This is a "string" with just one line
 
 value3 = \\This is a string
 	\\With multiple lines
 	\\${value1}
 
-value4 = 
+value4 =
 	\\This is a string
 	# A comment in between
 	\\With multiple lines
@@ -54,44 +54,8 @@ x = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
-MISSING METHOD - multiline_string_complex.md:37:3:37:9
-- - :0:0:0:0
 MISSING METHOD - multiline_string_complex.md:40:5:40:8
 # PROBLEMS
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**multiline_string_complex.md:37:3:37:4:**
-```roc
-		0 - \\
-```
-		^
-
-The type was determined to be non-numeric here:
-**multiline_string_complex.md:37:7:37:9:**
-```roc
-		0 - \\
-```
-		    ^^
-
-Other code expects this to have the type:
-
-    Str
-
-**MISSING METHOD**
-The value before this **-** operator has a type that doesn't have a **minus** method:
-**multiline_string_complex.md:37:3:37:9:**
-```roc
-		0 - \\
-```
-		^^^^^^
-
-The value's type, which does not have a method named **minus**, is:
-
-    Str
-
-**Hint:**The **-** operator calls a method named **minus** on the value preceding it, passing the value after the operator as the one argument.
-
 **MISSING METHOD**
 This **not** method is being called on a value whose type doesn't have that method:
 **multiline_string_complex.md:40:5:40:8:**
@@ -220,7 +184,53 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-NO CHANGE
+package
+	[]
+	{
+		x: \\Multiline
+		,
+	}
+
+value1 = \\This is a "string" with just one line
+
+value2 = 
+	\\This is a "string" with just one line
+
+value3 = \\This is a string
+	\\With multiple lines
+	\\${value1}
+
+value4 = 
+	\\This is a string
+	# A comment in between
+	\\With multiple lines
+	\\${value2}
+
+value5 = {
+	a: \\Multiline
+	,
+	b: (
+		\\Multiline
+		,
+		\\Multiline
+		,
+	),
+	c: [
+		\\multiline
+		,
+	],
+	d: (
+		0 - \\
+		,
+	),
+	e: !\\
+	,
+}
+
+x = {
+	\\
+	\\
+}
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -296,13 +306,13 @@ NO CHANGE
 		(patt (type "Str"))
 		(patt (type "Str"))
 		(patt (type "Str"))
-		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(patt (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
 		(patt (type "Str")))
 	(expressions
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
 		(expr (type "Str"))
-		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: Error, e: Error }"))
+		(expr (type "{ a: Str, b: (Str, Str), c: List(Str), d: f, e: Error } where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]), f.minus : f, Str -> f]"))
 		(expr (type "Str"))))
 ~~~

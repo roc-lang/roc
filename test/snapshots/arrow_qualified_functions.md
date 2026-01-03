@@ -94,18 +94,18 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 # Test qualified function calls with arrow syntax
-test1 = "hello"->Str.is_empty
-test2 = "hello"->Str.is_empty
+test1 = "hello"->Str.is_empty()
+test2 = "hello"->Str.is_empty()
 test3 = "hello"->Str.concat("bar")
 
 # Test unqualified function calls
 fn0 = |a| a
-test4 = 10->fn0
-test5 = 10->fn0
+test4 = 10->fn0()
+test5 = 10->fn0()
 
 # Test tag syntax
 test6 = 42->Ok
-test7 = 42->Ok
+test7 = 42->Ok()
 ~~~
 # CANONICALIZE
 ~~~clojure

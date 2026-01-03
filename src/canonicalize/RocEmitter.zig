@@ -193,6 +193,25 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
                 try self.writer().print("{d}.{d}", .{ whole, frac_part });
             }
         },
+        .e_typed_int => |typed| {
+            try self.emitIntValue(typed.value);
+            const type_name = self.module_env.getIdent(typed.type_name);
+            try self.writer().print(".{s}", .{type_name});
+        },
+        .e_typed_frac => |typed| {
+            // Emit as decimal and add type suffix
+            const value = typed.value.toI128();
+            const scale: i128 = 1_000_000_000_000_000_000;
+            const whole = @divTrunc(value, scale);
+            const frac_part = @mod(@abs(value), @as(u128, @intCast(scale)));
+            if (frac_part == 0) {
+                try self.writer().print("{d}.0", .{whole});
+            } else {
+                try self.writer().print("{d}.{d:0>18}", .{ whole, frac_part });
+            }
+            const type_name = self.module_env.getIdent(typed.type_name);
+            try self.writer().print(".{s}", .{type_name});
+        },
         .e_str_segment => |seg| {
             const text = self.module_env.common.getString(seg.literal);
             try self.writer().print("\"{s}\"", .{text});

@@ -486,7 +486,6 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
         },
     }
 }
-
 // instantiate  //
 
 const InstantiateRegionBehavior = union(enum) {
@@ -619,7 +618,8 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
     const idx = @intFromEnum(target_var);
 
     if (idx >= self.regions.len()) {
-        try self.regions.items.ensureTotalCapacity(self.gpa, idx + 1);
+        // Use the store's allocator since regions was allocated by the store
+        try self.regions.items.ensureTotalCapacity(self.cir.store.gpa, idx + 1);
 
         const empty_region = Region.zero();
         while (self.regions.len() <= idx) {
@@ -1268,7 +1268,8 @@ pub fn checkPlatformRequirements(
 
                         if (found_in_required_aliases) {
                             // Store the rigid (now instantiated flex) name -> instantiated var mapping in the app's module env
-                            try self.cir.rigid_vars.put(self.gpa, flex_name, fresh_var);
+                            // Use cir.gpa since rigid_vars belongs to the ModuleEnv
+                            try self.cir.rigid_vars.put(self.cir.gpa, flex_name, fresh_var);
                         }
                     },
                     else => {},
@@ -1340,7 +1341,16 @@ pub fn checkPlatformRequirements(
             // This constrains type variables in the export (e.g., closure params)
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
-            _ = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+            const unify_result = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
+
+            // If unification failed, report the type mismatch with context about
+            // which platform requirement wasn't satisfied
+            const app_ident = app_required_ident orelse try self.cir.insertIdent(
+                Ident.for_text(platform_env.getIdentText(required_type.ident)),
+            );
+            self.setDetailIfTypeMismatch(unify_result, .{
+                .incompatible_platform_requirement = .{ .required_ident = app_ident },
+            });
         } else {
             // If we got here, it means that the the definition was not found in
             // the module's *export* list
@@ -2898,7 +2908,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
                     // Record this literal for deferred validation during comptime eval
-                    _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                    // Use cir.gpa since deferred_numeric_literals belongs to the ModuleEnv
+                    _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                         .expr_idx = expr_idx,
                         .type_var = flex_var,
                         .constraint = constraint,
@@ -2938,7 +2949,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2964,7 +2975,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -2990,7 +3001,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
@@ -3018,13 +3029,81 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 const constraint_range = resolved.desc.content.flex.constraints;
                 const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
 
-                _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                _ = try self.cir.deferred_numeric_literals.append(self.cir.gpa, .{
                     .expr_idx = expr_idx,
                     .type_var = flex_var,
                     .constraint = constraint,
                     .region = expr_region,
                 });
             }
+        },
+        .e_typed_int => |typed_num| {
+            // Typed integer literal like 123.U64
+            // Create from_numeral constraint and unify with the explicit type
+            const num_literal_info = switch (typed_num.value.kind) {
+                .u128 => types_mod.NumeralInfo.fromU128(@bitCast(typed_num.value.bytes), false, expr_region),
+                .i128 => types_mod.NumeralInfo.fromI128(typed_num.value.toI128(), typed_num.value.toI128() < 0, false, expr_region),
+            };
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents = self.cir.getIdentStoreConst();
+            const type_name = idents.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
+        },
+        .e_typed_frac => |typed_num| {
+            // Typed fractional literal like 3.14.Dec
+            // The value is stored as scaled i128 (like Dec)
+            const num_literal_info = types_mod.NumeralInfo.fromI128(
+                typed_num.value.toI128(),
+                typed_num.value.toI128() < 0,
+                true, // is_fractional
+                expr_region,
+            );
+
+            // Create flex var with from_numeral constraint
+            const flex_var = try self.mkFlexWithFromNumeralConstraint(num_literal_info, env);
+
+            // Capture the constraint BEFORE unification (unification will change the content)
+            const resolved = self.types.resolveVar(flex_var);
+            const constraint_range = resolved.desc.content.flex.constraints;
+            const constraint = self.types.sliceStaticDispatchConstraints(constraint_range)[0];
+
+            // Look up the explicit type name and unify with it
+            const idents_frac = self.cir.getIdentStoreConst();
+            const type_name = idents_frac.getText(typed_num.type_name);
+            const type_content = try self.mkNumberTypeContent(type_name, env);
+            try self.unifyWith(flex_var, type_content, env);
+
+            // Unify expr_var with the flex_var (which is now constrained to the explicit type)
+            _ = try self.unify(expr_var, flex_var, env);
+
+            // Record for deferred validation during comptime eval
+            _ = try self.cir.deferred_numeric_literals.append(self.gpa, .{
+                .expr_idx = expr_idx,
+                .type_var = flex_var,
+                .constraint = constraint,
+                .region = expr_region,
+            });
         },
         // list //
         .e_empty_list => {
@@ -4823,8 +4902,37 @@ fn checkBinopExpr(
     does_fx = try self.checkExpr(binop.rhs, env, .no_expectation) or does_fx;
 
     switch (binop.op) {
-        .add, .sub, .mul, .div, .rem, .div_trunc, .lt, .gt, .le, .ge, .eq => {
-            // Unify lhs and rhs to ensure both operands have the same type
+        .add, .sub, .mul, .div, .rem, .div_trunc => {
+            const method_name =
+                switch (binop.op) {
+                    .add => self.cir.idents.plus,
+                    .sub => self.cir.idents.minus,
+                    .mul => self.cir.idents.times,
+                    .div => self.cir.idents.div_by,
+                    .div_trunc => self.cir.idents.div_trunc_by,
+                    .rem => self.cir.idents.rem_by,
+                    else => unreachable,
+                };
+
+            // Return type equals lhs type - e.g. Duration.times : Duration, I64 -> Duration
+            const ret_var = lhs_var;
+
+            // Create the binop static dispatch function: lhs.method(rhs) -> ret
+            try self.mkBinopConstraint(
+                lhs_var,
+                rhs_var,
+                ret_var,
+                method_name,
+                env,
+                expr_region,
+            );
+
+            // Set the expression to redirect to the return type
+            _ = try self.unify(expr_var, ret_var, env);
+        },
+        .lt, .gt, .le, .ge, .eq => {
+            // For comparison binops, lhs and rhs must have the same type.
+            // Unify lhs and rhs first to ensure both operands have the same type
             const arg_unify_result = try self.unify(lhs_var, rhs_var, env);
 
             // If unification failed, short-circuit and set the expression to error
@@ -4833,47 +4941,28 @@ fn checkBinopExpr(
                 return does_fx;
             }
 
-            // Now that we've unified the rhs and lhs, create an alias const for
-            // the static dispatch argument.
+            // Now that we've unified the rhs and lhs, use the unified type for the constraint
             const arg_var = rhs_var;
 
-            // Based on the binop we're processing, get the binop ident and the
-            // return var
             const method_name, const ret_var =
                 switch (binop.op) {
-                    // For num binops, we assert that the return type is the
-                    // same type as the args
-                    .add => .{ self.cir.idents.plus, arg_var },
-                    .sub => .{ self.cir.idents.minus, arg_var },
-                    .mul => .{ self.cir.idents.times, arg_var },
-                    .div => .{ self.cir.idents.div_by, arg_var },
-                    .div_trunc => .{ self.cir.idents.div_trunc_by, arg_var },
-                    .rem => .{ self.cir.idents.rem_by, arg_var },
-                    // For eq/ord binops, we assert that the return type is a Bool
                     .lt => .{ self.cir.idents.is_lt, try self.freshBool(env, expr_region) },
                     .gt => .{ self.cir.idents.is_gt, try self.freshBool(env, expr_region) },
                     .le => .{ self.cir.idents.is_lte, try self.freshBool(env, expr_region) },
                     .ge => .{ self.cir.idents.is_gte, try self.freshBool(env, expr_region) },
                     .eq => .{ self.cir.idents.is_eq, try self.freshBool(env, expr_region) },
-                    // These branches are impossible, due to the outer switch
-                    .ne, .@"and", .@"or" => unreachable,
+                    else => unreachable,
                 };
 
-            // Create the binop static dispatch function on the arg + ret
-            // This function attaches the dispatch fn to the argument
+            // Create the binop constraint with unified arg type
             try self.mkBinopConstraint(
+                arg_var,
                 arg_var,
                 ret_var,
                 method_name,
                 env,
                 expr_region,
             );
-
-            // IMPORTANT: We currently required the ret_var to be either the
-            // argument types _or_ a bool, depending on the binop. This is more
-            // restrictive, but makes inferred types easier to understand. We
-            // may revisit this in the future, but relaxing the restriction
-            // should be a non-breaking change.
 
             // Set the expression to redirect to the return type
             _ = try self.unify(expr_var, ret_var, env);
@@ -4903,9 +4992,8 @@ fn checkBinopExpr(
             const eq_arg_var = rhs_var;
             const eq_ret_var = try self.freshBool(env, expr_region);
 
-            // Create the eq static dispatch function on the eq_arg + eq_ret
-            // This function attaches the dispatch fn to the eq_arg
-            try self.mkBinopConstraint(eq_arg_var, eq_ret_var, eq_method_name, env, expr_region);
+            // Create the eq static dispatch function: arg.is_eq(arg) -> Bool
+            try self.mkBinopConstraint(eq_arg_var, eq_arg_var, eq_ret_var, eq_method_name, env, expr_region);
 
             // Get the not method + ret var
             const not_method_name = self.cir.idents.not;
@@ -4965,18 +5053,19 @@ fn checkBinopExpr(
 
 // binop + unary op exprs //
 
-/// Create a static dispatch fn like: `arg, arg -> ret` and assert the
-/// constraint to the argument var.
+/// Create a static dispatch fn like: `lhs, rhs -> ret` and assert the
+/// constraint to the lhs (receiver) var.
 fn mkBinopConstraint(
     self: *Self,
-    arg_var: Var,
+    lhs_var: Var,
+    rhs_var: Var,
     ret_var: Var,
     method_name: Ident.Idx,
     env: *Env,
     region: Region,
 ) Allocator.Error!void {
     // Create the function type: lhs_type, rhs_type -> ret_type
-    const args_range = try self.types.appendVars(&.{ arg_var, arg_var });
+    const args_range = try self.types.appendVars(&.{ lhs_var, rhs_var });
 
     // Create the constraint function type
     const constraint_fn_var = try self.freshFromContent(.{ .structure = .{ .fn_unbound = Func{
@@ -4993,14 +5082,14 @@ fn mkBinopConstraint(
     };
     const constraint_range = try self.types.appendStaticDispatchConstraints(&.{constraint});
 
-    // Create a constrained flex and unify it with the arg
+    // Create a constrained flex and unify it with the lhs (receiver)
     const constrained_var = try self.freshFromContent(
         .{ .flex = Flex{ .name = null, .constraints = constraint_range } },
         env,
         region,
     );
 
-    _ = try self.unify(constrained_var, arg_var, env);
+    _ = try self.unify(constrained_var, lhs_var, env);
 }
 
 /// Create a static dispatch fn like: `arg, arg -> ret` and assert the
@@ -5334,18 +5423,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
             // Get the deferred constraints to validate against
             const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
 
-            // First, special case if this rigid has no constraints
-            if (deferred_constraints.len > 0 and rigid_constraints.len == 0) {
-                const constraint = deferred_constraints[0];
-                try self.reportConstraintError(
-                    deferred_constraint.var_,
-                    constraint,
-                    .{ .missing_method = .rigid },
-                    env,
-                );
-                continue;
-            }
-
             // Build a map of constraints the rigid has
             self.ident_to_var_map.clearRetainingCapacity();
             try self.ident_to_var_map.ensureUnusedCapacity(@intCast(rigid_constraints.len));
@@ -5383,9 +5460,6 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     continue;
                 }
             }
-        } else if (dispatcher_content == .flex) {
-            // If the root type is aa flex, then we there's nothing to check
-            continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // If the root type is a nominal type, then this is valid static dispatch
             const nominal_type = dispatcher_content.structure.nominal_type;
@@ -5962,8 +6036,7 @@ pub fn createImportMapping(
                     const stmt_idx: CIR.Statement.Idx = @field(indices, field.name);
 
                     // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                    const stmt_idx_int = @intFromEnum(stmt_idx);
-                    if (stmt_idx_int != 0) {
+                    if (@intFromEnum(stmt_idx) != 0) {
                         const stmt = builtin_env.store.getStatement(stmt_idx);
                         switch (stmt) {
                             .s_nominal_decl => |decl| {

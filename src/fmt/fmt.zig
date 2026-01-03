@@ -1025,17 +1025,17 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
                 }
-                // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                // Always format with parens after `->` for consistency and idempotence.
+                // Without parens, `0->b.c` would parse `b.c` as a qualified identifier,
+                // but `0->b().c` unambiguously parses as field access on `0->b()`.
+                // (See issue #8851)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
-                if (right_expr == .apply) {
-                    const apply = right_expr.apply;
-                    if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: just format the function, not the empty parens
-                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
-                    } else {
-                        _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-                    }
+                if (right_expr == .ident) {
+                    // Plain identifier: add () after it
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.pushAll("()");
                 } else {
+                    // Already has parens (apply) or other expr: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                 }
             },
@@ -2634,4 +2634,46 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// These test cases verify that formatting is stable (idempotent) - formatting twice
+// produces the same output as formatting once.
+
+test "issue 8851: local dispatch with space before field access is idempotent" {
+    // a=0->b .c() should format stably (not progressively strip parens)
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+    // a = 0->b()().c() should format stably - must preserve ALL levels of function application
+    const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
+}
+
+test "issue 8851: multiline local dispatch with field access is idempotent" {
+    // Multiline case from issue comment 1
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=0->b
+        \\      .c()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
+}
+
+test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
+    // ()->b()()() from issue comment 2
+    const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
+}
+
+test "issue 8851: chained field access after local dispatch is idempotent" {
+    // 0->b .c .d() - multiple field accesses
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
 }

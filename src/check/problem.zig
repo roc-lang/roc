@@ -174,6 +174,14 @@ pub const TypeMismatchDetail = union(enum) {
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
+    /// App's export type doesn't match the platform's required type
+    incompatible_platform_requirement: IncompatiblePlatformRequirement,
+};
+
+/// Problem data for platform requirement type mismatches
+pub const IncompatiblePlatformRequirement = struct {
+    /// The identifier that the platform requires
+    required_ident: Ident.Idx,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -510,6 +518,10 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(mismatch.types, data);
+                        },
+                        .incompatible_platform_requirement => {
+                            // For now, use generic type mismatch report for platform requirements
+                            return self.buildGenericTypeMismatchReport(mismatch.types);
                         },
                     }
                 } else {

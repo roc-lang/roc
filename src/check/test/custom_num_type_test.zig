@@ -101,3 +101,24 @@ test "Custom number type without negate: unary minus fails" {
     // Should fail - MyNum doesn't have negate method
     try test_env.assertOneTypeError("MISSING METHOD");
 }
+
+test "Custom type with heterogeneous times: Duration * I64 works" {
+    const source =
+        \\Duration := { seconds: I64 }.{
+        \\    times : Duration, I64 -> Duration
+        \\    times = |d, n| { seconds: d.seconds * n }
+        \\}
+        \\
+        \\my_duration : Duration
+        \\my_duration = { seconds: 60 }
+        \\
+        \\result : Duration
+        \\result = my_duration * 5
+    ;
+
+    var test_env = try TestEnv.init("Duration", source);
+    defer test_env.deinit();
+
+    // Should type-check successfully - Duration.times accepts Duration and I64
+    try test_env.assertNoErrors();
+}

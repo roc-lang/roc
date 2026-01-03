@@ -76,6 +76,9 @@ jobs:
         run: |
           zig build test-serialization-sizes
 
+      # Coverage runs in the zig-tests job inside nix, which has a working kcov version.
+      # Ubuntu's apt kcov is too old to capture coverage from Zig binaries.
+
   zig-tests:
     needs: check-once
     runs-on: ${{ matrix.os }}
@@ -92,6 +95,9 @@ jobs:
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-24.04
+            cpu_flag: ''
+            target_flag: ''  # Native build for coverage (kcov doesn't work with musl)
           - os: ubuntu-24.04-arm
             cpu_flag: ''
             target_flag: -Dtarget=aarch64-linux-musl
@@ -257,7 +263,12 @@ jobs:
         run: |
           git clean -fdx
           git reset --hard HEAD
-          nix develop ./src/ -c zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}
+          # Only run coverage on Linux with no target flag (kcov doesn't work with cross/musl targets)
+          if [ "$RUNNER_OS" = "Linux" ] && [ -z "${{ matrix.target_flag }}" ]; then
+            nix develop ./src/ -c bash -c "zig build && zig build snapshot && zig build test && zig build coverage"
+          else
+            nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"
+          fi
 
   zig-cross-compile:
     needs: check-once
