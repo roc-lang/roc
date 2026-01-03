@@ -1881,7 +1881,10 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            expr_node.data_2 = @intCast(idx);
+                            // For e_hosted_lambda nodes with typed payload:
+                            // data_3 = packed_body_and_index (body 24 bits, index 8 bits)
+                            // Clear top 8 bits (index) and set new index
+                            expr_node.data_3 = (expr_node.data_3 & 0xFFFFFF) | ((@as(u32, @intCast(idx)) & 0xFF) << 24);
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
@@ -3328,7 +3331,10 @@ fn compileAndSerializeModulesForEmbedding(
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            expr_node.data_2 = @intCast(idx);
+                            // For e_hosted_lambda nodes with typed payload:
+                            // data_3 = packed_body_and_index (body 24 bits, index 8 bits)
+                            // Clear top 8 bits (index) and set new index
+                            expr_node.data_3 = (expr_node.data_3 & 0xFFFFFF) | ((@as(u32, @intCast(idx)) & 0xFF) << 24);
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
