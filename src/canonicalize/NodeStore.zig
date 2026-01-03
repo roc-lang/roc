@@ -31,6 +31,8 @@ gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
 extra_data: collections.SafeList(u32),
+int_values: collections.SafeList(i128),
+dec_values: collections.SafeList(RocDec),
 diag_region_data: collections.SafeList(Region), // Specialized list for diagnostic regions
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
@@ -109,6 +111,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
         .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
+        .int_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 32),
+        .dec_values = try collections.SafeList(RocDec).initCapacity(gpa, capacity / 32),
         .diag_region_data = try collections.SafeList(Region).initCapacity(gpa, 64),
         .scratch = try Scratch.init(gpa),
     };
@@ -119,6 +123,8 @@ pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
     store.extra_data.deinit(store.gpa);
+    store.int_values.deinit(store.gpa);
+    store.dec_values.deinit(store.gpa);
     store.diag_region_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
@@ -131,6 +137,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
     store.extra_data.relocate(offset);
+    store.int_values.relocate(offset);
+    store.dec_values.relocate(offset);
     store.diag_region_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
@@ -417,11 +425,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_num;
             const kind: CIR.NumKind = @enumFromInt(p.kind);
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
-            const value_as_u32s = store.extra_data.items.items[p.value_idx..][0..4];
+            const value_i128 = store.int_values.items.items[p.value_idx];
 
             return CIR.Expr{
                 .e_num = .{
-                    .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = val_kind },
+                    .value = .{ .bytes = @bitCast(value_i128), .kind = val_kind },
                     .kind = kind,
                 },
             };
@@ -474,12 +482,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dec => {
             const p = payload.expr_dec;
-            const value_as_u32s = store.extra_data.items.items[p.value_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const value = store.dec_values.items.items[p.value_idx];
 
             return CIR.Expr{
                 .e_dec = .{
-                    .value = RocDec{ .num = value_as_i128 },
+                    .value = value,
                     .has_suffix = p.has_suffix != 0,
                 },
             };
@@ -822,17 +829,17 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    const extra_data_start = store.extra_data.len();
+    const value_idx = store.int_values.len();
     const value_as_i128: i128 = @bitCast(value.bytes);
-    const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-    _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
+    _ = try store.int_values.append(store.gpa, value_as_i128);
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_num,
-        .data_1 = @intFromEnum(num_kind),
-        .data_2 = @intFromEnum(value.kind),
-        .data_3 = @intCast(extra_data_start),
-    });
+    var node = store.nodes.get(node_idx);
+    node.setPayload(.{ .expr_num = .{
+        .kind = @intFromEnum(num_kind),
+        .val_kind = @intFromEnum(value.kind),
+        .value_idx = @intCast(value_idx),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_zero_argument_tag expression in-place.
@@ -1131,13 +1138,11 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_num_literal => {
             const p = payload.pattern_num_literal;
-            const extra_data_idx = p.value_idx;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            const value_i128 = store.int_values.items.items[p.value_idx];
 
             return CIR.Pattern{
                 .num_literal = .{
-                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = @enumFromInt(p.val_kind) },
+                    .value = .{ .bytes = @bitCast(value_i128), .kind = @enumFromInt(p.val_kind) },
                     .kind = @enumFromInt(p.kind),
                 },
             };
@@ -1157,17 +1162,13 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_dec_literal => {
-            const raw = payload.raw;
-            const extra_data_idx = raw.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
-            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
-
-            const has_suffix = raw.data_2 != 0;
+            const p = payload.pattern_dec_literal;
+            const value = store.dec_values.items.items[p.value_idx];
 
             return CIR.Pattern{
                 .dec_literal = .{
-                    .value = RocDec{ .num = value_as_i128 },
-                    .has_suffix = has_suffix,
+                    .value = value,
+                    .has_suffix = p.has_suffix != 0,
                 },
             };
         },
@@ -1655,21 +1656,15 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_num => |e| {
             node.tag = .expr_num;
 
-            // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.len();
-
-            // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
-            // We always store as i128 internally
+            // Store i128 value in int_values list
+            const value_idx = store.int_values.len();
             const value_as_i128: i128 = @bitCast(e.value.bytes);
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
+            _ = try store.int_values.append(store.gpa, value_as_i128);
 
             node.setPayload(.{ .expr_num = .{
                 .kind = @intFromEnum(e.kind),
                 .val_kind = @intFromEnum(e.value.kind),
-                .value_idx = @intCast(extra_data_start),
+                .value_idx = @intCast(value_idx),
             } });
         },
         .e_list => |e| {
@@ -1716,16 +1711,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dec => |e| {
             node.tag = .expr_dec;
 
-            // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_i128: i128 = e.value.num;
-            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
+            // Store the RocDec value in dec_values list
+            const value_idx = store.dec_values.len();
+            _ = try store.dec_values.append(store.gpa, e.value);
 
             node.setPayload(.{ .expr_dec = .{
-                .value_idx = @intCast(extra_data_start),
+                .value_idx = @intCast(value_idx),
                 .has_suffix = @intFromBool(e.has_suffix),
                 ._unused = 0,
             } });
@@ -2274,16 +2265,15 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
+            const value_idx = store.int_values.len();
+            const value_as_i128: i128 = @bitCast(p.value.bytes);
+            _ = try store.int_values.append(store.gpa, value_as_i128);
+
             node.setPayload(.{ .pattern_num_literal = .{
                 .kind = @intFromEnum(p.kind),
                 .val_kind = @intFromEnum(p.value.kind),
-                .value_idx = @intCast(store.extra_data.len()),
+                .value_idx = @intCast(value_idx),
             } });
-
-            const value_as_u32s: [4]u32 = @bitCast(p.value.bytes);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
         },
         .small_dec_literal => |p| {
             node.tag = .pattern_small_dec_literal;
@@ -2295,16 +2285,13 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
-            // Store the RocDec value in extra_data
-            const extra_data_start = store.extra_data.len();
-            const value_as_u32s: [4]u32 = @bitCast(p.value.num);
-            for (value_as_u32s) |word| {
-                _ = try store.extra_data.append(store.gpa, word);
-            }
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intCast(extra_data_start),
-                .data_2 = @intFromBool(p.has_suffix),
-                .data_3 = 0,
+            const value_idx = store.dec_values.len();
+            _ = try store.dec_values.append(store.gpa, p.value);
+
+            node.setPayload(.{ .pattern_dec_literal = .{
+                .value_idx = @intCast(value_idx),
+                .has_suffix = @intFromBool(p.has_suffix),
+                ._unused = 0,
             } });
         },
         .str_literal => |p| {
@@ -3847,6 +3834,8 @@ pub const Serialized = extern struct {
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
     extra_data: collections.SafeList(u32).Serialized,
+    int_values: collections.SafeList(i128).Serialized,
+    dec_values: collections.SafeList(RocDec).Serialized,
     diag_region_data: collections.SafeList(Region).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
@@ -3863,6 +3852,10 @@ pub const Serialized = extern struct {
          try self.regions.serialize(&store.regions, allocator, writer);
          // Serialize extra_data
          try self.extra_data.serialize(&store.extra_data, allocator, writer);
+         // Serialize int_values
+         try self.int_values.serialize(&store.int_values, allocator, writer);
+         // Serialize dec_values
+         try self.dec_values.serialize(&store.dec_values, allocator, writer);
          // Serialize diag_region_data
          try self.diag_region_data.serialize(&store.diag_region_data, allocator, writer);
      }
@@ -3879,6 +3872,8 @@ pub const Serialized = extern struct {
          const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
          const deserialized_regions = self.regions.deserialize(base_addr).*;
          const deserialized_nodes = self.nodes.deserialize(base_addr).*;
+         const deserialized_int_values = self.int_values.deserialize(base_addr).*;
+         const deserialized_dec_values = self.dec_values.deserialize(base_addr).*;
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
@@ -3890,6 +3885,8 @@ pub const Serialized = extern struct {
             .nodes = deserialized_nodes,
             .regions = deserialized_regions,
             .extra_data = deserialized_extra_data,
+            .int_values = deserialized_int_values,
+            .dec_values = deserialized_dec_values,
             .diag_region_data = deserialized_diag_region_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
