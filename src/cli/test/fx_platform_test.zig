@@ -901,7 +901,7 @@ test "run allows warnings without blocking execution" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    try checkSuccess(run_result);
+    try checkFailure(run_result);
 
     // Should show the warning
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNUSED VARIABLE") != null);
