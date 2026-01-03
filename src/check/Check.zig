@@ -1468,6 +1468,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
         // Check any accumulated static dispatch constraints
         try self.checkDeferredStaticDispatchConstraints(&env);
+
+        // Check if the expression's type has incompatible constraints
+        const expr_var = ModuleEnv.varFrom(expr_idx);
+        try self.checkFlexVarConstraintCompatibility(expr_var, &env);
     }
 }
 
@@ -5463,7 +5467,43 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
             }
         } else if (dispatcher_content == .flex) {
-            // If the root type is aa flex, then we there's nothing to check
+            // The dispatcher is an unresolved flex var. Check if it has constraints that
+            // are incompatible with the type it will default to at runtime.
+            //
+            // If a flex var has a from_numeral constraint, it will default to a numeric type.
+            // We need to check that all OTHER constraints on the flex can be satisfied by
+            // numeric types. For example, if the flex has both from_numeral and not constraints,
+            // that's an error because numeric types don't have a not method.
+            const flex = dispatcher_content.flex;
+            const deferred_constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
+            const flex_constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+
+            // Check if this flex var has from_numeral constraint (indicating numeric type)
+            var has_from_numeral = false;
+            for (flex_constraints) |fc| {
+                if (fc.origin == .from_numeral) {
+                    has_from_numeral = true;
+                    break;
+                }
+            }
+
+            if (has_from_numeral) {
+                // This flex will default to a numeric type. Check that there are no
+                // deferred constraints that are known to be incompatible with numeric types.
+                for (deferred_constraints) |constraint| {
+                    if (self.isMethodIncompatibleWithNumeric(constraint.fn_name)) {
+                        // This constraint is not supported by numeric types
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                        );
+                    }
+                }
+            }
+            // If no from_numeral constraint, the flex may remain polymorphic or
+            // be resolved later - skip checking for now.
             continue;
         } else if (dispatcher_content == .structure and dispatcher_content.structure == .nominal_type) {
             // If the root type is a nominal type, then this is valid static dispatch
@@ -5794,6 +5834,54 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         // Error types: allow them to proceed
         .err => true,
     };
+}
+
+/// Check if a method is one that is known to NOT be on numeric types.
+/// This is used to detect incompatible constraints on flex vars with from_numeral.
+/// Currently only `not` is detected, as it's a Bool-only method often mistakenly
+/// applied to numeric literals (e.g., `!3`).
+fn isMethodIncompatibleWithNumeric(self: *Self, method_name: Ident.Idx) bool {
+    const idents = &self.cir.idents;
+    // The `not` method is only on Bool, not on any numeric type.
+    // Using `!` on a numeric literal is always a type error.
+    return method_name == idents.not;
+}
+
+/// Check if a flex var has incompatible constraints and report errors.
+/// This is called after type-checking to catch cases like `!3` where a flex var
+/// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
+fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (resolved.desc.content != .flex) return;
+
+    const flex = resolved.desc.content.flex;
+    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+    if (constraints.len == 0) return;
+
+    // Check if this flex var has from_numeral constraint (indicating numeric type)
+    var has_from_numeral = false;
+    for (constraints) |c| {
+        if (c.origin == .from_numeral) {
+            has_from_numeral = true;
+            break;
+        }
+    }
+
+    if (has_from_numeral) {
+        // This flex will default to a numeric type. Check that there are no
+        // constraints that are known to be incompatible with numeric types.
+        for (constraints) |constraint| {
+            if (self.isMethodIncompatibleWithNumeric(constraint.fn_name)) {
+                // This constraint is not supported by numeric types
+                try self.reportConstraintError(
+                    var_,
+                    constraint,
+                    .{ .missing_method = .nominal },
+                    env,
+                );
+            }
+        }
+    }
 }
 
 /// Check if an expression represents a function definition that should be generalized.
