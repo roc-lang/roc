@@ -14,15 +14,69 @@ const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
-const CACHE_VERSION: u32 = 1;
+
+/// Compute hash for a struct type (duplicated from struct_hash.zig to avoid circular imports)
+inline fn fnv1a32(comptime str: []const u8) u32 {
+    var hash: u32 = 2166136261;
+    inline for (str) |byte| {
+        hash ^= byte;
+        hash *%= 16777619;
+    }
+    return hash;
+}
+
+inline fn isExternStruct(comptime T: type) bool {
+    const type_info = @typeInfo(T);
+    return type_info == .@"struct" and type_info.@"struct".layout == .@"extern";
+}
+
+inline fn computeStructHashLocal(comptime StructType: type) [32]u8 {
+    const type_info = @typeInfo(StructType);
+    if (type_info != .@"struct") {
+        return [_]u8{0} ** 32;
+    }
+    const fields = type_info.@"struct".fields;
+    var hash: u64 = 14695981039346656037;
+    const fnv_prime = 1099511628211;
+    inline for (fields) |field| {
+        const name_hash = fnv1a32(field.name);
+        hash ^= name_hash;
+        hash *%= fnv_prime;
+        const field_size = @sizeOf(field.type);
+        const field_align = @alignOf(field.type);
+        hash ^= @intCast(field_size);
+        hash *%= fnv_prime;
+        hash ^= @intCast(field_align);
+        hash *%= fnv_prime;
+        if (isExternStruct(field.type)) {
+            const nested_hash = computeStructHashLocal(field.type);
+            inline for (nested_hash) |byte| {
+                hash ^= byte;
+            }
+            hash *%= fnv_prime;
+        }
+    }
+    var result: [32]u8 = undefined;
+    inline for (0..32) |i| {
+        result[i] = @intCast((hash >> @intCast((i % 8) * 8)) & 0xFF);
+    }
+    return result;
+}
+
+/// Compile-time hash of ModuleEnv.Serialized structure for automatic cache invalidation
+const MODULE_ENV_STRUCT_HASH: [32]u8 = blk: {
+    @setEvalBranchQuota(10000);
+    break :blk computeStructHashLocal(ModuleEnv.Serialized);
+};
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
     /// Magic number for validation
     magic: u32,
 
-    /// Version for compatibility checking
-    version: u32,
+    /// Structure hash of ModuleEnv.Serialized at compile time.
+    /// Invalidates cache if ModuleEnv.Serialized layout changes.
+    struct_hash: [32]u8,
 
     /// Total size of the data section (excluding this header)
     data_size: u32,
@@ -32,13 +86,13 @@ pub const Header = struct {
     warning_count: u32,
 
     /// Padding to ensure alignment
-    _padding: [12]u8 = [_]u8{0} ** 12,
+    _padding: [4]u8 = [_]u8{0} ** 4,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
         PartialRead,
         InvalidMagic,
-        InvalidVersion,
+        InvalidStructHash,
     };
 
     /// Verify that the given buffer begins with a valid Header
@@ -56,9 +110,13 @@ pub const Header = struct {
             return InitError.PartialRead;
         }
 
-        // Validate magic and version
+        // Validate magic
         if (header.magic != CACHE_MAGIC) return InitError.InvalidMagic;
-        if (header.version != CACHE_VERSION) return InitError.InvalidVersion;
+
+        // Validate structure hash
+        if (!std.mem.eql(u8, &header.struct_hash, &MODULE_ENV_STRUCT_HASH)) {
+            return InitError.InvalidStructHash;
+        }
 
         return header;
     }
@@ -105,11 +163,11 @@ pub const CacheModule = struct {
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
-            .version = CACHE_VERSION,
+            .struct_hash = MODULE_ENV_STRUCT_HASH,
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
-            ._padding = [_]u8{0} ** 12,
+            ._padding = [_]u8{0} ** 4,
         };
 
         // Consolidate the scattered iovecs into the cache data buffer
@@ -132,9 +190,14 @@ pub const CacheModule = struct {
 
         const header = @as(*const Header, @ptrCast(mapped_data.ptr));
 
-        // Validate magic number and version
-        if (header.magic != CACHE_MAGIC) return error.InvalidMagicNumber;
-        if (header.version != CACHE_VERSION) return error.InvalidVersion;
+        // Validate header (including struct hash)
+        _ = Header.initFromBytes(@constCast(mapped_data.ptr[0..@min(mapped_data.len, 8192)])) catch |err| {
+            return switch (err) {
+                error.PartialRead => error.BufferTooSmall,
+                error.InvalidMagic => error.InvalidMagicNumber,
+                error.InvalidStructHash => error.CacheStructHashMismatch,
+            };
+        };
 
         // Validate data size
         const expected_total_size = @sizeOf(Header) + header.data_size;
