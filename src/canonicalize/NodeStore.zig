@@ -856,18 +856,16 @@ pub fn replaceExprWithZeroArgumentTag(
 ) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
-    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+    // Pack variant_var (16 bits) | ext_var (16 bits)
+    const packed_vars = (@as(u32, @intFromEnum(ext_var)) << 16) | @as(u32, @intFromEnum(variant_var));
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_zero_argument_tag,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = 0,
-        .data_3 = 0,
-    });
+    var node = store.nodes.get(node_idx);
+    node.setPayload(.{ .expr_zero_argument_tag = .{
+        .closure_name = @bitCast(closure_name),
+        .packed_vars = packed_vars,
+        .name = @bitCast(name),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_tuple expression in-place.
