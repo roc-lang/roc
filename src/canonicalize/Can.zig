@@ -4309,7 +4309,6 @@ pub fn canonicalizeExpr(
                                 // For auto-imported types (like Str, Bool from Builtin module),
                                 // we need to look up the method in the Builtin module, not current scope
                                 if (is_auto_imported_type and self.module_envs != null) {
-                                    std.debug.print("[DEBUG-QIDENT] Found auto-imported type: {s}.{s}\n", .{ type_text, field_text });
                                     if (self.module_envs.?.get(module_alias)) |auto_imported_type_env| {
                                         const module_env = auto_imported_type_env.env;
 
@@ -4319,7 +4318,6 @@ pub fn canonicalizeExpr(
                                         const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
                                         const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_type_text, field_text);
                                         const qualified_text = self.env.getIdent(fully_qualified_idx);
-                                        std.debug.print("[DEBUG-QIDENT] Looking up: {s}\n", .{qualified_text});
 
                                         // Try to find the method in the Builtin module's exposed items
                                         if (module_env.common.findIdent(qualified_text)) |qname_ident| {
