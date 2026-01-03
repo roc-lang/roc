@@ -273,6 +273,9 @@ jobs:
           readelf --debug-dump=info zig-out/bin/parse_unit_coverage 2>/dev/null | head -50 || true
           echo "Running coverage..."
           zig build coverage
+          # Debug: show what file paths kcov captured
+          echo "Files tracked by kcov:"
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -30
 
       - name: Test inside nix too
         if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
