@@ -1045,6 +1045,16 @@ const Formatter = struct {
             .frac => |f| {
                 try fmt.pushTokenText(f.token);
             },
+            .typed_int => |ti| {
+                try fmt.pushTokenText(ti.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(ti.type_token);
+            },
+            .typed_frac => |tf| {
+                try fmt.pushTokenText(tf.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(tf.type_token);
+            },
             .list => |l| {
                 try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
             },
