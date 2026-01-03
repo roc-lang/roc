@@ -1941,3 +1941,26 @@ test "issue 8872: polymorphic tag union payload layout in match expressions" {
         \\}
     , "hello", .no_trace);
 }
+
+test "issue 8892: nominal type wrapping tag union with match expression" {
+    // Regression test for GitHub issue #8892: when evaluating a tag expression
+    // inside a function where the expected type is a nominal type wrapping a tag union,
+    // the interpreter would crash with "e_tag: unexpected layout type: box".
+    //
+    // The bug was in e_tag evaluation: it was using getRuntimeLayout(rt_var) where
+    // rt_var was the nominal type (which has a box layout), instead of using the
+    // unwrapped backing type's layout (which is the actual tag union layout).
+    //
+    // The fix: use getRuntimeLayout(resolved.var_) to get the backing type's layout.
+    try runExpectSuccess(
+        \\{
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
+        \\}
+    , .no_trace);
+}

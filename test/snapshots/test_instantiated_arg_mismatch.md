@@ -13,21 +13,26 @@ type=expr
 }
 ~~~
 # EXPECTED
-MISSING METHOD - test_instantiated_arg_mismatch.md:5:10:5:12
+TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:10:5:12
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **test_instantiated_arg_mismatch.md:5:10:5:12:**
 ```roc
     pair(42, "hello")
 ```
          ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**test_instantiated_arg_mismatch.md:5:14:5:21:**
+```roc
+    pair(42, "hello")
+```
+             ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

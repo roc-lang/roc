@@ -138,6 +138,9 @@ perf.data.old
 profile.json
 flamegraph.svg
 
+# Coverage output
+kcov-output/
+
 # Ignore html files in the snapshot directory
 src/snapshots/**/*.html
 
