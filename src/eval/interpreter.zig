@@ -11976,11 +11976,48 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
-                // This ensures we get the actual tag union layout instead of a box wrapper.
-                const layout_val = try self.getRuntimeLayout(resolved.var_);
 
-                if (layout_val.tag == .scalar) {
+                // Get the layout for the original (possibly nominal) type first
+                const nominal_layout = try self.getRuntimeLayout(rt_var);
+
+                // For box layouts (recursive nominal types), we need to handle the box wrapper.
+                // For other layouts, use the resolved (unwrapped) type's layout to get the
+                // actual tag union layout instead of any wrapper.
+                const layout_val = if (nominal_layout.tag == .box)
+                    nominal_layout
+                else
+                    try self.getRuntimeLayout(resolved.var_);
+
+                if (layout_val.tag == .box) {
+                    // Recursive nominal type - the layout is a box wrapping the actual tag union.
+                    // Get the inner layout (the tag union) and schedule building that first.
+                    const inner_layout = self.runtime_layout_store.getLayout(layout_val.data.box);
+                    const args_exprs = self.env.store.sliceExpr(tag.args);
+                    const arg_vars_range = tag_list.items[tag_index].args;
+                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
+
+                    if (args_exprs.len == 0) {
+                        // No payload args - finalize immediately with inner layout
+                        const value = try self.finalizeTagNoPayload(rt_var, tag_index, inner_layout, roc_ops);
+                        // Now box the value
+                        const boxed = try self.makeBoxValueFromLayout(layout_val, value, roc_ops, rt_var);
+                        value.decref(&self.runtime_layout_store, roc_ops);
+                        try value_stack.push(boxed);
+                    } else {
+                        // Has payload args - schedule collection with box wrapping
+                        // layout_type: 0=record, 1=tuple, 2=tag_union, 3=boxed_tag_union
+                        const layout_type: u8 = 3; // boxed_tag_union
+                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
+                            .collected_count = 0,
+                            .remaining_args = args_exprs,
+                            .arg_rt_vars = arg_rt_vars,
+                            .expr_idx = expr_idx,
+                            .rt_var = rt_var,
+                            .tag_index = tag_index,
+                            .layout_type = layout_type,
+                        } } });
+                    }
+                } else if (layout_val.tag == .scalar) {
                     // No payload union - just set discriminant
                     var out = try self.pushRaw(layout_val, 0, rt_var);
                     if (layout_val.data.scalar.tag == .int) {
@@ -15381,6 +15418,64 @@ pub const Interpreter = struct {
                         dest.is_initialized = true;
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
+                    } else if (tc.layout_type == 3) {
+                        // Boxed tag union layout: build the inner tag union, then box it
+                        const box_layout = layout_val;
+                        const inner_layout = self.runtime_layout_store.getLayout(box_layout.data.box);
+
+                        // Build the inner tag union value using the same logic as layout_type == 2
+                        if (inner_layout.tag != .tag_union) {
+                            for (values) |val| val.decref(&self.runtime_layout_store, roc_ops);
+                            self.triggerCrash("boxed_tag_union: inner layout is not tag_union", false, roc_ops);
+                            return error.Crash;
+                        }
+
+                        const tu_idx = inner_layout.data.tag_union.idx;
+                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
+                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
+
+                        var inner_dest = try self.pushRaw(inner_layout, 0, tc.rt_var);
+                        const base_ptr: [*]u8 = @ptrCast(inner_dest.ptr.?);
+
+                        // Write payload at offset 0
+                        const payload_ptr: *anyopaque = @ptrCast(base_ptr);
+                        if (total_count == 1) {
+                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
+                        } else {
+                            // Multiple args - create tuple payload
+                            var elem_layouts = try self.allocator.alloc(Layout, total_count);
+                            defer self.allocator.free(elem_layouts);
+                            var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
+                            defer self.allocator.free(elem_rt_vars);
+                            for (values, 0..) |val, idx| {
+                                elem_layouts[idx] = val.layout;
+                                elem_rt_vars[idx] = val.rt_var;
+                            }
+                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
+                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+                            const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                            const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                            const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                            for (values, 0..) |val, idx| {
+                                try tup_acc.setElement(idx, val, roc_ops);
+                            }
+                        }
+
+                        // Write discriminant
+                        tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
+
+                        inner_dest.is_initialized = true;
+
+                        // Now box the inner value
+                        const boxed = try self.makeBoxValueFromLayout(box_layout, inner_dest, roc_ops, tc.rt_var);
+                        inner_dest.decref(&self.runtime_layout_store, roc_ops);
+
+                        for (values) |val| {
+                            val.decref(&self.runtime_layout_store, roc_ops);
+                        }
+                        try value_stack.push(boxed);
                     }
                 }
                 return true;
@@ -17165,144 +17260,6 @@ pub const Interpreter = struct {
                 };
 
                 if (nominal_info == null) {
-                    // For where clause constrained types, check the compile-time type for method info
-                    // Get the original e_dot_access expression to find the receiver's compile-time type
-                    const dot_access_expr = self.env.store.getExpr(da.expr_idx);
-                    const receiver_expr_idx: ?can.CIR.Expr.Idx = if (dot_access_expr == .e_dot_access)
-                        dot_access_expr.e_dot_access.receiver
-                    else
-                        null;
-
-                    const ct_nominal_info: ?struct { origin: base_pkg.Ident.Idx, ident: base_pkg.Ident.Idx } = blk: {
-                        const ct_receiver_var = if (receiver_expr_idx) |recv_idx|
-                            can.ModuleEnv.varFrom(recv_idx)
-                        else
-                            break :blk null;
-
-                        const ct_resolved = self.env.types.resolveVar(ct_receiver_var);
-
-                        switch (ct_resolved.desc.content) {
-                            .structure => |s| switch (s) {
-                                .nominal_type => |nom| break :blk .{
-                                    .origin = nom.origin_module,
-                                    .ident = nom.ident.ident_idx,
-                                },
-                                else => {},
-                            },
-                            .flex => |flex| {
-                                // Check if this flex var has static dispatch constraints (from where clause)
-                                // If so, we need to resolve the method from the actual value's type
-                                if (!flex.constraints.isEmpty()) {
-                                    // The method is from a where clause - check the runtime type for nominal info
-                                    const value_rt_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
-                                    switch (value_rt_resolved.desc.content) {
-                                        .flex => {
-                                            // TODO: Runtime flex vars with constraints require cross-environment
-                                            // ident comparison which is not yet implemented. The decode tests
-                                            // are skipped until where clause method dispatch is properly implemented.
-                                        },
-                                        .structure => |s| switch (s) {
-                                            .nominal_type => |nom| break :blk .{
-                                                .origin = nom.origin_module,
-                                                .ident = nom.ident.ident_idx,
-                                            },
-                                            else => {},
-                                        },
-                                        else => {},
-                                    }
-                                }
-                            },
-                            .rigid => |rigid| {
-                                // Same logic for rigid vars with constraints
-                                if (!rigid.constraints.isEmpty()) {
-                                    // First check if runtime type has the nominal wrapper
-                                    const value_rt_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
-                                    switch (value_rt_resolved.desc.content) {
-                                        .structure => |s| switch (s) {
-                                            .nominal_type => |nom| break :blk .{
-                                                .origin = nom.origin_module,
-                                                .ident = nom.ident.ident_idx,
-                                            },
-                                            else => {},
-                                        },
-                                        .flex => {
-                                            // TODO: Runtime flex vars with constraints require cross-environment
-                                            // ident comparison which is not yet implemented. The decode tests
-                                            // are skipped until where clause method dispatch is properly implemented.
-                                        },
-                                        else => {},
-                                    }
-
-                                    // If runtime type doesn't have nominal info, check the compile-time constraints
-                                    // Note: This currently doesn't work because where clause constraints
-                                    // don't store which type satisfies them - they only store the method
-                                    // signature. This needs type system changes to fix properly.
-                                    for (self.env.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
-                                        // Both fn_name and field_name are from self.env, so compare indices directly
-                                        if (constraint.fn_name == da.field_name) {
-                                            // Found matching constraint - translate and check fn_var for nominal type
-                                            const rt_fn_var = self.translateTypeVar(self.env, constraint.fn_var) catch continue;
-                                            const fn_resolved = self.runtime_types.resolveVar(rt_fn_var);
-                                            if (fn_resolved.desc.content == .structure and
-                                                fn_resolved.desc.content.structure == .nominal_type)
-                                            {
-                                                const nom = fn_resolved.desc.content.structure.nominal_type;
-                                                break :blk .{
-                                                    .origin = nom.origin_module,
-                                                    .ident = nom.ident.ident_idx,
-                                                };
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            else => {},
-                        }
-                        break :blk null;
-                    };
-
-                    if (ct_nominal_info) |info| {
-                        // Found nominal info from compile-time type - use it for dispatch
-                        const method_func = self.resolveMethodFunction(
-                            info.origin,
-                            info.ident,
-                            da.field_name,
-                            roc_ops,
-                            effective_receiver_rt_var,
-                        ) catch |err| {
-                            receiver_value.decref(&self.runtime_layout_store, roc_ops);
-                            return err;
-                        };
-
-                        // Similar to main method dispatch path: push receiver and func, then collect args
-                        try value_stack.push(receiver_value);
-                        try value_stack.push(method_func);
-
-                        try work_stack.push(.{
-                            .apply_continuation = .{
-                                .dot_access_collect_args = .{
-                                    .method_name = da.field_name,
-                                    .collected_count = 0,
-                                    .remaining_args = arg_exprs,
-                                    .receiver_rt_var = effective_receiver_rt_var,
-                                    .expr_idx = da.expr_idx,
-                                    .expected_arg_rt_vars = null, // No expected types for where clause methods
-                                },
-                            },
-                        });
-
-                        // Start evaluating first arg
-                        if (arg_exprs.len > 0) {
-                            const first_arg_ct_var = can.ModuleEnv.varFrom(arg_exprs[0]);
-                            const first_arg_rt_var = try self.translateTypeVar(self.env, first_arg_ct_var);
-                            try work_stack.push(.{ .eval_expr = .{
-                                .expr_idx = arg_exprs[0],
-                                .expected_rt_var = first_arg_rt_var,
-                            } });
-                        }
-                        return true;
-                    }
-
                     receiver_value.decref(&self.runtime_layout_store, roc_ops);
                     return error.InvalidMethodReceiver;
                 }
