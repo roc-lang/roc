@@ -5908,6 +5908,7 @@ fn reportConstraintError(
                 .fn_var = constraint.fn_var,
                 .method_name = constraint.fn_name,
                 .origin = constraint.origin,
+                .num_literal = constraint.num_literal,
             },
         } },
         .not_nominal => problem.Problem{ .static_dispatch = .{
