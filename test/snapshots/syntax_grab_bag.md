@@ -269,7 +269,7 @@ INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
-MISSING METHOD - syntax_grab_bag.md:146:15:146:18
+TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
 UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
@@ -978,19 +978,17 @@ But `add_one` needs the first argument to be:
 
     U64
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **syntax_grab_bag.md:146:15:146:18:**
 ```roc
 	var number = 123
 ```
 	             ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
