@@ -128,5 +128,5 @@ EndOfFile,
 		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
 		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
 		(expr (type "[#1_make_adder({ .._others, y: _field }), .._others]"))
-		(expr (type "(a -> [#1_make_adder({ ..b, y: a }), ..c]), a -> (a -> [#1_make_adder({ ..b, y: a }), ..c])"))))
+		(expr (type "Try(a -> [#1_make_adder({ ..b, y: a }), ..c], [InvalidNumeral([#1_make_adder({ ..b, y: a }), ..c])])"))))
 ~~~
