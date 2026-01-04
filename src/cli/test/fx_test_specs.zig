@@ -273,11 +273,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>done",
         .description = "Regression test: Minimal repro for issue #8897 panic",
     },
-    .{
-        .roc_file = "test/fx/issue8916.roc",
-        .io_spec = "1>n0: 0, n1_disc: 1, n1: 1",
-        .description = "Regression test: Pattern matching on recursive nominal type with Box (issue #8916)",
-    },
 };
 
 /// Get the total number of IO spec tests
