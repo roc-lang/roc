@@ -1471,6 +1471,52 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     }
 }
 
+/// Check a REPL expression, also type-checking any definitions (for local type declarations)
+pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+    try ensureTypeStoreIsFilled(self);
+
+    // Copy builtin types into this module's type store
+    try self.copyBuiltinTypes();
+
+    // Create a solver env
+    var env = try self.env_pool.acquire(.generalized);
+    defer self.env_pool.release(env);
+
+    // First, iterate over the statements, generating types for each type declaration
+    const stms_slice = self.cir.store.sliceStatements(self.cir.builtin_statements);
+    for (stms_slice) |stmt_idx| {
+        try self.generateStmtTypeDeclType(stmt_idx, &env);
+    }
+
+    // Initialize top_level_ptrns with any defs from local type declarations
+    const defs_slice = self.cir.store.sliceDefs(self.cir.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .not_processed });
+    }
+
+    // Type-check defs from local type declarations (their associated blocks)
+    for (defs_slice) |def_idx| {
+        env.reset();
+        try self.checkDef(def_idx, &env);
+    }
+
+    {
+        try env.var_pool.pushRank();
+        defer env.var_pool.popRank();
+
+        // Check the expr
+        _ = try self.checkExpr(expr_idx, &env, .no_expectation);
+
+        // Only generalize if this is a lambda expression (value restriction)
+        const should_generalize = self.isLambdaExpr(expr_idx);
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+
+        // Check any accumulated static dispatch constraints
+        try self.checkDeferredStaticDispatchConstraints(&env);
+    }
+}
+
 // defs //
 
 /// Check the types for a single definition
@@ -4383,7 +4429,11 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno => {
+            .s_nominal_decl => |nominal| {
+                // Local nominal type declaration - generate the type properly
+                try self.generateNominalDecl(stmt_idx, stmt_var, nominal, env);
+            },
+            .s_import, .s_alias_decl, .s_type_anno => {
                 // These are only valid at the top level, czer reports error
                 try self.unifyWith(stmt_var, .err, env);
             },
