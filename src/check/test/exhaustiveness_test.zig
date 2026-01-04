@@ -838,3 +838,24 @@ test "exhaustive - record patterns with different field subsets" {
 
     try test_env.assertLastDefType("Str");
 }
+
+// Regression test for issue #8896: non-exhaustive tuple with list pattern
+// Previously caused "Invalid free" panic due to allocator mismatch when freeing
+// the missing_patterns slice in the NonExhaustiveMatch error.
+
+test "non-exhaustive - tuple with list pattern" {
+    const source =
+        \\f : (List(I64), I64) -> I64
+        \\f = |l, i| {
+        \\    match (l, i) {
+        \\        ([], _) => 0
+        \\        (_, 0) => 0
+        \\        ([_x, ..], _) => 0
+        \\    }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("NON-EXHAUSTIVE MATCH");
+}
