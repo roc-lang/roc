@@ -9207,37 +9207,6 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Resolve a type annotation index through a rigid_var_lookup reference (exactly one hop).
-    /// This is necessary because after builtin serialization, the union-find relationships
-    /// established during type checking are lost. rigid_var_lookup annotations reference
-    /// the original rigid_var but have a different index, causing varFrom() to return
-    /// different type variables that aren't unified after deserialization.
-    fn resolveTypeAnnoRef(env: *const can.ModuleEnv, anno_idx: can.CIR.TypeAnno.Idx) can.CIR.TypeAnno.Idx {
-        const anno = env.store.getTypeAnno(anno_idx);
-        const result = switch (anno) {
-            .rigid_var_lookup => |lookup| lookup.ref,
-            else => anno_idx,
-        };
-
-        // Debug validation: verify there's at most one hop
-        if (comptime builtin.mode == .Debug) {
-            var current = anno_idx;
-            var count: u32 = 0;
-            while (count < 100) : (count += 1) {
-                const check_anno = env.store.getTypeAnno(current);
-                switch (check_anno) {
-                    .rigid_var_lookup => |lookup| {
-                        current = lookup.ref;
-                    },
-                    else => break,
-                }
-            }
-            std.debug.assert(current == result);
-        }
-
-        return result;
-    }
-
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
@@ -11163,13 +11132,8 @@ pub const Interpreter = struct {
                 const type_var_alias_stmt = self.env.store.getStatement(tvd.type_var_alias_stmt);
                 const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
 
-                // Resolve through rigid_var_lookup to get the original type annotation.
-                // After builtin serialization, union-find relationships are lost, so we need
-                // to follow the rigid_var_lookup reference to get the correct type variable.
-                const resolved_anno = resolveTypeAnnoRef(self.env, type_var_anno);
-
                 // Translate the type annotation to a runtime type variable
-                const ct_var = can.ModuleEnv.varFrom(resolved_anno);
+                const ct_var = can.ModuleEnv.varFrom(type_var_anno);
                 const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
 
                 // Resolve the type to find the nominal type info
