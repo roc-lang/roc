@@ -708,13 +708,13 @@ pub const Store = struct {
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(target_usize.size())),
             },
             .record => .{
-                // Use dynamic size computation to handle recursive types correctly
-                .size = @intCast(self.getRecordSize(layout.data.record.idx, layout.data.record.alignment)),
+                // Use pre-computed size from RecordData to avoid infinite recursion on recursive types
+                .size = @intCast(self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.record.alignment.toByteUnits())),
             },
             .tuple => .{
-                // Use dynamic size computation to handle recursive types correctly
-                .size = @intCast(self.getTupleSize(layout.data.tuple.idx, layout.data.tuple.alignment)),
+                // Use pre-computed size from TupleData to avoid infinite recursion on recursive types
+                .size = @intCast(self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tuple.alignment.toByteUnits())),
             },
             .closure => blk: {
@@ -729,8 +729,8 @@ pub const Store = struct {
                 };
             },
             .tag_union => .{
-                // Use dynamic size computation to handle recursive types correctly
-                .size = @intCast(self.getTagUnionSize(layout.data.tag_union.idx, layout.data.tag_union.alignment)),
+                // Use pre-computed size from TagUnionData to avoid infinite recursion on recursive types
+                .size = @intCast(self.tag_union_data.get(@enumFromInt(layout.data.tag_union.idx.int_idx)).size),
                 .alignment = layout_mod.RocAlignment.fromByteUnits(@intCast(layout.data.tag_union.alignment.toByteUnits())),
             },
             .zst => .{
