@@ -191,15 +191,13 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
-UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
+MISSING METHOD - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
-UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
-UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
+UNUSED VALUE - fuzz_crash_020.md:86:11:86:11
 TYPE MISMATCH - fuzz_crash_020.md:77:11:77:14
-UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
-UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
-UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
-UNUSED VALUE - fuzz_crash_020.md:119:2:119:10
+UNUSED VALUE - fuzz_crash_020.md:98:4:98:4
+UNUSED VALUE - fuzz_crash_020.md:105:2:105:2
+UNUSED VALUE - fuzz_crash_020.md:119:2:119:2
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -915,17 +913,17 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
 **fuzz_crash_020.md:39:2:39:3:**
 ```roc
 	1
 ```
 	^
 
-It has the type:
+The value's type, which does not have a method named **from_numeral**, is:
 
-    f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]
+    {}
 
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern in the fourth branch of this `match` differs from previous ones:
@@ -964,27 +962,17 @@ All patterns in an `match` must have compatible types.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-It has the type:
-
-    _f
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:86:11:86:17:**
+**fuzz_crash_020.md:86:11:**
 ```roc
 	)crash ke"Unr!" #)
 ```
-	         ^^^^^^
+          ^^^^^^
 
 It has the type:
 
     Str
+
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -1000,7 +988,7 @@ Other code expects this to have the type:
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:98:4:104:3:**
+**fuzz_crash_020.md:98:4:**
 ```roc
 	m (
 		123,
@@ -1019,41 +1007,35 @@ It has the type:
         j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
       ]
 
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:105:2:105:54:**
+**fuzz_crash_020.md:105:2:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
-	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
 
     Bool
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:105:55:105:85:**
-```roc
-	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
-```
-	                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    ok
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:119:2:119:10:**
+**fuzz_crash_020.md:119:2:**
 ```roc
 	foo == 1
 ```
-	^^^^^^^^
+ ^^^^^^^^
 
 It has the type:
 
     Bool
+
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

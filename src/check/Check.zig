@@ -4330,27 +4330,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 does_fx = try self.checkExpr(expr.expr, env, .no_expectation) or does_fx;
                 const expr_var: Var = ModuleEnv.varFrom(expr.expr);
 
-                const resolved = self.types.resolveVar(expr_var).desc.content;
-                const is_empty_record = blk: {
-                    if (resolved == .err) break :blk true;
-                    if (resolved != .structure) break :blk false;
-                    switch (resolved.structure) {
-                        .empty_record => break :blk true,
-                        .record => |record| {
-                            // A record is effectively empty if it has no fields
-                            const fields_slice = self.types.getRecordFieldsSlice(record.fields);
-                            break :blk fields_slice.len == 0;
-                        },
-                        else => break :blk false,
-                    }
-                };
-                if (!is_empty_record) {
-                    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, expr_var);
-                    _ = try self.problems.appendProblem(self.cir.gpa, .{ .unused_value = .{
-                        .var_ = expr_var,
-                        .snapshot = snapshot,
-                    } });
-                }
+                // Statements must evaluate to {}. Add a constraint to unify with empty record.
+                // If unification fails, we get a nice type mismatch error explaining that
+                // statement expressions must return {}.
+                const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
+                const unify_result = try self.unify(empty_rec, expr_var, env);
+                self.setDetailIfTypeMismatch(unify_result, .statement_not_unit);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },

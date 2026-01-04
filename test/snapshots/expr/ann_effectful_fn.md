@@ -14,8 +14,8 @@ type=expr
 ~~~
 # EXPECTED
 DUPLICATE DEFINITION - ann_effectful_fn.md:3:5:3:19
-UNUSED VALUE - ann_effectful_fn.md:2:32:2:36
-UNUSED VALUE - ann_effectful_fn.md:2:37:2:50
+UNUSED VALUE - ann_effectful_fn.md:2:32:2:32
+UNUSED VALUE - ann_effectful_fn.md:2:37:2:37
 # PROBLEMS
 **DUPLICATE DEFINITION**
 The name `launchTheNukes` is being redeclared in this scope.
@@ -37,7 +37,7 @@ But `launchTheNukes` was already defined here:
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:32:2:36:**
+**ann_effectful_fn.md:2:32:**
 ```roc
     launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
@@ -47,9 +47,11 @@ It has the type:
 
     [Bool, .._others]
 
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**ann_effectful_fn.md:2:37:2:50:**
+**ann_effectful_fn.md:2:37:**
 ```roc
     launchTheNukes : {} => Try Bool LaunchNukeErr
 ```
@@ -58,6 +60,8 @@ This expression produces a value, but it's not being used:
 It has the type:
 
     [LaunchNukeErr, .._others]
+
+Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

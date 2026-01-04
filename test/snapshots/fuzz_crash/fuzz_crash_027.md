@@ -227,7 +227,6 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
 TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
@@ -968,18 +967,6 @@ But all the previous patterns have this type:
     [Red, Blue, .._others]
 
 All patterns in an `match` must have compatible types.
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-It has the type:
-
-    _d
 
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
