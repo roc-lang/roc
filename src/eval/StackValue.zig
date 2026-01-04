@@ -222,27 +222,21 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .closure) {
         const closure_raw_ptr = ptr orelse return;
-        // Get the closure header to find the captures layout
-        const closure_header: *const layout_mod.Closure = builtins.utils.alignedPtrCast(*const layout_mod.Closure, @as([*]u8, @ptrCast(closure_raw_ptr)), @src());
         const closure_ptr_val = @intFromPtr(closure_raw_ptr);
 
-        // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
-        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        // Use the captures_layout_idx from the passed-in layout, NOT from the raw memory header.
+        // The layout parameter is authoritative and was set when the closure was created.
+        // Reading from raw memory could give stale/incorrect values.
+        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const idx_as_usize = @intFromEnum(captures_layout_idx);
         if (comptime trace_refcount) {
-            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={} body_idx={}", .{
+            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={}", .{
                 closure_ptr_val,
                 idx_as_usize,
-                @intFromEnum(closure_header.body_idx),
             });
         }
-        if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefLayoutPtr: closure invalid captures_layout_idx=0x{x}", .{idx_as_usize}) catch "decrefLayoutPtr: invalid closure";
-            ops.crash(msg);
-            return;
-        }
 
-        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+        const captures_layout = layout_cache.getLayout(captures_layout_idx);
 
         if (comptime trace_refcount) {
             traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
