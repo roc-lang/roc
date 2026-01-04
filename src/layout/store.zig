@@ -1411,11 +1411,16 @@ pub const Store = struct {
                     // A recursive reference has the same type arguments (or none).
                     // Different instantiations (like Try(Str, Str) inside Try((Try(Str, Str), U64), Str))
                     // have different type arguments and should not be treated as recursive.
-                    const current_type_args = self.types_store.sliceNominalArgs(nominal_type);
+                    const current_type_args_range = types.Store.getNominalArgsRange(nominal_type);
                     const same_type_args = argsMatch: {
-                        if (current_type_args.len != progress.type_args.len) break :argsMatch false;
+                        if (current_type_args_range.count != progress.type_args_range.count) break :argsMatch false;
+                        // Re-slice the stored range to get the actual vars.
+                        // We do this now (rather than storing a slice) because the vars storage
+                        // may have been reallocated since we stored the range.
+                        const current_type_args = self.types_store.sliceVars(current_type_args_range);
+                        const progress_type_args = self.types_store.sliceVars(progress.type_args_range);
                         // Compare each type arg by resolving and checking if they point to the same type
-                        for (current_type_args, progress.type_args) |curr_arg, prog_arg| {
+                        for (current_type_args, progress_type_args) |curr_arg, prog_arg| {
                             const curr_resolved = self.types_store.resolveVar(curr_arg);
                             const prog_resolved = self.types_store.resolveVar(prog_arg);
                             if (curr_resolved.var_ != prog_resolved.var_) break :argsMatch false;
@@ -1655,13 +1660,15 @@ pub const Store = struct {
                             try self.layouts_by_var.put(self.env.gpa, current.var_, reserved_idx);
 
                             // Mark this nominal type as in-progress.
-                            // Store the nominal var, backing var, and type args.
+                            // Store the nominal var, backing var, and type args range.
                             // Type args are needed to distinguish different instantiations.
-                            const type_args = self.types_store.sliceNominalArgs(nominal_type);
+                            // We store the range (indices) rather than a slice to avoid
+                            // dangling pointers if the vars storage is reallocated.
+                            const type_args_range = types.Store.getNominalArgsRange(nominal_type);
                             try self.work.in_progress_nominals.put(nominal_key, .{
                                 .nominal_var = current.var_,
                                 .backing_var = resolved_backing.var_,
-                                .type_args = type_args,
+                                .type_args_range = type_args_range,
                             });
 
                             // From a layout perspective, nominal types are identical to type aliases:
