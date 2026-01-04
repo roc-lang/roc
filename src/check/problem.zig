@@ -931,7 +931,7 @@ pub const ReportBuilder = struct {
 
         // Add explanation
         try report.document.addLineBreak();
-        try report.document.addReflowingText("Since this expression is used as a statement, it should evaluate to ");
+        try report.document.addReflowingText("Since this expression is used as a statement, it must evaluate to ");
         try report.document.addAnnotated("{}", .type_variable);
         try report.document.addText(". ");
         try report.document.addReflowingText("If you don't need the value, you can ignore it with ");

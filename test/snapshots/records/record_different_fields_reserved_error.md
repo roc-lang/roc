@@ -460,7 +460,7 @@ It has the type:
 
     Str
 
-Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -474,7 +474,7 @@ It has the type:
 
     Str
 
-Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

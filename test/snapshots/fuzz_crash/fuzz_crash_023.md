@@ -1111,7 +1111,7 @@ It has the type:
 
     [Blue, .._others]
 
-Since this expression is used as a statement, it should evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
