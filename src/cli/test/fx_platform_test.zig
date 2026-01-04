@@ -263,10 +263,14 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "(\"Roc\", 1, 1, \"Roc\")\n" ++
         "10\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5, explicit_f32: 5, explicit_f64: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "{ binary: 5, explicit_dec: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
         "False\n" ++
         "99\n" ++
-        "\"12345.0\"\n";
+        "\"12345.0\"\n" ++
+        "\"Foo with 42 and hello\"\n" ++
+        "\"other color\"\n" ++
+        "\"A\"\n" ++
+        "\"other letter\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
     try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
@@ -756,6 +760,8 @@ test "fx platform expect with toplevel numeric" {
 //     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "done") != null);
 // }
 
+// The platform requires `main! : () => {}` but test_type_mismatch.roc returns Str.
+// This should be a type error.
 test "fx platform test_type_mismatch" {
     const allocator = testing.allocator;
 
@@ -803,12 +809,13 @@ test "fx platform issue8433" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail compilation with a MISSING METHOD error
+    // This file is expected to fail compilation with a TYPE MISMATCH error
+    // (number literal used where Str is expected in string interpolation)
     switch (run_result.term) {
         .Exited => |code| {
             if (code != 0) {
-                // Expected to fail - check for missing method error message
-                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+                // Expected to fail - check for type mismatch error message
+                try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
             } else {
                 std.debug.print("Expected compilation error but succeeded\n", .{});
                 return error.UnexpectedSuccess;
@@ -818,7 +825,7 @@ test "fx platform issue8433" {
             // Abnormal termination should also indicate error
             std.debug.print("Run terminated abnormally: {}\n", .{run_result.term});
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
-            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "MISSING METHOD") != null);
+            try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
         },
     }
 }
@@ -895,7 +902,7 @@ test "run allows warnings without blocking execution" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    try checkSuccess(run_result);
+    try checkFailure(run_result);
 
     // Should show the warning
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "UNUSED VARIABLE") != null);
@@ -1205,5 +1212,42 @@ test "fx platform issue8826 app vs platform type mismatch" {
             std.debug.print("STDERR: {s}\n", .{run_result.stderr});
             return error.RunTerminatedAbnormally;
         },
+    }
+}
+
+test "fx platform issue8826 large file type checking" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8826
+    // The bug was that running `roc <file>` on a large parser/tokenizer file
+    // would silently exit with code 1 and no output. This was caused by:
+    // 1. The type checker using SharedMemoryAllocator for working memory, which
+    //    is a bump allocator that can't free/resize, causing OOM on large files
+    // 2. The error handler not printing any message before exiting
+    //
+    // The fix uses ctx.gpa (real allocator) for type checker working memory,
+    // and increased shared memory size to handle worst-case fragmentation.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/issue8826_full.roc", .{});
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // This file has type errors, so it should fail with a non-zero exit code
+    // The important thing is that it should NOT silently exit - it should
+    // print error messages to stderr
+    try checkFailure(run_result);
+
+    // Verify error messages are printed (not silent exit)
+    // The file has mutually recursive type aliases, type mismatches, etc.
+    // On Windows, we may hit OOM due to shared memory limits, which should
+    // still print an error message (just not the type error message).
+    const has_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null or
+        std.mem.indexOf(u8, run_result.stderr, "MUTUALLY RECURSIVE TYPE ALIASES") != null or
+        std.mem.indexOf(u8, run_result.stderr, "UNDECLARED TYPE") != null;
+    const has_oom_error = std.mem.indexOf(u8, run_result.stderr, "Out of memory") != null;
+
+    if (!has_type_error and !has_oom_error) {
+        std.debug.print("Expected type error or OOM output but got:\n", .{});
+        std.debug.print("STDERR: {s}\n", .{run_result.stderr});
+        return error.ExpectedTypeErrors;
     }
 }

@@ -643,6 +643,17 @@ pub const Store = struct {
         return slice[1..];
     }
 
+    /// Get the arg vars range for this nominal type.
+    /// Returns a range (start index + count) which can be stored safely.
+    /// Unlike sliceNominalArgs, this returns indices that remain valid even if
+    /// the underlying storage is reallocated.
+    pub fn getNominalArgsRange(nominal: NominalType) VarSafeList.Range {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        var span = nominal.vars.nonempty;
+        span.dropFirstElem();
+        return span;
+    }
+
     /// Get the an iterator arg vars for this nominal type
     pub fn iterNominalArgs(self: *const Self, nominal: NominalType) VarSafeList.Iterator {
         std.debug.assert(nominal.vars.nonempty.count > 0);

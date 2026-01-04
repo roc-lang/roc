@@ -193,6 +193,12 @@ pub const TestRunner = struct {
 
     /// Evaluates a single expect expression, returning whether it passed, failed or did not evaluate to a boolean.
     pub fn eval(self: *TestRunner, expr_idx: CIR.Expr.Idx) EvalError!Evaluation {
+        // Reset interpreter's env to the test module's env before each test.
+        // This ensures we're always reading from the correct module's NodeStore,
+        // even if a previous evaluation switched to a different module's env
+        // and didn't properly restore it.
+        self.interpreter.env = self.env;
+
         const ops = self.get_ops();
         const result = try self.interpreter.eval(expr_idx, ops);
         const layout_cache = &self.interpreter.runtime_layout_store;

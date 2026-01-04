@@ -222,27 +222,21 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
     }
     if (layout.tag == .closure) {
         const closure_raw_ptr = ptr orelse return;
-        // Get the closure header to find the captures layout
-        const closure_header: *const layout_mod.Closure = builtins.utils.alignedPtrCast(*const layout_mod.Closure, @as([*]u8, @ptrCast(closure_raw_ptr)), @src());
         const closure_ptr_val = @intFromPtr(closure_raw_ptr);
 
-        // Debug assert: check for obviously invalid layout indices (sentinel values like 0xAAAAAAAA)
-        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        // Use the captures_layout_idx from the passed-in layout, NOT from the raw memory header.
+        // The layout parameter is authoritative and was set when the closure was created.
+        // Reading from raw memory could give stale/incorrect values.
+        const captures_layout_idx = layout.data.closure.captures_layout_idx;
+        const idx_as_usize = @intFromEnum(captures_layout_idx);
         if (comptime trace_refcount) {
-            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={} body_idx={}", .{
+            traceRefcount("DECREF closure detail: ptr=0x{x} captures_layout_idx={}", .{
                 closure_ptr_val,
                 idx_as_usize,
-                @intFromEnum(closure_header.body_idx),
             });
         }
-        if (idx_as_usize > 0x1000000) { // 16 million layouts is way more than any real program would have
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "decrefLayoutPtr: closure invalid captures_layout_idx=0x{x}", .{idx_as_usize}) catch "decrefLayoutPtr: invalid closure";
-            ops.crash(msg);
-            return;
-        }
 
-        const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
+        const captures_layout = layout_cache.getLayout(captures_layout_idx);
 
         if (comptime trace_refcount) {
             traceRefcount("DECREF closure captures_layout.tag={}", .{@intFromEnum(captures_layout.tag)});
@@ -608,6 +602,8 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
 }
 
 /// Read this StackValue's integer value, ensuring it's initialized
+/// Note: For u128 values larger than i128 max, use asU128() instead to get the correct value.
+/// This function uses @bitCast for u128 which may give negative values for large unsigned numbers.
 pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.is_initialized); // Ensure initialized before reading
     std.debug.assert(self.ptr != null);
@@ -621,13 +617,46 @@ pub fn asI128(self: StackValue) i128 {
         .u16 => @as(i128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
         .u32 => @as(i128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
         .u64 => @as(i128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
-        .u128 => @as(i128, @intCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*)),
+        // Use @bitCast instead of @intCast to avoid panic for values > i128 max
+        // Callers needing correct u128 values should use asU128() instead
+        .u128 => @bitCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*),
         .i8 => @as(i128, @as(*const i8, @ptrCast(raw_ptr)).*),
         .i16 => @as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*),
         .i32 => @as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*),
         .i64 => @as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*),
         .i128 => @as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*,
     };
+}
+
+/// Read this StackValue's integer value as u128, ensuring it's initialized
+/// Use this for unsigned values, especially u128 which can exceed i128 max
+pub fn asU128(self: StackValue) u128 {
+    std.debug.assert(self.is_initialized); // Ensure initialized before reading
+    std.debug.assert(self.ptr != null);
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+
+    const precision = self.layout.data.scalar.data.int;
+    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
+
+    return switch (precision) {
+        .u8 => @as(u128, @as(*const u8, @ptrCast(raw_ptr)).*),
+        .u16 => @as(u128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
+        .u32 => @as(u128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
+        .u64 => @as(u128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
+        .u128 => @as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*,
+        // For signed types, cast to u128 (will give large positive values for negative numbers)
+        .i8 => @bitCast(@as(i128, @as(*const i8, @ptrCast(raw_ptr)).*)),
+        .i16 => @bitCast(@as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*)),
+        .i32 => @bitCast(@as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*)),
+        .i64 => @bitCast(@as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*)),
+        .i128 => @bitCast(@as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*),
+    };
+}
+
+/// Get the integer precision of this StackValue
+pub fn getIntPrecision(self: StackValue) types.Int.Precision {
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    return self.layout.data.scalar.data.int;
 }
 
 /// Initialise the StackValue integer value

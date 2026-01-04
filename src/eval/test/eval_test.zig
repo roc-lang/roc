@@ -1814,6 +1814,31 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     , 15, .no_trace);
 }
 
+test "issue 8814: List.get with numeric literal on function parameter - regression" {
+    // Regression test for GitHub issue #8814: interpreter crash when calling
+    // list.get(0) on a list passed as a function parameter.
+    //
+    // The bug occurred because when collecting arguments for a static dispatch
+    // method call, the expected type for the numeric literal 0 wasn't being
+    // set from the method's signature (U64). This caused the interpreter to
+    // fail when trying to evaluate the numeric literal without a concrete type.
+    //
+    // The fix: extract expected parameter types from the method's function
+    // signature and use them when evaluating arguments. This allows numeric
+    // literals to correctly infer their concrete types (like U64 for List.get).
+    try runExpectStr(
+        \\{
+        \\    process = |args| {
+        \\        match args.get(0) {
+        \\            Ok(x) => x
+        \\            Err(_) => "error"
+        \\        }
+        \\    }
+        \\    process(["hello", "world"])
+        \\}
+    , "hello", .no_trace);
+}
+
 test "encode: Str.encode with local format type" {
     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
     // where Fmt is a local type defined in the test.
@@ -1828,6 +1853,36 @@ test "encode: Str.encode with local format type" {
         \\    List.map(bytes, |b| U8.to_i64(b))
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);
+}
+
+test "issue 8831: self-referential value definition should produce error, not crash" {
+    // Regression test for GitHub issue #8831
+    // A self-referential value definition like `a = a` should produce a
+    // compile-time error (ident_not_in_scope) instead of crashing at runtime
+    // with "e_lookup_local: definition not found in current scope".
+    //
+    // The fix is to detect during canonicalization that the RHS of a definition
+    // refers to a variable that is being defined in the current definition and
+    // hasn't been introduced to the scope yet.
+    try runExpectError(
+        \\{
+        \\    a = a
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "issue 8831: nested self-reference in list should also error" {
+    // Additional test for issue #8831
+    // Even nested self-references like `a = [a]` should error during canonicalization.
+    // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
+    // Only lambdas are allowed to self-reference (for recursive function calls).
+    try runExpectError(
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
 }
 
 test "recursive function with record - stack memory restoration (issue #8813)" {
@@ -1845,4 +1900,83 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\    f(1000)
         \\}
     , 500500, .no_trace);
+}
+
+test "issue 8872: polymorphic tag union payload layout in match expressions" {
+    // Regression test for GitHub issue #8872: when using a polymorphic function
+    // that transforms Err(a) to Err(b) via a lambda, the Str payload was being
+    // corrupted because the layout was computed from a flex var (defaulting to
+    // Dec = 16 bytes) instead of the actual Str type (24 bytes).
+    //
+    // The bug manifested when:
+    // 1. A polymorphic function takes a lambda that returns type `b`
+    // 2. The function wraps the lambda result in Err(b)
+    // 3. The match expression extracts the Err payload
+    // 4. The extracted value is corrupted due to wrong layout
+    try runExpectStr(
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "issue 8899: closure decref index out of bounds in for loop" {
+    // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
+    // when running roc test on code with closures and for loops.
+    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
+    // instead of using the layout parameter.
+    //
+    // The original code was a compress function that removes consecutive duplicates.
+    // The issue manifested when closures were created inside the for loop (match branches)
+    // and List operations like List.last and List.append were used.
+    try runExpectI64(
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0i64
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
+
+test "issue 8892: nominal type wrapping tag union with match expression" {
+    // Regression test for GitHub issue #8892: when evaluating a tag expression
+    // inside a function where the expected type is a nominal type wrapping a tag union,
+    // the interpreter would crash with "e_tag: unexpected layout type: box".
+    //
+    // The bug was in e_tag evaluation: it was using getRuntimeLayout(rt_var) where
+    // rt_var was the nominal type (which has a box layout), instead of using the
+    // unwrapped backing type's layout (which is the actual tag union layout).
+    //
+    // The fix: use getRuntimeLayout(resolved.var_) to get the backing type's layout.
+    try runExpectSuccess(
+        \\{
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
+        \\}
+    , .no_trace);
 }

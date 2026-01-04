@@ -209,6 +209,7 @@ UNDEFINED VARIABLE - fuzz_crash_027.md:114:2:114:11
 UNDEFINED VARIABLE - fuzz_crash_027.md:128:2:128:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:131:63:131:69
 UNDEFINED VARIABLE - fuzz_crash_027.md:132:42:132:48
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_027.md:132:50:132:55
 UNDEFINED VARIABLE - fuzz_crash_027.md:136:3:136:7
 UNDEFINED VARIABLE - fuzz_crash_027.md:138:4:138:10
 UNDEFINED VARIABLE - fuzz_crash_027.md:141:14:141:17
@@ -228,8 +229,8 @@ INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
 UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
-MISSING METHOD - fuzz_crash_027.md:125:6:125:9
-MISSING METHOD - fuzz_crash_027.md:102:15:102:18
+TYPE MISMATCH - fuzz_crash_027.md:125:6:125:9
+TYPE MISMATCH - fuzz_crash_027.md:102:15:102:18
 MISSING METHOD - fuzz_crash_027.md:129:12:129:22
 + - :0:0:0:0
 TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
@@ -725,6 +726,18 @@ Is there an `import` or `exposing` missing up-top?
 	                                        ^^^^^^
 
 
+**INVALID ASSIGNMENT TO ITSELF**
+The value `tuple` is assigned to itself, which would cause an infinite loop at runtime.
+
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+
+**fuzz_crash_027.md:132:50:132:55:**
+```roc
+	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+```
+	                                                ^^^^^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `tag1` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -981,33 +994,29 @@ The function has the signature:
 
     [Blue, Red, .._others], _arg -> Error
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **fuzz_crash_027.md:125:6:125:9:**
 ```roc
 		),	456, # ee
 ```
 		  	^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **fuzz_crash_027.md:102:15:102:18:**
 ```roc
 	var number = 123
 ```
 	             ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -2199,8 +2208,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "tuple")))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))

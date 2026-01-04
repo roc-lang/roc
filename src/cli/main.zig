@@ -48,6 +48,7 @@ const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
 const lsp = @import("lsp");
+const cli_repl = @import("repl.zig");
 const compiled_builtins = @import("compiled_builtins");
 const builtin_loading = eval.builtin_loading;
 const BuiltinTypes = eval.BuiltinTypes;
@@ -285,15 +286,21 @@ const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
+/// Counts of errors and warnings from type checking.
+const ProblemCounts = struct {
+    error_count: usize,
+    warning_count: usize,
+};
+
 /// Render type checking problems as diagnostic reports to stderr.
-/// Returns the count of errors (fatal/runtime_error severity).
+/// Returns counts of errors and warnings.
 /// This is shared between rocCheck and rocRun to ensure consistent error reporting.
 fn renderTypeProblems(
     ctx: *CliContext,
     checker: *Check,
     module_env: *ModuleEnv,
     filename: []const u8,
-) usize {
+) ProblemCounts {
     const stderr = ctx.io.stderr();
 
     var rb = ReportBuilder.init(
@@ -355,18 +362,53 @@ fn renderTypeProblems(
     // Flush stderr to ensure all error output is visible
     ctx.io.flush();
 
-    return error_count;
+    return ProblemCounts{
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
 }
 
-/// Size for shared memory allocator (just virtual address space to reserve)
+/// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
 ///
-/// We pick a large number because we can't resize this without messing up the
-/// child process. It's just virtual address space though, not physical memory.
-/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
-const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
+/// We need a large size because SharedMemoryAllocator is a bump allocator that
+/// cannot free memory. During type checking, the types Store grows significantly
+/// and every array growth allocates new memory without freeing old, causing
+/// memory fragmentation. With a 25KB source file, type checking can use ~2GB
+/// of shared memory due to this fragmentation.
+///
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory:
+/// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
+///   it until pages are actually touched.
+/// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
+///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
+///
+/// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets
 else
-    256 * 1024 * 1024; // 256MB for 32-bit targets
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+
+/// Fallback size for systems with overcommit disabled. On Linux with
+/// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
+/// though the memory wouldn't actually be used. We fall back to 4GB which
+/// should work on most systems while still being large enough for typical use.
+const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets (same as primary)
+else
+    4 * 1024 * 1024 * 1024; // 4GB for 64-bit targets
+
+/// Try to create shared memory, falling back to a smaller size if the system
+/// has overcommit disabled and rejects the initial allocation.
+fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
+    // Try the preferred size first
+    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
+        return shm;
+    } else |_| {}
+
+    // Fall back to smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+}
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
@@ -598,8 +640,16 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocs.arena);
 
-    mainArgs(&allocs, args) catch {
-        // Error messages have already been printed by the individual functions.
+    mainArgs(&allocs, args) catch |err| {
+        // Handle OutOfMemory specially - it may not have been printed
+        switch (err) {
+            error.OutOfMemory => {
+                // Use std.debug.print to stderr since we don't have access to ctx.io here
+                // TODO: if virtual address allocation fails at 4gb, fall back on doing `roc build` followed by manually running the executable
+                std.debug.print("The Roc compiler ran out of memory trying to preallocate virtual address space for compiling and running this program. Try using `roc build` to build the executable separately, then run it manually.\n", .{});
+            },
+            else => {}, // Other errors should already have printed messages
+        }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
@@ -710,7 +760,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
-        .repl => rocRepl(&ctx),
+        .repl => |repl_args| rocRepl(&ctx, repl_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
@@ -1198,6 +1248,12 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
     }
     std.log.debug("Interpreter execution completed", .{});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (shm_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -1524,11 +1580,12 @@ pub const SharedMemoryHandle = struct {
 };
 
 /// Result of setting up shared memory with type checking information.
-/// Contains both the shared memory handle for the compiled modules and
-/// a count of type errors encountered during compilation.
+/// Contains the shared memory handle for the compiled modules and
+/// counts of errors and warnings encountered during compilation.
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     error_count: usize,
+    warning_count: usize,
 };
 
 /// Write data to shared memory for inter-process communication.
@@ -1590,9 +1647,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
 pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+    var shm = try createSharedMemoryWithFallback(page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -1616,7 +1674,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Note: All paths use arena allocator so no manual freeing is needed.
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
+    else if (base.url.isSafeUrl(platform_spec)) blk: {
         // URL platform - resolve to cached package path
         const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
@@ -1872,6 +1930,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     try app_env.common.calcLineStarts(shm_allocator);
 
     var error_count: usize = 0;
+    var warning_count: usize = 0;
 
     var app_parse_ast = try parse.parse(&app_env.common, ctx.gpa);
     defer app_parse_ast.deinit(ctx.gpa);
@@ -1898,6 +1957,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                     .size = shm.getUsedSize(),
                 },
                 .error_count = error_count,
+                .warning_count = warning_count,
             };
         }
     }
@@ -2144,7 +2204,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations
+    // (scratch arrays, hashmaps, etc). SharedMemoryAllocator is a bump allocator
+    // that never frees, which causes OOM on large files.
+    var app_checker = try Check.init(ctx.gpa, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -2185,10 +2249,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Render all type problems (errors and warnings) exactly as roc check would
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    error_count += if (!builtin.is_test)
-        renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path)
-    else
-        0;
+    if (!builtin.is_test) {
+        const problem_counts = renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path);
+        error_count += problem_counts.error_count;
+        warning_count += problem_counts.warning_count;
+    }
 
     app_env_ptr.* = app_env;
 
@@ -2201,6 +2266,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .size = shm.getUsedSize(),
         },
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -2705,7 +2771,9 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations.
+    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2726,6 +2794,8 @@ const CompiledModule = struct {
     is_app: bool,
     /// Number of errors found during compilation (from parsing, canonicalization, type checking)
     error_count: usize,
+    /// Number of warnings found during compilation
+    warning_count: usize,
 };
 
 /// Result of compiling and serializing modules for embedding.
@@ -2736,6 +2806,8 @@ const SerializedModulesResult = struct {
     entry_def_indices: []const u32,
     /// Number of compilation errors encountered
     error_count: usize,
+    /// Number of compilation warnings encountered
+    warning_count: usize,
 };
 
 /// Compile a single module to a ModuleEnv using a regular allocator.
@@ -2995,6 +3067,7 @@ fn compileModuleForSerialization(
         .is_platform_main = false,
         .is_app = false,
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -3005,8 +3078,9 @@ fn compileAndSerializeModulesForEmbedding(
     roc_file_path: []const u8,
     allow_errors: bool,
 ) !SerializedModulesResult {
-    // Track total errors across all modules
+    // Track total errors and warnings across all modules
     var total_error_count: usize = 0;
+    var total_warning_count: usize = 0;
 
     // Load builtin modules
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
@@ -3019,7 +3093,7 @@ fn compileAndSerializeModulesForEmbedding(
     // Resolve platform path
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(ctx.gpa, &[_][]const u8{ app_dir, platform_spec })
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://")) blk: {
+    else if (base.url.isSafeUrl(platform_spec)) blk: {
         const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
             error.OutOfMemory => return error.OutOfMemory,
@@ -3117,6 +3191,7 @@ fn compileAndSerializeModulesForEmbedding(
             sorted_modules[0..i], // Pass type module names for previously compiled siblings
         );
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         compiled_modules.appendAssumeCapacity(compiled);
         // Store pointer to the env we just appended (safe because we pre-allocated)
         sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
@@ -3145,6 +3220,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_platform_main = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         primary_env_index = @intCast(compiled_modules.items.len);
         try compiled_modules.append(compiled);
     }
@@ -3171,6 +3247,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         app_env_index = @intCast(compiled_modules.items.len);
         if (!has_platform) {
             primary_env_index = app_env_index;
@@ -3375,6 +3452,7 @@ fn compileAndSerializeModulesForEmbedding(
         .bytes = buffer,
         .entry_def_indices = entry_def_indices,
         .error_count = total_error_count,
+        .warning_count = total_warning_count,
     };
 }
 
@@ -4238,9 +4316,9 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     std.log.debug("Platform spec: {s}", .{platform_spec});
 
     // Resolve platform path - errors are recorded in context and propagate up
-    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
-    else if (std.mem.startsWith(u8, platform_spec, "http://") or std.mem.startsWith(u8, platform_spec, "https://"))
+    const platform_paths: ?PlatformPaths = if (std.mem.startsWith(u8, platform_spec, "./") or
+        std.mem.startsWith(u8, platform_spec, "../") or
+        base.url.isSafeUrl(platform_spec))
         try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir)
     else
         null;
@@ -4540,6 +4618,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try std.fmt.allocPrint(ctx.arena, "./{s}", .{final_output_path});
 
     try ctx.io.stdout().print("Successfully built {s}\n", .{display_path});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (compile_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Dump linker inputs to a temp directory for debugging linking issues.
@@ -4912,9 +4996,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(ctx: *CliContext) !void {
-    ctx.io.stderr().print("repl not implemented\n", .{}) catch {};
-    return error.NotImplemented;
+fn rocRepl(ctx: *CliContext, _: cli_args.ReplArgs) !void {
+    return cli_repl.run(ctx);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
@@ -5404,7 +5487,13 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
 
             // Flush before exit
             ctx.io.flush();
-            return error.CheckFailed;
+
+            // Exit with code 1 for errors, code 2 for warnings only
+            if (check_result.error_count > 0) {
+                return error.CheckFailed;
+            } else {
+                std.process.exit(2);
+            }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};

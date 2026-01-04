@@ -2306,17 +2306,39 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 return try self.pushMalformed(AST.Expr.Idx, .expr_dot_suffix_not_allowed, self.pos);
             }
 
-            expr = try self.store.addExpr(.{ .int = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed integer syntax: 123.U64
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_int = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .int = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .Float => {
             self.advance();
-            expr = try self.store.addExpr(.{ .frac = .{
-                .token = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+            // Check for typed fractional syntax: 3.14.Dec
+            if (self.peek() == .NoSpaceDotUpperIdent) {
+                const type_token = self.pos;
+                self.advance();
+                expr = try self.store.addExpr(.{ .typed_frac = .{
+                    .token = start,
+                    .type_token = type_token,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                expr = try self.store.addExpr(.{ .frac = .{
+                    .token = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
         },
         .SingleQuote => {
             self.advance();
@@ -3193,14 +3215,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             // Parse record fields, with support for record extension
             while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
-                    // Handle record extension: { field: Type, ..ext }
+                    // Handle record extension: { field: Type, ..ext } or { field: Type, .. }
+                    const double_dot_start = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent) {
                         // Parse the extension type variable
                         ext_anno = try self.parseTypeAnno(.looking_for_args);
+                    } else {
+                        // Anonymous extension (just ..) - create an underscore type annotation
+                        ext_anno = try self.store.addTypeAnno(.{ .underscore = .{
+                            .region = .{ .start = double_dot_start, .end = self.pos },
+                        } });
                     }
-                    // If no identifier follows .., it's an anonymous extension (just ..)
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
                     break;

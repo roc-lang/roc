@@ -10,7 +10,7 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 # EXPECTED
 UNDEFINED VARIABLE - binop_omnibus__single__no_spaces.md:1:5:1:8
 NOT IMPLEMENTED - binop_omnibus__single__no_spaces.md:1:1:1:13
-MISSING METHOD - binop_omnibus__single__no_spaces.md:1:32:1:34
+TYPE MISMATCH - binop_omnibus__single__no_spaces.md:1:32:1:34
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `foo` in this scope.
@@ -35,19 +35,17 @@ Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
 
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **binop_omnibus__single__no_spaces.md:1:32:1:34:**
 ```roc
 Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5
 ```
                                ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Bool
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
