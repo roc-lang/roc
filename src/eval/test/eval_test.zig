@@ -1801,7 +1801,10 @@ test "Decoder: create err result" {
 }
 
 test "decode: I32.decode with simple format" {
-    // TODO: where clause method dispatch not yet implemented
+    // TODO: type variable dispatch resolves to backing type instead of nominal type.
+    // When propagateFlexMappings is called with a nominal type (MyFormat := []),
+    // it propagates the backing type (tag_union) rather than the nominal itself.
+    // Method dispatch needs the nominal type to find decode_i32.
     if (true) return error.SkipZigTest;
     // Test I32.decode with a format that provides decode_i32
     try runExpectI64(

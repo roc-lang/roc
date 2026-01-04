@@ -9207,6 +9207,27 @@ pub const Interpreter = struct {
         }
     }
 
+    /// Resolve a type annotation index through any rigid_var_lookup references.
+    /// This is necessary because after builtin serialization, the union-find relationships
+    /// established during type checking are lost. rigid_var_lookup annotations reference
+    /// the original rigid_var but have a different index, causing varFrom() to return
+    /// different type variables that aren't unified after deserialization.
+    fn resolveTypeAnnoRef(env: *const can.ModuleEnv, anno_idx: can.CIR.TypeAnno.Idx) can.CIR.TypeAnno.Idx {
+        var current = anno_idx;
+        // Follow rigid_var_lookup chain (should be at most one hop, but loop for safety)
+        var count: u32 = 0;
+        while (count < 100) : (count += 1) {
+            const anno = env.store.getTypeAnno(current);
+            switch (anno) {
+                .rigid_var_lookup => |lookup| {
+                    current = lookup.ref;
+                },
+                else => break,
+            }
+        }
+        return current;
+    }
+
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
     /// Handles most structural types: tag unions, tuples, records, functions, and nominal types.
     /// Uses caching to handle recursive types and avoid duplicate work.
@@ -11132,8 +11153,13 @@ pub const Interpreter = struct {
                 const type_var_alias_stmt = self.env.store.getStatement(tvd.type_var_alias_stmt);
                 const type_var_anno = type_var_alias_stmt.s_type_var_alias.type_var_anno;
 
+                // Resolve through rigid_var_lookup to get the original type annotation.
+                // After builtin serialization, union-find relationships are lost, so we need
+                // to follow the rigid_var_lookup reference to get the correct type variable.
+                const resolved_anno = resolveTypeAnnoRef(self.env, type_var_anno);
+
                 // Translate the type annotation to a runtime type variable
-                const ct_var = can.ModuleEnv.varFrom(type_var_anno);
+                const ct_var = can.ModuleEnv.varFrom(resolved_anno);
                 const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
 
                 // Resolve the type to find the nominal type info
@@ -11206,6 +11232,7 @@ pub const Interpreter = struct {
                 }
 
                 // Resolve the method function
+                const layout_env = self.runtime_layout_store.env;
                 const method_func = self.resolveMethodFunction(
                     nominal_info.?.origin,
                     nominal_info.?.ident,
@@ -11214,7 +11241,6 @@ pub const Interpreter = struct {
                     dispatch_rt_var,
                 ) catch |err| switch (err) {
                     error.MethodLookupFailed => {
-                        const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
                             layout_env.common.getIdentStore(),
@@ -17876,6 +17902,21 @@ pub const Interpreter = struct {
                 // Decref the original receiver value since patternMatchesBind made a copy
                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
+                // Get CT function argument types from the lambda's type signature
+                // This is needed because the type variables in the function signature
+                // may be different from the type variables in the parameter patterns
+                // after serialization/deserialization.
+                const lambda_ct_resolved = self.env.types.resolveVar(lambda_ct_var);
+                const ct_fn_args: ?types.Var.SafeList.Range = if (lambda_ct_resolved.desc.content == .structure)
+                    switch (lambda_ct_resolved.desc.content.structure) {
+                        .fn_pure => |f| f.args,
+                        .fn_effectful => |f| f.args,
+                        .fn_unbound => |f| f.args,
+                        else => null,
+                    }
+                else
+                    null;
+
                 // Bind explicit arguments using patternMatchesBind
                 for (arg_values, 0..) |arg, idx| {
                     const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
@@ -17885,6 +17926,16 @@ pub const Interpreter = struct {
                     if (arg_rt_resolved.desc.content == .structure) {
                         const param_ct_var = can.ModuleEnv.varFrom(params[1 + idx]);
                         try self.propagateFlexMappings(self.env, param_ct_var, arg.rt_var);
+
+                        // Also propagate from the function signature's argument type
+                        // This ensures type variables in the function body are mapped correctly
+                        if (ct_fn_args) |args| {
+                            const ct_arg_vars = self.env.types.sliceVars(args);
+                            // idx is for explicit args (not including receiver), so add 1 for fn_args index
+                            if (1 + idx < ct_arg_vars.len) {
+                                try self.propagateFlexMappings(self.env, ct_arg_vars[1 + idx], arg.rt_var);
+                            }
+                        }
                     }
 
                     if (!try self.patternMatchesBind(params[1 + idx], arg, param_rt_var, roc_ops, &self.bindings, null)) {

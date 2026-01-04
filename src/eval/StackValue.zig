@@ -243,16 +243,9 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             return;
         }
 
-        // Check if the index is within bounds of the current layout store.
-        // Closures from builtin modules may have indices from a different layout store,
-        // in which case we skip the captures decref (builtin closures are managed separately).
-        const layout_count = layout_cache.layouts.len();
-        if (idx_as_usize >= layout_count) {
-            if (comptime trace_refcount) {
-                traceRefcount("DECREF closure: skipping captures decref, idx {} >= layout_count {}", .{ idx_as_usize, layout_count });
-            }
-            return;
-        }
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
 
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
@@ -532,14 +525,10 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         // Get the closure header to find the captures layout
         const closure = self.asClosure(roc_ops);
 
-        // Check if the index is within bounds of the current layout store.
-        // Closures from builtin modules may have indices from a different layout store,
-        // in which case we skip the captures incref (builtin closures are managed separately).
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
         const idx_as_usize = @intFromEnum(closure.captures_layout_idx);
-        const layout_count = layout_cache.layouts.len();
-        if (idx_as_usize >= layout_count) {
-            return;
-        }
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
 
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
 
@@ -1511,13 +1500,10 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         if (self.ptr == null) return;
         const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(self.ptr.?));
 
-        // Check if the index is within bounds of the current layout store.
-        // Closures from builtin modules may have indices from a different layout store.
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
         const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
-        const layout_count = layout_cache.layouts.len();
-        if (idx_as_usize >= layout_count) {
-            return;
-        }
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
 
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
@@ -1764,14 +1750,10 @@ pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocO
     if (self.layout.tag == .closure and self.ptr != null) {
         const closure = self.asClosure(roc_ops);
 
-        // Check if the index is within bounds of the current layout store.
-        // Closures from builtin modules may have indices from a different layout store.
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
         const idx_as_usize = @intFromEnum(closure.captures_layout_idx);
-        const layout_count = layout_cache.layouts.len();
-        if (idx_as_usize >= layout_count) {
-            // For builtin closures, just return the header size
-            return @sizeOf(Closure);
-        }
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
 
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
         const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
