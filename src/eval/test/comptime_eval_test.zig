@@ -2678,14 +2678,14 @@ test "comptime eval - recursive nominal: deeply nested record recursion" {
 
 test "encode - custom format type with infallible encoding (empty error type)" {
     // Test that a custom format type can define an encode_str method that can't fail.
-    // Using [] as the error type means encoding always succeeds.
+    // Using [EncodeErr] as the error type (which is never instantiated).
     // This matches the signature required by Str.encode's where clause:
     //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
     const src =
-        \\# Define a format type with infallible encoding (error type is [])
-        \\Utf8 := [].{
-        \\    encode_str : Str -> Try(List(U8), [])
-        \\    encode_str = |str| Ok(Str.to_utf8(str))
+        \\# Define a format type with infallible encoding
+        \\Utf8 := [Format].{
+        \\    encode_str : Utf8, Str -> Try(List(U8), [EncodeErr])
+        \\    encode_str = |_self, str| Ok(Str.to_utf8(str))
         \\}
         \\
         \\fmt = Utf8
