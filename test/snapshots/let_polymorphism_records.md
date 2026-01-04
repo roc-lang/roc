@@ -50,7 +50,6 @@ main = |_| {
 ~~~
 # EXPECTED
 TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
-UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -63,22 +62,6 @@ updated_mismatch = update_data(str_container, 99)
 Other code expects this to have the type:
 
     Str
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**let_polymorphism_records.md:38:2:38:17:**
-```roc
-	1 + update_data
-```
-	^^^^^^^^^^^^^^^
-
-It has the type:
-
-    a
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.plus : a, ({ ..b, data: c }, c -> { ..b, data: c }) -> a,
-      ]
 
 # TOKENS
 ~~~zig
