@@ -174,6 +174,14 @@ pub const TypeMismatchDetail = union(enum) {
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
+    /// App's export type doesn't match the platform's required type
+    incompatible_platform_requirement: IncompatiblePlatformRequirement,
+};
+
+/// Problem data for platform requirement type mismatches
+pub const IncompatiblePlatformRequirement = struct {
+    /// The identifier that the platform requires
+    required_ident: Ident.Idx,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -310,6 +318,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Optional numeric literal info for from_numeral constraints
+    num_literal: ?types_mod.NumeralInfo = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -508,6 +518,10 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(mismatch.types, data);
+                        },
+                        .incompatible_platform_requirement => {
+                            // For now, use generic type mismatch report for platform requirements
+                            return self.buildGenericTypeMismatchReport(mismatch.types);
                         },
                     }
                 } else {
@@ -2154,6 +2168,11 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) !Report {
+        // Special case: number literal being used where a non-number type is expected
+        if (data.origin == .from_numeral) {
+            return self.buildNumberUsedAsNonNumber(data);
+        }
+
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
@@ -2249,6 +2268,63 @@ pub const ReportBuilder = struct {
                 }
             },
         }
+
+        return report;
+    }
+
+    /// Build a report for when a number literal is used where a non-number type is expected
+    fn buildNumberUsedAsNonNumber(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        // Get the region of the number literal from the num_literal info
+        const num_literal = data.num_literal.?;
+        const num_region = num_literal.region;
+        const num_region_info = self.module_env.calcRegionInfo(num_region);
+
+        // Get the region of the dispatcher (the type that was expected)
+        // This might be different if the type came from somewhere else (e.g., a type annotation)
+        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+
+        try report.document.addReflowingText("This number is being used where a non-number type is needed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            num_region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Check if we have a different origin region we can show
+        if (dispatcher_region.start.offset != num_region.start.offset or
+            dispatcher_region.end.offset != num_region.end.offset)
+        {
+            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region);
+            try report.document.addReflowingText("The type was determined to be non-numeric here:");
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                dispatcher_region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addReflowingText("Other code expects this to have the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
 
         return report;
     }

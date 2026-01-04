@@ -170,6 +170,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:96:54:96:57
 DUPLICATE DEFINITION - fuzz_crash_020.md:97:2:97:3
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:21:97:24
 UNDEFINED VARIABLE - fuzz_crash_020.md:97:30:97:32
+INVALID ASSIGNMENT TO ITSELF - fuzz_crash_020.md:97:34:97:35
 UNDEFINED VARIABLE - fuzz_crash_020.md:98:2:98:3
 UNDEFINED VARIABLE - fuzz_crash_020.md:100:11:100:14
 UNDEFINED VARIABLE - fuzz_crash_020.md:102:4:102:6
@@ -183,6 +184,7 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:108:6:108:8
 UNUSED VARIABLE - fuzz_crash_020.md:76:2:76:3
 UNUSED VARIABLE - fuzz_crash_020.md:87:2:87:3
 UNUSED VARIABLE - fuzz_crash_020.md:96:2:96:4
+UNUSED VARIABLE - fuzz_crash_020.md:97:2:97:3
 UNDECLARED TYPE - fuzz_crash_020.md:116:5:116:6
 UNDEFINED VARIABLE - fuzz_crash_020.md:119:2:119:5
 UNDEFINED VARIABLE - fuzz_crash_020.md:120:1:120:2
@@ -193,7 +195,7 @@ UNUSED VALUE - fuzz_crash_020.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
 UNUSED VALUE - fuzz_crash_020.md:1:1:1:1
 UNUSED VALUE - fuzz_crash_020.md:86:11:86:17
-MISSING METHOD - fuzz_crash_020.md:77:11:77:14
+TYPE MISMATCH - fuzz_crash_020.md:77:11:77:14
 UNUSED VALUE - fuzz_crash_020.md:98:4:104:3
 UNUSED VALUE - fuzz_crash_020.md:105:2:105:54
 UNUSED VALUE - fuzz_crash_020.md:105:55:105:85
@@ -679,6 +681,18 @@ Is there an `import` or `exposing` missing up-top?
 	                            ^^
 
 
+**INVALID ASSIGNMENT TO ITSELF**
+The value `t` is assigned to itself, which would cause an infinite loop at runtime.
+
+Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.
+
+**fuzz_crash_020.md:97:34:97:35:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+	                                ^
+
+
 **UNDEFINED VARIABLE**
 Nothing is named `m` in this scope.
 Is there an `import` or `exposing` missing up-top?
@@ -826,6 +840,18 @@ The unused variable is declared here:
 	^^
 
 
+**UNUSED VARIABLE**
+Variable `t` is not used anywhere in your code.
+
+If you don't need this variable, prefix it with an underscore like `_t` to suppress this warning.
+The unused variable is declared here:
+**fuzz_crash_020.md:97:2:97:3:**
+```roc
+	t = (123, "World", tag, O, (nd, t), [1, 2, 3])
+```
+	^
+
+
 **UNDECLARED TYPE**
 The type _V_ is not declared in this scope.
 
@@ -960,19 +986,17 @@ It has the type:
 
     Str
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **fuzz_crash_020.md:77:11:77:14:**
 ```roc
 	var er = 123
 ```
 	         ^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
@@ -1884,8 +1908,7 @@ expect {
 								(e-tuple
 									(elems
 										(e-runtime-error (tag "ident_not_in_scope"))
-										(e-lookup-local
-											(p-assign (ident "t")))))
+										(e-runtime-error (tag "self_referential_definition"))))
 								(e-list
 									(elems
 										(e-num (value "1"))

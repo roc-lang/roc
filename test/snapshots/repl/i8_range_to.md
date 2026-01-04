@@ -5,9 +5,9 @@ type=repl
 ~~~
 # SOURCE
 ~~~roc
-» -2i8.to(2i8)
-» 0i8.to(0i8)
-» 3i8.to(1i8)
+» -2.I8.to(2.I8)
+» 0.I8.to(0.I8)
+» 3.I8.to(1.I8)
 ~~~
 # OUTPUT
 [-2, -1, 0, 1, 2]

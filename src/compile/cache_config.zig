@@ -21,7 +21,7 @@ pub const Constants = struct {
     pub const MAX_CACHE_SIZE = 256 * 1024 * 1024;
 
     /// Cache format version
-    pub const CACHE_VERSION = 1;
+    pub const CACHE_VERSION = 2;
 };
 
 /// Configuration for the Roc cache system.

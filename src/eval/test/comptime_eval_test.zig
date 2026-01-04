@@ -2583,6 +2583,99 @@ test "comptime eval - recursive nominal: command chain" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - recursive nominal inside Try with tuple (issue #8855)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8855
+    // A recursive nominal type used inside Try with a tuple caused TypeContainedMismatch
+    // because cycle detection only checked the last container, not the full stack.
+    const src =
+        \\Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+        \\
+        \\# This function signature triggers the bug: recursive nominal inside Try with tuple
+        \\parse_block : List(U8), U64, List(Statement) -> [Ok((List(Statement), U64)), Err(Str)]
+        \\parse_block = |_file, index, acc| Ok((acc, index))
+        \\
+        \\x = parse_block([], 0, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated); // parse_block and x
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" {
+    // Regression test for issue #8795: recursive opaque types where the recursion
+    // goes through a tuple field would crash with "increfDataPtrC: ptr not aligned"
+    // because tuple elements weren't being auto-boxed for recursive types.
+    const src =
+        \\Type := [Name(Str), Array((U64, Type))]
+        \\
+        \\inner = Type.Name("hello")
+        \\outer = Type.Array((0, inner))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - nested nominal in tuple causes alignment crash (issue #8874)" {
+    // Regression test for issue #8874: nested nominal types (like Try) inside tuples
+    // caused "increfDataPtrC: ptr not aligned" crashes. The bug occurred when
+    // accessing the payload of an outer Try containing a tuple with an inner Try.
+    const src =
+        \\result : Try((Try(Str, Str), U64), Str) = Ok((Ok("todo"), 3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: recursion through record field" {
+    // Test case: recursive type where the recursion goes through a record field
+    const src =
+        \\Type := [Leaf, Node({ value: Str, child: Type })]
+        \\
+        \\inner = Type.Leaf
+        \\outer = Type.Node({ value: "hello", child: inner })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - recursive nominal: deeply nested record recursion" {
+    // Test deeper nesting to ensure refcounting works correctly
+    const src =
+        \\Type := [Leaf(Str), Node({ value: Str, child: Type })]
+        \\
+        \\leaf = Type.Leaf("deep")
+        \\level1 = Type.Node({ value: "level1", child: leaf })
+        \\level2 = Type.Node({ value: "level2", child: level1 })
+        \\level3 = Type.Node({ value: "level3", child: level2 })
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 4), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "encode - custom format type with infallible encoding (empty error type)" {
     // Test that a custom format type can define an encode_str method that can't fail.
     // Using [] as the error type means encoding always succeeds.
@@ -2662,4 +2755,74 @@ test "issue 8754: pattern matching on recursive tag union variant payload" {
     }
 
     return error.TestExpectedDefNotFound;
+}
+
+test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
+    // Regression test for GitHub issue #8637
+    // Methods attached to transparent tag union type aliases with type parameters
+    // should work. The bug was that propagateFlexMappings wasn't handling tag unions,
+    // so type parameters weren't being mapped to concrete runtime types.
+    const src =
+        \\Iter(s) :: [It(s)].{
+        \\    identity : Iter(s) -> Iter(s)
+        \\    identity = |It(s_)| It(s_)
+        \\}
+        \\
+        \\count : Iter({})
+        \\count = It({})
+        \\
+        \\result = count.identity()
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // All declarations should evaluate without crashes
+    try testing.expect(summary.evaluated >= 3);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+// Issue #8901: Recursive nominal type with Box where one variant has no payload
+// The interpreter crashed at extractTagValue when matching on such types.
+test "comptime eval - issue 8901: recursive nominal with Box and no-payload variant" {
+    // Test 1: Create Nat.Zero - a no-payload variant of a recursive nominal type
+    const src1 =
+        \\Nat := [Zero, Suc(Box(Nat))]
+        \\
+        \\zero_val = Nat.Zero
+    ;
+
+    var res1 = try parseCheckAndEvalModule(src1);
+    defer cleanupEvalModule(&res1);
+
+    const summary1 = try res1.evaluator.evalAll();
+
+    // Creating Zero should not crash
+    try testing.expect(summary1.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary1.crashed);
+}
+
+test "comptime eval - issue 8901: pattern matching on nominal type" {
+    // Test pattern matching on a nominal type with no-payload variant
+    const src =
+        \\Color := [Red, Green, Blue]
+        \\
+        \\color = Color.Red
+        \\
+        \\result = match color {
+        \\    Color.Red -> 1
+        \\    _ -> 0
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Pattern matching on no-payload variant should not crash
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
 }

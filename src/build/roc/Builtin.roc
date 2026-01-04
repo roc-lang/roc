@@ -280,11 +280,12 @@ Builtin :: [].{
 
 		is_eq : Bool, Bool -> Bool
 
-		# encoder : Bool -> Encoder(fmt, [])
-		# 	where [fmt implements EncoderFormatting]
-		# encoder =
-
-		# Encoder fmt := List U8, fmt -> List U8 where fmt implements EncoderFormatting
+		# Encode a bool using a format that provides encode_bool
+		encode : Bool, fmt -> Try(encoded, err)
+			where [fmt.encode_bool : fmt, Bool -> Try(encoded, err)]
+		encode = |self, format| {
+			format.encode_bool(self)
+		}
 	}
 
 	Box(item) :: [ProvidedByCompiler].{
@@ -400,7 +401,7 @@ Builtin :: [].{
 
 		U8 :: [].{
 			default : () -> U8
-			default = || 0u8
+			default = || 0
 
 			to_str : U8 -> Str
 			is_zero : U8 -> Bool
@@ -457,11 +458,18 @@ Builtin :: [].{
 			to_f32 : U8 -> F32
 			to_f64 : U8 -> F64
 			to_dec : U8 -> Dec
+
+			# Encode a U8 using a format that provides encode_u8
+			encode : U8, fmt -> Try(encoded, err)
+				where [fmt.encode_u8 : fmt, U8 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u8(self)
+			}
 		}
 
 		I8 :: [].{
 			default : () -> I8
-			default = || 0i8
+			default = || 0
 
 			to_str : I8 -> Str
 			is_zero : I8 -> Bool
@@ -526,11 +534,18 @@ Builtin :: [].{
 			to_f32 : I8 -> F32
 			to_f64 : I8 -> F64
 			to_dec : I8 -> Dec
+
+			# Encode an I8 using a format that provides encode_i8
+			encode : I8, fmt -> Try(encoded, err)
+				where [fmt.encode_i8 : fmt, I8 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i8(self)
+			}
 		}
 
 		U16 :: [].{
 			default : () -> U16
-			default = || 0u16
+			default = || 0
 
 			to_str : U16 -> Str
 			is_zero : U16 -> Bool
@@ -589,11 +604,18 @@ Builtin :: [].{
 			to_f32 : U16 -> F32
 			to_f64 : U16 -> F64
 			to_dec : U16 -> Dec
+
+			# Encode a U16 using a format that provides encode_u16
+			encode : U16, fmt -> Try(encoded, err)
+				where [fmt.encode_u16 : fmt, U16 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u16(self)
+			}
 		}
 
 		I16 :: [].{
 			default : () -> I16
-			default = || 0i16
+			default = || 0
 
 			to_str : I16 -> Str
 			is_zero : I16 -> Bool
@@ -659,11 +681,18 @@ Builtin :: [].{
 			to_f32 : I16 -> F32
 			to_f64 : I16 -> F64
 			to_dec : I16 -> Dec
+
+			# Encode an I16 using a format that provides encode_i16
+			encode : I16, fmt -> Try(encoded, err)
+				where [fmt.encode_i16 : fmt, I16 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i16(self)
+			}
 		}
 
 		U32 :: [].{
 			default : () -> U32
-			default = || 0u32
+			default = || 0
 
 			to_str : U32 -> Str
 			is_zero : U32 -> Bool
@@ -724,11 +753,18 @@ Builtin :: [].{
 			to_f32 : U32 -> F32
 			to_f64 : U32 -> F64
 			to_dec : U32 -> Dec
+
+			# Encode a U32 using a format that provides encode_u32
+			encode : U32, fmt -> Try(encoded, err)
+				where [fmt.encode_u32 : fmt, U32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u32(self)
+			}
 		}
 
 		I32 :: [].{
 			default : () -> I32
-			default = || 0i32
+			default = || 0
 
 			to_str : I32 -> Str
 			is_zero : I32 -> Bool
@@ -795,11 +831,18 @@ Builtin :: [].{
 			to_f32 : I32 -> F32
 			to_f64 : I32 -> F64
 			to_dec : I32 -> Dec
+
+			# Encode an I32 using a format that provides encode_i32
+			encode : I32, fmt -> Try(encoded, err)
+				where [fmt.encode_i32 : fmt, I32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i32(self)
+			}
 		}
 
 		U64 :: [].{
 			default : () -> U64
-			default = || 0u64
+			default = || 0
 
 			to_str : U64 -> Str
 			is_zero : U64 -> Bool
@@ -862,11 +905,18 @@ Builtin :: [].{
 			to_f32 : U64 -> F32
 			to_f64 : U64 -> F64
 			to_dec : U64 -> Dec
+
+			# Encode a U64 using a format that provides encode_u64
+			encode : U64, fmt -> Try(encoded, err)
+				where [fmt.encode_u64 : fmt, U64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u64(self)
+			}
 		}
 
 		I64 :: [].{
 			default : () -> I64
-			default = || 0i64
+			default = || 0
 
 			to_str : I64 -> Str
 			is_zero : I64 -> Bool
@@ -934,11 +984,18 @@ Builtin :: [].{
 			to_f32 : I64 -> F32
 			to_f64 : I64 -> F64
 			to_dec : I64 -> Dec
+
+			# Encode an I64 using a format that provides encode_i64
+			encode : I64, fmt -> Try(encoded, err)
+				where [fmt.encode_i64 : fmt, I64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i64(self)
+			}
 		}
 
 		U128 :: [].{
 			default : () -> U128
-			default = || 0u128
+			default = || 0
 
 			to_str : U128 -> Str
 			is_zero : U128 -> Bool
@@ -1005,11 +1062,18 @@ Builtin :: [].{
 
 			# Conversion to Dec (can overflow)
 			to_dec_try : U128 -> Try(Dec, [OutOfRange, ..])
+
+			# Encode a U128 using a format that provides encode_u128
+			encode : U128, fmt -> Try(encoded, err)
+				where [fmt.encode_u128 : fmt, U128 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_u128(self)
+			}
 		}
 
 		I128 :: [].{
 			default : () -> I128
-			default = || 0i128
+			default = || 0
 
 			to_str : I128 -> Str
 			is_zero : I128 -> Bool
@@ -1080,11 +1144,18 @@ Builtin :: [].{
 
 			# Conversion to Dec (can overflow)
 			to_dec_try : I128 -> Try(Dec, [OutOfRange, ..])
+
+			# Encode an I128 using a format that provides encode_i128
+			encode : I128, fmt -> Try(encoded, err)
+				where [fmt.encode_i128 : fmt, I128 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_i128(self)
+			}
 		}
 
 		Dec :: [].{
 			default : () -> Dec
-			default = || 0.0dec
+			default = || 0.0
 
 			to_str : Dec -> Str
 			is_zero : Dec -> Bool
@@ -1151,11 +1222,18 @@ Builtin :: [].{
 			# # Returns an empty list if this `Dec` is greater than or equal to the other.
 			until : Dec, Dec -> List(Dec)
 			until = |start, end| range_until(start, end)
+
+			# Encode a Dec using a format that provides encode_dec
+			encode : Dec, fmt -> Try(encoded, err)
+				where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_dec(self)
+			}
 		}
 
 		F32 :: [].{
 			default : () -> F32
-			default = || 0.0f32
+			default = || 0.0
 
 			to_str : F32 -> Str
 			is_zero : F32 -> Bool
@@ -1207,11 +1285,18 @@ Builtin :: [].{
 
 			# Conversion to F64 (safe widening)
 			to_f64 : F32 -> F64
+
+			# Encode an F32 using a format that provides encode_f32
+			encode : F32, fmt -> Try(encoded, err)
+				where [fmt.encode_f32 : fmt, F32 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_f32(self)
+			}
 		}
 
 		F64 :: [].{
 			default : () -> F64
-			default = || 0.0f64
+			default = || 0.0
 
 			to_str : F64 -> Str
 			is_zero : F64 -> Bool
@@ -1272,6 +1357,13 @@ Builtin :: [].{
 				} else {
 					Err(OutOfRange)
 				}
+			}
+
+			# Encode an F64 using a format that provides encode_f64
+			encode : F64, fmt -> Try(encoded, err)
+				where [fmt.encode_f64 : fmt, F64 -> Try(encoded, err)]
+			encode = |self, format| {
+				format.encode_f64(self)
 			}
 		}
 	}

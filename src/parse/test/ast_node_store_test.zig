@@ -495,6 +495,20 @@ test "NodeStore round trip - Expr" {
         },
     });
     try expressions.append(gpa, AST.Expr{
+        .typed_int = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
+        .typed_frac = .{
+            .region = rand_region(),
+            .token = rand_token_idx(),
+            .type_token = rand_token_idx(),
+        },
+    });
+    try expressions.append(gpa, AST.Expr{
         .single_quote = .{
             .region = rand_region(),
             .token = rand_token_idx(),
@@ -742,4 +756,20 @@ test "NodeStore round trip - Targets" {
         std.debug.print("Retrieved TargetsSection (nulls): {any}\n\n", .{retrieved_section_nulls});
         return err;
     };
+}
+
+test "NodeStore debug function" {
+    const gpa = testing.allocator;
+    var store = try NodeStore.initCapacity(gpa, 16);
+    defer store.deinit();
+
+    // Add some nodes to make debug output more interesting
+    _ = try store.addHeader(.{
+        .type_module = .{
+            .region = rand_region(),
+        },
+    });
+
+    // Call debug function - it should not crash
+    store.debug();
 }

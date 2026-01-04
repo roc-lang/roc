@@ -28,8 +28,8 @@ UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
-MISSING METHOD - lambda_multi_arg_mismatch.md:9:5:9:7
-MISSING METHOD - lambda_multi_arg_mismatch.md:13:5:13:9
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:13:5:13:9
 # PROBLEMS
 **UNUSED VARIABLE**
 Variable `x3` is not used anywhere in your code.
@@ -92,33 +92,36 @@ But the seventh argument has the type:
 
 `multi_arg_fn` needs these arguments to have compatible types.
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **lambda_multi_arg_mismatch.md:9:5:9:7:**
 ```roc
     42,        # x1: U64 (type 'a')
 ```
     ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**lambda_multi_arg_mismatch.md:11:5:11:12:**
+```roc
+    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
+```
+    ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **lambda_multi_arg_mismatch.md:13:5:13:9:**
 ```roc
     3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
 ```
     ^^^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -135,9 +135,9 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 61;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 63;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 40;
+pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 18;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -496,6 +496,34 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
                     .has_suffix = node.data_3 != 0,
+                },
+            };
+        },
+        .expr_typed_int => {
+            // Unpack typed int: value in extra_data, type_name in data_1
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            return CIR.Expr{
+                .e_typed_int = .{
+                    .value = .{
+                        .bytes = @bitCast(value_as_i128),
+                        .kind = @enumFromInt(node.data_2),
+                    },
+                    .type_name = @bitCast(node.data_1),
+                },
+            };
+        },
+        .expr_typed_frac => {
+            // Unpack typed frac: value in extra_data, type_name in data_1
+            const value_as_u32s = store.extra_data.items.items[node.data_3..][0..4];
+            const value_as_i128: i128 = @bitCast(value_as_u32s.*);
+            return CIR.Expr{
+                .e_typed_frac = .{
+                    .value = .{
+                        .bytes = @bitCast(value_as_i128),
+                        .kind = @enumFromInt(node.data_2),
+                    },
+                    .type_name = @bitCast(node.data_1),
                 },
             };
         },
@@ -1692,6 +1720,36 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.data_1 = @as(u32, @bitCast(@as(i32, e.value.numerator)));
             node.data_2 = @as(u32, e.value.denominator_power_of_ten);
             node.data_3 = @intFromBool(e.has_suffix);
+        },
+        .e_typed_int => |e| {
+            node.tag = .expr_typed_int;
+
+            // Store type_name in data_1, value kind in data_2, value in extra_data
+            node.data_1 = @bitCast(e.type_name);
+            node.data_2 = @intFromEnum(e.value.kind);
+
+            const extra_data_start = store.extra_data.len();
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                _ = try store.extra_data.append(store.gpa, word);
+            }
+            node.data_3 = @intCast(extra_data_start);
+        },
+        .e_typed_frac => |e| {
+            node.tag = .expr_typed_frac;
+
+            // Store type_name in data_1, value kind in data_2, value in extra_data
+            node.data_1 = @bitCast(e.type_name);
+            node.data_2 = @intFromEnum(e.value.kind);
+
+            const extra_data_start = store.extra_data.len();
+            const value_as_i128: i128 = @bitCast(e.value.bytes);
+            const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
+            for (value_as_u32s) |word| {
+                _ = try store.extra_data.append(store.gpa, word);
+            }
+            node.data_3 = @intCast(extra_data_start);
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
@@ -3002,6 +3060,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             region = r.region;
             node.data_1 = @bitCast(r.ident);
         },
+        .self_referential_definition => |r| {
+            node.tag = .diag_self_referential_definition;
+            region = r.region;
+            node.data_1 = @bitCast(r.ident);
+        },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
@@ -3292,6 +3355,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             _ = try store.extra_data.append(store.gpa, r.other_region.end.offset);
             node.data_3 = @intCast(extra_start);
         },
+        .deprecated_number_suffix => |r| {
+            node.tag = .diag_deprecated_number_suffix;
+            region = r.region;
+            node.data_1 = @intFromEnum(r.suffix);
+            node.data_2 = @intFromEnum(r.suggested);
+        },
     }
 
     const nid = @intFromEnum(try store.nodes.append(store.gpa, node));
@@ -3372,6 +3441,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
+            .ident = @bitCast(node.data_1),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
             .ident = @bitCast(node.data_1),
             .region = store.getRegionAt(node_idx),
         } },
@@ -3632,6 +3705,11 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
+        .diag_deprecated_number_suffix => return CIR.Diagnostic{ .deprecated_number_suffix = .{
+            .suffix = @enumFromInt(node.data_1),
+            .suggested = @enumFromInt(node.data_2),
+            .region = store.getRegionAt(node_idx),
+        } },
         else => {
             @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
         },
