@@ -9207,25 +9207,35 @@ pub const Interpreter = struct {
         }
     }
 
-    /// Resolve a type annotation index through any rigid_var_lookup references.
+    /// Resolve a type annotation index through a rigid_var_lookup reference (exactly one hop).
     /// This is necessary because after builtin serialization, the union-find relationships
     /// established during type checking are lost. rigid_var_lookup annotations reference
     /// the original rigid_var but have a different index, causing varFrom() to return
     /// different type variables that aren't unified after deserialization.
     fn resolveTypeAnnoRef(env: *const can.ModuleEnv, anno_idx: can.CIR.TypeAnno.Idx) can.CIR.TypeAnno.Idx {
-        var current = anno_idx;
-        // Follow rigid_var_lookup chain (should be at most one hop, but loop for safety)
-        var count: u32 = 0;
-        while (count < 100) : (count += 1) {
-            const anno = env.store.getTypeAnno(current);
-            switch (anno) {
-                .rigid_var_lookup => |lookup| {
-                    current = lookup.ref;
-                },
-                else => break,
+        const anno = env.store.getTypeAnno(anno_idx);
+        const result = switch (anno) {
+            .rigid_var_lookup => |lookup| lookup.ref,
+            else => anno_idx,
+        };
+
+        // Debug validation: verify there's at most one hop
+        if (comptime builtin.mode == .Debug) {
+            var current = anno_idx;
+            var count: u32 = 0;
+            while (count < 100) : (count += 1) {
+                const check_anno = env.store.getTypeAnno(current);
+                switch (check_anno) {
+                    .rigid_var_lookup => |lookup| {
+                        current = lookup.ref;
+                    },
+                    else => break,
+                }
             }
+            std.debug.assert(current == result);
         }
-        return current;
+
+        return result;
     }
 
     /// Translate a compile-time type variable from a module's type store to the runtime type store.
