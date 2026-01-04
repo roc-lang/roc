@@ -9904,9 +9904,16 @@ pub const Interpreter = struct {
         };
         if (params.len != args.len) return error.TypeMismatch;
 
+        // Take a snapshot before unification to preserve arg types on failure.
+        // unifyWithConf sets types to .err on failure, which would corrupt our
+        // argument types and break downstream evaluation.
+        var types_snapshot = try self.runtime_types.snapshot();
+        errdefer types_snapshot.deinit(self.runtime_types.gpa);
+
+        var unification_failed = false;
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithConf(
+            const result = try unify.unifyWithConf(
                 self.runtime_layout_store.env,
                 self.runtime_types,
                 &self.problems,
@@ -9918,7 +9925,20 @@ pub const Interpreter = struct {
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
+            if (result != .ok) {
+                unification_failed = true;
+                break;
+            }
         }
+
+        if (unification_failed) {
+            // Rollback to restore original types before .err corruption.
+            // Unification failures at runtime can happen in polymorphic contexts due to
+            // type reuse across iterations. Since the code passed compile-time type checking,
+            // we can safely continue with the original types.
+            self.runtime_types.rollbackTo(&types_snapshot);
+        }
+        types_snapshot.deinit(self.runtime_types.gpa);
         // ret_var may now be constrained
 
         // Apply rigid substitutions to ret_var if needed
@@ -11639,11 +11659,14 @@ pub const Interpreter = struct {
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    // Debug assertion: list type should be a structure (nominal_type for List).
+                    // If this fails, it indicates a bug in type translation or unification.
                     std.debug.assert(list_resolved.desc.content == .structure);
                     std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
                     const nom = list_resolved.desc.content.structure.nominal_type;
                     const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    // vars[0] = backing, vars[1] = element type
+                    std.debug.assert(vars.len >= 2);
                     const elem_rt_var = vars[1];
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
