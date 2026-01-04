@@ -9,74 +9,59 @@ const collections = @import("collections");
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
+const Blake3 = std.crypto.hash.Blake3;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
 
-/// Compute hash for a struct type (duplicated from struct_hash.zig to avoid circular imports)
-inline fn fnv1a32(comptime str: []const u8) u32 {
-    var hash: u32 = 2166136261;
-    inline for (str) |byte| {
-        hash ^= byte;
-        hash *%= 16777619;
-    }
-    return hash;
-}
-
-inline fn isExternStruct(comptime T: type) bool {
-    const type_info = @typeInfo(T);
-    return type_info == .@"struct" and type_info.@"struct".layout == .@"extern";
-}
-
-inline fn computeStructHashLocal(comptime StructType: type) [32]u8 {
-    const type_info = @typeInfo(StructType);
-    if (type_info != .@"struct") {
-        return [_]u8{0} ** 32;
-    }
-    const fields = type_info.@"struct".fields;
-    var hash: u64 = 14695981039346656037;
-    const fnv_prime = 1099511628211;
-    inline for (fields) |field| {
-        const name_hash = fnv1a32(field.name);
-        hash ^= name_hash;
-        hash *%= fnv_prime;
-        const field_size = @sizeOf(field.type);
-        const field_align = @alignOf(field.type);
-        hash ^= @intCast(field_size);
-        hash *%= fnv_prime;
-        hash ^= @intCast(field_align);
-        hash *%= fnv_prime;
-        if (isExternStruct(field.type)) {
-            const nested_hash = computeStructHashLocal(field.type);
-            inline for (nested_hash) |byte| {
-                hash ^= byte;
-            }
-            hash *%= fnv_prime;
+/// Compute a version hash for a struct type using Blake3.
+/// This hash changes when the struct layout changes, enabling automatic cache invalidation.
+fn computeVersionHash(comptime StructType: type) [32]u8 {
+    // Build a string representation of the struct layout at comptime
+    const layout_str = comptime blk: {
+        const type_info = @typeInfo(StructType);
+        if (type_info != .@"struct") {
+            break :blk "not_a_struct";
         }
-    }
+
+        var result: []const u8 = @typeName(StructType);
+        const fields = type_info.@"struct".fields;
+        for (fields) |field| {
+            result = result ++ ";" ++ field.name ++ ":" ++ @typeName(field.type);
+        }
+        break :blk result;
+    };
+
+    // Hash using Blake3 at runtime (Blake3 doesn't support comptime evaluation)
+    var hasher = Blake3.init(.{});
+    hasher.update(layout_str);
     var result: [32]u8 = undefined;
-    inline for (0..32) |i| {
-        result[i] = @intCast((hash >> @intCast((i % 8) * 8)) & 0xFF);
-    }
+    hasher.final(&result);
     return result;
 }
 
-/// Compile-time hash of ModuleEnv.Serialized structure for automatic cache invalidation
-const MODULE_ENV_STRUCT_HASH: [32]u8 = blk: {
-    @setEvalBranchQuota(10000);
-    break :blk computeStructHashLocal(ModuleEnv.Serialized);
-};
+/// Lazily computed version hash for ModuleEnv.Serialized
+var module_env_version_hash: ?[32]u8 = null;
+
+fn getModuleEnvVersionHash() [32]u8 {
+    if (module_env_version_hash) |hash| {
+        return hash;
+    }
+    const hash = computeVersionHash(ModuleEnv.Serialized);
+    module_env_version_hash = hash;
+    return hash;
+}
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
     /// Magic number for validation
     magic: u32,
 
-    /// Structure hash of ModuleEnv.Serialized at compile time.
+    /// Version hash of ModuleEnv.Serialized layout.
     /// Invalidates cache if ModuleEnv.Serialized layout changes.
-    struct_hash: [32]u8,
+    version_hash: [32]u8,
 
     /// Total size of the data section (excluding this header)
     data_size: u32,
@@ -92,7 +77,7 @@ pub const Header = struct {
     pub const InitError = error{
         PartialRead,
         InvalidMagic,
-        InvalidStructHash,
+        InvalidVersionHash,
     };
 
     /// Verify that the given buffer begins with a valid Header
@@ -113,9 +98,9 @@ pub const Header = struct {
         // Validate magic
         if (header.magic != CACHE_MAGIC) return InitError.InvalidMagic;
 
-        // Validate structure hash
-        if (!std.mem.eql(u8, &header.struct_hash, &MODULE_ENV_STRUCT_HASH)) {
-            return InitError.InvalidStructHash;
+        // Validate version hash
+        if (!std.mem.eql(u8, &header.version_hash, &getModuleEnvVersionHash())) {
+            return InitError.InvalidVersionHash;
         }
 
         return header;
@@ -163,7 +148,7 @@ pub const CacheModule = struct {
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
-            .struct_hash = MODULE_ENV_STRUCT_HASH,
+            .version_hash = getModuleEnvVersionHash(),
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
@@ -190,12 +175,12 @@ pub const CacheModule = struct {
 
         const header = @as(*const Header, @ptrCast(mapped_data.ptr));
 
-        // Validate header (including struct hash)
+        // Validate header (including version hash)
         _ = Header.initFromBytes(@constCast(mapped_data)) catch |err| {
             return switch (err) {
                 error.PartialRead => error.BufferTooSmall,
                 error.InvalidMagic => error.InvalidMagicNumber,
-                error.InvalidStructHash => error.CacheStructHashMismatch,
+                error.InvalidVersionHash => error.CacheVersionHashMismatch,
             };
         };
 
