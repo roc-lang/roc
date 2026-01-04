@@ -263,6 +263,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Done: 2",
         .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
     },
+    .{
+        .roc_file = "test/fx/issue8897.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Multiple expects with polymorphic function panic (issue #8897)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897_min.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Minimal repro for issue #8897 panic",
+    },
 };
 
 /// Get the total number of IO spec tests
