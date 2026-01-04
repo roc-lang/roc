@@ -113,6 +113,9 @@ bool_var: Var,
 str_var: Var,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
+/// Current block's statements - used to find local nominal types when checking deferred constraints.
+/// This is set when entering a block and cleared when exiting.
+current_block_statements: ?[]const CIR.Statement.Idx,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
@@ -207,6 +210,7 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
+        .current_block_statements = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
         .enclosing_func_name = null,
@@ -4120,6 +4124,11 @@ const BlockStatementsResult = struct {
 /// Given a slice of stmts, type check each one
 /// Returns whether any statement has effects and whether the block diverges (return/crash)
 fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
+    // Track current block statements for deferred constraint checking
+    const prev_block_statements = self.current_block_statements;
+    self.current_block_statements = statements;
+    defer self.current_block_statements = prev_block_statements;
+
     var does_fx = false;
     var diverges = false;
     for (statements) |stmt_idx| {
@@ -5720,13 +5729,19 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         );
                     }
                 } else {
-                    // Other methods are not supported on anonymous types
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .not_nominal,
-                        env,
-                    );
+                    // Try to find a nominal type with matching backing that has the required method
+                    if (try self.tryUnifyWithCompatibleNominal(deferred_constraint.var_, dispatcher_content.structure, constraint, env)) {
+                        // Successfully unified with a nominal type - the constraint will be
+                        // re-checked in a subsequent iteration since we just added it back
+                    } else {
+                        // No compatible nominal type found - report error
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .not_nominal,
+                            env,
+                        );
+                    }
                 }
             }
         } else {
@@ -5841,6 +5856,116 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         // Error types: allow them to proceed
         .err => true,
     };
+}
+
+/// Try to find a nominal type that:
+/// 1. Has a backing type compatible with the given structural type
+/// 2. Has the required method from the constraint
+/// If found, unify the structural var with the nominal type and add the constraint for re-checking.
+/// Returns true if successful, false if no compatible nominal type was found.
+fn tryUnifyWithCompatibleNominal(
+    self: *Self,
+    structural_var: Var,
+    structural_type: FlatType,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    // Search both module-level statements and current block statements
+    const all_stmts = self.cir.store.sliceStatements(self.cir.all_statements);
+    const block_stmts = self.current_block_statements orelse &[_]CIR.Statement.Idx{};
+
+    // Try module-level statements first, then block-local statements
+    for ([_][]const CIR.Statement.Idx{ all_stmts, block_stmts }) |stmts_slice| {
+        if (try self.tryFindNominalInStatements(stmts_slice, structural_var, structural_type, constraint, env)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn tryFindNominalInStatements(
+    self: *Self,
+    stmts_slice: []const CIR.Statement.Idx,
+    structural_var: Var,
+    structural_type: FlatType,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+) std.mem.Allocator.Error!bool {
+    for (stmts_slice) |stmt_idx| {
+        const stmt = self.cir.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_nominal_decl => |nominal| {
+                const stmt_var: Var = ModuleEnv.varFrom(stmt_idx);
+                const resolved = self.types.resolveVar(stmt_var);
+
+                // Check if this is actually a nominal type
+                if (resolved.desc.content != .structure) continue;
+                if (resolved.desc.content.structure != .nominal_type) continue;
+
+                const nominal_type = resolved.desc.content.structure.nominal_type;
+
+                // Check if the backing type is compatible with our structural type
+                const backing_var = self.types.getNominalBackingVar(nominal_type);
+                const backing_resolved = self.types.resolveVar(backing_var);
+
+                const backing_matches = blk: {
+                    if (backing_resolved.desc.content != .structure) break :blk false;
+                    const backing_flat = backing_resolved.desc.content.structure;
+
+                    // Check if the backing type matches our structural type
+                    switch (structural_type) {
+                        .empty_record => {
+                            // Match empty_record or a record with 0 fields
+                            if (backing_flat == .empty_record) break :blk true;
+                            if (backing_flat == .record) {
+                                const fields = self.types.getRecordFieldsSlice(backing_flat.record.fields);
+                                if (fields.len == 0) break :blk true;
+                            }
+                            break :blk false;
+                        },
+                        .empty_tag_union => break :blk backing_flat == .empty_tag_union,
+                        .record => break :blk backing_flat == .record,
+                        .tuple => break :blk backing_flat == .tuple,
+                        .tag_union => break :blk backing_flat == .tag_union,
+                        else => break :blk false,
+                    }
+                };
+
+                if (!backing_matches) continue;
+
+                // Check if this nominal type has the required method
+                const header = self.cir.store.getTypeHeader(nominal.header);
+                const type_ident = header.relative_name;
+
+                const method_ident = self.cir.lookupMethodIdentFromEnvConst(self.cir, type_ident, constraint.fn_name) orelse continue;
+                _ = self.cir.getExposedNodeIndexById(method_ident) orelse continue;
+
+                // Found a compatible nominal type with the required method!
+                // Unify the structural var with the nominal type
+                const region = self.getRegionAt(structural_var);
+                const nominal_instance = try self.instantiateVar(stmt_var, env, .{ .explicit = region });
+                const unify_result = try self.unify(structural_var, nominal_instance, env);
+
+                if (!unify_result.isProblem()) {
+                    // Successfully unified! The deferred constraint check loop will pick up
+                    // this constraint again (since the var is now nominal) and handle it properly.
+                    _ = try env.deferred_static_dispatch_constraints.append(self.gpa, DeferredConstraintCheck{
+                        .var_ = structural_var,
+                        .constraints = StaticDispatchConstraint.SafeList.Range{
+                            .start = @enumFromInt(self.types.static_dispatch_constraints.len()),
+                            .count = 1,
+                        },
+                    });
+                    _ = try self.types.static_dispatch_constraints.append(self.gpa, constraint);
+                    return true;
+                }
+            },
+            else => {},
+        }
+    }
+
+    return false;
 }
 
 /// Check if an expression represents a function definition that should be generalized.

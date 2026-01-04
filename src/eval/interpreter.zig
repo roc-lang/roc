@@ -11209,7 +11209,6 @@ pub const Interpreter = struct {
                 }
 
                 // Resolve the method function
-                const layout_env = self.runtime_layout_store.env;
                 const method_func = self.resolveMethodFunction(
                     nominal_info.?.origin,
                     nominal_info.?.ident,
@@ -11218,6 +11217,7 @@ pub const Interpreter = struct {
                     dispatch_rt_var,
                 ) catch |err| switch (err) {
                     error.MethodLookupFailed => {
+                        const layout_env = self.runtime_layout_store.env;
                         const type_name = import_mapping_mod.getDisplayName(
                             self.import_mapping,
                             layout_env.common.getIdentStore(),
@@ -12013,52 +12013,14 @@ pub const Interpreter = struct {
                     self.triggerCrash(msg, true, roc_ops);
                     return error.Crash;
                 };
-
-                // Get the layout for the original (possibly nominal) type first
-                const nominal_layout = try self.getRuntimeLayout(rt_var);
-
-                // For box layouts (recursive nominal types), we need to handle the box wrapper.
-                // For other layouts, use the resolved (unwrapped) type's layout to get the
-                // actual tag union layout instead of any wrapper.
+                // Use the resolved (unwrapped) type's layout, not the nominal wrapper's layout.
+                // This ensures we get the actual tag union layout instead of a box wrapper.
                 // We store resolved.var_ as layout_rt_var for consistent layout calculation,
                 // while keeping rt_var for type identity and method dispatch.
                 const layout_rt_var = resolved.var_;
-                const layout_val = if (nominal_layout.tag == .box)
-                    nominal_layout
-                else
-                    try self.getRuntimeLayout(layout_rt_var);
+                const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
-                if (layout_val.tag == .box) {
-                    // Recursive nominal type - the layout is a box wrapping the actual tag union.
-                    // Get the inner layout (the tag union) and schedule building that first.
-                    const inner_layout = self.runtime_layout_store.getLayout(layout_val.data.box);
-                    const args_exprs = self.env.store.sliceExpr(tag.args);
-                    const arg_vars_range = tag_list.items[tag_index].args;
-                    const arg_rt_vars = self.runtime_types.sliceVars(arg_vars_range);
-
-                    if (args_exprs.len == 0) {
-                        // No payload args - finalize immediately with inner layout
-                        const value = try self.finalizeTagNoPayload(rt_var, tag_index, inner_layout, roc_ops);
-                        // Now box the value
-                        const boxed = try self.makeBoxValueFromLayout(layout_val, value, roc_ops, rt_var);
-                        value.decref(&self.runtime_layout_store, roc_ops);
-                        try value_stack.push(boxed);
-                    } else {
-                        // Has payload args - schedule collection with box wrapping
-                        // layout_type: 0=record, 1=tuple, 2=tag_union, 3=boxed_tag_union
-                        const layout_type: u8 = 3; // boxed_tag_union
-                        try work_stack.push(.{ .apply_continuation = .{ .tag_collect = .{
-                            .collected_count = 0,
-                            .remaining_args = args_exprs,
-                            .arg_rt_vars = arg_rt_vars,
-                            .expr_idx = expr_idx,
-                            .rt_var = rt_var,
-                            .layout_rt_var = layout_rt_var,
-                            .tag_index = tag_index,
-                            .layout_type = layout_type,
-                        } } });
-                    }
-                } else if (layout_val.tag == .scalar) {
+                if (layout_val.tag == .scalar) {
                     // No payload union - just set discriminant
                     var out = try self.pushRaw(layout_val, 0, rt_var);
                     if (layout_val.data.scalar.tag == .int) {
@@ -15487,64 +15449,6 @@ pub const Interpreter = struct {
                         dest.is_initialized = true;
                         dest.rt_var = tc.rt_var;
                         try value_stack.push(dest);
-                    } else if (tc.layout_type == 3) {
-                        // Boxed tag union layout: build the inner tag union, then box it
-                        const box_layout = layout_val;
-                        const inner_layout = self.runtime_layout_store.getLayout(box_layout.data.box);
-
-                        // Build the inner tag union value using the same logic as layout_type == 2
-                        if (inner_layout.tag != .tag_union) {
-                            for (values) |val| val.decref(&self.runtime_layout_store, roc_ops);
-                            self.triggerCrash("boxed_tag_union: inner layout is not tag_union", false, roc_ops);
-                            return error.Crash;
-                        }
-
-                        const tu_idx = inner_layout.data.tag_union.idx;
-                        const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
-                        const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
-
-                        var inner_dest = try self.pushRaw(inner_layout, 0, tc.rt_var);
-                        const base_ptr: [*]u8 = @ptrCast(inner_dest.ptr.?);
-
-                        // Write payload at offset 0
-                        const payload_ptr: *anyopaque = @ptrCast(base_ptr);
-                        if (total_count == 1) {
-                            try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
-                        } else {
-                            // Multiple args - create tuple payload
-                            var elem_layouts = try self.allocator.alloc(Layout, total_count);
-                            defer self.allocator.free(elem_layouts);
-                            var elem_rt_vars = try self.allocator.alloc(types.Var, total_count);
-                            defer self.allocator.free(elem_rt_vars);
-                            for (values, 0..) |val, idx| {
-                                elem_layouts[idx] = val.layout;
-                                elem_rt_vars[idx] = val.rt_var;
-                            }
-                            const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
-                            const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
-                            const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
-                            const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
-                            const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
-                            var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
-                            var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
-                            for (values, 0..) |val, idx| {
-                                try tup_acc.setElement(idx, val, roc_ops);
-                            }
-                        }
-
-                        // Write discriminant
-                        tu_data.writeDiscriminantToPtr(base_ptr + disc_offset, @intCast(tc.tag_index));
-
-                        inner_dest.is_initialized = true;
-
-                        // Now box the inner value
-                        const boxed = try self.makeBoxValueFromLayout(box_layout, inner_dest, roc_ops, tc.rt_var);
-                        inner_dest.decref(&self.runtime_layout_store, roc_ops);
-
-                        for (values) |val| {
-                            val.decref(&self.runtime_layout_store, roc_ops);
-                        }
-                        try value_stack.push(boxed);
                     }
                 }
                 return true;
@@ -17951,21 +17855,6 @@ pub const Interpreter = struct {
                 // Decref the original receiver value since patternMatchesBind made a copy
                 receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
-                // Get CT function argument types from the lambda's type signature
-                // This is needed because the type variables in the function signature
-                // may be different from the type variables in the parameter patterns
-                // after serialization/deserialization.
-                const lambda_ct_resolved = self.env.types.resolveVar(lambda_ct_var);
-                const ct_fn_args: ?types.Var.SafeList.Range = if (lambda_ct_resolved.desc.content == .structure)
-                    switch (lambda_ct_resolved.desc.content.structure) {
-                        .fn_pure => |f| f.args,
-                        .fn_effectful => |f| f.args,
-                        .fn_unbound => |f| f.args,
-                        else => null,
-                    }
-                else
-                    null;
-
                 // Bind explicit arguments using patternMatchesBind
                 for (arg_values, 0..) |arg, idx| {
                     const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
@@ -17975,16 +17864,6 @@ pub const Interpreter = struct {
                     if (arg_rt_resolved.desc.content == .structure) {
                         const param_ct_var = can.ModuleEnv.varFrom(params[1 + idx]);
                         try self.propagateFlexMappings(self.env, param_ct_var, arg.rt_var);
-
-                        // Also propagate from the function signature's argument type
-                        // This ensures type variables in the function body are mapped correctly
-                        if (ct_fn_args) |args| {
-                            const ct_arg_vars = self.env.types.sliceVars(args);
-                            // idx is for explicit args (not including receiver), so add 1 for fn_args index
-                            if (1 + idx < ct_arg_vars.len) {
-                                try self.propagateFlexMappings(self.env, ct_arg_vars[1 + idx], arg.rt_var);
-                            }
-                        }
                     }
 
                     if (!try self.patternMatchesBind(params[1 + idx], arg, param_rt_var, roc_ops, &self.bindings, null)) {

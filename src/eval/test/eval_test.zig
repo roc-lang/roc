@@ -1801,20 +1801,15 @@ test "Decoder: create err result" {
 }
 
 test "decode: I32.decode with simple format" {
-    // TODO: type variable dispatch resolves to backing type instead of nominal type.
-    // When propagateFlexMappings is called with a nominal type (MyFormat := []),
-    // it propagates the backing type (tag_union) rather than the nominal itself.
-    // Method dispatch needs the nominal type to find decode_i32.
-    if (true) return error.SkipZigTest;
     // Test I32.decode with a format that provides decode_i32
     try runExpectI64(
         \\{
         \\    # Define a format type with decode_i32 method
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_i32 : MyFormat, List(U8) -> (Try(I32, [Err]), List(U8))
         \\        decode_i32 = |_fmt, src| (Ok(42i32), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = I32.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -1825,16 +1820,14 @@ test "decode: I32.decode with simple format" {
 }
 
 test "decode: I64.decode with simple format" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test I64.decode with a simple format that returns a constant
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_i64 : MyFormat, List(U8) -> (Try(I64, [Err]), List(U8))
         \\        decode_i64 = |_fmt, src| (Ok(99i64), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = I64.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n
@@ -1845,16 +1838,14 @@ test "decode: I64.decode with simple format" {
 }
 
 test "decode: U8.decode success" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test U8.decode with simple constant format
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Ok(255u8), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -1865,16 +1856,14 @@ test "decode: U8.decode success" {
 }
 
 test "decode: U8.decode error" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test U8.decode returns error - use I64 result to avoid complex match
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Err(Empty), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
         \\        Ok(_) => 0i64
@@ -1885,16 +1874,14 @@ test "decode: U8.decode error" {
 }
 
 test "decode: Bool.decode true" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test Bool.decode returns true
     try runExpectBool(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
         \\        Ok(b) => b
@@ -1905,16 +1892,14 @@ test "decode: Bool.decode true" {
 }
 
 test "decode: Bool.decode false" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test Bool.decode returns false
     try runExpectBool(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
         \\        Ok(b) => b
@@ -1925,16 +1910,14 @@ test "decode: Bool.decode false" {
 }
 
 test "decode: Str.decode success" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test Str.decode with constant
     try runExpectStr(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_str : MyFormat, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
         \\        decode_str = |_fmt, src| (Ok("hi"), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = Str.decode([], fmt)
         \\    match result {
         \\        Ok(s) => s
@@ -1945,16 +1928,14 @@ test "decode: Str.decode success" {
 }
 
 test "decode: rest returned from decode" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Verify that decode returns the rest bytes
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Ok(1u8), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U8.decode([5u8], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -1965,16 +1946,14 @@ test "decode: rest returned from decode" {
 }
 
 test "decode: U16.decode" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test U16.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u16 : MyFormat, List(U8) -> (Try(U16, [Err]), List(U8))
         \\        decode_u16 = |_fmt, src| (Ok(1000u16), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U16.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -1985,16 +1964,14 @@ test "decode: U16.decode" {
 }
 
 test "decode: U32.decode" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test U32.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u32 : MyFormat, List(U8) -> (Try(U32, [Err]), List(U8))
         \\        decode_u32 = |_fmt, src| (Ok(100000u32), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U32.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -2005,16 +1982,14 @@ test "decode: U32.decode" {
 }
 
 test "decode: U64.decode" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test U64.decode
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_u64 : MyFormat, List(U8) -> (Try(U64, [Err]), List(U8))
         \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807u64), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = U64.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64_wrap()
@@ -2025,16 +2000,14 @@ test "decode: U64.decode" {
 }
 
 test "decode: I8.decode negative" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test I8.decode with negative value
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_i8 : MyFormat, List(U8) -> (Try(I8, [Err]), List(U8))
         \\        decode_i8 = |_fmt, src| (Ok(-42i8), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = I8.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
@@ -2045,16 +2018,14 @@ test "decode: I8.decode negative" {
 }
 
 test "decode: I16.decode negative" {
-    // TODO: where clause method dispatch not yet implemented
-    if (true) return error.SkipZigTest;
     // Test I16.decode with negative value
     try runExpectI64(
         \\{
-        \\    MyFormat := [].{
+        \\    MyFormat := {}.{
         \\        decode_i16 : MyFormat, List(U8) -> (Try(I16, [Err]), List(U8))
         \\        decode_i16 = |_fmt, src| (Ok(-1000i16), src)
         \\    }
-        \\    fmt = MyFormat
+        \\    fmt = {}
         \\    (result, _rest) = I16.decode([], fmt)
         \\    match result {
         \\        Ok(n) => n.to_i64()
