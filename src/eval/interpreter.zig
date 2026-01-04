@@ -10252,8 +10252,13 @@ pub const Interpreter = struct {
             arg_rt_vars: []const types.Var,
             /// Tag expression index (for type info)
             expr_idx: can.CIR.Expr.Idx,
-            /// Runtime type variable for the tag union
+            /// Runtime type variable for the tag union (may be nominal wrapper).
+            /// Used for type identity and method dispatch.
             rt_var: types.Var,
+            /// Unwrapped type variable for layout calculation.
+            /// For nominal types, this is the backing type; otherwise same as rt_var.
+            /// Using this for layout ensures consistency with how the value was created.
+            layout_rt_var: types.Var,
             /// Tag index (discriminant)
             tag_index: usize,
             /// Layout type: 0=record, 1=tuple
@@ -11983,10 +11988,13 @@ pub const Interpreter = struct {
                 // For box layouts (recursive nominal types), we need to handle the box wrapper.
                 // For other layouts, use the resolved (unwrapped) type's layout to get the
                 // actual tag union layout instead of any wrapper.
+                // We store resolved.var_ as layout_rt_var for consistent layout calculation,
+                // while keeping rt_var for type identity and method dispatch.
+                const layout_rt_var = resolved.var_;
                 const layout_val = if (nominal_layout.tag == .box)
                     nominal_layout
                 else
-                    try self.getRuntimeLayout(resolved.var_);
+                    try self.getRuntimeLayout(layout_rt_var);
 
                 if (layout_val.tag == .box) {
                     // Recursive nominal type - the layout is a box wrapping the actual tag union.
@@ -12013,6 +12021,7 @@ pub const Interpreter = struct {
                             .arg_rt_vars = arg_rt_vars,
                             .expr_idx = expr_idx,
                             .rt_var = rt_var,
+                            .layout_rt_var = layout_rt_var,
                             .tag_index = tag_index,
                             .layout_type = layout_type,
                         } } });
@@ -12052,6 +12061,7 @@ pub const Interpreter = struct {
                             .arg_rt_vars = arg_rt_vars,
                             .expr_idx = expr_idx,
                             .rt_var = rt_var,
+                            .layout_rt_var = layout_rt_var,
                             .tag_index = tag_index,
                             .layout_type = layout_type,
                         } } });
@@ -15060,6 +15070,7 @@ pub const Interpreter = struct {
                         .arg_rt_vars = tc.arg_rt_vars,
                         .expr_idx = tc.expr_idx,
                         .rt_var = tc.rt_var,
+                        .layout_rt_var = tc.layout_rt_var,
                         .tag_index = tc.tag_index,
                         .layout_type = tc.layout_type,
                     } } });
@@ -15080,12 +15091,15 @@ pub const Interpreter = struct {
                         values[i] = value_stack.pop() orelse return error.Crash;
                     }
 
-                    // Get the layout from the original type (tc.rt_var).
+                    // Get the layout from the unwrapped type (tc.layout_rt_var).
+                    // This ensures consistency with how the tag value was created - we use
+                    // the backing type's layout, not a nominal wrapper's layout which might
+                    // be different (e.g., box instead of scalar).
                     // Note: For polymorphic types, this layout may have incorrect payload sizes
                     // (e.g., flex vars default to Dec/ZST). The branches below handle this
                     // by checking actual value sizes and using properly-typed layouts when needed.
                     // See https://github.com/roc-lang/roc/issues/8872
-                    const layout_val = try self.getRuntimeLayout(tc.rt_var);
+                    const layout_val = try self.getRuntimeLayout(tc.layout_rt_var);
 
                     if (tc.layout_type == 0) {
                         // Record layout { tag, payload }
