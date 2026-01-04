@@ -4333,6 +4333,11 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const resolved = self.types.resolveVar(expr_var).desc.content;
                 const is_empty_record = blk: {
                     if (resolved == .err) break :blk true;
+                    // Flex vars may be resolved later by deferred static dispatch constraints.
+                    // For example, `f.show!()` creates a flex for the return type that gets
+                    // unified with `{}` during constraint resolution. Skip the unused value
+                    // check for flex vars to avoid false positives.
+                    if (resolved == .flex) break :blk true;
                     if (resolved != .structure) break :blk false;
                     switch (resolved.structure) {
                         .empty_record => break :blk true,

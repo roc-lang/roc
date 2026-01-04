@@ -266,13 +266,11 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
 TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
 MISSING METHOD - syntax_grab_bag.md:176:12:176:22
 + - :0:0:0:0
-UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -937,18 +935,6 @@ But all the previous patterns have this type:
 
 All patterns in an `match` must have compatible types.
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-It has the type:
-
-    _d
-
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
 **syntax_grab_bag.md:155:2:157:3:**
@@ -1003,18 +989,6 @@ The value's type, which does not have a method named **plus**, is:
     Str
 
 **Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:190:2:190:29:**
-```roc
-	Stdout.line!(interpolated)?
-```
-	^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    _d
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
