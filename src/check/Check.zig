@@ -525,13 +525,14 @@ fn instantiateVarPreserveRigids(
     self: *Self,
     var_to_instantiate: Var,
     env: *Env,
+    rank: Rank,
     region_behavior: InstantiateRegionBehavior,
 ) std.mem.Allocator.Error!Var {
+    std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
-
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_rigid,
     };
@@ -2867,8 +2868,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     defer trace.end();
 
     const expr = self.cir.store.getExpr(expr_idx);
-    const expr_var = ModuleEnv.varFrom(expr_idx);
     const expr_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(expr_idx));
+    const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
     // Check if this is a lambda expression. If so, then we should generalize.
     const should_generalize = expr == .e_lambda;
@@ -2877,12 +2878,16 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     if (should_generalize) try env.var_pool.pushRank();
     defer if (should_generalize) env.var_pool.popRank();
 
-    // Set the correct rank of this expr
-    try self.setVarRank(expr_var, env);
-
-    // Generate annotation type variables
-    const mb_anno_vars: ?AnnoVars = switch (expected) {
-        .no_expectation => null,
+    // Generate the expr var and the annotation type vars
+    //
+    // If we have an annotation, then we create a fresh one, so if we hit an
+    // error we don't poison the variable
+    const expr_var: Var, const mb_anno_vars: ?AnnoVars = switch (expected) {
+        .no_expectation => blk: {
+            // Set the correct rank of this expr
+            try self.setVarRank(expr_var_raw, env);
+            break :blk .{ expr_var_raw, null };
+        },
         .expected => |annotation_idx| blk: {
             // Generate the type for the annotation
             try self.generateAnnotationType(annotation_idx, env);
@@ -2890,9 +2895,17 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Instantiate a backup copy, used if the expr errors to allow
             // places that reference this expr to use as if it did not error
-            const anno_var_backup = try self.instantiateVarPreserveRigids(anno_var, env, .use_last_var);
+            const anno_var_backup = try self.instantiateVarPreserveRigids(
+                anno_var,
+                env,
+                env.rank(),
+                .use_last_var,
+            );
 
-            break :blk .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup };
+            break :blk .{
+                try self.fresh(env, expr_region),
+                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+            };
         },
     };
 
@@ -4084,11 +4097,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
     }
 
+    // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
+        // Unify the anno with the expr var
         _ = try self.unifyWithCtx(anno_vars.anno_var, expr_var, env, .anno);
 
-        // TODO: Preserve type annotation type if expr errored
-
+        // Check if the expression type contains any errors anywhere in its
+        // structure. If it does and we have an annotation, use the annotation
+        // type for the pattern instead of the expression type. This preserves
+        // the annotation type for other code that references this identifier,
+        // even when the expression has errors.
+        //
+        // For example, if the annotation is `I64 -> Str` and the expression has
+        // an error in the return type (making it `I64 -> Error`), the pattern
+        // should still get `I64 -> Str` from the annotation.
+        var visited = std.AutoHashMap(Var, void).init(self.gpa);
+        defer visited.deinit();
+        if (self.varContainsError(expr_var, &visited)) {
+            // If there was an annotation AND the expr contains errors, then unify the
+            // raw expr var against the annotation
+            _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
+        } else {
+            // Otherwise, unify the raw var with the intermediate var
+            _ = try self.unify(expr_var_raw, expr_var, env);
+        }
     }
 
     // Check any accumulated static dispatch constraints
@@ -4143,68 +4175,18 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 };
                 defer self.enclosing_func_name = saved_func_name;
 
-                // Check if this expr is one that should be generalized
-                const should_generalize = self.isLambdaExpr(decl_stmt.expr);
-
-                // // Create placeholder for the annotation, if it exists
-                // var mb_instantiated_anno_var: ?Var = null;
-
-                // Evaluate the rhs of the expression
-                {
-
-                    // If this type of expr should be generalized, push a new rank
-                    if (should_generalize) try env.var_pool.pushRank();
-                    defer if (should_generalize) env.var_pool.popRank();
-
-                    // Check the annotation, if it exists
-                    const expectation = blk: {
-                        if (decl_stmt.anno) |annotation_idx| {
-                            // // Generate the annotation type var in-place
-                            // try self.generateAnnotationType(annotation_idx, env);
-                            // const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                            // // Here we copy the annotation before we unify against it
-                            // //
-                            // // This is so if there's an error in the expr/ptrn, we can preserve
-                            // // the annotation so other places that reference it still get the
-                            // // type of the annotation.
-                            // mb_instantiated_anno_var = try self.instantiateVarPreserveRigids(
-                            //     annotation_var,
-                            //     env,
-                            //     .use_last_var,
-                            // );
-
-                            // Return the expectation
-                            break :blk Expected{
-                                .expected = annotation_idx,
-                            };
-                        } else {
-                            break :blk Expected.no_expectation;
-                        }
-                    };
-
-                    does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
-
-                    // Only generalize if this is a lambda expression (value restriction)
-                    if (should_generalize) {
-                        try self.checkDeferredStaticDispatchConstraints(env);
-                        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+                // Check the annotation, if it exists
+                const expectation = blk: {
+                    if (decl_stmt.anno) |annotation_idx| {
+                        break :blk Expected{ .expected = annotation_idx };
+                    } else {
+                        break :blk Expected.no_expectation;
                     }
-                }
+                };
 
-                // if (mb_instantiated_anno_var != null and
-                //     self.types.resolveVar(decl_expr_var).desc.content == .err)
-                // {
-                //     // If there was an annotation AND the expr errored, then
-                //     // unify the ptrn against the annotation
-                //     const instantiated_anno_var = mb_instantiated_anno_var.?;
-                //     _ = try self.unify(decl_pattern_var, instantiated_anno_var, env);
-                // } else {
-                // Otherwise, unify the ptrn and expr
+                does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
+
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-                // }
-
-                // Unify the pattern with the expression
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
             },
             .s_decl_gen => |decl_stmt| {
@@ -4227,42 +4209,19 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Evaluate the rhs of the expression
                 const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
 
-                // Check if this expr is one that should be generalized
-                const should_generalize = self.isLambdaExpr(decl_stmt.expr);
-
-                {
-                    // If this type of expr should be generalized, push a new rank
-                    if (should_generalize) try env.var_pool.pushRank();
-                    defer if (should_generalize) env.var_pool.popRank();
-
-                    // Check the annotation, if it exists
-                    const expectation = blk: {
-                        if (decl_stmt.anno) |annotation_idx| {
-                            // // Generate the annotation type var in-place
-                            // try self.generateAnnotationType(annotation_idx, env);
-                            // const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                            // Return the expectation
-                            break :blk Expected{
-                                .expected = annotation_idx,
-                            };
-                        } else {
-                            break :blk Expected.no_expectation;
-                        }
-                    };
-
-                    does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
-
-                    // Only generalize if this is a lambda expression (value restriction)
-                    if (should_generalize) {
-                        try self.checkDeferredStaticDispatchConstraints(env);
-                        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), should_generalize);
+                // Check the annotation, if it exists
+                const expectation = blk: {
+                    if (decl_stmt.anno) |annotation_idx| {
+                        // Return the expectation
+                        break :blk Expected{ .expected = annotation_idx };
+                    } else {
+                        break :blk Expected.no_expectation;
                     }
-                }
+                };
+
+                does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
 
                 _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-
-                // Unify the pattern with the expression
                 _ = try self.unify(stmt_var, decl_pattern_var, env);
             },
             .s_var => |var_stmt| {
@@ -4273,17 +4232,8 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (var_stmt.anno) |annotation_idx| {
-                        // // Generate the annotation type var in-place
-                        // try self.generateAnnotationType(annotation_idx, env);
-                        // const annotation_var = ModuleEnv.varFrom(annotation_idx);
-
-                        // // Unify the pattern with the annotation
-                        // _ = try self.unify(var_pattern_var, annotation_var, env);
-
                         // Return the expectation
-                        break :blk Expected{
-                            .expected = annotation_idx,
-                        };
+                        break :blk Expected{ .expected = annotation_idx };
                     } else {
                         break :blk Expected.no_expectation;
                     }
@@ -4292,9 +4242,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 does_fx = try self.checkExpr(var_stmt.expr, env, expectation) or does_fx;
                 const var_expr: Var = ModuleEnv.varFrom(var_stmt.expr);
 
-                // Unify the pattern with the expression
                 _ = try self.unify(var_pattern_var, var_expr, env);
-
                 _ = try self.unify(stmt_var, var_expr, env);
             },
             .s_reassign => |reassign| {
