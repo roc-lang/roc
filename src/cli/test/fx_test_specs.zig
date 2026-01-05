@@ -278,6 +278,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>converted to utf8|1>Parsing block|1>parsed: Try.Err(\"wildcard\")",
         .description = "Regression test: Infinite recursion in layout size computation for recursive opaque types (issue #8923)",
     },
+    .{
+        .roc_file = "test/fx/static_dispatch_platform_module.roc",
+        .io_spec = "1>Result: start-middle-end",
+        .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
+    },
 };
 
 /// Get the total number of IO spec tests

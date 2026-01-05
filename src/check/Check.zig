@@ -5528,16 +5528,22 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         break :blk self.cir;
                     }
                 } else {
-                    // Look up the module in auto_imported_types.
-                    // Note: auto_imported_types maps TYPE names to their modules, but
-                    // here we're using the origin_module (a MODULE name). This works
-                    // because imported types have entries keyed by their type name.
-                    std.debug.assert(self.auto_imported_types != null);
-                    const auto_imported_types = self.auto_imported_types.?;
+                    // For types from other modules (not this module, not builtin), find the
+                    // module environment from imported_modules by matching the module name.
+                    // We compare string values because origin_module is an ident from where the
+                    // type was defined, while module_name is the canonical name from imported_env.
+                    const origin_module_text = self.cir.getIdent(original_module_ident);
+                    for (self.imported_modules) |imported_env| {
+                        if (std.mem.eql(u8, imported_env.module_name, origin_module_text)) {
+                            break :blk imported_env;
+                        }
+                    }
 
-                    const mb_original_module_env = auto_imported_types.get(original_module_ident);
-                    std.debug.assert(mb_original_module_env != null);
-                    break :blk mb_original_module_env.?.env;
+                    // Could not find the module environment. This is an internal compiler error.
+                    std.debug.panic("Unable to find module environment for type {s} from module {s}", .{
+                        self.cir.getIdent(nominal_type.ident.ident_idx),
+                        origin_module_text,
+                    });
                 }
             };
 
