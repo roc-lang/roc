@@ -857,14 +857,15 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Err
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // Create the backing tag union [Err(err), Ok(ok)]
-    // Tags must be in alphabetical order for correct discriminant assignment
+    // Create the backing tag union [Ok(ok), Err(err)]
+    // Tags are created in source order (matching Try definition in Builtin.roc).
+    // The layout generator will sort them alphabetically later.
     const ok_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Ok"));
     const err_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Err"));
     const ok_tag = try self.types.mkTag(ok_ident, &.{ok_var});
     const err_tag = try self.types.mkTag(err_ident, &.{err_var});
     const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
-    const backing_content = try self.types.mkTagUnion(&.{ err_tag, ok_tag }, ext_var);
+    const backing_content = try self.types.mkTagUnion(&.{ ok_tag, err_tag }, ext_var);
     const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
 
     const type_args = [_]Var{ ok_var, err_var };
