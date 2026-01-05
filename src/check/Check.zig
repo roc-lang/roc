@@ -782,7 +782,7 @@ fn mkFlexWithFromNumeralConstraint(
 
     // Create Try(flex_var, err_var) as the return type
     // Try is a nominal type with two type args: the success type and the error type
-    const try_type_content = try self.mkTryContent(flex_var, err_var);
+    const try_type_content = try self.mkTryContent(flex_var, err_var, env);
     const ret_var = try self.freshFromContent(try_type_content, env, num_literal_info.region);
 
     const func_content = types_mod.Content{
@@ -847,7 +847,7 @@ fn mkBoxContent(self: *Self, elem_var: Var) Allocator.Error!Content {
 
 /// Create a nominal Try type with the given success and error types.
 /// This is used for creating Try types in function signatures (e.g., from_numeral).
-fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content {
+fn mkTryContent(self: *Self, ok_var: Var, err_var: Var, env: *Env) Allocator.Error!Content {
     const origin_module_id = if (self.builtin_ctx.builtin_module) |_|
         self.cir.idents.builtin_module
     else
@@ -857,9 +857,17 @@ fn mkTryContent(self: *Self, ok_var: Var, err_var: Var) Allocator.Error!Content 
         .ident_idx = self.cir.idents.builtin_try,
     };
 
-    // mkNominal requires a backing_var, but for nominal-to-nominal unification
-    // only the type ident and type args are compared, so ok_var is fine here.
-    const backing_var = ok_var;
+    // Create the backing tag union [Ok(ok), Err(err)]
+    // Tags are created in source order (matching Try definition in Builtin.roc).
+    // The layout generator will sort them alphabetically later.
+    const ok_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Ok"));
+    const err_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text("Err"));
+    const ok_tag = try self.types.mkTag(ok_ident, &.{ok_var});
+    const err_tag = try self.types.mkTag(err_ident, &.{err_var});
+    const ext_var = try self.freshFromContent(.{ .structure = .empty_tag_union }, env, Region.zero());
+    const backing_content = try self.types.mkTagUnion(&.{ ok_tag, err_tag }, ext_var);
+    const backing_var = try self.freshFromContent(backing_content, env, Region.zero());
+
     const type_args = [_]Var{ ok_var, err_var };
 
     return try self.types.mkNominal(
