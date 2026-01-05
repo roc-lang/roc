@@ -40,7 +40,7 @@ pub const Instantiator = struct {
     idents: *const base.Ident.Store,
     var_map: *std.AutoHashMap(Var, Var),
 
-    current_rank: Rank = Rank.top_level,
+    current_rank: Rank,
     rigid_behavior: RigidBehavior,
 
     /// The mode to use when instantiating
@@ -72,6 +72,11 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // Non-generalized variables should _not_ be instantiated
+        if (resolved.desc.rank != .generalized) {
+            return resolved_var;
+        }
 
         // Check if we've already instantiated this variable
         if (self.var_map.get(resolved_var)) |fresh_var| {
@@ -141,32 +146,26 @@ pub const Instantiator = struct {
                 return fresh_var;
             },
             else => {
-                if (resolved.desc.rank != .generalized and resolved.desc.content == .flex) {
-                    // If this is a flex var that's NOT generalized, then return
-                    // it unmodified
-                    return resolved.var_;
-                } else {
-                    // Generate the content
+                // Generate the content
 
-                    // Remember this substitution for recursive references
-                    // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
-                    const fresh_var = try self.store.fresh();
-                    try self.var_map.put(resolved_var, fresh_var);
+                // Remember this substitution for recursive references
+                // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
+                const fresh_var = try self.store.fresh();
+                try self.var_map.put(resolved_var, fresh_var);
 
-                    const fresh_content = try self.instantiateContent(resolved.desc.content);
+                const fresh_content = try self.instantiateContent(resolved.desc.content);
 
-                    // Update the placeholder fresh var with the real content
-                    try self.store.dangerousSetVarDesc(
-                        fresh_var,
-                        .{
-                            .content = fresh_content,
-                            .rank = self.current_rank,
-                            .mark = Mark.none,
-                        },
-                    );
+                // Update the placeholder fresh var with the real content
+                try self.store.dangerousSetVarDesc(
+                    fresh_var,
+                    .{
+                        .content = fresh_content,
+                        .rank = self.current_rank,
+                        .mark = Mark.none,
+                    },
+                );
 
-                    return fresh_var;
-                }
+                return fresh_var;
             },
         }
     }

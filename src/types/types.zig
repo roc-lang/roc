@@ -109,7 +109,6 @@ pub const Rank = enum(u8) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
     outermost = 1,
-    top_level = 2,
     _,
 
     /// Get the lowest rank

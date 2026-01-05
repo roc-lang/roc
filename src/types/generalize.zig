@@ -10,31 +10,40 @@
 //! to generalize its type - converting concrete type variables into polymorphic ones
 //! that can be instantiated differently at each use site.
 //!
-//! **Key idea:** A variable can only be generalized if it doesn't "escape" its scope
-//! by being referenced by variables from outer (lower-ranked) scopes.
+//! **Key insight:** Generalization is per-variable, not per-type. A type can be
+//! "partially generalized" where some variables are quantified while others remain
+//! as shared unification variables that escaped from outer scopes.
 //!
 //! ## Ranks
 //!
 //! - **Rank 0 (generalized):** Polymorphic type variables (post-generalization)
-//! - **Rank 1 (top_level):** Built-in types, constants
-//! - **Rank 2:** Variables introduced at the outermost let-binding
+//! - **Rank 1 (outermost):** Top-level definitions not being generalized (value restriction)
+//! - **Rank 2 (top_level):** Variables introduced at the outermost let-binding
 //! - **Rank 3+:** Variables introduced in nested let-bindings
 //!
-//! ## Example
+//! **Invariant:** After rank adjustment, all variables in a type being generalized
+//! at rank N have rank <= N. Variables with rank = N get generalized; variables
+//! with rank < N escaped and remain monomorphic (shared with outer scope).
+//!
+//! ## Example - Partial Generalization
 //!
 //! ```roc
-//! id = |x| x                    # Can generalize: forall a. a -> a
+//! x = 10                    # x : α, rank 1, not generalized (value restriction)
 //!
-//! apply = |f, x|
-//!   result = f(x)               # Cannot fully generalize
-//!   result
+//! process = |y, _z| {       # rank 2
+//!   [x, y]                  # unifies α with y's type
+//! }
 //! ```
 //!
-//! When generalizing the inner `result`, we discover it references `f` and `x` from
-//! the outer scope, so it "escapes" and cannot be generalized.
+//! When generalizing `process` at rank 2:
+//! - `y` unifies with `α` (from `x`), pulling `y` down to rank 1
+//! - `_z` stays at rank 2
+//! - Result: `process : ∀β. (α, β) -> List(α)` — only `_z` is generalized
+//!
+//! Later, `process(1.U8, "hello")` constrains the shared `α` to `U8`,
+//! which also constrains `x` to `U8`.
 //!
 //! ## Main entry point
-//!
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
@@ -51,30 +60,8 @@ const Rank = @import("types.zig").Rank;
 /// rank can be safely generalized (made polymorphic) and which have "escaped" their
 /// scope by being referenced from outer scopes.
 ///
-/// ## Algorithm Overview
-///
-/// 1. **Build temporary rank table:** Copy vars at the rank we're generalizing into
-///    a temporary pool for processing
-///
-/// 2. **Adjust ranks:** Walk through all variables and adjust their ranks to maintain
-///    the invariant that ranks never increase as you go deeper into types. This phase
-///    detects which variables have escaped.
-///
-/// 3. **Categorize variables:** After rank adjustment:
-///    - If var.rank < rank_to_generalize: Variable escaped (move to lower rank pool)
-///    - If var.rank == rank_to_generalize: Can generalize (set rank to .generalized)
-///
-/// 4. **Update pools:** Move escaped variables to their correct rank pools and set
-///    generalized variables to rank .generalized
-///
-/// ## Entry point
-///
-/// - `generalize()` - Main function that performs generalization for a given rank
-///
-/// ## Internal state
-///
-/// This type holds temporary state during generalization and should be reset between
-/// uses. Fields are not owned - store is borrowed, and temporary structures are reused.
+/// ## Main entry point
+/// - `Generalizer.generalize()` - Generalize all variables at a given rank
 pub const Generalizer = struct {
     /// Borrowed reference to the type store
     store: *TypesStore,
@@ -123,25 +110,26 @@ pub const Generalizer = struct {
     ///    for processing, preserving their current ranks
     ///
     /// 2. **Adjust ranks:** Process vars from lowest to highest rank, adjusting each
-    ///    var's rank based on the ranks of variables it references. This enforces the
-    ///    invariant that ranks never increase as you traverse deeper into types.
+    ///    var's rank based on the ranks of variables it references. Variables that
+    ///    were unified with outer-scope variables will have their ranks lowered.
     ///
-    /// 3. **Separate escaped from generalizable:** After rank adjustment:
-    ///    - Vars with rank < rank_to_generalize have "escaped" (reference outer vars)
-    ///    - Vars with rank == rank_to_generalize can be safely generalized
+    /// 3. **Separate escaped from generalizable:** After rank adjustment, each variable
+    ///    originally at rank_to_generalize either:
+    ///    - Has rank < rank_to_generalize: "escaped" by referencing outer-scope vars
+    ///    - Has rank == rank_to_generalize: safe to generalize
+    ///
+    ///    Note: rank > rank_to_generalize should never occur and would indicate a bug.
     ///
     /// 4. **Update var pool:**
-    ///    - Move escaped vars to their (now lower) rank pools
-    ///    - Set generalizable vars to rank ∞ (Rank.generalized) if should_generalize is true
+    ///    - Move escaped vars to their (now lower) rank pools, where they remain
+    ///      as shared unification variables with outer scope
+    ///    - Set generalizable vars to rank .generalized
     ///    - Clear the original rank pool
     ///
     /// ## Parameters
     /// - `var_pool`: The main variable pool tracking all vars by rank
     /// - `rank_to_generalize`: The rank level to generalize (must be var_pool.current_rank)
-    /// - `should_generalize`: If true, actually generalize eligible vars. If false, just
-    ///   clean up the rank pool without generalizing. Only lambda expressions should
-    ///   have their types generalized (value restriction).
-    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank, _: bool) std.mem.Allocator.Error!void {
+    pub fn generalize(self: *Self, _: std.mem.Allocator, var_pool: *VarPool, rank_to_generalize: Rank) std.mem.Allocator.Error!void {
         if (rank_to_generalize == Rank.generalized) return;
 
         std.debug.assert(var_pool.current_rank == rank_to_generalize);
@@ -210,40 +198,54 @@ pub const Generalizer = struct {
 
     /// Adjusts type variable ranks to prepare for generalization.
     ///
-    /// This implements the rank adjustment phase of Hindley-Milner generalization.
-    /// The key insight is that a type can only be generalized if all the type variables
-    /// it references are also being generalized at the same time (are at the same rank).
+    /// This implements the rank adjustment phase of Hindley-Milner
+    /// generalization. The key insight is that generalization is
+    /// **per-variable**, not per-type. A type can be "partially
+    /// generalized"—some variables are quantified while others remain as shared
+    /// unification variables that escaped from outer scopes.
     ///
-    /// **Core Invariant:** Ranks never increase as you traverse deeper into a type structure.
-    /// This means the outermost rank represents the maximum rank of the entire type,
-    /// making it easy to determine which variables can be generalized.
+    /// **Core Invariant:** Ranks never increase as you traverse deeper into a
+    /// type structure. This ensures we can identify which variables originated
+    /// from outer scopes.
+    ///
     ///
     /// ## Two classes of variables:
     ///
-    /// 1. **Variables being generalized** (in `vars_to_generalize`):
-    ///    - Start at `group_rank` (the rank we're trying to generalize)
-    ///    - Ranks can be INCREASED to the max rank found in their contents
-    ///    - Final rank = max(group_rank, ranks of all nested variables)
-    ///    - If final rank > group_rank, the variable "escaped" and cannot be generalized
+    /// 1. **Variables that can be generalized** (rank == rank being generalized):
+    ///    - Introduced at the current scope
+    ///    - Will be quantified during generalization
+    ///    - Each call site instantiates these with fresh variables
     ///
-    /// 2. **Other variables** (not in `vars_to_generalize`):
-    ///    - Already introduced at some earlier (lower) rank
-    ///    - Ranks can only be LOWERED to maintain the invariant
-    ///    - Final rank = min(current_rank, group_rank)
-    ///    - This ensures outer types don't incorrectly claim to be "more general" than their contents
+    /// 2. **Escaped variables** (rank < rank being generalized):
+    ///    - Introduced at an outer scope
+    ///    - NOT quantified. They remain as shared unification variables
+    ///    - All references share the same variable, enabling value restriction
     ///
-    /// ## Example:
+    /// ## Example - Partial Generalization:
     /// ```
-    /// let outer = |x|         # rank 1, introduces var 'x' at rank 1
-    ///   let inner = |y|       # rank 2, introduces var 'y' at rank 2
-    ///     (x, y)              # references 'x' from rank 1
-    ///   inner
+    /// x = 10               # x : α, rank 0, not generalized (value restriction)
+    ///
+    /// process = |y, _z| {  # rank 1
+    ///   [x, y]             # unifies α with y's type
+    /// }
     /// ```
-    /// When generalizing rank 2, we process `inner`'s type. We find it references `x`
-    /// which is at rank 1 (lower/outer scope). Since `x` is NOT in vars_to_generalize
-    /// for rank 2, `inner`'s effective rank becomes max(2, 1) = 2, but `x` stays at rank 1.
-    /// This creates an "escape" - we cannot generalize `inner` because it captures
-    /// a not-yet-generalized variable from an outer scope.
+    /// When generalizing `process` at rank 1:
+    /// - `y` unifies with `α` (from `x`), pulling `y` down to rank 0
+    /// - `_z` stays at rank 1
+    /// - Result: `process : ∀β. (α, β) -> List(α)`
+    /// - Only `_z` (as `β`) is generalized; `α` is shared with `x`
+    /// - The variable for the entire function type is marked as generalized
+    ///   because it contains at least one generalizable variable (`β`).
+    ///   During instantiation, the walk recurses into the function and only
+    ///   creates fresh copies only for variables that are themselves marked
+    ///   generalized.
+    ///
+    /// When instantiating `process`:
+    /// - `β` (was `_z`) → fresh variable
+    /// - `α` (was `y`/`x`) → left alone, still the original unification variable
+    ///
+    /// This means `process(1.U8, "hello")` constrains `x` to `U8`, and subsequent
+    /// calls must respect that constraint.
     ///
     /// ## Recursion handling:
     /// - `rank_adjusted_vars` tracks variables we've already processed to handle cycles
@@ -428,7 +430,7 @@ pub const VarPool = struct {
         }
         return Self{
             .ranks = ranks,
-            .current_rank = Rank.top_level,
+            .current_rank = Rank.generalized,
             .allocator = allocator,
         };
     }

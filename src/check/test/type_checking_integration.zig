@@ -2208,7 +2208,9 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.plus : a, c -> a,
+        \\    a.plus : a, d -> a,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );

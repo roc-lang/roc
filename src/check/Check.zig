@@ -1103,9 +1103,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // Check any accumulated static dispatch constraints
     try self.checkDeferredStaticDispatchConstraints(&env);
 
-    // Only generalize if this is a lambda expression (value restriction)
-    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
-
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
     // before type inference
@@ -1476,27 +1473,15 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
         try self.generateStmtTypeDeclType(stmt_idx, &env);
     }
 
-    {
+    // Set the rank to be outermost
+    try env.var_pool.pushRank();
+    std.debug.assert(env.rank() == .outermost);
 
-        // Check if this expr is one that should be generalized
-        const should_generalize = self.isLambdaExpr(expr_idx);
+    // Check the expr
+    _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-        // If this type of expr should be generalized, push a new rank
-        if (should_generalize) try env.var_pool.pushRank();
-        defer if (should_generalize) env.var_pool.popRank();
-
-        // Check the expr
-        _ = try self.checkExpr(expr_idx, &env, .no_expectation);
-
-        // If this type of expr should be generalized, generalize it!
-        if (should_generalize) {
-            // Check any accumulated static dispatch constraints
-            try self.checkDeferredStaticDispatchConstraints(&env);
-
-            // Only generalize if this is a lambda expression (value restriction)
-            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
-        }
-    }
+    // Check any accumulated static dispatch constraints
+    try self.checkDeferredStaticDispatchConstraints(&env);
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -1538,26 +1523,11 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
         std.debug.assert(env.rank() == .outermost);
     }
 
-    {
-        // Check if this expr is one that should be generalized
-        const should_generalize = self.isLambdaExpr(expr_idx);
+    // Check the expr
+    _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-        // If this type of expr should be generalized, push a new rank
-        if (should_generalize) try env.var_pool.pushRank();
-        defer if (should_generalize) env.var_pool.popRank();
-
-        // Check the expr
-        _ = try self.checkExpr(expr_idx, &env, .no_expectation);
-
-        // If this type of expr should be generalized, generalize it!
-        if (should_generalize) {
-            // Check any accumulated static dispatch constraints
-            try self.checkDeferredStaticDispatchConstraints(&env);
-
-            // Only generalize if this is a lambda expression (value restriction)
-            try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
-        }
-    }
+    // Check any accumulated static dispatch constraints
+    try self.checkDeferredStaticDispatchConstraints(&env);
 }
 
 // defs //
@@ -1617,31 +1587,10 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Infer types for the body, checking against the instantiated annotation
     _ = try self.checkExpr(def.expr, env, expectation);
 
-    // Check if the expression type contains any errors anywhere in its structure.
-    // If it does and we have an annotation, use the annotation type for the pattern
-    // instead of the expression type. This preserves the annotation type for other
-    // code that references this identifier, even when the expression has errors.
-    //
-    // For example, if the annotation is `I64 -> Str` and the expression has an error
-    // in the return type (making it `I64 -> Error`), the pattern should still get
-    // `I64 -> Str` from the annotation.
-    // if (mb_instantiated_anno_var) |instantiated_anno_var| {
-    //     var visited = std.AutoHashMap(Var, void).init(self.gpa);
-    //     defer visited.deinit();
-    //     if (self.varContainsError(expr_var, &visited)) {
-    //         // If there was an annotation AND the expr contains errors, then unify the
-    //         // ptrn against the annotation
-    //         _ = try self.unify(ptrn_var, instantiated_anno_var, env);
-    //     } else {
-    //         // Otherwise, unify the ptrn and expr
-    //         _ = try self.unify(ptrn_var, expr_var, env);
-    //     }
-    // } else {
-    // No annotation, just unify the ptrn and expr
+    // Unify the ptrn and the expr
     _ = try self.unify(ptrn_var, expr_var, env);
-    // }
 
-    // Check that the def and ptrn match
+    // Unify the def and ptrn
     _ = try self.unify(def_var, ptrn_var, env);
 
     // After solving the definition, check for infinite types.
@@ -1798,11 +1747,6 @@ fn generateStandaloneTypeAnno(
 
     // Unify the statement variable with the generated annotation type
     _ = try self.unify(stmt_var, anno_var, env);
-
-    // Generalize the type variables in the annotation.
-    // Standalone type annotations represent polymorphic function declarations,
-    // so they should always be generalized to allow proper instantiation at use sites.
-    try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
 }
 
 /// Generate types for type anno args
@@ -3381,16 +3325,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         try sub_env.var_pool.pushRank();
                         std.debug.assert(sub_env.rank() == .outermost);
 
-                        // Copy generalized and top_level to the new solver pool
-                        try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.generalized), .generalized);
-                        try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.outermost), .outermost);
-
+                        // Check def and assert that ranks have been processed
                         try self.checkDef(processing_def.def_idx, &sub_env);
                         std.debug.assert(sub_env.rank() == .outermost);
 
-                        // Copy generalized and top_level to the new solver pool
-                        try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.generalized), .generalized);
-                        try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.outermost), .outermost);
+                        // TODO: Handle mutually recursive functions
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
@@ -4129,7 +4068,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
         // Only generalize if this is a lambda expression (value restriction)
-        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank(), true);
+        try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     }
 
     return does_fx;
@@ -5551,16 +5490,11 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                                 try sub_env.var_pool.pushRank();
                                 std.debug.assert(sub_env.rank() == .outermost);
 
-                                // Copy generalized and top_level to the new solver pool
-                                // try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.generalized), .generalized);
-                                // try sub_env.var_pool.addVarsToRank(env.var_pool.getVarsForRank(.outermost), .outermost);
-
-                                try self.checkDef(def_idx, &sub_env);
+                                // Check def and assert that ranks have been processed
+                                try self.checkDef(processing_def.def_idx, &sub_env);
                                 std.debug.assert(sub_env.rank() == .outermost);
 
-                                // Copy generalized and top_level to the new solver pool
-                                // try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.generalized), .generalized);
-                                // try env.var_pool.addVarsToRank(sub_env.var_pool.getVarsForRank(.outermost), .outermost);
+                                // TODO: Handle mutually recursive functions
                             },
                             .processing => {
                                 // Recursive reference during static dispatch resolution.
@@ -5801,24 +5735,6 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         .alias => |alias| self.varSupportsIsEq(self.types.getAliasBackingVar(alias)),
         // Error types: allow them to proceed
         .err => true,
-    };
-}
-
-/// Check if an expression represents a function definition that should be generalized.
-/// This includes lambdas and function declarations (even those without bodies).
-/// Value restriction: only function definitions should have their types generalized,
-/// not arbitrary value definitions like records, tuples, or numerals.
-fn isLambdaExpr(self: *Self, expr_idx: CIR.Expr.Idx) bool {
-    const expr = self.cir.store.getExpr(expr_idx);
-    return switch (expr) {
-        // Actual lambda expressions
-        .e_closure, .e_lambda => true,
-        // Annotation-only function declarations (e.g., `is_empty : List(a) -> Bool`)
-        // These represent polymorphic function signatures and should be generalized
-        .e_anno_only => true,
-        // Hosted/low-level lambdas also represent function declarations
-        .e_hosted_lambda, .e_low_level_lambda => true,
-        else => false,
     };
 }
 
