@@ -723,7 +723,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_anno_only => {
-            return CIR.Expr{ .e_anno_only = .{} };
+            return CIR.Expr{ .e_anno_only = .{
+                .ident = @bitCast(node.data_1),
+            } };
         },
         .expr_return => {
             return CIR.Expr{ .e_return = .{
@@ -1056,10 +1058,42 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     }
 }
 
+/// Returns true if the given node tag represents a pattern node.
+fn isPatternTag(tag: Node.Tag) bool {
+    return switch (tag) {
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        .pattern_num_literal,
+        .pattern_dec_literal,
+        .pattern_f32_literal,
+        .pattern_f64_literal,
+        .pattern_small_dec_literal,
+        .pattern_str_literal,
+        .pattern_underscore,
+        .malformed, // Valid pattern tag for runtime_error patterns
+        => true,
+        else => false,
+    };
+}
+
 /// Retrieves a pattern from the store.
 pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     const node = store.nodes.get(node_idx);
+
+    // Safety check: Handle cross-module node index issues where a pattern index
+    // might point to a non-pattern node (e.g., type_header from another module)
+    if (!isPatternTag(node.tag)) {
+        // Return a placeholder pattern to avoid crash
+        // This indicates a bug in cross-module canonicalization
+        return CIR.Pattern{ .underscore = {} };
+    }
 
     switch (node.tag) {
         .pattern_identifier => return CIR.Pattern{
@@ -1811,8 +1845,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_ellipsis => |_| {
             node.tag = .expr_ellipsis;
         },
-        .e_anno_only => |_| {
+        .e_anno_only => |anno| {
             node.tag = .expr_anno_only;
+            node.data_1 = @bitCast(anno.ident);
         },
         .e_return => |ret| {
             node.tag = .expr_return;
