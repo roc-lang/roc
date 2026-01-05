@@ -160,6 +160,8 @@ pub const TypePair = struct {
 pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
+    /// A statement expression must evaluate to {} but has a different type
+    statement_not_unit,
     incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
@@ -476,6 +478,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_if_cond => {
                             return self.buildInvalidIfCondition(mismatch.types);
+                        },
+                        .statement_not_unit => {
+                            return self.buildStatementNotUnit(mismatch.types);
                         },
                         .incompatible_if_branches => |data| {
                             return self.buildIncompatibleIfBranches(mismatch.types, data);
@@ -863,6 +868,74 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("True", .tag_name);
         try report.document.addText(" or ");
         try report.document.addAnnotated("False", .tag_name);
+        try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for statement expressions that don't return {}
+    fn buildStatementNotUnit(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned strings
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
+        try report.document.addLineBreak();
+
+        // Get the region info for the expression
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            actual_region.start.offset,
+            actual_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = actual_region_info.start_line_idx + 1,
+            .start_column = actual_region_info.start_col_idx + 1,
+            .end_line = actual_region_info.end_line_idx + 1,
+            .end_column = actual_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type
+        try report.document.addReflowingText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
+        try report.document.addLineBreak();
+
+        // Add explanation
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Since this expression is used as a statement, it must evaluate to ");
+        try report.document.addAnnotated("{}", .type_variable);
+        try report.document.addText(". ");
+        try report.document.addReflowingText("If you don't need the value, you can ignore it with ");
+        try report.document.addAnnotated("_ =", .keyword);
         try report.document.addText(".");
 
         return report;

@@ -94,3 +94,30 @@ test "check - repro - issue 8785" {
 
     try test_env.assertNoErrors();
 }
+
+test "check - repro - issue 8919" {
+    // Instance method syntax should not produce UNUSED VALUE error
+    // when the method returns {}. Previously, the return type was not
+    // resolved before the unused value check due to deferred constraints.
+    // The bug only manifests when the method call is an s_expr statement
+    // (not the final expression of a block).
+    const src =
+        \\main! = |_| {}
+        \\
+        \\Foo := { x: I64 }.{
+        \\    show! = |_self| {}
+        \\}
+        \\
+        \\test_method! = |_| {
+        \\    f : Foo
+        \\    f = { x: 42 }
+        \\    f.show!()
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
