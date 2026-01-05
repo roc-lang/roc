@@ -378,7 +378,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             } };
         },
         else => {
-            @panic("unreachable, node is not an expression tag");
+            std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
         },
     }
 }
@@ -846,7 +846,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         // that reference diagnostic indices. The .malformed case above handles
         // converting these to runtime_error nodes in the ModuleEnv.
         else => {
-            @panic("unreachable, node is not an expression tag");
+            std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
         },
     }
 }
@@ -1053,7 +1053,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         else => {
-            std.debug.panic("unreachable, node is not a where tag {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
         },
     }
 }
@@ -1264,7 +1264,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             } };
         },
         else => {
-            std.debug.panic("unreachable, node is not a pattern tag {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
         },
     }
 }
@@ -1376,7 +1376,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             .diagnostic = @enumFromInt(node.data_1),
         } },
         else => {
-            std.debug.panic("Invalid node tag for TypeAnno: {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
         },
     }
 }
