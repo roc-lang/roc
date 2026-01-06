@@ -12,9 +12,21 @@ foo = if 1 A
     }
 ~~~
 # EXPECTED
-INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:7:1:7
 TYPE MISMATCH - if_then_else_simple_file.md:1:10:1:11
+INCOMPATIBLE IF BRANCHES - if_then_else_simple_file.md:1:7:1:7
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**if_then_else_simple_file.md:1:10:1:11:**
+```roc
+foo = if 1 A
+```
+         ^
+
+Other code expects this to have the type:
+
+    Bool
+
 **INCOMPATIBLE IF BRANCHES**
 This `if` has an `else` branch with a different type from it's `then` branch:
 **if_then_else_simple_file.md:1:7:**
@@ -39,18 +51,6 @@ All branches in an `if` must have compatible types.
 
 Note: You can wrap branches in a tag to make them compatible.
 To learn about tags, see <https://www.roc-lang.org/tutorial#tags>
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**if_then_else_simple_file.md:1:10:1:11:**
-```roc
-foo = if 1 A
-```
-         ^
-
-Other code expects this to have the type:
-
-    Bool
 
 # TOKENS
 ~~~zig

@@ -496,10 +496,13 @@ const InstantiateRegionBehavior = union(enum) {
     use_last_var,
 };
 
-/// Instantiate a variable, substituting any encountered rigids with flex vars
+/// Instantiate a variable
+///
+/// * Substituting generalized flex vars with fresh flex vars
+/// * Substituting generalized rigid vars with fresh flex vars
 ///
 /// Note that the the rigid var structure will be preserved.
-/// E.g. `a -> a`, `a` will reference the same new flex var
+/// E.g. In `a -> a`, all `a` will reference the same new flex var
 fn instantiateVar(
     self: *Self,
     var_to_instantiate: Var,
@@ -517,11 +520,10 @@ fn instantiateVar(
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-/// Instantiate a variable, substituting any encountered rigids with *new* rigid vars
+/// You probably are looking for `instantiateVar`.
 ///
-/// Note that the the rigid var structure will be preserved.
-/// E.g. `a -> a`, `a` will reference the same new rigid var
-fn instantiateVarPreserveRigids(
+/// Copy/paste a variable. This does NOT respect rank or normal instantiation rules.
+fn instantiateVarOrphan(
     self: *Self,
     var_to_instantiate: Var,
     env: *Env,
@@ -535,11 +537,19 @@ fn instantiateVarPreserveRigids(
         .var_map = &self.var_map,
         .current_rank = env.rank(),
         .rigid_behavior = .fresh_rigid,
+        .rank_behavior = .ignore_rank,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-/// Instantiate a variable
+/// Instantiate a variable, substituting any encountered rigids with
+/// user-provided variables.
+///
+/// Based on the provided map, the caller can specifically set specified rigids
+/// to be a specific var. This is used when evaluating type annotation.
+///
+/// If a rigid is is encountered that's not in the provided map, a debug assertion
+/// will fail. In production mode, that rigid var will be set as an `.err`
 fn instantiateVarWithSubs(
     self: *Self,
     var_to_instantiate: Var,
@@ -1725,10 +1735,6 @@ fn generateStandaloneTypeAnno(
     // Reset seen type annos
     self.seen_annos.clearRetainingCapacity();
 
-    // Push a new rank for generalization
-    try env.var_pool.pushRank();
-    defer env.var_pool.popRank();
-
     // Save top of scratch static dispatch constraints
     const scratch_static_dispatch_constraints_top = self.scratch_static_dispatch_constraints.top();
     defer self.scratch_static_dispatch_constraints.clearFrom(scratch_static_dispatch_constraints_top);
@@ -2816,41 +2822,58 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     const expr_var_raw = ModuleEnv.varFrom(expr_idx);
 
     // Check if this is a lambda expression. If so, then we should generalize.
-    const should_generalize = expr == .e_lambda;
+    const is_closure = expr == .e_closure;
+    _ = expr == .e_anno_only and expected == .expected and blk: {
+        // TODO: If anno, then
+        break :blk false;
+    };
+    const should_generalize = isLambdaExpr(expr);
 
     // Push/pop ranks based on if we should generalize
     if (should_generalize) try env.var_pool.pushRank();
     defer if (should_generalize) env.var_pool.popRank();
 
+    try self.setVarRank(expr_var_raw, env);
+
     // Generate the expr var and the annotation type vars
     //
     // If we have an annotation, then we create a fresh one, so if we hit an
     // error we don't poison the variable
-    const expr_var: Var, const mb_anno_vars: ?AnnoVars = switch (expected) {
-        .no_expectation => blk: {
-            // Set the correct rank of this expr
-            try self.setVarRank(expr_var_raw, env);
+    const expr_var: Var, const mb_anno_vars: ?AnnoVars = blk: {
+        if (is_closure) {
+            // If this expr is a closure, then the inner expr MUST be a lambda
+            // If not, then it's a bug in Czer
+            //
+            // In this case, we should forward the `expected` value down to the
+            // lambda, so the type can be generated at the same rank as the lambda
+            std.debug.assert(self.cir.store.getExpr(expr.e_closure.lambda_idx) == .e_lambda);
             break :blk .{ expr_var_raw, null };
-        },
-        .expected => |annotation_idx| blk: {
-            // Generate the type for the annotation
-            try self.generateAnnotationType(annotation_idx, env);
-            const anno_var = ModuleEnv.varFrom(annotation_idx);
+        }
 
-            // Instantiate a backup copy, used if the expr errors to allow
-            // places that reference this expr to use as if it did not error
-            const anno_var_backup = try self.instantiateVarPreserveRigids(
-                anno_var,
-                env,
-                env.rank(),
-                .use_last_var,
-            );
+        switch (expected) {
+            .no_expectation => {
+                break :blk .{ expr_var_raw, null };
+            },
+            .expected => |annotation_idx| {
+                // Generate the type for the annotation
+                try self.generateAnnotationType(annotation_idx, env);
+                const anno_var = ModuleEnv.varFrom(annotation_idx);
 
-            break :blk .{
-                try self.fresh(env, expr_region),
-                .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
-            };
-        },
+                // Copy/paste the variable. This will be used if the expr errors to
+                // preserve the type annotation for places that reference this def.
+                const anno_var_backup = try self.instantiateVarOrphan(
+                    anno_var,
+                    env,
+                    env.rank(),
+                    .use_last_var,
+                );
+
+                break :blk .{
+                    try self.fresh(env, expr_region),
+                    .{ .anno_var = anno_var, .anno_var_backup = anno_var_backup },
+                };
+            },
+        }
     };
 
     var does_fx = false; // Does this expression potentially perform any side effects?
@@ -2881,7 +2904,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         const seg_region = self.cir.store.getNodeRegion(ModuleEnv.nodeIdxFrom(seg_expr_idx));
                         const expected_str_var = try self.freshStr(env, seg_region);
 
-                        const unify_result = try self.unify(seg_var, expected_str_var, env);
+                        const unify_result = try self.unify(expected_str_var, seg_var, env);
                         if (!unify_result.isOk()) {
                             // Unification failed - mark as error
                             try self.unifyWith(seg_var, .err, env);
@@ -3547,7 +3570,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
         },
         .e_closure => |closure| {
-            does_fx = try self.checkExpr(closure.lambda_idx, env, .no_expectation) or does_fx;
+            // Here, we must forward the expected valued to the inner lambda, so
+            // the annotation type is created at the same rank as the expr
+            does_fx = try self.checkExpr(closure.lambda_idx, env, expected) or does_fx;
             _ = try self.unify(expr_var, ModuleEnv.varFrom(closure.lambda_idx), env);
         },
         // function calling //
@@ -3926,7 +3951,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |_| {
                     // The expr will be unified with the expected type below
-                    // expr_var is defaulty a flex var, so no action is need here
+                    // expr_var is a flex var by default, so no action is need here
                 },
             }
         },
@@ -3953,7 +3978,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |_| {
                     // The expr will be unified with the expected type below
-                    // expr_var is defaulty a flex var, so no action is need here
+                    // expr_var is a flex var by default, so no action is need here
                 },
             }
         },
@@ -3971,7 +3996,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 },
                 .expected => |_| {
                     // The expr will be unified with the expected type below
-                    // expr_var is defaulty a flex var, so no action is need here
+                    // expr_var is a flex var by default, so no action is need here
                 },
             }
         },
@@ -4050,6 +4075,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // For example, if the annotation is `I64 -> Str` and the expression has
         // an error in the return type (making it `I64 -> Error`), the pattern
         // should still get `I64 -> Str` from the annotation.
+        //
+        // TODO: Move this allocation to root and reuse across runs
         var visited = std.AutoHashMap(Var, void).init(self.gpa);
         defer visited.deinit();
         if (self.varContainsError(expr_var, &visited)) {
@@ -4067,7 +4094,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
-        // Only generalize if this is a lambda expression (value restriction)
         try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
     }
 
@@ -4075,6 +4101,23 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 }
 
 const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };
+
+/// Check if an expression represents a function definition that should be generalized.
+/// This includes lambdas and function declarations (even those without bodies).
+/// Value restriction: only function definitions should have their types generalized,
+/// not arbitrary value definitions like records, tuples, or numerals.
+fn isLambdaExpr(expr: CIR.Expr) bool {
+    return switch (expr) {
+        // Actual lambda expressions
+        .e_lambda => true,
+        // Annotation-only function declarations (e.g., `is_empty : List(a) -> Bool`)
+        // These represent polymorphic function signatures and should be generalized
+        .e_anno_only => true,
+        // Hosted/low-level lambdas also represent function declarations
+        .e_hosted_lambda, .e_low_level_lambda => true,
+        else => false,
+    };
+}
 
 // stmts //
 
@@ -4376,7 +4419,7 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
     switch (stmt) {
         .s_return => |ret| {
             const return_expr_var = ModuleEnv.varFrom(ret.expr);
-            _ = try self.unify(return_expr_var, return_var, env);
+            _ = try self.unify(return_var, return_expr_var, env);
         },
         .s_decl => |decl| {
             // Recurse into the declaration's expression
@@ -4664,10 +4707,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     const cond_is_error = resolved_cond.desc.content == .err;
 
     if (!had_type_error and !cond_is_error and !has_invalid_try) {
-        const match_region = self.cir.store.regions.get(
-            @enumFromInt(@intFromEnum(expr_idx)),
-        ).*;
-
+        const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
         const builtin_idents = exhaustive.BuiltinIdents{
             .builtin_module = self.cir.idents.builtin_module,
             .u8_type = self.cir.idents.u8_type,
@@ -4727,7 +4767,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Report redundant patterns
         for (result.redundant_indices) |idx| {
-            _ = try self.problems.appendProblem(self.cir.gpa, .{ .redundant_pattern = .{
+            _ = try self.problems.appendProblem(self.gpa, .{ .redundant_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -4736,7 +4776,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
         // Report unmatchable patterns (patterns on uninhabited types)
         for (result.unmatchable_indices) |idx| {
-            _ = try self.problems.appendProblem(self.cir.gpa, .{ .unmatchable_pattern = .{
+            _ = try self.problems.appendProblem(self.gpa, .{ .unmatchable_pattern = .{
                 .match_expr = expr_idx,
                 .num_branches = @intCast(match.branches.span.len),
                 .problem_branch_index = idx,
@@ -5413,18 +5453,15 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                     // module environment from imported_modules by matching the module name.
                     // We compare string values because origin_module is an ident from where the
                     // type was defined, while module_name is the canonical name from imported_env.
-                    const origin_module_text = self.cir.getIdent(original_module_ident);
                     for (self.imported_modules) |imported_env| {
-                        if (std.mem.eql(u8, imported_env.module_name, origin_module_text)) {
+                        const imported_module_ident = try @constCast(self.cir).insertIdent(base.Ident.for_text(imported_env.module_name));
+                        if (imported_module_ident == original_module_ident) {
                             break :blk imported_env;
                         }
                     }
 
                     // Could not find the module environment. This is an internal compiler error.
-                    std.debug.panic("Unable to find module environment for type {s} from module {s}", .{
-                        self.cir.getIdent(nominal_type.ident.ident_idx),
-                        origin_module_text,
-                    });
+                    std.debug.panic("Unable to find module environment for type {s} from module {s}", .{ self.cir.getIdent(nominal_type.ident.ident_idx), self.cir.getIdent(original_module_ident) });
                 }
             };
 

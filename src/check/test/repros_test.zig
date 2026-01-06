@@ -198,6 +198,6 @@ test "check - repro - issue 8848" {
     var test_env = try TestEnv.init("Test", src);
     defer test_env.deinit();
 
-    // No assertion here, this repro previously paniced, so that's the
+    // No assertion here, this repro previously panicked, so that's the
     // regression we're guarding against
 }

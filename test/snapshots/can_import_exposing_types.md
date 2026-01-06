@@ -917,10 +917,10 @@ combineTrys = |jsonTry, httpStatus|
 		(alias (type "ServerConfig")
 			(ty-header (name "ServerConfig"))))
 	(expressions
-		(expr (type "Str -> Error"))
+		(expr (type "Str -> Try(Error, Error)"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error, List(Error) -> Error"))
+		(expr (type "Error, List(Error) -> Try(List(Error), Error)"))
 		(expr (type "Error -> Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Try(Error, Error), Error -> Try(Error, Error)"))))
 ~~~

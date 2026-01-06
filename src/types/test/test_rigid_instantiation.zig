@@ -13,7 +13,6 @@ const Instantiator = @import("../instantiate.zig").Instantiator;
 
 const Ident = base.Ident;
 
-const Rank = types_mod.Rank;
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
 const Flex = types_mod.Flex;

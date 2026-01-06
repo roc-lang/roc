@@ -15,9 +15,28 @@ match ... {
 }
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
 TYPE MISMATCH - pattern_alternatives_mixed.md:2:10:2:11
+INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**pattern_alternatives_mixed.md:2:10:2:11:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	        ^
+
+The type was determined to be non-numeric here:
+**pattern_alternatives_mixed.md:3:2:3:9:**
+```roc
+	"hello" | "world" => "greetings"
+```
+	^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern first pattern in this third`match` differs from previous ones:
 **pattern_alternatives_mixed.md:1:1:**
@@ -42,25 +61,6 @@ But all the previous patterns have this type:
     Str
 
 All patterns in an `match` must have compatible types.
-
-**TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**pattern_alternatives_mixed.md:2:10:2:11:**
-```roc
-	1 | 2 | 3 => "small numbers"
-```
-	        ^
-
-The type was determined to be non-numeric here:
-**pattern_alternatives_mixed.md:3:2:3:9:**
-```roc
-	"hello" | "world" => "greetings"
-```
-	^^^^^^^
-
-Other code expects this to have the type:
-
-    Str
 
 # TOKENS
 ~~~zig

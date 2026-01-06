@@ -10304,6 +10304,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     self.defining_pattern = saved_defining_pattern;
 
     // Determine if we should generalize based on RHS
+    // TODO: Remove, generalization is handled solely in type checking
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
 
     // Create a declaration statement (generalized or not)
@@ -10325,6 +10326,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
 
 /// Determines whether a let binding should be generalized based on its RHS expression.
 /// According to Roc's value restriction, only lambdas and number literals should be generalized.
+// TODO: Remove, generalization is handled solely in type checking
 fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
     const expr = self.env.store.getExpr(expr_idx);
     return switch (expr) {

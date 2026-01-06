@@ -168,9 +168,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> b where [_c.from_numeral : Numeral -> _ret, a.plus : a, _arg -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, _arg2 -> b]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)])]")))
+		(patt (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
+		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, _arg -> a]")))
 	(expressions
-		(expr (type "a -> b where [_c.from_numeral : Numeral -> _ret, a.plus : a, _arg -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, _arg2 -> b]"))
-		(expr (type "a where [a.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), a.plus : b, c -> b, c.from_numeral : Numeral -> a]"))))
+		(expr (type "a -> a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a]"))
+		(expr (type "_a where [_b.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), _d.plus : c, e -> c]"))))
 ~~~

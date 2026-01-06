@@ -268,9 +268,7 @@ INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
-TYPE MISMATCH - syntax_grab_bag.md:146:15:146:18
-MISSING METHOD - syntax_grab_bag.md:176:12:176:22
-+ - :0:0:0:0
+TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -965,30 +963,20 @@ But `add_one` needs the first argument to be:
     U64
 
 **TYPE MISMATCH**
-This number is being used where a non-number type is needed:
-**syntax_grab_bag.md:146:15:146:18:**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:150:3:150:6:**
 ```roc
-	var number = 123
+		tag # Comment after return statement
 ```
-	             ^^^
+		^^^
 
-Other code expects this to have the type:
+It has the type:
 
-    Str
+    [Blue, .._others]
 
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**syntax_grab_bag.md:176:12:176:22:**
-```roc
-		number = number + n
-```
-		         ^^^^^^^^^^
+But I expected it to be:
 
-The value's type, which does not have a method named **plus**, is:
-
-    Str
-
-**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
+    Try({  }, err)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2499,8 +2487,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "U64 -> U64"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
@@ -2545,10 +2533,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
-		(expr (type "Error"))
+		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~
