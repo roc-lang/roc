@@ -751,12 +751,41 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     stdout.writeAll("\n") catch {};
 }
 
+/// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
+/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+/// Returns {} and takes Builder as argument
+fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    _ = ops;
+    _ = ret_ptr; // Return value is {} which is zero-sized
+
+    // Builder is a record with { value: Str, count: U64 }
+    // Roc may order fields alphabetically or by alignment, so let's try count first
+    const Args = extern struct {
+        count: u64,
+        value: RocStr,
+    };
+
+    const args: *Args = @ptrCast(@alignCast(args_ptr));
+    const value_slice = args.value.asSlice();
+
+    const stdout: std.fs.File = .stdout();
+    stdout.writeAll("SUCCESS: Builder.print_value! called via static dispatch!\n") catch {};
+    stdout.writeAll("  value: ") catch {};
+    stdout.writeAll(value_slice) catch {};
+    stdout.writeAll("\n  count: ") catch {};
+    var buf: [32]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&buf, "{d}", .{args.count}) catch "?";
+    stdout.writeAll(count_str) catch {};
+    stdout.writeAll("\n") catch {};
+}
+
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
+/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, and Builder Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    hostedStderrLine, // Stderr.line! (index 0)
-    hostedStdinLine, // Stdin.line! (index 1)
-    hostedStdoutLine, // Stdout.line! (index 2)
+    hostedBuilderPrintValue, // Builder.print_value! (index 0)
+    hostedStderrLine, // Stderr.line! (index 1)
+    hostedStdinLine, // Stdin.line! (index 2)
+    hostedStdoutLine, // Stdout.line! (index 3)
 };
 
 /// Platform host entrypoint

@@ -1254,6 +1254,23 @@ pub const Interpreter = struct {
         return result_value;
     }
 
+    /// Checks if a closure is a hosted function and invokes it if so.
+    /// Returns the result if hosted, or null if it's a regular closure that should be evaluated normally.
+    fn tryInvokeHostedClosure(
+        self: *Interpreter,
+        closure_header: *const layout.Closure,
+        args: []StackValue,
+        return_rt_var: types.Var,
+        roc_ops: *RocOps,
+    ) !?StackValue {
+        const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
+        if (lambda_expr == .e_hosted_lambda) {
+            const hosted = lambda_expr.e_hosted_lambda;
+            return try self.callHostedFunction(hosted.index, args, roc_ops, return_rt_var);
+        }
+        return null;
+    }
+
     /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
         const trace = tracy.trace(@src());
@@ -11253,10 +11270,10 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        var args = [0]StackValue{};
+                        var no_args = [0]StackValue{};
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -11322,6 +11339,19 @@ pub const Interpreter = struct {
                         } });
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    // Check if hosted lambda and invoke with no arguments
+                    const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    var no_args = [0]StackValue{};
+
+                    if (try self.tryInvokeHostedClosure(closure_header, &no_args, return_rt_var, roc_ops)) |result| {
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                        try value_stack.push(result);
                     } else {
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -13484,7 +13514,7 @@ pub const Interpreter = struct {
                 .params = lam.args,
                 .captures_pattern_idx = @enumFromInt(@as(u32, 0)),
                 .captures_layout_idx = captures_layout_idx,
-                .lambda_expr_idx = expr_idx,
+                .lambda_expr_idx = cls.lambda_idx,
                 .source_env = self.env,
             };
             // Copy captures into record area following header
@@ -15958,16 +15988,13 @@ pub const Interpreter = struct {
                         return true;
                     }
 
-                    // Check if this is a hosted lambda
-                    if (lambda_expr == .e_hosted_lambda) {
-                        const hosted = lambda_expr.e_hosted_lambda;
-                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
-                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    // Check if this is a hosted lambda and invoke it
+                    const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                    const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
 
-                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
-
+                    if (try self.tryInvokeHostedClosure(header, arg_values, ret_rt_var, roc_ops)) |result| {
                         // Decref all args
                         for (arg_values) |arg| {
                             arg.decref(&self.runtime_layout_store, roc_ops);
@@ -16331,6 +16358,23 @@ pub const Interpreter = struct {
                     var args = [1]StackValue{operand};
                     const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
 
+                    // Note: We do NOT decref the operand here.
+                    // The defer statement at the top of unary_op_apply already handles decrefing.
+                    // Decrefing here too would cause a double-free bug.
+
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Check if hosted lambda and invoke with operand
+                const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                const return_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ua.operand_rt_var;
+                var args = [1]StackValue{operand};
+
+                if (try self.tryInvokeHostedClosure(closure_header, &args, return_rt_var, roc_ops)) |result| {
                     // Note: We do NOT decref the operand here.
                     // The defer statement at the top of unary_op_apply already handles decrefing.
                     // Decrefing here too would cause a double-free bug.
@@ -16809,6 +16853,54 @@ pub const Interpreter = struct {
                         closure_val.decref(&self.runtime_layout_store, roc_ops);
                     }
                     return error.TypeMismatch;
+                }
+
+                // Check if this is a hosted lambda and invoke it
+                const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                // Collect the two bound arguments
+                var hosted_args = try self.allocator.alloc(StackValue, 2);
+                defer self.allocator.free(hosted_args);
+                for (params[0..2], 0..) |param, param_idx| {
+                    // Find this parameter's binding by searching backwards through bindings
+                    var found = false;
+                    var binding_idx: usize = self.bindings.items.len;
+                    while (binding_idx > saved_bindings_len) {
+                        binding_idx -= 1;
+                        if (self.bindings.items[binding_idx].pattern_idx == param) {
+                            hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        return error.Crash;
+                    }
+                }
+
+                if (try self.tryInvokeHostedClosure(closure_header, hosted_args, return_rt_var, roc_ops)) |result| {
+                    // Cleanup
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    saved_flex_type_context.deinit();
+                    self.poly_context_generation +%= 1;
+
+                    // Apply negate if needed (for != operator)
+                    if (ba.negate_result) {
+                        const is_true = self.boolValueEquals(true, result, roc_ops);
+                        result.decref(&self.runtime_layout_store, roc_ops);
+                        const negated = try self.makeBoolValue(!is_true);
+                        try value_stack.push(negated);
+                    } else {
+                        try value_stack.push(result);
+                    }
+                    return true;
                 }
 
                 // Push cleanup and evaluate body
@@ -17322,6 +17414,12 @@ pub const Interpreter = struct {
 
                 // If no additional args, invoke method directly with receiver
                 if (arg_exprs.len == 0) {
+                    if (method_func.ptr == null) {
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.triggerCrash("Hosted lambda closure has null pointer", false, roc_ops);
+                        return error.Crash;
+                    }
                     const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
                     const saved_env = self.env;
@@ -17345,6 +17443,21 @@ pub const Interpreter = struct {
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         }
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Check if hosted lambda and invoke it
+                    const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    var args = [1]StackValue{receiver_value};
+
+                    if (try self.tryInvokeHostedClosure(closure_header, &args, return_rt_var, roc_ops)) |result| {
+                        // Decref receiver (borrowed)
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -18011,6 +18124,41 @@ pub const Interpreter = struct {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
 
+                    // Check if the body is a hosted lambda
+                    const tvd_body_expr = self.env.store.getExpr(lambda_expr.e_lambda.body);
+                    if (tvd_body_expr == .e_hosted_lambda) {
+                        const hosted = tvd_body_expr.e_hosted_lambda;
+                        // Collect bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
+                        defer self.allocator.free(hosted_args);
+                        for (params_slice, 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > saved_bindings_len) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        const result = try self.callHostedFunction(hosted.index, hosted_args, roc_ops, return_rt_var);
+
+                        // Cleanup
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -18063,6 +18211,41 @@ pub const Interpreter = struct {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
 
+                    // Check if the body is a hosted lambda
+                    const tvd_closure_body_expr = self.env.store.getExpr(underlying_lambda.e_lambda.body);
+                    if (tvd_closure_body_expr == .e_hosted_lambda) {
+                        const hosted = tvd_closure_body_expr.e_hosted_lambda;
+                        // Collect bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
+                        defer self.allocator.free(hosted_args);
+                        for (params_slice, 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > saved_bindings_len) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        const result = try self.callHostedFunction(hosted.index, hosted_args, roc_ops, return_rt_var);
+
+                        // Cleanup
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -18084,6 +18267,24 @@ pub const Interpreter = struct {
                     } });
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                }
+
+                // Check if this is a hosted lambda and invoke it
+                const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                if (try self.tryInvokeHostedClosure(closure_header, arg_values, return_rt_var, roc_ops)) |result| {
+                    // Decref arguments
+                    for (arg_values) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                    try value_stack.push(result);
                     return true;
                 } else {
                     method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -18613,6 +18814,43 @@ pub const Interpreter = struct {
                         });
 
                         const bindings_start = self.bindings.items.len - 2;
+
+                        // Check if this is a hosted lambda and invoke it
+                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
+                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                        const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                        // Collect the two bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, 2);
+                        defer self.allocator.free(hosted_args);
+                        for (cmp_params[0..2], 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > bindings_start) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        if (try self.tryInvokeHostedClosure(cmp_header, hosted_args, return_rt_var, roc_ops)) |result| {
+                            // Cleanup
+                            _ = self.active_closures.pop();
+                            self.env = cmp_saved_env;
+                            self.trimBindingList(&self.bindings, bindings_start, roc_ops);
+
+                            try value_stack.push(result);
+                            return true;
+                        }
+
                         try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                             .saved_env = cmp_saved_env,
                             .saved_bindings_len = bindings_start,
@@ -18696,6 +18934,43 @@ pub const Interpreter = struct {
                     });
 
                     const bindings_start = self.bindings.items.len - 2;
+
+                    // Check if this is a hosted lambda and invoke it
+                    const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
+                    const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                    // Collect the two bound arguments
+                    var hosted_args = try self.allocator.alloc(StackValue, 2);
+                    defer self.allocator.free(hosted_args);
+                    for (cmp_params[0..2], 0..) |param, param_idx| {
+                        // Find this parameter's binding by searching backwards through bindings
+                        var found = false;
+                        var binding_idx: usize = self.bindings.items.len;
+                        while (binding_idx > bindings_start) {
+                            binding_idx -= 1;
+                            if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            return error.Crash;
+                        }
+                    }
+
+                    if (try self.tryInvokeHostedClosure(cmp_header, hosted_args, return_rt_var, roc_ops)) |result| {
+                        // Cleanup
+                        _ = self.active_closures.pop();
+                        self.env = cmp_saved_env;
+                        self.trimBindingList(&self.bindings, bindings_start, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = cmp_saved_env,
                         .saved_bindings_len = bindings_start,

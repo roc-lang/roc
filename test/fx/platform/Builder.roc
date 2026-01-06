@@ -22,4 +22,7 @@ Builder := {
 
     get_value : Builder -> Str
     get_value = |builder| builder.value
+
+    # Anno-only effect method for testing static dispatch
+    print_value! : Builder => {}
 }
