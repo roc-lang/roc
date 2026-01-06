@@ -47,7 +47,7 @@ pub fn main() !void {
 
     // NB: all checks are intentionally implemented in a streaming fashion,
     // such that we only need to read the files once.
-    const file_buffer = try gpa.alloc(u8, 1 * MiB);
+    const file_buffer = try gpa.alloc(u8, MiB + MiB / 2); // 1.5 MiB
     defer gpa.free(file_buffer);
 
     const paths = try listFilePaths(gpa);
@@ -65,11 +65,11 @@ pub fn main() !void {
         }).len;
         if (bytes_read >= file_buffer.len - 1) {
             std.debug.panic(
-                \\File exceeds {d} MiB buffer limit: {s}
+                \\File exceeds 1.5 MiB buffer limit: {s}
                 \\
                 \\If this is a binary file, add its extension to `binary_extensions` in ci/tidy.zig
                 \\to exclude it from tidy checks.
-            , .{ file_buffer.len / MiB, file_path });
+            , .{file_path});
         }
         file_buffer[bytes_read] = 0;
 
