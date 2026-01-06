@@ -9240,12 +9240,12 @@ pub const Interpreter = struct {
                                     },
                                     else => {
                                         // Closed union - use empty_tag_union
-                                        break :blk2 try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                                        break :blk2 try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                                     },
                                 }
                             };
                             const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .empty_tag_union => {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
@@ -9336,7 +9336,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_effectful => |f| {
                             const fne_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_effectful");
@@ -9350,7 +9350,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_unbound => |f| {
                             const fnu_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_unbound");
@@ -9364,7 +9364,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .nominal_type => |nom| {
                             const nom_trace = tracy.traceNamed(@src(), "translateTypeVar.nominal_type");
@@ -9426,7 +9426,7 @@ pub const Interpreter = struct {
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                     }
                 },
@@ -9444,7 +9444,7 @@ pub const Interpreter = struct {
                     const rt_alias_ident_idx = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_alias_str));
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
-                    break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -9643,8 +9643,10 @@ pub const Interpreter = struct {
             .store = self.runtime_types,
             .idents = self.runtime_layout_store.env.common.getIdentStore(),
             .var_map = &self.instantiate_scratch,
-            .current_rank = types.Rank.outermost,
             .rigid_behavior = .fresh_flex,
+            // Rank is not material to runtime types, so ignore it
+            .current_rank = types.Rank.generalized,
+            .rank_behavior = .ignore_rank,
         };
         const result = try instantiator.instantiateVar(type_var);
 
@@ -17708,11 +17710,7 @@ pub const Interpreter = struct {
                             for (0..arg_count_to_unify) |unify_idx| {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
-                                const arg_copy = try self.runtime_types.register(.{
-                                    .content = arg_resolved.desc.content,
-                                    .rank = arg_resolved.desc.rank,
-                                    .mark = types.Mark.none,
-                                });
+                                const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
                                 _ = unify.unifyWithConf(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
@@ -17799,11 +17797,7 @@ pub const Interpreter = struct {
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
-                    const recv_copy = try self.runtime_types.register(.{
-                        .content = recv_resolved.desc.content,
-                        .rank = recv_resolved.desc.rank,
-                        .mark = types.Mark.none,
-                    });
+                    const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
                     _ = unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -19038,7 +19032,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
-    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+    const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -19092,7 +19086,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 
     // backing type is Str for simplicity
     const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal, false);
-    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+    const ct_nominal_var = try env.types.freshFromContent(ct_nominal_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -19250,7 +19244,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     // runtime flex var 'a'
     const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
     const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
-    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.outermost, .mark = types.Mark.none });
+    const func_var = try interp.runtime_types.freshFromContent(func_content);
 
     // Call with Str
     // Get the real Str type from the loaded builtin module and translate to runtime

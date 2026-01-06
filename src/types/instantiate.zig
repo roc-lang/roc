@@ -42,8 +42,17 @@ pub const Instantiator = struct {
 
     current_rank: Rank,
     rigid_behavior: RigidBehavior,
+    rank_behavior: RankBehavior = .respect_rank,
 
-    /// The mode to use when instantiating
+    /// Controls whether to respect rank when deciding what to instantiate
+    pub const RankBehavior = enum {
+        /// Only instantiate generalized types (type checker semantics)
+        respect_rank,
+        /// Instantiate all types regardless of rank (runtime semantics)
+        ignore_rank,
+    };
+
+    /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
         /// Note that the the rigid var structure will be preserved.
@@ -73,8 +82,8 @@ pub const Instantiator = struct {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
 
-        // Non-generalized variables should _not_ be instantiated
-        if (resolved.desc.rank != .generalized) {
+        // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
+        if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             return resolved_var;
         }
 
