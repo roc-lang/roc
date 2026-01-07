@@ -1029,10 +1029,6 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         try self.generateStmtTypeDeclType(builtin_stmt_idx, &env);
     }
 
-    // Process requires_types annotations for platforms
-    // This ensures the type store has the actual types for platform requirements
-    try self.processRequiresTypes(&env);
-
     const stmts_slice = self.cir.store.sliceStatements(self.cir.all_statements);
 
     // First pass: generate types for each type declaration
@@ -1073,6 +1069,10 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // Set the rank to be outermost
     try env.var_pool.pushRank();
     std.debug.assert(env.rank() == .outermost);
+
+    // Process requires_types annotations for platforms
+    // This ensures the type store has the actual types for platform requirements
+    try self.processRequiresTypes(&env);
 
     // Then, iterate over defs again, inferring types
     for (defs_slice) |def_idx| {
@@ -1117,6 +1117,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
     // because anonymous static dispatch makes function order not knowable
     // before type inference
 
+    // TODO: Check for any exposed types that are generalized that are NOT functions
 }
 
 /// Process the requires_types annotations for platform modules, like:
@@ -1129,9 +1130,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 /// Here, we create `model` as a *rigid* var, and a type alias `Model` pointing to
 /// that exact rigid var.
 ///
-/// We create this variable at the `.generalized` rank, but we have special
-/// logic in `generateAnnoTypeInPlace` so places that reference `Model`
-/// directly reference the underlying *uninstantiated* rigid var
+/// We create this variable at the `.outermost` rank, so that every places
+/// that references this var gets the same instance
 ///
 /// Then, we generate the type for the actual required type
 ///   { [Model : model] for main : { init : model, ... } }
@@ -1146,7 +1146,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // Ensure we are generalized
     // This is because we do not want the type checking we do here to be let-polymorphic
-    std.debug.assert(env.rank() == .generalized);
+    std.debug.assert(env.rank() == .outermost);
 
     const requires_types_slice = self.cir.requires_types.items.items;
     for (requires_types_slice) |required_type| {
@@ -1219,6 +1219,10 @@ pub fn checkPlatformRequirements(
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
+
+    // Push thru to outermost
+    std.debug.assert(env.rank() == .generalized);
+    try env.var_pool.pushRank();
 
     // Iterate over the platform's required types
     const requires_types_slice = platform_env.requires_types.items.items;
