@@ -120,7 +120,6 @@ current_alias_name: ?Ident.Idx = null,
 /// Used to detect self-referential definitions like `a = a` or `a = [a]`.
 /// This is null when we're inside a lambda (where self-references are valid for recursion).
 defining_pattern: ?Pattern.Idx = null,
-
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
