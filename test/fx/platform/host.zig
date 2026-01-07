@@ -755,7 +755,6 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
 /// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
 /// Returns {} and takes Builder as argument
 fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
-    _ = ops;
     _ = ret_ptr; // Return value is {} which is zero-sized
 
     // Builder is a record with { value: Str, count: U64 }
@@ -768,15 +767,28 @@ fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, 
     const args: *Args = @ptrCast(@alignCast(args_ptr));
     const value_slice = args.value.asSlice();
 
-    const stdout: std.fs.File = .stdout();
-    stdout.writeAll("SUCCESS: Builder.print_value! called via static dispatch!\n") catch {};
-    stdout.writeAll("  value: ") catch {};
-    stdout.writeAll(value_slice) catch {};
-    stdout.writeAll("\n  count: ") catch {};
-    var buf: [32]u8 = undefined;
+    // Format the output messages
+    var buf: [256]u8 = undefined;
     const count_str = std.fmt.bufPrint(&buf, "{d}", .{args.count}) catch "?";
-    stdout.writeAll(count_str) catch {};
-    stdout.writeAll("\n") catch {};
+
+    // Use hostedStdoutLine to respect test mode tracking
+    // Create temporary RocStr instances for each line
+    var empty_ret: u8 = 0;
+    var line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
+    defer line1.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line1));
+
+    var line2_buf: [256]u8 = undefined;
+    const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
+    var line2 = RocStr.fromSlice(line2_str, ops);
+    defer line2.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line2));
+
+    var line3_buf: [256]u8 = undefined;
+    const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
+    var line3 = RocStr.fromSlice(line3_str, ops);
+    defer line3.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
 }
 
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
