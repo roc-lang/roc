@@ -2753,7 +2753,9 @@ fn createAnnoOnlyDef(
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
     // Create the e_anno_only expression
-    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+        .ident = ident,
+    } }, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -9810,7 +9812,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             };
 
                             // Create the e_anno_only expression
-                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                                .ident = name_ident,
+                            } }, region);
 
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
@@ -9919,7 +9923,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             };
 
                             // Create the e_anno_only expression
-                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                                .ident = name_ident,
+                            } }, region);
 
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
@@ -9989,7 +9995,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         };
 
                         // Create the e_anno_only expression
-                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                            .ident = name_ident,
+                        } }, region);
 
                         // Create the annotation structure
                         const annotation = CIR.Annotation{
@@ -10059,7 +10067,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 };
 
                 // Create the e_anno_only expression
-                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                    .ident = name_ident,
+                } }, region);
 
                 // Create the annotation structure
                 const annotation = CIR.Annotation{
