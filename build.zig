@@ -2333,8 +2333,6 @@ pub fn build(b: *std.Build) void {
     playground_exe.rdynamic = true;
     playground_exe.link_function_sections = true;
     playground_exe.import_memory = false;
-    // Set a larger stack size for the WASM module to handle deep recursion in canonicalization
-    playground_exe.stack_size = 2 * 1024 * 1024; // 2 MB stack
     roc_modules.addAll(playground_exe);
     playground_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
     playground_exe.step.dependOn(&write_compiled_builtins.step);
