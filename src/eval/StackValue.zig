@@ -1273,7 +1273,13 @@ pub const RecordAccessor = struct {
     }
 };
 
-/// Get this value as a string pointer
+/// Get this value as a mutable string pointer.
+///
+/// Panics in debug builds if:
+/// - The layout is not a scalar string type
+/// - The pointer is null (via ptr.?)
+///
+/// Callers do NOT need to check ptr != null before calling this method.
 pub fn asRocStr(self: StackValue) *RocStr {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
     return @ptrCast(@alignCast(self.ptr.?));

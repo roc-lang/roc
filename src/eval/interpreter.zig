@@ -948,6 +948,8 @@ pub const Interpreter = struct {
     ) !RocStr {
         if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
             if (value.ptr) |ptr| {
+                // Cannot use asRocStr() here - we need to handle null gracefully by returning
+                // empty string, rather than panicking. The unwrapped ptr is a raw pointer.
                 const existing: *const RocStr = @ptrCast(@alignCast(ptr));
                 var copy = existing.*;
                 copy.incref(1, roc_ops);
@@ -1302,9 +1304,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // low-level .str_is_empty expects 1 argument
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null); // low-level .str_is_empty expects non-null string pointer
-
-                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str = str_arg.asRocStr();
 
                 return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
             },
@@ -1314,11 +1314,8 @@ pub const Interpreter = struct {
 
                 const str_a = args[0];
                 const str_b = args[1];
-                std.debug.assert(str_a.ptr != null); // low-level .str_is_eq expects non-null string pointer
-                std.debug.assert(str_b.ptr != null); // low-level .str_is_eq expects non-null string pointer
-
-                const roc_str_a: *const RocStr = @ptrCast(@alignCast(str_a.ptr.?));
-                const roc_str_b: *const RocStr = @ptrCast(@alignCast(str_b.ptr.?));
+                const roc_str_a = str_a.asRocStr();
+                const roc_str_b = str_b.asRocStr();
 
                 return try self.makeBoolValue(roc_str_a.eql(roc_str_b.*));
             },
@@ -1329,11 +1326,8 @@ pub const Interpreter = struct {
                 const str_a_arg = args[0];
                 const str_b_arg = args[1];
 
-                std.debug.assert(str_a_arg.ptr != null);
-                std.debug.assert(str_b_arg.ptr != null);
-
-                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
-                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+                const str_a = str_a_arg.asRocStr();
+                const str_b = str_b_arg.asRocStr();
 
                 // Call strConcat to concatenate the strings
                 const result_str = builtins.str.strConcat(str_a.*, str_b.*, roc_ops);
@@ -1344,7 +1338,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1357,11 +1351,8 @@ pub const Interpreter = struct {
                 const haystack_arg = args[0];
                 const needle_arg = args[1];
 
-                std.debug.assert(haystack_arg.ptr != null);
-                std.debug.assert(needle_arg.ptr != null);
-
-                const haystack: *const RocStr = @ptrCast(@alignCast(haystack_arg.ptr.?));
-                const needle: *const RocStr = @ptrCast(@alignCast(needle_arg.ptr.?));
+                const haystack = haystack_arg.asRocStr();
+                const needle = needle_arg.asRocStr();
 
                 const result = builtins.str.strContains(haystack.*, needle.*);
 
@@ -1372,9 +1363,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr();
 
                 const result_str = builtins.str.strTrim(roc_str_arg.*, roc_ops);
 
@@ -1384,7 +1373,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1395,9 +1384,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr();
 
                 const result_str = builtins.str.strTrimStart(roc_str_arg.*, roc_ops);
 
@@ -1407,7 +1394,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1418,9 +1405,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr();
 
                 const result_str = builtins.str.strTrimEnd(roc_str_arg.*, roc_ops);
 
@@ -1430,7 +1415,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1443,11 +1428,8 @@ pub const Interpreter = struct {
                 const str_a_arg = args[0];
                 const str_b_arg = args[1];
 
-                std.debug.assert(str_a_arg.ptr != null);
-                std.debug.assert(str_b_arg.ptr != null);
-
-                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
-                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+                const str_a = str_a_arg.asRocStr();
+                const str_b = str_b_arg.asRocStr();
 
                 // Call strConcat to concatenate the strings
                 const result = builtins.str.strCaselessAsciiEquals(str_a.*, str_b.*);
@@ -1459,9 +1441,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr();
 
                 const result_str = builtins.str.strWithAsciiLowercased(roc_str_arg.*, roc_ops);
 
@@ -1471,7 +1451,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1482,9 +1462,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr();
 
                 const result_str = builtins.str.strWithAsciiUppercased(roc_str_arg.*, roc_ops);
 
@@ -1494,7 +1472,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1507,11 +1485,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const prefix = prefix_arg.asRocStr();
 
                 return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
             },
@@ -1522,11 +1497,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const suffix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(suffix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const suffix = suffix_arg.asRocStr();
 
                 return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
             },
@@ -1537,9 +1509,7 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const count_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr();
                 const count_value = try self.extractNumericValue(count_arg);
                 const count: u64 = switch (count_value) {
                     .int => |v| @intCast(v),
@@ -1557,7 +1527,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1570,11 +1540,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const prefix = prefix_arg.asRocStr();
 
                 // with_prefix is just concat with args swapped: prefix ++ string
                 const result_str = builtins.str.strConcat(prefix.*, string.*, roc_ops);
@@ -1585,7 +1552,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1598,11 +1565,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const prefix = prefix_arg.asRocStr();
 
                 const result_str = builtins.str.strDropPrefix(string.*, prefix.*, roc_ops);
 
@@ -1612,7 +1576,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1625,11 +1589,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const suffix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(suffix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const suffix = suffix_arg.asRocStr();
 
                 const result_str = builtins.str.strDropSuffix(string.*, suffix.*, roc_ops);
 
@@ -1639,7 +1600,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1650,9 +1611,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr();
                 const byte_count = builtins.str.countUtf8Bytes(string.*);
 
                 const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for str_count_utf8_bytes", @src());
@@ -1678,7 +1637,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1691,9 +1650,7 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const spare_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr();
                 const spare_value = try self.extractNumericValue(spare_arg);
                 const spare: u64 = @intCast(spare_value.int);
 
@@ -1703,7 +1660,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, string_arg.rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1714,16 +1671,14 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr();
                 const result_str = builtins.str.strReleaseExcessCapacity(roc_ops, string.*);
 
                 const result_layout = string_arg.layout;
                 var out = try self.pushRaw(result_layout, 0, string_arg.rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1734,9 +1689,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr();
                 const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
 
                 // Get the result layout - should be List(U8).
@@ -1798,7 +1751,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1866,7 +1819,8 @@ pub const Interpreter = struct {
                                 const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
                                 @memset(bytes, 0);
                             }
-                            // Write Str to the payload area
+                            // Cannot use asRocStr() here - payload_ptr is a raw computed pointer
+                            // from tuple element access, not a StackValue. Also need raw ptr for memset above.
                             const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
                             str_ptr.* = result.string;
                         }
@@ -1915,7 +1869,8 @@ pub const Interpreter = struct {
                                 const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
                                 @memset(bytes, 0);
                             }
-                            // Write Str to the payload area
+                            // Cannot use asRocStr() here - payload_ptr is a raw computed pointer
+                            // from record field access, not a StackValue. Also need raw ptr for memset above.
                             const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
                             str_ptr.* = result.string;
                         }
@@ -1940,7 +1895,8 @@ pub const Interpreter = struct {
 
                             tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
 
-                            // Write Str payload at offset 0
+                            // Cannot use asRocStr() here - base_ptr is a raw computed pointer
+                            // from tag union base, not a StackValue. Also need raw ptr for memset above.
                             const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
                             str_ptr.* = result.string;
                         }
@@ -2211,11 +2167,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const delimiter_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(delimiter_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const delimiter: *const RocStr = @ptrCast(@alignCast(delimiter_arg.ptr.?));
+                const string = string_arg.asRocStr();
+                const delimiter = delimiter_arg.asRocStr();
 
                 const result_list = builtins.str.strSplitOn(string.*, delimiter.*, roc_ops);
 
@@ -2257,11 +2210,8 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 const separator_arg = args[1];
 
-                std.debug.assert(list_arg.ptr != null);
-                std.debug.assert(separator_arg.ptr != null);
-
                 const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                const separator: *const RocStr = @ptrCast(@alignCast(separator_arg.ptr.?));
+                const separator = separator_arg.asRocStr();
 
                 const result_str = builtins.str.strJoinWithC(roc_list.*, separator.*, roc_ops);
 
@@ -2270,7 +2220,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, str_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr();
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -2312,7 +2262,7 @@ pub const Interpreter = struct {
 
                         const str_rt_var = try self.getCanonicalStrRuntimeVar();
                         const out = try self.pushStr(str_rt_var);
-                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        const roc_str_ptr = out.asRocStr();
                         roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                         return out;
                     }
@@ -2347,7 +2297,7 @@ pub const Interpreter = struct {
 
                         const str_rt_var = try self.getCanonicalStrRuntimeVar();
                         const out = try self.pushStr(str_rt_var);
-                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        const roc_str_ptr = out.asRocStr();
                         roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                         return out;
                     }
@@ -2393,7 +2343,7 @@ pub const Interpreter = struct {
 
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const out = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                    const roc_str_ptr = out.asRocStr();
                     roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                     return out;
                 }
@@ -2435,7 +2385,7 @@ pub const Interpreter = struct {
 
                 const str_rt_var = try self.getCanonicalStrRuntimeVar();
                 const out = try self.pushStr(str_rt_var);
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const roc_str_ptr = out.asRocStr();
                 roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                 return out;
             },
@@ -4492,12 +4442,16 @@ pub const Interpreter = struct {
                                         const inner_payload_rt = try self.runtime_types.fresh();
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx, inner_payload_rt);
                                         if (inner_payload_field.ptr) |str_ptr| {
+                                            // Cannot use asRocStr() - str_ptr is an unwrapped optional
+                                            // pointer from record field access, not a StackValue.
                                             const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
                                             str_dest.* = roc_str;
                                         }
                                     }
                                 } else if (err_payload_layout.tag == .scalar and err_payload_layout.data.scalar.tag == .str) {
                                     // Direct Str payload (single-tag union optimized away)
+                                    // Cannot use asRocStr() - outer_payload_ptr is a computed pointer
+                                    // from tag union payload offset, not a StackValue.
                                     const str_dest: *RocStr = @ptrCast(@alignCast(outer_payload_ptr));
                                     str_dest.* = roc_str;
                                 }
@@ -4786,8 +4740,7 @@ pub const Interpreter = struct {
                 // Dispatch to type-specific parsing using comptime generics
                 std.debug.assert(args.len == 1);
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str = str_arg.asRocStr();
 
                 const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_str", @src());
                 const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
@@ -4824,15 +4777,12 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // expects 1 argument: Dec
 
                 const dec_arg = args[0];
-                // Null argument is a compiler bug - the compiler should never produce code with null args
-                std.debug.assert(dec_arg.ptr != null);
-
                 const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
                 const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
 
                 const str_rt_var = try self.getCanonicalStrRuntimeVar();
                 const value = try self.pushStr(str_rt_var);
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                const roc_str_ptr = value.asRocStr();
                 roc_str_ptr.* = result_str;
                 return value;
             },
@@ -5141,8 +5091,6 @@ pub const Interpreter = struct {
     fn intToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
-        std.debug.assert(int_arg.ptr != null);
 
         const int_value: T = @as(*const T, @ptrCast(@alignCast(int_arg.ptr.?))).*;
 
@@ -5152,7 +5100,7 @@ pub const Interpreter = struct {
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str_ptr = value.asRocStr();
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
@@ -5161,8 +5109,6 @@ pub const Interpreter = struct {
     fn floatToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
-        std.debug.assert(float_arg.ptr != null);
 
         const float_value: T = @as(*const T, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
@@ -5172,7 +5118,7 @@ pub const Interpreter = struct {
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str_ptr = value.asRocStr();
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
@@ -6422,8 +6368,8 @@ pub const Interpreter = struct {
                 },
                 .str => {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    const lhs_str = lhs.asRocStr();
+                    const rhs_str = rhs.asRocStr();
                     return lhs_str.eql(rhs_str.*);
                 },
                 else => {
@@ -6646,8 +6592,8 @@ pub const Interpreter = struct {
                 },
                 .str => blk: {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    const lhs_str = lhs.asRocStr();
+                    const rhs_str = rhs.asRocStr();
                     break :blk lhs_str.eql(rhs_str.*);
                 },
                 .opaque_ptr => blk: {
@@ -7706,7 +7652,7 @@ pub const Interpreter = struct {
             .str_literal => |sl| {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
                 const lit = self.env.getString(sl.literal);
-                const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
+                const rs = value.asRocStr();
                 return rs.eqlSlice(lit);
             },
             .nominal => |n| {
@@ -10994,7 +10940,7 @@ pub const Interpreter = struct {
                     traceDbg(roc_ops, "e_str: empty string", .{});
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const value = try self.pushStr(str_rt_var);
-                    const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    const roc_str = value.asRocStr();
                     roc_str.* = RocStr.empty();
                     try value_stack.push(value);
                 } else {
@@ -13032,7 +12978,7 @@ pub const Interpreter = struct {
         const content = self.env.getString(seg.literal);
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str = value.asRocStr();
         // Use arena allocator for string literals - freed wholesale at interpreter deinit
         roc_str.* = try self.createConstantStr(content);
         return value;
@@ -15687,7 +15633,7 @@ pub const Interpreter = struct {
                     // Push as string value
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const str_value = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                    const roc_str_ptr = str_value.asRocStr();
                     roc_str_ptr.* = segment_str;
                     try value_stack.push(str_value);
                     collected_count += 1;
@@ -15724,6 +15670,8 @@ pub const Interpreter = struct {
                     while (i < sc.total_count) : (i += 1) {
                         const str_val = value_stack.pop() orelse return error.Crash;
                         if (str_val.ptr) |ptr| {
+                            // Cannot use asRocStr() - we need to handle null gracefully by appending
+                            // empty string. The unwrapped ptr is a raw pointer.
                             const roc_str: *RocStr = @ptrCast(@alignCast(ptr));
                             try segment_strings.append(roc_str.*);
                         } else {
@@ -15757,7 +15705,7 @@ pub const Interpreter = struct {
 
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const result = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                    const roc_str_ptr = result.asRocStr();
                     roc_str_ptr.* = result_str;
                     try value_stack.push(result);
                     return true;
@@ -15774,7 +15722,7 @@ pub const Interpreter = struct {
                     const seg_str = try self.createConstantStr(content);
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const seg_value = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
+                    const roc_str_ptr = seg_value.asRocStr();
                     roc_str_ptr.* = seg_str;
                     try value_stack.push(seg_value);
 
