@@ -1273,10 +1273,33 @@ pub const RecordAccessor = struct {
     }
 };
 
-/// Get this value as a string pointer
-pub fn asRocStr(self: StackValue) *RocStr {
+/// Get this value as a string pointer, or null if the pointer is null.
+pub fn asRocStr(self: StackValue) ?*RocStr {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
-    return @ptrCast(@alignCast(self.ptr.?));
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
+    }
+    return null;
+}
+
+/// Set this value's contents to a RocStr.
+/// Panics if ptr is null or layout is not a string type.
+pub fn setRocStr(self: StackValue, value: RocStr) void {
+    std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .str);
+    const str_ptr: *RocStr = @ptrCast(@alignCast(self.ptr.?));
+    str_ptr.* = value;
+}
+
+/// Zero-initialize this value's memory based on its layout size.
+/// Used for union payloads that need clearing before writing a smaller variant.
+/// No-op if ptr is null.
+pub fn clearBytes(self: StackValue, layout_cache: *LayoutStore) void {
+    if (self.ptr) |ptr| {
+        const size = layout_cache.layoutSize(self.layout);
+        if (size > 0) {
+            @memset(@as([*]u8, @ptrCast(ptr))[0..size], 0);
+        }
+    }
 }
 
 /// Get this value as a closure pointer
@@ -1428,7 +1451,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     }
 
     if (self.layout.tag == .scalar and self.layout.data.scalar.tag == .str) {
-        const roc_str = self.asRocStr();
+        const roc_str = self.asRocStr().?;
         if (comptime trace_refcount) {
             // Small strings have no allocation - skip refcount tracing for them
             if (roc_str.isSmallStr()) {
@@ -1568,7 +1591,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
     switch (self.layout.tag) {
         .scalar => switch (self.layout.data.scalar.tag) {
             .str => {
-                const roc_str = self.asRocStr();
+                const roc_str = self.asRocStr().?;
                 if (comptime trace_refcount) {
                     // Small strings have no allocation - skip refcount tracing for them
                     if (roc_str.isSmallStr()) {
