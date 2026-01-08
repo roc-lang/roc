@@ -13738,11 +13738,43 @@ pub const Interpreter = struct {
         for (all_defs) |def_idx| {
             const def = self.env.store.getDef(def_idx);
             if (def.pattern == lookup.pattern_idx) {
+                // Check if this def is already being evaluated (to detect circular references)
+                for (self.def_stack.items) |entry| {
+                    if (entry.pattern_idx == lookup.pattern_idx) {
+                        // For recursive functions (lambdas/closures), create a placeholder
+                        const def_expr = self.env.store.getExpr(def.expr);
+                        if (def_expr == .e_lambda or def_expr == .e_closure) {
+                            try self.addClosurePlaceholder(def.pattern, def.expr);
+                            const bindings_len = self.bindings.items.len;
+                            if (bindings_len > 0) {
+                                const last_binding = self.bindings.items[bindings_len - 1];
+                                if (last_binding.pattern_idx == def.pattern) {
+                                    return try self.pushCopy(last_binding.value, roc_ops);
+                                }
+                            }
+                        }
+                        // Circular reference detected for non-function definition
+                        self.triggerCrash("Circular reference detected: this value refers to itself", false, roc_ops);
+                        return error.Crash;
+                    }
+                }
+
+                // Add to def_stack before evaluating to detect cycles
+                try self.def_stack.append(.{
+                    .pattern_idx = def.pattern,
+                    .expr_idx = def.expr,
+                    .value = null,
+                });
+                defer _ = self.def_stack.pop();
+
                 // For top-level recursive functions, we need to add a placeholder BEFORE
                 // evaluating the lambda body, so recursive calls can find the binding.
                 // This mirrors what addClosurePlaceholders does for block-level definitions.
-                //
-                // Evaluate the definition normally - no placeholder handling for now
+                const def_expr = self.env.store.getExpr(def.expr);
+                if (def_expr == .e_lambda or def_expr == .e_closure) {
+                    try self.addClosurePlaceholder(def.pattern, def.expr);
+                }
+
                 const result = try self.evalWithExpectedType(def.expr, roc_ops, null);
                 try self.bindings.append(.{
                     .pattern_idx = def.pattern,
