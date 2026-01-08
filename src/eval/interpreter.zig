@@ -1043,7 +1043,7 @@ pub const Interpreter = struct {
 
         std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        const roc_list = list_arg.asRocList().?;
         const list_len = roc_list.len();
 
         // If list has 0 or 1 elements, it's already sorted
@@ -1082,8 +1082,7 @@ pub const Interpreter = struct {
         );
 
         // Write the result of makeUnique back into the list arg
-        const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-        list_arg_ptr.* = working_list;
+        list_arg.setRocList(working_list);
 
         // Update rt_var if provided
         var result_list = list_arg;
@@ -1727,8 +1726,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -1740,7 +1738,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result_str = builtins.str.fromUtf8Lossy(roc_list.*, roc_ops);
 
                 const result_rt_var = return_rt_var orelse try self.getCanonicalStrRuntimeVar();
@@ -1761,7 +1759,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result = builtins.str.fromUtf8C(roc_list.*, .Immutable, roc_ops);
 
                 // Get the return layout from the caller - it should be a Try tag union
@@ -2174,8 +2172,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, list_str_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -2187,7 +2184,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 const separator_arg = args[1];
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const separator = separator_arg.asRocStr().?;
 
                 const result_str = builtins.str.strJoinWithC(roc_list.*, separator.*, roc_ops);
@@ -2375,7 +2372,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null); // low-level .list_len expects non-null list pointer
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const len_usize = builtins.list.listLen(roc_list.*);
 
                 const len_u64: u64 = @intCast(len_usize);
@@ -2407,7 +2404,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null); // low-level .list_is_empty expects non-null list pointer
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result = builtins.list.listIsEmpty(roc_list.*);
 
                 return try self.makeBoolValue(result);
@@ -2429,8 +2426,7 @@ pub const Interpreter = struct {
                     // For ZST lists, capacity doesn't matter - just return an empty list
                     var out = try self.pushRaw(result_layout, 0, result_rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = builtins.list.RocList.empty();
+                    out.setRocList(builtins.list.RocList.empty());
                     out.is_initialized = true;
                     return out;
                 }
@@ -2471,8 +2467,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -2491,7 +2486,7 @@ pub const Interpreter = struct {
                 // Extract element layout from List(a)
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const index = index_arg.asI128(); // U64 stored as i128
 
                 // Get element layout
@@ -2649,8 +2644,8 @@ pub const Interpreter = struct {
                 std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
                 std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
 
-                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
-                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+                const list_a = list_a_arg.asRocList().?;
+                const list_b = list_b_arg.asRocList().?;
 
                 // Get element layout - handle list_of_zst by checking both lists for a proper element layout.
                 // When concatenating a list_of_zst (e.g., empty list []) with a regular list,
@@ -2710,7 +2705,6 @@ pub const Interpreter = struct {
                 const result_rt_var = return_rt_var orelse list_a_arg.rt_var;
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
-                const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
 
                 const runtime_list = builtins.list.RocList.allocateExact(
                     elem_alignment_u32,
@@ -2734,7 +2728,7 @@ pub const Interpreter = struct {
                     }
                 }
 
-                header.* = runtime_list;
+                out.setRocList(runtime_list);
                 out.is_initialized = true;
 
                 // Handle refcounting for copied elements - increment refcount for each element
@@ -2784,7 +2778,7 @@ pub const Interpreter = struct {
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const roc_list = roc_list_arg.asRocList().?;
 
                     // If the element is also ZST, just bump the length
                     if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
@@ -2792,8 +2786,7 @@ pub const Interpreter = struct {
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        out.setRocList(result_list);
                         out.is_initialized = true;
                         return out;
                     }
@@ -2883,14 +2876,13 @@ pub const Interpreter = struct {
                     // Push result with upgraded layout
                     var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    out.setRocList(result_list);
                     out.is_initialized = true;
                     return out;
                 }
 
                 // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const roc_list = roc_list_arg.asRocList().?;
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
@@ -2982,8 +2974,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3003,7 +2994,7 @@ pub const Interpreter = struct {
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const roc_list = roc_list_arg.asRocList().?;
 
                     // If the element is also ZST, just bump the length
                     if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
@@ -3011,8 +3002,7 @@ pub const Interpreter = struct {
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        out.setRocList(result_list);
                         out.is_initialized = true;
                         return out;
                     }
@@ -3102,14 +3092,13 @@ pub const Interpreter = struct {
                     // Push result with upgraded layout
                     var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    out.setRocList(result_list);
                     out.is_initialized = true;
                     return out;
                 }
 
                 // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const roc_list = roc_list_arg.asRocList().?;
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
@@ -3201,8 +3190,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3217,7 +3205,7 @@ pub const Interpreter = struct {
 
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
 
                 // Get element layout from the list layout
                 const elem_layout_idx = list_arg.layout.data.list;
@@ -3258,8 +3246,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3271,7 +3258,7 @@ pub const Interpreter = struct {
                 // Check and extract first element as a typed RocList
                 const list_arg = args[0];
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
 
                 // Access second argument as a record and extract its specific fields
                 const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "sublist config argument should be a valid record", @src());
@@ -3321,8 +3308,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -4026,13 +4012,13 @@ pub const Interpreter = struct {
                 const after_field = acc.getFieldByIndex(after_idx, field_rt3) catch debugUnreachable(roc_ops, "failed to get digits_after_pt field from Numeral record", @src());
 
                 // Extract list data from digits_before_pt
-                const before_list: *const builtins.list.RocList = @ptrCast(@alignCast(before_field.ptr.?));
+                const before_list = before_field.asRocList().?;
                 const before_len = before_list.len();
                 const before_ptr = before_list.elements(u8);
                 const digits_before: []const u8 = if (before_ptr) |ptr| ptr[0..before_len] else &[_]u8{};
 
                 // Extract list data from digits_after_pt
-                const after_list: *const builtins.list.RocList = @ptrCast(@alignCast(after_field.ptr.?));
+                const after_list = after_field.asRocList().?;
                 const after_len = after_list.len();
                 const after_ptr = after_list.elements(u8);
                 const digits_after: []const u8 = if (after_ptr) |ptr| ptr[0..after_len] else &[_]u8{};
@@ -7448,12 +7434,11 @@ pub const Interpreter = struct {
             }
         } else list_layout;
 
-        const dest = try self.pushRaw(actual_list_layout, 0, rt_var);
+        var dest = try self.pushRaw(actual_list_layout, 0, rt_var);
         if (dest.ptr == null) return dest;
-        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
         if (count == 0) {
-            header.* = RocList.empty();
+            dest.setRocList(RocList.empty());
             return dest;
         }
 
@@ -7480,7 +7465,7 @@ pub const Interpreter = struct {
 
         source.incref(1, elements_refcounted, roc_ops);
         markListElementCount(&slice, elements_refcounted, roc_ops);
-        header.* = slice;
+        dest.setRocList(slice);
         return dest;
     }
 
@@ -11589,8 +11574,7 @@ pub const Interpreter = struct {
                     const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
-                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                        header.* = RocList.empty();
+                        dest.setRocList(RocList.empty());
                     }
                     try value_stack.push(dest);
                 } else {
@@ -11621,9 +11605,9 @@ pub const Interpreter = struct {
                         const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                         const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                         if (dest.ptr != null) {
-                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                            header.* = RocList.empty();
-                            header.length = elems.len;
+                            var list = RocList.empty();
+                            list.length = elems.len;
+                            dest.setRocList(list);
                         }
                         try value_stack.push(dest);
                     } else {
@@ -13049,9 +13033,8 @@ pub const Interpreter = struct {
         };
 
         const dest = try self.pushRaw(list_layout, 0, final_rt_var);
-        if (dest.ptr) |ptr| {
-            const header: *RocList = @ptrCast(@alignCast(ptr));
-            header.* = RocList.empty();
+        if (dest.ptr != null) {
+            dest.setRocList(RocList.empty());
         }
         return dest;
     }
@@ -14558,8 +14541,7 @@ pub const Interpreter = struct {
                         var dest = try self.pushRaw(list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
                         if (dest.ptr != null) {
-                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                            header.* = RocList.empty();
+                            dest.setRocList(RocList.empty());
                         }
                         try value_stack.push(dest);
                     } else {
@@ -14659,7 +14641,6 @@ pub const Interpreter = struct {
                             return true;
                         }
 
-                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
                         const elem_alignment = list_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
                         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(list_elem_layout));
@@ -14704,7 +14685,7 @@ pub const Interpreter = struct {
                         }
 
                         markListElementCount(&runtime_list, elements_refcounted, roc_ops);
-                        header.* = runtime_list;
+                        dest.setRocList(runtime_list);
 
                         // Decref temporary values after they've been copied into the list
                         {
@@ -18660,7 +18641,7 @@ pub const Interpreter = struct {
                     }
                 };
 
-                const working_list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(sc.list_value.ptr.?));
+                const working_list_ptr = sc.list_value.asRocList().?;
 
                 if (is_less_than) {
                     // Current element is less than compared element - swap them

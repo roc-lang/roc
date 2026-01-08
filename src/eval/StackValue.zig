@@ -1302,6 +1302,24 @@ pub fn clearBytes(self: StackValue, layout_cache: *LayoutStore) void {
     }
 }
 
+/// Get this value as a list pointer, or null if the pointer is null.
+/// Caller can use `.?` to panic on null if they're confident it's non-null.
+pub fn asRocList(self: StackValue) ?*RocList {
+    std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
+    }
+    return null;
+}
+
+/// Set this value's contents to a RocList.
+/// Panics if ptr is null or layout is not a list type.
+pub fn setRocList(self: StackValue, value: RocList) void {
+    std.debug.assert(self.layout.tag == .list or self.layout.tag == .list_of_zst);
+    const list_ptr: *RocList = @ptrCast(@alignCast(self.ptr.?));
+    list_ptr.* = value;
+}
+
 /// Get this value as a closure pointer
 pub fn asClosure(self: StackValue, roc_ops: *RocOps) *const Closure {
     std.debug.assert(self.layout.tag == .closure);
@@ -1622,8 +1640,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             else => {},
         },
         .list => {
-            if (self.ptr == null) return;
-            const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
+            const list_header = self.asRocList() orelse return;
             const list_value = list_header.*;
             const elem_layout = layout_cache.getLayout(self.layout.data.list);
             const alignment_u32: u32 = @intCast(elem_layout.alignment(layout_cache.targetUsize()).toByteUnits());
@@ -1663,8 +1680,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             return;
         },
         .list_of_zst => {
-            if (self.ptr == null) return;
-            const list_header: *const RocList = @ptrCast(@alignCast(self.ptr.?));
+            const list_header = self.asRocList() orelse return;
             const list_value = list_header.*;
 
             const alignment_u32: u32 = @intCast(layout_cache.targetUsize().size());
