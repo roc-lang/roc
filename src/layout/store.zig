@@ -472,6 +472,62 @@ pub const Store = struct {
         return std.mem.alignForward(u32, total_unaligned, @intCast(alignment.toByteUnits()));
     }
 
+    /// Create a new tag_union layout with a specific variant's payload layout replaced.
+    /// This is used when the actual payload layout differs from the type's expected layout,
+    /// to ensure correct decref behavior for nested containers (e.g., lists with different
+    /// element layouts). Returns a new tag_union layout with correct variant payloads.
+    pub fn createTagUnionWithPayload(
+        self: *Self,
+        original_tu_idx: TagUnionIdx,
+        variant_index: u32,
+        new_payload_layout_idx: Idx,
+    ) std.mem.Allocator.Error!Layout {
+        const tu_data = self.getTagUnionData(original_tu_idx);
+        const variants = self.getTagUnionVariants(tu_data);
+
+        // Record where new variants will start
+        const variants_start: u32 = @intCast(self.tag_union_variants.len());
+
+        // Copy all variants, replacing the specified one's payload layout
+        var max_payload_size: u32 = 0;
+        var max_payload_alignment: std.mem.Alignment = .@"1";
+        for (0..variants.len) |i| {
+            const variant = variants.get(i);
+            const payload_idx = if (i == variant_index) new_payload_layout_idx else variant.payload_layout;
+            _ = try self.tag_union_variants.append(self.env.gpa, .{
+                .payload_layout = payload_idx,
+            });
+
+            // Track max size and alignment for the new discriminant offset
+            const payload_layout = self.getLayout(payload_idx);
+            const payload_size = self.layoutSize(payload_layout);
+            const payload_align = payload_layout.alignment(self.targetUsize());
+            if (payload_size > max_payload_size) max_payload_size = payload_size;
+            max_payload_alignment = max_payload_alignment.max(payload_align);
+        }
+
+        // Calculate discriminant offset and total size
+        const disc_align = tu_data.discriminantAlignment();
+        const discriminant_offset: u16 = @intCast(std.mem.alignForward(u32, max_payload_size, @intCast(disc_align.toByteUnits())));
+        const tag_union_alignment = max_payload_alignment.max(disc_align);
+        const total_size_unaligned = discriminant_offset + tu_data.discriminant_size;
+        const total_size = std.mem.alignForward(u32, total_size_unaligned, @intCast(tag_union_alignment.toByteUnits()));
+
+        // Store new TagUnionData
+        const tag_union_data_idx: u32 = @intCast(self.tag_union_data.len());
+        _ = try self.tag_union_data.append(self.env.gpa, .{
+            .size = total_size,
+            .discriminant_offset = discriminant_offset,
+            .discriminant_size = tu_data.discriminant_size,
+            .variants = .{
+                .start = variants_start,
+                .count = @intCast(variants.len),
+            },
+        });
+
+        return Layout.tagUnion(tag_union_alignment, .{ .int_idx = @intCast(tag_union_data_idx) });
+    }
+
     /// Dynamically compute the total size of a tuple.
     /// This computes the size based on current field layout sizes.
     pub fn getTupleSize(self: *const Self, tuple_idx: TupleIdx, alignment: std.mem.Alignment) u32 {
