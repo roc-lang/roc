@@ -512,7 +512,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         @memcpy(dst, src);
 
         // Get the closure header to find the captures layout
-        const closure = self.asClosure(roc_ops);
+        const closure = self.asClosure().?;
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
 
         // Only incref if there are actual captures (record with fields)
@@ -1320,30 +1320,52 @@ pub fn setRocList(self: StackValue, value: RocList) void {
     list_ptr.* = value;
 }
 
-/// Get this value as a closure pointer
-pub fn asClosure(self: StackValue, roc_ops: *RocOps) *const Closure {
+/// Get this value as a closure header pointer, or null if ptr is null.
+/// Caller can use `.?` to panic on null if they're confident it's non-null.
+pub fn asClosure(self: StackValue) ?*const Closure {
     std.debug.assert(self.layout.tag == .closure);
-    std.debug.assert(self.ptr != null);
-    // Alignment check (debug builds only for performance)
-    if (comptime builtin.mode == .Debug) {
-        const ptr_val = @intFromPtr(self.ptr.?);
-        const required_align = @alignOf(Closure);
-        if (ptr_val % required_align != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[asClosure] alignment error: ptr=0x{x} align={}", .{ ptr_val, required_align }) catch "[asClosure] alignment error";
-            roc_ops.crash(msg);
-        }
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
     }
-    return @ptrCast(@alignCast(self.ptr.?));
+    return null;
 }
 
-/// Get the payload pointer stored inside a Box value (if any)
-pub fn boxDataPointer(self: StackValue) ?[*]u8 {
+/// Get the box slot pointer (holds address of heap data), or null if ptr is null.
+/// Use this for low-level slot manipulation (copy, zero, etc.)
+pub fn asBoxSlot(self: StackValue) ?*usize {
     std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
-    if (self.ptr == null) return null;
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
+    }
+    return null;
+}
+
+/// Get the heap data pointer from inside the box, or null if box is empty.
+/// This reads the slot and converts to a byte pointer.
+pub fn getBoxedData(self: StackValue) ?[*]u8 {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    if (self.ptr) |ptr| {
+        const slot: *const usize = @ptrCast(@alignCast(ptr));
+        if (slot.* == 0) return null;
+        return @ptrFromInt(slot.*);
+    }
+    return null;
+}
+
+/// Initialize a box slot with a data pointer.
+/// Used during box creation after allocation.
+pub fn initBoxSlot(self: StackValue, data_ptr: ?*anyopaque) void {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
     const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-    if (slot.* == 0) return null;
-    return @as([*]u8, @ptrFromInt(slot.*));
+    slot.* = if (data_ptr) |p| @intFromPtr(p) else 0;
+}
+
+/// Clear a box slot (set to 0/null).
+/// Used during destruction after decref.
+pub fn clearBoxSlot(self: StackValue) void {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+    slot.* = 0;
 }
 
 /// Move this value to binding (transfers ownership, no refcounts change)
@@ -1407,19 +1429,18 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
     }
 
     if (self.layout.tag == .box) {
-        const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+        const src_slot = self.asBoxSlot().?;
+        const dest_slot = dest.asBoxSlot().?;
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
-            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
+            const data_ptr: [*]u8 = @ptrFromInt(dest_slot.*);
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
 
     if (self.layout.tag == .box_of_zst) {
-        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
-        dest_slot.* = 0;
+        dest.clearBoxSlot();
         return;
     }
 
@@ -1447,8 +1468,8 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
         dest_str.* = src_str.*; // Just copy the struct, no refcount change
     } else {
         if (self.layout.tag == .box or self.layout.tag == .box_of_zst) {
-            const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-            const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+            const src_slot = self.asBoxSlot().?;
+            const dest_slot = dest.asBoxSlot().?;
             dest_slot.* = src_slot.*;
             return;
         }
@@ -1510,13 +1531,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         return;
     }
     if (self.layout.tag == .box) {
-        if (self.ptr == null) return;
-        const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+        const slot = self.asBoxSlot() orelse return;
         if (slot.* != 0) {
             if (comptime trace_refcount) {
                 traceRefcount("INCREF box ptr=0x{x}", .{slot.*});
             }
-            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
+            const data_ptr: [*]u8 = @ptrFromInt(slot.*);
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
@@ -1688,11 +1708,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             return;
         },
         .box => {
-            if (self.ptr == null) return;
-            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+            const slot = self.asBoxSlot() orelse return;
             const raw_ptr = slot.*;
             if (raw_ptr == 0) return;
-            const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
+            const data_ptr: [*]u8 = @ptrFromInt(raw_ptr);
             const target_usize = layout_cache.targetUsize();
             const elem_layout = layout_cache.getLayout(self.layout.data.box);
             const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
@@ -1737,9 +1756,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             return;
         },
         .box_of_zst => {
-            if (self.ptr == null) return;
-            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-            slot.* = 0;
+            if (self.ptr != null) {
+                self.clearBoxSlot();
+            }
             return;
         },
         .tuple => {
@@ -1793,9 +1812,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 ///
 /// - For closures, this includes both the Closure header and captured data
 /// - For all other types, this is just the layout size
-pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) u32 {
+pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, _: *RocOps) u32 {
     if (self.layout.tag == .closure and self.ptr != null) {
-        const closure = self.asClosure(roc_ops);
+        const closure = self.asClosure().?;
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
         const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
         const header_size = @sizeOf(Closure);
