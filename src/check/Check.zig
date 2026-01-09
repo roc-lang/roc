@@ -35,7 +35,7 @@ const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
-const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
+const ExtraStringIdx = problem.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 /// Deferred numeric literal for compile-time validation
@@ -4752,20 +4752,24 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
-            // Format missing patterns and store in snapshot store for lifecycle management
-            // NOTE: We use self.gpa here (not self.cir.gpa) because snapshots.deinit() uses self.gpa
-            // to free the extra strings. Using different allocators would cause invalid free.
-            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+            // Format missing patterns and store in problems store for lifecycle management
+            // Track the start position for the missing patterns range
+            const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+
             for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
-                const idx = try self.snapshots.storeExtraString(formatted);
-                try missing_indices.append(self.gpa, idx);
+                const idx = try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                try self.problems.missing_patterns_backing.append(idx);
             }
+
+            const missing_patterns_range = problem.MissingPatternsRange{
+                .start = missing_patterns_start,
+                .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+            };
 
             _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_indices.toOwnedSlice(self.gpa),
+                .missing_patterns = missing_patterns_range,
             } });
         }
 

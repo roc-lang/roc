@@ -402,11 +402,7 @@ fn generateAllReports(
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
         var report_builder = types_problem_mod.ReportBuilder.init(
-            allocator,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            snapshot_path,
+            allocator, module_env, can_ir, &solver.snapshots, &solver.problems, snapshot_path,
             empty_modules,
             &solver.import_mapping,
         );

@@ -1149,11 +1149,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
 
         // Collect type checking problems and convert them to reports using ReportBuilder
         var report_builder = problem.ReportBuilder.init(
-            allocator,
-            result.module_env,
-            type_can_ir,
-            &solver.snapshots,
-            "main.roc",
+            allocator, result.module_env, type_can_ir, &solver.snapshots, &solver.problems, "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
         );

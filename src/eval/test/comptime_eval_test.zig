@@ -85,7 +85,8 @@ fn parseCheckAndEvalModuleWithName(src: []const u8, module_name: []const u8) !Ev
 
     // Create problem store for comptime evaluation
     const problems = try gpa.create(check.problem.Store);
-    problems.* = .{};
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
 
     // Create and run comptime evaluator with real builtins
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
@@ -185,7 +186,8 @@ fn parseCheckAndEvalModuleWithImport(src: []const u8, import_name: []const u8, i
 
     // Create problem store for comptime evaluation
     const problems = try gpa.create(check.problem.Store);
-    problems.* = .{};
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
 
     // Keep other_envs alive
     const other_envs_slice = try gpa.dupe(*const ModuleEnv, imported_envs.items);

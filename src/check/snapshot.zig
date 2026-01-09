@@ -12,15 +12,6 @@ const Ident = base.Ident;
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
-/// Index for extra strings stored in the snapshot store (e.g., formatted pattern strings)
-pub const ExtraStringIdx = enum(u32) {
-    _,
-
-    pub fn toInt(self: ExtraStringIdx) u32 {
-        return @intFromEnum(self);
-    }
-};
-
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
@@ -189,9 +180,6 @@ pub const Store = struct {
     formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
     formatted_strings_backing: ByteList,
 
-    /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
-    extra_strings: std.ArrayListUnmanaged([]const u8),
-
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .gpa = gpa,
@@ -211,7 +199,6 @@ pub const Store = struct {
                 break :blk map;
             },
             .formatted_strings_backing = try ByteList.initCapacity(gpa, 512),
-            .extra_strings = .{},
         };
     }
 
@@ -219,12 +206,6 @@ pub const Store = struct {
         // Free all stored formatted strings
         self.formatted_strings.deinit(self.gpa);
         self.formatted_strings_backing.deinit();
-
-        // Free all extra strings
-        for (self.extra_strings.items) |str| {
-            self.gpa.free(str);
-        }
-        self.extra_strings.deinit(self.gpa);
 
         // Free all formatted tag strings
         const tags_len = self.tags.len();
@@ -256,19 +237,6 @@ pub const Store = struct {
         const range = mb_range.?;
 
         return self.formatted_strings_backing.items[range.start..][0..range.count];
-    }
-
-    /// Store an extra string (e.g., formatted pattern) and return its index.
-    /// The string will be freed when the store is deinitialized.
-    pub fn storeExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
-        const idx: ExtraStringIdx = @enumFromInt(self.extra_strings.items.len);
-        try self.extra_strings.append(self.gpa, str);
-        return idx;
-    }
-
-    /// Get an extra string by index.
-    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings.items[idx.toInt()];
     }
 
     /// Deep copy a type variable for error reporting. This snapshots the type structure

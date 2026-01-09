@@ -1754,11 +1754,7 @@ fn compileModule(
 
         const problem = check.problem;
         var report_builder = problem.ReportBuilder.init(
-            gpa,
-            module_env,
-            module_env,
-            &checker.snapshots,
-            source_path,
+            gpa, module_env, module_env, &checker.snapshots, &module_env.problems, source_path,
             imported_envs.items,
             &checker.import_mapping,
         );
