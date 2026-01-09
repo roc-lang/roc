@@ -483,7 +483,6 @@ UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:382:20:382:24
 UNDEFINED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
 UNUSED VARIABLE - associated_items_truly_comprehensive.md:388:12:388:16
-CIRCULAR DEFINITION - associated_items_truly_comprehensive.md:170:16:170:38
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `val4` in this scope.
@@ -530,18 +529,6 @@ The unused variable is declared here:
 ```
            ^^^^
 
-
-**CIRCULAR DEFINITION**
-This value references itself in its own definition:
-**associated_items_truly_comprehensive.md:170:16:170:38:**
-```roc
-        val2 = D3_Pattern2.L2.L3.val3 + 10      # Forward ref to L3 val (qualified)
-```
-               ^^^^^^^^^^^^^^^^^^^^^^
-
-The definition of `associated_items_truly_comprehensive.D3_Pattern2.L2.L3.val3` depends on itself, which creates an infinite loop.
-
-**Hint:** Recursive functions are allowed, but values cannot directly reference themselves.
 
 # TOKENS
 ~~~zig
@@ -3624,9 +3611,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
-		(patt (type "Error"))
-		(patt (type "Error"))
-		(patt (type "Error"))
+		(patt (type "e where [e.plus : e, e -> e]"))
+		(patt (type "e where [e.plus : e, e -> e]"))
+		(patt (type "e where [e.plus : e, e -> e]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
@@ -3958,9 +3945,9 @@ anno2 = Annotated.L2.alsoTyped # 889
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "e where [e.plus : e, e -> e]"))
+		(expr (type "e where [e.plus : e, e -> e]"))
+		(expr (type "e where [e.plus : e, e -> e]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "e where [e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.times : e, f -> e, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))

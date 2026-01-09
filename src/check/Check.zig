@@ -3359,36 +3359,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // TODO: Handle mutually recursive functions
                     },
                     .processing => {
-                        // Recursive reference - check if this is a valid recursive function
-                        // or an invalid circular value definition like `a = a`
-                        const def = self.cir.store.getDef(processing_def.def_idx);
-                        const def_expr = self.cir.store.getExpr(def.expr);
-
-                        // Check if this is a function definition (lambda or closure)
-                        // Closures are lambdas that capture variables from their environment
-                        const is_function = isLambdaExpr(def_expr) or def_expr == .e_closure;
-
-                        if (!is_function) {
-                            // This is a circular value definition (not a function)
-                            // Report an error and mark this as an error type
-                            const pattern = self.cir.store.getPattern(def.pattern);
-                            const ident = switch (pattern) {
-                                .assign => |assign| assign.ident,
-                                else => null,
-                            };
-
-                            if (ident) |ident_idx| {
-                                _ = try self.problems.appendProblem(self.gpa, .{ .circular_def = .{
-                                    .ident = ident_idx,
-                                    .region = expr_region,
-                                } });
-                            }
-
-                            // Unify with error type to prevent further issues
-                            try self.unifyWith(expr_var, .err, env);
-                            return false;
-                        }
-                        // For recursive functions, continue - the pattern variable is still at
+                        // Recursive reference - the pattern variable is still at
                         // top_level rank (not generalized), so the code below will
                         // unify directly with it, which is the correct behavior.
                     },

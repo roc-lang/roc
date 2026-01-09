@@ -58,7 +58,6 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
-    circular_def: CircularDef,
     bug: Bug,
 
     pub const Idx = enum(u32) { _ };
@@ -97,14 +96,6 @@ pub const ComptimeExpectFailed = struct {
 /// An error that occurred during compile-time evaluation
 pub const ComptimeEvalError = struct {
     error_name: []const u8,
-    region: base.Region,
-};
-
-/// A circular definition where a value references itself (e.g., `a = a`)
-pub const CircularDef = struct {
-    /// The identifier of the variable with the circular definition
-    ident: Ident.Idx,
-    /// The region of the circular reference
     region: base.Region,
 };
 
@@ -596,7 +587,6 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
-            .circular_def => |data| return self.buildCircularDefReport(data),
             .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
@@ -3313,38 +3303,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_error_name);
-
-        return report;
-    }
-
-    /// Build a report for circular definition (e.g., `a = a`)
-    fn buildCircularDefReport(self: *Self, data: CircularDef) !Report {
-        var report = Report.init(self.gpa, "CIRCULAR DEFINITION", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_name = try report.addOwnedString(self.can_ir.getIdentText(data.ident));
-
-        try report.document.addText("This value references itself in its own definition:");
-        try report.document.addLineBreak();
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addText("The definition of ");
-        try report.document.addAnnotated(owned_name, .inline_code);
-        try report.document.addText(" depends on itself, which creates an infinite loop.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addAnnotated("Hint:", .emphasized);
-        try report.document.addText(" Recursive functions are allowed, but values cannot directly reference themselves.");
 
         return report;
     }
