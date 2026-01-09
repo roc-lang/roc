@@ -89,6 +89,8 @@ env_pool: EnvPool,
 generalizer: Generalizer,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
+/// A map from one var to another. Used in instantiation and var copying
+var_set: std.AutoHashMap(Var, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// scratch vars used to build up intermediate lists, used for various things
@@ -198,6 +200,7 @@ pub fn init(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
@@ -236,6 +239,7 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
@@ -4083,11 +4087,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // For example, if the annotation is `I64 -> Str` and the expression has
         // an error in the return type (making it `I64 -> Error`), the pattern
         // should still get `I64 -> Str` from the annotation.
-        //
-        // TODO: Move this allocation to root and reuse across runs
-        var visited = std.AutoHashMap(Var, void).init(self.gpa);
-        defer visited.deinit();
-        if (self.varContainsError(expr_var, &visited)) {
+        self.var_set.clearRetainingCapacity();
+        if (self.varContainsError(expr_var, &self.var_set)) {
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
