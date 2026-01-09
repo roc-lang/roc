@@ -543,7 +543,12 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert the rendered problem matches the expected problem
     var report_builder = problem_mod.ReportBuilder.init(
-        self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test",
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        &self.checker.problems,
+        "test",
         &.{},
         &self.checker.import_mapping,
     );
@@ -565,7 +570,12 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
 
     // Assert the rendered problem matches the expected problem
     var report_builder = problem_mod.ReportBuilder.init(
-        self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test",
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        &self.checker.problems,
+        "test",
         &.{},
         &self.checker.import_mapping,
     );

@@ -706,7 +706,12 @@ pub const BuildEnv = struct {
             const app_root_module = app_sched.getRootModule() orelse return;
 
             var rb = ReportBuilder.init(
-                self.gpa, app_root_env, app_root_env, &checker.snapshots, &checker.problems, app_root_module.path,
+                self.gpa,
+                app_root_env,
+                app_root_env,
+                &checker.snapshots,
+                &checker.problems,
+                app_root_module.path,
                 &.{},
                 &checker.import_mapping,
             );

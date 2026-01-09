@@ -25,7 +25,10 @@ const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 const ByteList = std.array_list.Managed(u8);
 const ByteListRange = struct { start: usize, count: usize };
 
+/// Alias into the Store.extra_strings_backing array
 pub const ExtraStringIdx = ByteListRange;
+
+/// A range of patterns
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 const Var = types_mod.Var;

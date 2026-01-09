@@ -304,7 +304,12 @@ fn renderTypeProblems(
     const stderr = ctx.io.stderr();
 
     var rb = ReportBuilder.init(
-        ctx.gpa, module_env, module_env, &checker.snapshots, &checker.problems, filename,
+        ctx.gpa,
+        module_env,
+        module_env,
+        &checker.snapshots,
+        &checker.problems,
+        filename,
         &.{},
         &checker.import_mapping,
     );
@@ -3024,7 +3029,12 @@ fn compileModuleForSerialization(
 
     // Render type checking problems
     var rb = ReportBuilder.init(
-        ctx.gpa, &env, &env, &checker.snapshots, &checker.problems, file_path,
+        ctx.gpa,
+        &env,
+        &env,
+        &checker.snapshots,
+        &checker.problems,
+        file_path,
         &.{},
         &checker.import_mapping,
     );
@@ -4905,7 +4915,12 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     if (has_comptime_crashes) {
         const problem = @import("check").problem;
         var report_builder = problem.ReportBuilder.init(
-            ctx.gpa, &env, &env, &checker.snapshots, &checker.problems, args.path,
+            ctx.gpa,
+            &env,
+            &env,
+            &checker.snapshots,
+            &checker.problems,
+            args.path,
             &.{},
             &checker.import_mapping,
         );
