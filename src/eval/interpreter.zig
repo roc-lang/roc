@@ -3408,12 +3408,12 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l == r,
-                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l == r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num == r.num,
-                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
                         else => return error.TypeMismatch,
                     },
                     .f32, .f64 => {
@@ -3432,7 +3432,7 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l > r,
                         // Int vs Dec: convert Dec to Int for comparison
-                        .dec => |r| l > @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l > r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3446,7 +3446,7 @@ pub const Interpreter = struct {
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num > r.num,
                         // Dec vs Int: convert Int to Dec for comparison
-                        .int => |r| l.num > @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num > RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3460,7 +3460,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l >= r,
-                        .dec => |r| l >= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l >= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3473,7 +3473,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num >= r.num,
-                        .int => |r| l.num >= @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num >= RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3487,7 +3487,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l < r,
-                        .dec => |r| l < @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l < r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3500,7 +3500,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num < r.num,
-                        .int => |r| l.num < @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num < RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3514,7 +3514,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l <= r,
-                        .dec => |r| l <= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l <= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3527,7 +3527,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num <= r.num,
-                        .int => |r| l.num <= @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num <= RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3621,7 +3621,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l + r),
-                        .dec => |r| try out.setInt(l + @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l + r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3634,7 +3634,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3653,7 +3653,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l - r),
-                        .dec => |r| try out.setInt(l - @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l - r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3666,7 +3666,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3685,7 +3685,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l * r),
-                        .dec => |r| try out.setInt(l * @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l * r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3698,7 +3698,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3721,7 +3721,7 @@ pub const Interpreter = struct {
                             try out.setInt(@divTrunc(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@divTrunc(l, r_int));
                         },
@@ -3748,7 +3748,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -3773,7 +3773,7 @@ pub const Interpreter = struct {
                             try out.setInt(@divTrunc(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@divTrunc(l, r_int));
                         },
@@ -3801,7 +3801,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -3826,7 +3826,7 @@ pub const Interpreter = struct {
                             try out.setInt(@rem(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@rem(l, r_int));
                         },
@@ -3853,7 +3853,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.rem(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -5357,7 +5357,7 @@ pub const Interpreter = struct {
         std.debug.assert(int_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-        const dec_value = RocDec{ .num = @as(i128, from_value) * RocDec.one_point_zero_i128 };
+        const dec_value = RocDec.fromWholeInt(from_value).?;
 
         const dec_layout = Layout.frac(.dec);
         const result_rt_var = try self.runtime_types.fresh();
@@ -5391,7 +5391,7 @@ pub const Interpreter = struct {
             @compileError("intToDecTryUnsafe only supports u128 and i128");
 
         // Build the result record: { success: Bool, val_or_memory_garbage: Dec }
-        return try self.buildSuccessValRecord(success, if (success) RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 } else RocDec{ .num = 0 });
+        return try self.buildSuccessValRecord(success, if (success) RocDec.fromWholeInt(@intCast(from_value)).? else RocDec{ .num = 0 });
     }
 
     /// Helper for float to int truncating conversions
@@ -5501,7 +5501,7 @@ pub const Interpreter = struct {
         const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
 
         // Get the whole number part by dividing by one_point_zero
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         // Saturate to target range
         const to_value: To = std.math.cast(To, whole_part) orelse if (whole_part < 0) std.math.minInt(To) else std.math.maxInt(To);
@@ -5529,7 +5529,7 @@ pub const Interpreter = struct {
         const is_int = remainder == 0;
 
         // Get the whole number part
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         // Check if in range for target type
         const in_range = std.math.cast(To, whole_part) != null;
@@ -5553,7 +5553,7 @@ pub const Interpreter = struct {
         const is_int = remainder == 0;
 
         // Get the whole number part - always fits in i128
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         return try self.buildIsIntValRecord(is_int, whole_part);
     }
@@ -6046,7 +6046,7 @@ pub const Interpreter = struct {
             .add => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l + r),
-                    .dec => |r| try out.setInt(l + @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l + r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6059,14 +6059,14 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
             .sub => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l - r),
-                    .dec => |r| try out.setInt(l - @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l - r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6079,14 +6079,14 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
             .mul => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l * r),
-                    .dec => |r| try out.setInt(l * @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l * r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6099,7 +6099,7 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
@@ -6140,7 +6140,7 @@ pub const Interpreter = struct {
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
+                        out.setDec(RocDec.div(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6174,7 +6174,7 @@ pub const Interpreter = struct {
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
+                        out.setDec(RocDec.rem(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6259,8 +6259,7 @@ pub const Interpreter = struct {
                 return std.math.order(lhs_f, rhs.f64);
             },
             .dec => {
-                const lhs_dec = lhs * RocDec.one_point_zero_i128;
-                return std.math.order(lhs_dec, rhs.dec.num);
+                return std.math.order(RocDec.fromWholeInt(lhs).?.num, rhs.dec.num);
             },
         };
     }
@@ -6298,8 +6297,7 @@ pub const Interpreter = struct {
     fn orderDec(_: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
-                return std.math.order(lhs.num, rhs_dec);
+                return std.math.order(lhs.num, RocDec.fromWholeInt(rhs.int).?.num);
             },
             .dec => std.math.order(lhs.num, rhs.dec.num),
             else => return error.TypeMismatch,
@@ -6334,12 +6332,12 @@ pub const Interpreter = struct {
                 return switch (lhs_num) {
                     .int => |l| switch (rhs_num) {
                         .int => |r| l == r,
-                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l == r.toWholeInt(),
                         else => false,
                     },
                     .dec => |l| switch (rhs_num) {
                         .dec => |r| l.num == r.num,
-                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
                         else => false,
                     },
                     .f32 => |l| switch (rhs_num) {
@@ -7630,10 +7628,8 @@ pub const Interpreter = struct {
                         // For Dec type, extract the value and compare
                         if (value.layout.data.scalar.data.frac != .dec) break :blk false;
                         const dec_value = value.asDec(roc_ops);
-                        // Dec stores values scaled by 10^18, so we need to compare scaled values
-                        // For integer literals, we scale the literal value
-                        const scaled_lit = lit * RocDec.one_point_zero_i128;
-                        break :blk dec_value.num == scaled_lit;
+                        // Dec stores values scaled by 10^18, so compare with scaled literal
+                        break :blk if (RocDec.fromWholeInt(lit)) |d| dec_value.num == d.num else false;
                     },
                     else => false,
                 };
@@ -12639,7 +12635,7 @@ pub const Interpreter = struct {
                     },
                     .dec => {
                         const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                        ptr.* = RocDec.fromWholeInt(num_lit.value.toI128()).?;
                     },
                 },
                 else => return error.TypeMismatch,
@@ -12874,7 +12870,7 @@ pub const Interpreter = struct {
                     },
                     .dec => {
                         const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        ptr.* = .{ .num = typed_int.value.toI128() * RocDec.one_point_zero_i128 };
+                        ptr.* = RocDec.fromWholeInt(typed_int.value.toI128()).?;
                     },
                 },
                 else => return error.TypeMismatch,
