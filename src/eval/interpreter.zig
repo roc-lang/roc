@@ -146,6 +146,34 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
     };
 }
 
+/// Selects the appropriate copy function for the given element layout.
+/// Used by list_append, list_append_unsafe, and list_concat operations.
+fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
+    return switch (elem_layout.tag) {
+        .scalar => switch (elem_layout.data.scalar.tag) {
+            .str => &builtins.list.copy_str,
+            .int => switch (elem_layout.data.scalar.data.int) {
+                .u8 => &builtins.list.copy_u8,
+                .u16 => &builtins.list.copy_u16,
+                .u32 => &builtins.list.copy_u32,
+                .u64 => &builtins.list.copy_u64,
+                .u128 => &builtins.list.copy_u128,
+                .i8 => &builtins.list.copy_i8,
+                .i16 => &builtins.list.copy_i16,
+                .i32 => &builtins.list.copy_i32,
+                .i64 => &builtins.list.copy_i64,
+                .i128 => &builtins.list.copy_i128,
+            },
+            else => &builtins.list.copy_fallback,
+        },
+        .box => &builtins.list.copy_box,
+        .box_of_zst => &builtins.list.copy_box_zst,
+        .list => &builtins.list.copy_list,
+        .list_of_zst => &builtins.list.copy_list_zst,
+        else => &builtins.list.copy_fallback,
+    };
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -2856,33 +2884,7 @@ pub const Interpreter = struct {
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                        .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
-                                .str => break :copy &builtins.list.copy_str,
-                                .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
-                                        .u8 => break :copy &builtins.list.copy_u8,
-                                        .u16 => break :copy &builtins.list.copy_u16,
-                                        .u32 => break :copy &builtins.list.copy_u32,
-                                        .u64 => break :copy &builtins.list.copy_u64,
-                                        .u128 => break :copy &builtins.list.copy_u128,
-                                        .i8 => break :copy &builtins.list.copy_i8,
-                                        .i16 => break :copy &builtins.list.copy_i16,
-                                        .i32 => break :copy &builtins.list.copy_i32,
-                                        .i64 => break :copy &builtins.list.copy_i64,
-                                        .i128 => break :copy &builtins.list.copy_i128,
-                                    }
-                                },
-                                else => break :copy &builtins.list.copy_fallback,
-                            }
-                        },
-                        .box => break :copy &builtins.list.copy_box,
-                        .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                        .list => break :copy &builtins.list.copy_list,
-                        .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                        else => break :copy &builtins.list.copy_fallback,
-                    };
+                    const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
                     if (elements_refcounted) {
@@ -2959,33 +2961,7 @@ pub const Interpreter = struct {
                     .roc_ops = roc_ops,
                 };
 
-                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                    .scalar => {
-                        switch (elem_layout.data.scalar.tag) {
-                            .str => break :copy &builtins.list.copy_str,
-                            .int => {
-                                switch (elem_layout.data.scalar.data.int) {
-                                    .u8 => break :copy &builtins.list.copy_u8,
-                                    .u16 => break :copy &builtins.list.copy_u16,
-                                    .u32 => break :copy &builtins.list.copy_u32,
-                                    .u64 => break :copy &builtins.list.copy_u64,
-                                    .u128 => break :copy &builtins.list.copy_u128,
-                                    .i8 => break :copy &builtins.list.copy_i8,
-                                    .i16 => break :copy &builtins.list.copy_i16,
-                                    .i32 => break :copy &builtins.list.copy_i32,
-                                    .i64 => break :copy &builtins.list.copy_i64,
-                                    .i128 => break :copy &builtins.list.copy_i128,
-                                }
-                            },
-                            else => break :copy &builtins.list.copy_fallback,
-                        }
-                    },
-                    .box => break :copy &builtins.list.copy_box,
-                    .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                    .list => break :copy &builtins.list.copy_list,
-                    .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                    else => break :copy &builtins.list.copy_fallback,
-                };
+                const copy_fn = selectCopyFallbackFn(elem_layout);
 
                 // Increment refcount of the element being appended.
                 // The element is copied into the list, creating a second reference,
@@ -3072,33 +3048,7 @@ pub const Interpreter = struct {
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                        .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
-                                .str => break :copy &builtins.list.copy_str,
-                                .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
-                                        .u8 => break :copy &builtins.list.copy_u8,
-                                        .u16 => break :copy &builtins.list.copy_u16,
-                                        .u32 => break :copy &builtins.list.copy_u32,
-                                        .u64 => break :copy &builtins.list.copy_u64,
-                                        .u128 => break :copy &builtins.list.copy_u128,
-                                        .i8 => break :copy &builtins.list.copy_i8,
-                                        .i16 => break :copy &builtins.list.copy_i16,
-                                        .i32 => break :copy &builtins.list.copy_i32,
-                                        .i64 => break :copy &builtins.list.copy_i64,
-                                        .i128 => break :copy &builtins.list.copy_i128,
-                                    }
-                                },
-                                else => break :copy &builtins.list.copy_fallback,
-                            }
-                        },
-                        .box => break :copy &builtins.list.copy_box,
-                        .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                        .list => break :copy &builtins.list.copy_list,
-                        .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                        else => break :copy &builtins.list.copy_fallback,
-                    };
+                    const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
                     if (elements_refcounted) {
@@ -3175,33 +3125,7 @@ pub const Interpreter = struct {
                     .roc_ops = roc_ops,
                 };
 
-                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                    .scalar => {
-                        switch (elem_layout.data.scalar.tag) {
-                            .str => break :copy &builtins.list.copy_str,
-                            .int => {
-                                switch (elem_layout.data.scalar.data.int) {
-                                    .u8 => break :copy &builtins.list.copy_u8,
-                                    .u16 => break :copy &builtins.list.copy_u16,
-                                    .u32 => break :copy &builtins.list.copy_u32,
-                                    .u64 => break :copy &builtins.list.copy_u64,
-                                    .u128 => break :copy &builtins.list.copy_u128,
-                                    .i8 => break :copy &builtins.list.copy_i8,
-                                    .i16 => break :copy &builtins.list.copy_i16,
-                                    .i32 => break :copy &builtins.list.copy_i32,
-                                    .i64 => break :copy &builtins.list.copy_i64,
-                                    .i128 => break :copy &builtins.list.copy_i128,
-                                }
-                            },
-                            else => break :copy &builtins.list.copy_fallback,
-                        }
-                    },
-                    .box => break :copy &builtins.list.copy_box,
-                    .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                    .list => break :copy &builtins.list.copy_list,
-                    .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                    else => break :copy &builtins.list.copy_fallback,
-                };
+                const copy_fn = selectCopyFallbackFn(elem_layout);
 
                 // Increment refcount of the element being appended.
                 // The element is copied into the list, creating a second reference,
