@@ -150,6 +150,35 @@ pub const Conf = struct {
     pub const Ctx = enum { anon, anno };
 };
 
+/// Unify two type variables ignoring any errors
+/// Only us this, if you know the unification will succeed! (e.g in the interpreter)
+///
+/// This function
+/// * Resolves type variables & compresses paths
+/// * Compares variable contents for equality
+/// * Merges unified variables so 1 is "root" and the other is "redirect"
+pub fn unifyAssumeOk (
+	module_env: *ModuleEnv,
+    types: *types_mod.Store,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    /// The "expected" variable
+    a: Var,
+    /// The "actual" variable
+    b: Var,
+) void {
+	const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // First reset the scratch store
+    unify_scratch.reset();
+
+    // Unify
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    unifier.unifyGuarded(a, b) catch {};
+
+}
+
 /// Unify two type variables
 ///
 /// This function
