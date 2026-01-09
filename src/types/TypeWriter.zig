@@ -403,7 +403,7 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
                 _ = try writer.write(self.getIdent(rigid.name));
 
                 // Useful in debugging to see if a var is rigid or not
-                // _ = try writer.write("[r]");
+                // _ = try writer.print("[r-{}]", .{var_});
 
                 for (self.types.sliceStaticDispatchConstraints(rigid.constraints)) |constraint| {
                     try self.appendStaticDispatchConstraint(var_, constraint);

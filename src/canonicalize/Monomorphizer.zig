@@ -1280,7 +1280,7 @@ pub fn instantiateType(
         .store = self.types_store,
         .idents = self.module_env.getIdentStoreConst(),
         .var_map = var_map,
-        .current_rank = types.Rank.top_level,
+        .current_rank = types.Rank.outermost,
         .rigid_behavior = .fresh_flex,
     };
 

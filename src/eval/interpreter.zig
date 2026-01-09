@@ -112,6 +112,40 @@ fn layoutsEqual(a: Layout, b: Layout) bool {
     return a.eql(b);
 }
 
+/// Check if there's a nested layout mismatch that would cause decref issues.
+/// This specifically checks for list element layout size differences, which cause
+/// incorrect iteration during decref.
+fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layout.Store) bool {
+    if (actual.tag != expected.tag) return false;
+
+    return switch (actual.tag) {
+        .list => {
+            const actual_elem = layout_store.getLayout(actual.data.list);
+            const expected_elem = layout_store.getLayout(expected.data.list);
+            const actual_size = layout_store.layoutSize(actual_elem);
+            const expected_size = layout_store.layoutSize(expected_elem);
+            // Size mismatch means iteration will read wrong offsets
+            return actual_size != expected_size;
+        },
+        .tuple => {
+            const actual_data = layout_store.getTupleData(actual.data.tuple.idx);
+            const expected_data = layout_store.getTupleData(expected.data.tuple.idx);
+            const actual_fields = layout_store.tuple_fields.sliceRange(actual_data.getFields());
+            const expected_fields = layout_store.tuple_fields.sliceRange(expected_data.getFields());
+            if (actual_fields.len != expected_fields.len) return true;
+            for (0..actual_fields.len) |i| {
+                const actual_elem = layout_store.getLayout(actual_fields.get(i).layout);
+                const expected_elem = layout_store.getLayout(expected_fields.get(i).layout);
+                if (hasNestedLayoutMismatch(actual_elem, expected_elem, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -9240,12 +9274,12 @@ pub const Interpreter = struct {
                                     },
                                     else => {
                                         // Closed union - use empty_tag_union
-                                        break :blk2 try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                                        break :blk2 try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                                     },
                                 }
                             };
                             const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .empty_tag_union => {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
@@ -9336,7 +9370,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_effectful => |f| {
                             const fne_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_effectful");
@@ -9350,7 +9384,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_unbound => |f| {
                             const fnu_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_unbound");
@@ -9364,7 +9398,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .nominal_type => |nom| {
                             const nom_trace = tracy.traceNamed(@src(), "translateTypeVar.nominal_type");
@@ -9426,7 +9460,7 @@ pub const Interpreter = struct {
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                     }
                 },
@@ -9444,7 +9478,7 @@ pub const Interpreter = struct {
                     const rt_alias_ident_idx = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_alias_str));
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
-                    break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -9643,8 +9677,10 @@ pub const Interpreter = struct {
             .store = self.runtime_types,
             .idents = self.runtime_layout_store.env.common.getIdentStore(),
             .var_map = &self.instantiate_scratch,
-            .current_rank = types.Rank.top_level,
             .rigid_behavior = .fresh_flex,
+            // Rank is not material to runtime types, so ignore it
+            .current_rank = types.Rank.generalized,
+            .rank_behavior = .ignore_rank,
         };
         const result = try instantiator.instantiateVar(type_var);
 
@@ -15087,6 +15123,44 @@ pub const Interpreter = struct {
                         const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
+                                // Check for layout mismatch (similar to layout_type == 1)
+                                const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const layouts_differ = arg_size != payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+
+                                if (layouts_differ) {
+                                    // Create a new record layout with the actual payload layout
+                                    const field_layouts = [2]Layout{ tag_field.layout, values[0].layout };
+                                    const field_names = [2]base_pkg.Ident.Idx{ self.env.idents.tag, self.env.idents.payload };
+                                    const proper_record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
+                                    const proper_record_layout = self.runtime_layout_store.getLayout(proper_record_idx);
+                                    var proper_dest = try self.pushRaw(proper_record_layout, 0, tc.rt_var);
+                                    var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
+
+                                    // Write tag discriminant
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_field_rt = try self.runtime_types.fresh();
+                                    const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write payload
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_field_rt2 = try self.runtime_types.fresh();
+                                    const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
+                                    if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_payload_ptr, roc_ops);
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
                                 try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             } else {
                                 // Multiple args - create tuple payload
@@ -15100,6 +15174,54 @@ pub const Interpreter = struct {
                                 }
                                 const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                                // Check if the tuple layout differs from expected payload layout
+                                const expected_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const actual_size = self.runtime_layout_store.layoutSize(tuple_layout);
+                                const tuple_layouts_differ = actual_size != expected_size or !layoutsEqual(tuple_layout, payload_field.layout);
+
+                                if (tuple_layouts_differ) {
+                                    // Create a new record layout with the actual tuple payload layout
+                                    const field_layouts_arr = [2]Layout{ tag_field.layout, tuple_layout };
+                                    const field_names_arr = [2]base_pkg.Ident.Idx{ self.env.idents.tag, self.env.idents.payload };
+                                    const proper_record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts_arr, &field_names_arr);
+                                    const proper_record_layout = self.runtime_layout_store.getLayout(proper_record_idx);
+                                    var proper_dest = try self.pushRaw(proper_record_layout, 0, tc.rt_var);
+                                    var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
+
+                                    // Write tag discriminant
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_field_rt = try self.runtime_types.fresh();
+                                    const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write tuple payload
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_field_rt2 = try self.runtime_types.fresh();
+                                    const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
+                                    if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                        // Create tuple type from element types
+                                        const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                                        const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                                        const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                                        var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = proper_payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                                        var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                        for (values, 0..) |val, idx| {
+                                            try tup_acc.setElement(idx, val, roc_ops);
+                                        }
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
+
                                 // Create tuple type from element types
                                 const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                                 const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
@@ -15335,15 +15457,72 @@ pub const Interpreter = struct {
                                 elem_rt_vars[idx] = val.rt_var;
                             }
                             // Override with expected layouts using original indices
+                            // BUT preserve actual layouts for container types (list, tuple, record)
+                            // that may have different nested layouts - the actual layout must be
+                            // used for correct decref handling.
                             for (0..expected_fields.len) |sorted_idx| {
                                 const field = expected_fields.get(sorted_idx);
                                 const orig_idx = field.index;
                                 if (orig_idx < total_count) {
-                                    elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                                    const expected_layout = self.runtime_layout_store.getLayout(field.layout);
+                                    const actual_layout = elem_layouts[orig_idx];
+                                    // Only override if the layouts are the same type and don't have
+                                    // different nested layouts. Container types (list, tuple, record)
+                                    // with the same tag but different nested layouts should keep
+                                    // the actual layout to ensure correct decref behavior.
+                                    const should_override = blk: {
+                                        if (actual_layout.tag != expected_layout.tag) {
+                                            // Different types - may need boxing, use expected
+                                            break :blk true;
+                                        }
+                                        // Same top-level type - check if it's a container with nested layouts
+                                        switch (actual_layout.tag) {
+                                            .list => {
+                                                // Lists have nested element layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .tuple => {
+                                                // Tuples have nested element layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .record => {
+                                                // Records have nested field layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .tag_union => {
+                                                // Tag unions have nested variant layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            else => {
+                                                // Scalars, boxes, etc. - can use expected
+                                                break :blk true;
+                                            },
+                                        }
+                                    };
+                                    if (should_override) {
+                                        elem_layouts[orig_idx] = expected_layout;
+                                    }
                                 }
                             }
                             const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                             const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                            // Check if the actual tuple layout has nested containers with size mismatches.
+                            // If so, create a new tag_union layout with the correct variant payload
+                            // to ensure proper decref behavior. This preserves the tag_union type
+                            // (unlike the wrapper tuple approach) so comptime evaluation still works.
+                            const has_nested_mismatch = hasNestedLayoutMismatch(tuple_layout, expected_payload_layout, &self.runtime_layout_store);
+                            if (has_nested_mismatch) {
+                                // Create a new tag_union layout with this variant's payload replaced
+                                const new_tu_layout = try self.runtime_layout_store.createTagUnionWithPayload(
+                                    tu_idx,
+                                    @intCast(tc.tag_index),
+                                    tuple_layout_idx,
+                                );
+                                // Update dest's layout to use the new tag_union
+                                dest.layout = new_tu_layout;
+                            }
+
                             const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                             const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
                             const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
@@ -17708,11 +17887,7 @@ pub const Interpreter = struct {
                             for (0..arg_count_to_unify) |unify_idx| {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
-                                const arg_copy = try self.runtime_types.register(.{
-                                    .content = arg_resolved.desc.content,
-                                    .rank = arg_resolved.desc.rank,
-                                    .mark = types.Mark.none,
-                                });
+                                const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
                                 _ = unify.unifyWithConf(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
@@ -17799,11 +17974,7 @@ pub const Interpreter = struct {
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
-                    const recv_copy = try self.runtime_types.register(.{
-                        .content = recv_resolved.desc.content,
-                        .rank = recv_resolved.desc.rank,
-                        .mark = types.Mark.none,
-                    });
+                    const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
                     _ = unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -19038,7 +19209,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
-    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -19092,7 +19263,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 
     // backing type is Str for simplicity
     const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal, false);
-    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_nominal_var = try env.types.freshFromContent(ct_nominal_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -19250,7 +19421,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     // runtime flex var 'a'
     const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
     const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
-    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const func_var = try interp.runtime_types.freshFromContent(func_content);
 
     // Call with Str
     // Get the real Str type from the loaded builtin module and translate to runtime
