@@ -26,6 +26,17 @@ const Closure = layout_mod.Closure;
 
 const StackValue = @This();
 
+/// Read an aligned integer from memory.
+inline fn readAligned(comptime T: type, raw_ptr: [*]u8) T {
+    return builtins.utils.alignedPtrCast(*const T, raw_ptr, @src()).*;
+}
+
+/// Write an i128 value to memory with alignment handling and overflow checking.
+inline fn writeChecked(comptime T: type, raw_ptr: [*]u8, value: i128) error{IntegerOverflow}!void {
+    const ptr = builtins.utils.alignedPtrCast(*T, raw_ptr, @src());
+    ptr.* = std.math.cast(T, value) orelse return error.IntegerOverflow;
+}
+
 // Internal helper functions for memory operations that don't need rt_var
 
 /// Read the discriminant for a tag union, handling single-tag unions which don't store one.
@@ -327,51 +338,21 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 return;
             },
             .int => {
-                // Use type-specific integer copying with precision
                 std.debug.assert(self.ptr != null);
-                const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
                 const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
-                switch (precision) {
-                    .u8 => {
-                        const typed_ptr: *u8 = builtins.utils.alignedPtrCast(*u8, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
-                    },
-                    .u16 => {
-                        const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
-                    },
-                    .u32 => {
-                        const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
-                    },
-                    .u64 => {
-                        const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
-                    },
-                    .u128 => {
-                        const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
-                    },
-                    .i8 => {
-                        const typed_ptr: *i8 = builtins.utils.alignedPtrCast(*i8, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
-                    },
-                    .i16 => {
-                        const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
-                    },
-                    .i32 => {
-                        const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
-                    },
-                    .i64 => {
-                        const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
-                    },
+                switch (self.layout.data.scalar.data.int) {
+                    .u8 => try writeChecked(u8, dest_bytes, value),
+                    .i8 => try writeChecked(i8, dest_bytes, value),
+                    .u16 => try writeChecked(u16, dest_bytes, value),
+                    .i16 => try writeChecked(i16, dest_bytes, value),
+                    .u32 => try writeChecked(u32, dest_bytes, value),
+                    .i32 => try writeChecked(i32, dest_bytes, value),
+                    .u64 => try writeChecked(u64, dest_bytes, value),
+                    .i64 => try writeChecked(i64, dest_bytes, value),
+                    .u128 => try writeChecked(u128, dest_bytes, value),
                     .i128 => {
-                        const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, dest_bytes, @src());
-                        typed_ptr.* = value;
+                        builtins.utils.alignedPtrCast(*i128, dest_bytes, @src()).* = value;
                     },
                 }
                 return;
@@ -609,22 +590,19 @@ pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    return switch (precision) {
-        .u8 => @as(i128, @as(*const u8, @ptrCast(raw_ptr)).*),
-        .u16 => @as(i128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
-        .u32 => @as(i128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
-        .u64 => @as(i128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
-        // Use @bitCast instead of @intCast to avoid panic for values > i128 max
-        // Callers needing correct u128 values should use asU128() instead
-        .u128 => @bitCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*),
-        .i8 => @as(i128, @as(*const i8, @ptrCast(raw_ptr)).*),
-        .i16 => @as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*),
-        .i32 => @as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*),
-        .i64 => @as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*),
-        .i128 => @as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*,
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    return switch (self.layout.data.scalar.data.int) {
+        .u8 => readAligned(u8, raw_ptr),
+        .i8 => readAligned(i8, raw_ptr),
+        .u16 => readAligned(u16, raw_ptr),
+        .i16 => readAligned(i16, raw_ptr),
+        .u32 => readAligned(u32, raw_ptr),
+        .i32 => readAligned(i32, raw_ptr),
+        .u64 => readAligned(u64, raw_ptr),
+        .i64 => readAligned(i64, raw_ptr),
+        .i128 => readAligned(i128, raw_ptr),
+        // Use @bitCast to avoid panic for values > i128 max
+        .u128 => @bitCast(readAligned(u128, raw_ptr)),
     };
 }
 
@@ -635,21 +613,19 @@ pub fn asU128(self: StackValue) u128 {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    return switch (precision) {
-        .u8 => @as(u128, @as(*const u8, @ptrCast(raw_ptr)).*),
-        .u16 => @as(u128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
-        .u32 => @as(u128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
-        .u64 => @as(u128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
-        .u128 => @as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*,
-        // For signed types, cast to u128 (will give large positive values for negative numbers)
-        .i8 => @bitCast(@as(i128, @as(*const i8, @ptrCast(raw_ptr)).*)),
-        .i16 => @bitCast(@as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*)),
-        .i32 => @bitCast(@as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*)),
-        .i64 => @bitCast(@as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*)),
-        .i128 => @bitCast(@as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*),
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    return switch (self.layout.data.scalar.data.int) {
+        .u8 => readAligned(u8, raw_ptr),
+        .u16 => readAligned(u16, raw_ptr),
+        .u32 => readAligned(u32, raw_ptr),
+        .u64 => readAligned(u64, raw_ptr),
+        .u128 => readAligned(u128, raw_ptr),
+        // Signed types: widen to i128 first to preserve sign, then bitcast to u128
+        .i8 => @bitCast(@as(i128, readAligned(i8, raw_ptr))),
+        .i16 => @bitCast(@as(i128, readAligned(i16, raw_ptr))),
+        .i32 => @bitCast(@as(i128, readAligned(i32, raw_ptr))),
+        .i64 => @bitCast(@as(i128, readAligned(i64, raw_ptr))),
+        .i128 => @bitCast(readAligned(i128, raw_ptr)),
     };
 }
 
@@ -662,63 +638,24 @@ pub fn getIntPrecision(self: StackValue) types.Int.Precision {
 /// Initialise the StackValue integer value
 /// Returns error.IntegerOverflow if the value doesn't fit in the target type
 pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
-
-    // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
-
-    // Assert this is an integer
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(!self.is_initialized); // Avoid accidental overwrite
 
-    // Assert this is uninitialised memory
-    //
-    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
-    std.debug.assert(!self.is_initialized);
-
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    // Inline integer writing logic with proper type casting and alignment
-    // Use std.math.cast to safely check if value fits, returning error instead of panicking
-    switch (precision) {
-        .u8 => {
-            const typed_ptr: *u8 = @ptrCast(raw_ptr);
-            typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
-        },
-        .u16 => {
-            const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
-        },
-        .u32 => {
-            const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
-        },
-        .u64 => {
-            const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
-        },
-        .u128 => {
-            const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
-        },
-        .i8 => {
-            const typed_ptr: *i8 = @ptrCast(raw_ptr);
-            typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
-        },
-        .i16 => {
-            const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
-        },
-        .i32 => {
-            const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
-        },
-        .i64 => {
-            const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
-        },
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    switch (self.layout.data.scalar.data.int) {
+        .u8 => try writeChecked(u8, raw_ptr, value),
+        .i8 => try writeChecked(i8, raw_ptr, value),
+        .u16 => try writeChecked(u16, raw_ptr, value),
+        .i16 => try writeChecked(i16, raw_ptr, value),
+        .u32 => try writeChecked(u32, raw_ptr, value),
+        .i32 => try writeChecked(i32, raw_ptr, value),
+        .u64 => try writeChecked(u64, raw_ptr, value),
+        .i64 => try writeChecked(i64, raw_ptr, value),
+        .u128 => try writeChecked(u128, raw_ptr, value),
         .i128 => {
-            const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, raw_ptr, @src());
-            typed_ptr.* = value;
+            // i128 always fits - no overflow check needed
+            builtins.utils.alignedPtrCast(*i128, raw_ptr, @src()).* = value;
         },
     }
 }
