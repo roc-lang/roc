@@ -99,6 +99,8 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// scratch deferred static dispatch constraints
+scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -201,6 +203,7 @@ pub fn init(
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
@@ -238,6 +241,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.scratch_deferred_static_dispatch_constraints.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
@@ -5364,8 +5368,10 @@ fn checkNominalTypeUsage(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var next_deferred = try DeferredConstraintCheck.SafeList.initCapacity(self.gpa, 8);
-    defer next_deferred.deinit(self.gpa);
+    // During this pass, we want to hold onto any flex vars we encounter and
+    // check them again later, when maybe they've been resolved
+    const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
+    defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
 
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
@@ -5667,7 +5673,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         } else if (dispatcher_content == .flex) {
             // If the thing we're dispatching is a flex, then hold onto the
             // constraint so we can try again later.
-            _ = try next_deferred.append(self.gpa, deferred_constraint);
+            _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
             // This handles function types, which do not support any methods
@@ -5703,7 +5709,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
     // Now that we've processed all constraints, reset the array
     env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
-    try env.deferred_static_dispatch_constraints.items.appendSlice(self.gpa, next_deferred.items.items);
+
+    // Copy any flex constraints to try again later
+    try env.deferred_static_dispatch_constraints.items.appendSlice(
+        self.gpa,
+        self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
+    );
 }
 
 /// Check if a structural type supports is_eq.
