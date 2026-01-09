@@ -647,3 +647,121 @@ test "addTypeVar - recursive nominal type with nested Box at depth 2+ (issue #88
     // RichDoc should have a tag_union layout (since the nominal wraps a tag union)
     try testing.expect(result_layout.tag == .tag_union);
 }
+
+test "layoutSizeAlign - recursive nominal type with record containing List (issue #8923)" {
+    // Regression test for issue #8923:
+    // Recursive nominal types where the recursion goes through a record containing
+    // List of the recursive type would cause infinite recursion in layoutSizeAlign.
+    //
+    // The bug was that layoutSizeAlign was dynamically computing sizes for records
+    // and tag unions by recursively calling itself on field layouts, which caused
+    // infinite recursion when the type contained itself through a List in a record.
+    //
+    // The fix was to use pre-computed sizes from RecordData.size, TupleData.size,
+    // and TagUnionData.size instead of dynamically computing them.
+    //
+    // Example Roc code that triggered the bug:
+    //   Statement := [
+    //       FuncCall({ name: Str, args: List(U64) }),
+    //       ForLoop({ identifiers: List(Str), block: List(Statement) }),  # Recursive!
+    //   ]
+
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers
+    const statement_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Statement"));
+    const list_ident_idx = try lt.module_env.insertIdent(Ident.for_text("List"));
+    _ = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create a recursive type: Statement := [FuncCall({...}), ForLoop({block: List(Statement)})]
+    // We create the recursive reference by first creating a flex var, then updating it
+    // to point to the nominal type content after we've created the full structure.
+
+    // Create a fresh var for the recursive reference
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+
+    // Create List(recursive_var) - this is the key difference from issue #8816
+    // The recursion goes through List in a record field, not through Box
+    const list_recursive_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = list_ident_idx },
+        recursive_var,
+        &[_]types.Var{recursive_var},
+        builtin_module_idx,
+        false,
+    );
+    const list_recursive_var = try lt.type_store.freshFromContent(list_recursive_content);
+
+    // Create a record { block: List(Statement) }
+    const block_field_ident = try lt.module_env.insertIdent(Ident.for_text("block"));
+    const empty_record = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+    const for_loop_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = block_field_ident, .var_ = list_recursive_var },
+    });
+    const for_loop_record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{ .fields = for_loop_fields, .ext = empty_record } },
+    });
+
+    // Create a simple record for FuncCall { name: Str } (simplified)
+    const name_field_ident = try lt.module_env.insertIdent(Ident.for_text("name"));
+    const str_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record }); // Simplified Str
+    const func_call_fields = try lt.type_store.record_fields.appendSlice(lt.gpa, &[_]types.RecordField{
+        .{ .name = name_field_ident, .var_ = str_var },
+    });
+    const func_call_record_var = try lt.type_store.freshFromContent(.{
+        .structure = .{ .record = .{ .fields = func_call_fields, .ext = empty_record } },
+    });
+
+    // Create [FuncCall({...}), ForLoop({block: List(Statement)})]
+    const func_call_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("FuncCall")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{func_call_record_var}),
+    };
+    const for_loop_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("ForLoop")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{for_loop_record_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ func_call_tag, for_loop_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    // Create the nominal type content: Statement := [FuncCall({...}), ForLoop({block: List(Statement)})]
+    const statement_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = statement_ident_idx },
+        tag_union_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+
+    // Close the recursive loop by updating the recursive_var to point to the nominal content
+    try lt.type_store.setVarContent(recursive_var, statement_content);
+
+    // Create a fresh var with the content for testing
+    const statement_var = try lt.type_store.freshFromContent(statement_content);
+
+    // This should succeed without infinite recursion.
+    // Before the fix, layoutSizeAlign would infinitely recurse when computing the size.
+    const result_idx = try lt.layout_store.addTypeVar(statement_var, &lt.type_scope);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+
+    // Statement should have a tag_union layout (since the nominal wraps a tag union)
+    try testing.expect(result_layout.tag == .tag_union);
+
+    // Verify layoutSizeAlign works without infinite recursion by calling layoutSize
+    // (which internally calls layoutSizeAlign)
+    const size = lt.layout_store.layoutSize(result_layout);
+    // The size should be > 0 (a tag union with payloads has non-zero size)
+    try testing.expect(size > 0);
+}
