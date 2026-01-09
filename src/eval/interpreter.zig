@@ -112,6 +112,40 @@ fn layoutsEqual(a: Layout, b: Layout) bool {
     return a.eql(b);
 }
 
+/// Check if there's a nested layout mismatch that would cause decref issues.
+/// This specifically checks for list element layout size differences, which cause
+/// incorrect iteration during decref.
+fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layout.Store) bool {
+    if (actual.tag != expected.tag) return false;
+
+    return switch (actual.tag) {
+        .list => {
+            const actual_elem = layout_store.getLayout(actual.data.list);
+            const expected_elem = layout_store.getLayout(expected.data.list);
+            const actual_size = layout_store.layoutSize(actual_elem);
+            const expected_size = layout_store.layoutSize(expected_elem);
+            // Size mismatch means iteration will read wrong offsets
+            return actual_size != expected_size;
+        },
+        .tuple => {
+            const actual_data = layout_store.getTupleData(actual.data.tuple.idx);
+            const expected_data = layout_store.getTupleData(expected.data.tuple.idx);
+            const actual_fields = layout_store.tuple_fields.sliceRange(actual_data.getFields());
+            const expected_fields = layout_store.tuple_fields.sliceRange(expected_data.getFields());
+            if (actual_fields.len != expected_fields.len) return true;
+            for (0..actual_fields.len) |i| {
+                const actual_elem = layout_store.getLayout(actual_fields.get(i).layout);
+                const expected_elem = layout_store.getLayout(expected_fields.get(i).layout);
+                if (hasNestedLayoutMismatch(actual_elem, expected_elem, layout_store)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        else => false,
+    };
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -947,8 +981,7 @@ pub const Interpreter = struct {
         roc_ops: *RocOps,
     ) !RocStr {
         if (value.layout.tag == .scalar and value.layout.data.scalar.tag == .str) {
-            if (value.ptr) |ptr| {
-                const existing: *const RocStr = @ptrCast(@alignCast(ptr));
+            if (value.asRocStr()) |existing| {
                 var copy = existing.*;
                 copy.incref(1, roc_ops);
                 return copy;
@@ -1044,7 +1077,7 @@ pub const Interpreter = struct {
 
         std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-        const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+        const roc_list = list_arg.asRocList().?;
         const list_len = roc_list.len();
 
         // If list has 0 or 1 elements, it's already sorted
@@ -1083,8 +1116,7 @@ pub const Interpreter = struct {
         );
 
         // Write the result of makeUnique back into the list arg
-        const list_arg_ptr: *builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-        list_arg_ptr.* = working_list;
+        list_arg.setRocList(working_list);
 
         // Update rt_var if provided
         var result_list = list_arg;
@@ -1254,6 +1286,30 @@ pub const Interpreter = struct {
         return result_value;
     }
 
+    /// Checks if a closure is a hosted function and invokes it if so.
+    /// Returns the result if hosted, or null if it's a regular closure that should be evaluated normally.
+    fn tryInvokeHostedClosure(
+        self: *Interpreter,
+        closure_header: *const layout.Closure,
+        args: []StackValue,
+        return_rt_var: types.Var,
+        roc_ops: *RocOps,
+    ) !?StackValue {
+        var lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
+
+        // Unwrap e_closure to get to the underlying lambda
+        if (lambda_expr == .e_closure) {
+            const cls = lambda_expr.e_closure;
+            lambda_expr = closure_header.source_env.store.getExpr(cls.lambda_idx);
+        }
+
+        if (lambda_expr == .e_hosted_lambda) {
+            const hosted = lambda_expr.e_hosted_lambda;
+            return try self.callHostedFunction(hosted.index, args, roc_ops, return_rt_var);
+        }
+        return null;
+    }
+
     /// Version of callLowLevelBuiltin that also accepts a target type for operations like num_from_numeral
     pub fn callLowLevelBuiltinWithTargetType(self: *Interpreter, op: can.CIR.Expr.LowLevel, args: []StackValue, roc_ops: *RocOps, return_rt_var: ?types.Var, target_type_var: ?types.Var) !StackValue {
         const trace = tracy.trace(@src());
@@ -1278,9 +1334,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // low-level .str_is_empty expects 1 argument
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null); // low-level .str_is_empty expects non-null string pointer
-
-                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str = str_arg.asRocStr().?;
 
                 return try self.makeBoolValue(builtins.str.isEmpty(roc_str.*));
             },
@@ -1290,11 +1344,8 @@ pub const Interpreter = struct {
 
                 const str_a = args[0];
                 const str_b = args[1];
-                std.debug.assert(str_a.ptr != null); // low-level .str_is_eq expects non-null string pointer
-                std.debug.assert(str_b.ptr != null); // low-level .str_is_eq expects non-null string pointer
-
-                const roc_str_a: *const RocStr = @ptrCast(@alignCast(str_a.ptr.?));
-                const roc_str_b: *const RocStr = @ptrCast(@alignCast(str_b.ptr.?));
+                const roc_str_a = str_a.asRocStr().?;
+                const roc_str_b = str_b.asRocStr().?;
 
                 return try self.makeBoolValue(roc_str_a.eql(roc_str_b.*));
             },
@@ -1305,11 +1356,8 @@ pub const Interpreter = struct {
                 const str_a_arg = args[0];
                 const str_b_arg = args[1];
 
-                std.debug.assert(str_a_arg.ptr != null);
-                std.debug.assert(str_b_arg.ptr != null);
-
-                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
-                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+                const str_a = str_a_arg.asRocStr().?;
+                const str_b = str_b_arg.asRocStr().?;
 
                 // Call strConcat to concatenate the strings
                 const result_str = builtins.str.strConcat(str_a.*, str_b.*, roc_ops);
@@ -1320,7 +1368,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1333,11 +1381,8 @@ pub const Interpreter = struct {
                 const haystack_arg = args[0];
                 const needle_arg = args[1];
 
-                std.debug.assert(haystack_arg.ptr != null);
-                std.debug.assert(needle_arg.ptr != null);
-
-                const haystack: *const RocStr = @ptrCast(@alignCast(haystack_arg.ptr.?));
-                const needle: *const RocStr = @ptrCast(@alignCast(needle_arg.ptr.?));
+                const haystack = haystack_arg.asRocStr().?;
+                const needle = needle_arg.asRocStr().?;
 
                 const result = builtins.str.strContains(haystack.*, needle.*);
 
@@ -1348,9 +1393,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr().?;
 
                 const result_str = builtins.str.strTrim(roc_str_arg.*, roc_ops);
 
@@ -1360,7 +1403,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1371,9 +1414,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr().?;
 
                 const result_str = builtins.str.strTrimStart(roc_str_arg.*, roc_ops);
 
@@ -1383,7 +1424,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1394,9 +1435,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr().?;
 
                 const result_str = builtins.str.strTrimEnd(roc_str_arg.*, roc_ops);
 
@@ -1406,7 +1445,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1419,11 +1458,8 @@ pub const Interpreter = struct {
                 const str_a_arg = args[0];
                 const str_b_arg = args[1];
 
-                std.debug.assert(str_a_arg.ptr != null);
-                std.debug.assert(str_b_arg.ptr != null);
-
-                const str_a: *const RocStr = @ptrCast(@alignCast(str_a_arg.ptr.?));
-                const str_b: *const RocStr = @ptrCast(@alignCast(str_b_arg.ptr.?));
+                const str_a = str_a_arg.asRocStr().?;
+                const str_b = str_b_arg.asRocStr().?;
 
                 // Call strConcat to concatenate the strings
                 const result = builtins.str.strCaselessAsciiEquals(str_a.*, str_b.*);
@@ -1435,9 +1471,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr().?;
 
                 const result_str = builtins.str.strWithAsciiLowercased(roc_str_arg.*, roc_ops);
 
@@ -1447,7 +1481,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1458,9 +1492,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-
-                const roc_str_arg: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str_arg = str_arg.asRocStr().?;
 
                 const result_str = builtins.str.strWithAsciiUppercased(roc_str_arg.*, roc_ops);
 
@@ -1470,7 +1502,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1483,11 +1515,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const prefix = prefix_arg.asRocStr().?;
 
                 return try self.makeBoolValue(builtins.str.startsWith(string.*, prefix.*));
             },
@@ -1498,11 +1527,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const suffix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(suffix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const suffix = suffix_arg.asRocStr().?;
 
                 return try self.makeBoolValue(builtins.str.endsWith(string.*, suffix.*));
             },
@@ -1513,9 +1539,7 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const count_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
                 const count_value = try self.extractNumericValue(count_arg);
                 const count: u64 = switch (count_value) {
                     .int => |v| @intCast(v),
@@ -1533,7 +1557,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1546,11 +1570,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const prefix = prefix_arg.asRocStr().?;
 
                 // with_prefix is just concat with args swapped: prefix ++ string
                 const result_str = builtins.str.strConcat(prefix.*, string.*, roc_ops);
@@ -1561,7 +1582,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1574,11 +1595,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const prefix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(prefix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const prefix: *const RocStr = @ptrCast(@alignCast(prefix_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const prefix = prefix_arg.asRocStr().?;
 
                 const result_str = builtins.str.strDropPrefix(string.*, prefix.*, roc_ops);
 
@@ -1588,7 +1606,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1601,11 +1619,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const suffix_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(suffix_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const suffix: *const RocStr = @ptrCast(@alignCast(suffix_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const suffix = suffix_arg.asRocStr().?;
 
                 const result_str = builtins.str.strDropSuffix(string.*, suffix.*, roc_ops);
 
@@ -1615,7 +1630,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result string structure to the output
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1626,9 +1641,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
                 const byte_count = builtins.str.countUtf8Bytes(string.*);
 
                 const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for str_count_utf8_bytes", @src());
@@ -1654,7 +1667,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1667,9 +1680,7 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const spare_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
                 const spare_value = try self.extractNumericValue(spare_arg);
                 const spare: u64 = @intCast(spare_value.int);
 
@@ -1679,7 +1690,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, string_arg.rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1690,16 +1701,14 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
                 const result_str = builtins.str.strReleaseExcessCapacity(roc_ops, string.*);
 
                 const result_layout = string_arg.layout;
                 var out = try self.pushRaw(result_layout, 0, string_arg.rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1710,9 +1719,7 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1);
 
                 const string_arg = args[0];
-                std.debug.assert(string_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
                 const result_list = builtins.str.strToUtf8C(string.*, roc_ops);
 
                 // Get the result layout - should be List(U8).
@@ -1753,8 +1760,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -1766,7 +1772,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result_str = builtins.str.fromUtf8Lossy(roc_list.*, roc_ops);
 
                 const result_rt_var = return_rt_var orelse try self.getCanonicalStrRuntimeVar();
@@ -1774,7 +1780,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -1787,7 +1793,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result = builtins.str.fromUtf8C(roc_list.*, .Immutable, roc_ops);
 
                 // Get the return layout from the caller - it should be a Try tag union
@@ -1836,15 +1842,9 @@ pub const Interpreter = struct {
 
                         // Element 0 is the payload - clear it first since it's a union
                         const payload_field = try acc.getElement(0, str_rt_var);
-                        if (payload_field.ptr) |payload_ptr| {
-                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                            if (payload_bytes_len > 0) {
-                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                                @memset(bytes, 0);
-                            }
-                            // Write Str to the payload area
-                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
-                            str_ptr.* = result.string;
+                        if (payload_field.ptr != null) {
+                            payload_field.clearBytes(&self.runtime_layout_store);
+                            payload_field.setRocStr(result.string);
                         }
 
                         // Element 1 is the tag discriminant
@@ -1885,15 +1885,9 @@ pub const Interpreter = struct {
 
                         // Clear payload area first since it's a union
                         const payload_field = try acc.getFieldByIndex(payload_field_idx, str_rt_var);
-                        if (payload_field.ptr) |payload_ptr| {
-                            const payload_bytes_len = self.runtime_layout_store.layoutSize(payload_field.layout);
-                            if (payload_bytes_len > 0) {
-                                const bytes = @as([*]u8, @ptrCast(payload_ptr))[0..payload_bytes_len];
-                                @memset(bytes, 0);
-                            }
-                            // Write Str to the payload area
-                            const str_ptr: *RocStr = @ptrCast(@alignCast(payload_ptr));
-                            str_ptr.* = result.string;
+                        if (payload_field.ptr != null) {
+                            payload_field.clearBytes(&self.runtime_layout_store);
+                            payload_field.setRocStr(result.string);
                         }
 
                         dest.is_initialized = true;
@@ -1905,18 +1899,13 @@ pub const Interpreter = struct {
                         const tu_data = self.runtime_layout_store.getTagUnionData(tu_idx);
                         const disc_offset = self.runtime_layout_store.getTagUnionDiscriminantOffset(tu_idx);
 
+                        // Clear the entire payload area first
+                        dest.clearBytes(&self.runtime_layout_store);
                         if (dest.ptr) |base_ptr| {
                             const ptr_u8 = @as([*]u8, @ptrCast(base_ptr));
-
-                            // Clear the entire payload area first
-                            const total_size = self.runtime_layout_store.layoutSize(result_layout);
-                            if (total_size > 0) {
-                                @memset(ptr_u8[0..total_size], 0);
-                            }
-
                             tu_data.writeDiscriminantToPtr(ptr_u8 + disc_offset, @intCast(ok_index orelse 0));
-
-                            // Write Str payload at offset 0
+                            // Cannot use setRocStr() - dest.layout is tag_union, not str.
+                            // String data is written at base_ptr (offset 0).
                             const str_ptr: *RocStr = @ptrCast(@alignCast(base_ptr));
                             str_ptr.* = result.string;
                         }
@@ -2187,11 +2176,8 @@ pub const Interpreter = struct {
                 const string_arg = args[0];
                 const delimiter_arg = args[1];
 
-                std.debug.assert(string_arg.ptr != null);
-                std.debug.assert(delimiter_arg.ptr != null);
-
-                const string: *const RocStr = @ptrCast(@alignCast(string_arg.ptr.?));
-                const delimiter: *const RocStr = @ptrCast(@alignCast(delimiter_arg.ptr.?));
+                const string = string_arg.asRocStr().?;
+                const delimiter = delimiter_arg.asRocStr().?;
 
                 const result_list = builtins.str.strSplitOn(string.*, delimiter.*, roc_ops);
 
@@ -2220,8 +2206,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, list_str_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -2233,11 +2218,8 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 const separator_arg = args[1];
 
-                std.debug.assert(list_arg.ptr != null);
-                std.debug.assert(separator_arg.ptr != null);
-
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
-                const separator: *const RocStr = @ptrCast(@alignCast(separator_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
+                const separator = separator_arg.asRocStr().?;
 
                 const result_str = builtins.str.strJoinWithC(roc_list.*, separator.*, roc_ops);
 
@@ -2246,7 +2228,7 @@ pub const Interpreter = struct {
                 var out = try self.pushRaw(result_layout, 0, str_rt_var);
                 out.is_initialized = false;
 
-                const result_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const result_ptr = out.asRocStr().?;
                 result_ptr.* = result_str;
 
                 out.is_initialized = true;
@@ -2288,7 +2270,7 @@ pub const Interpreter = struct {
 
                         const str_rt_var = try self.getCanonicalStrRuntimeVar();
                         const out = try self.pushStr(str_rt_var);
-                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        const roc_str_ptr = out.asRocStr().?;
                         roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                         return out;
                     }
@@ -2323,7 +2305,7 @@ pub const Interpreter = struct {
 
                         const str_rt_var = try self.getCanonicalStrRuntimeVar();
                         const out = try self.pushStr(str_rt_var);
-                        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                        const roc_str_ptr = out.asRocStr().?;
                         roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                         return out;
                     }
@@ -2369,7 +2351,7 @@ pub const Interpreter = struct {
 
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const out = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                    const roc_str_ptr = out.asRocStr().?;
                     roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                     return out;
                 }
@@ -2411,7 +2393,7 @@ pub const Interpreter = struct {
 
                 const str_rt_var = try self.getCanonicalStrRuntimeVar();
                 const out = try self.pushStr(str_rt_var);
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(out.ptr.?));
+                const roc_str_ptr = out.asRocStr().?;
                 roc_str_ptr.* = RocStr.fromSlice(rendered, roc_ops);
                 return out;
             },
@@ -2424,7 +2406,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null); // low-level .list_len expects non-null list pointer
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const len_usize = builtins.list.listLen(roc_list.*);
 
                 const len_u64: u64 = @intCast(len_usize);
@@ -2456,7 +2438,7 @@ pub const Interpreter = struct {
                 const list_arg = args[0];
                 std.debug.assert(list_arg.ptr != null); // low-level .list_is_empty expects non-null list pointer
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const result = builtins.list.listIsEmpty(roc_list.*);
 
                 return try self.makeBoolValue(result);
@@ -2478,8 +2460,7 @@ pub const Interpreter = struct {
                     // For ZST lists, capacity doesn't matter - just return an empty list
                     var out = try self.pushRaw(result_layout, 0, result_rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = builtins.list.RocList.empty();
+                    out.setRocList(builtins.list.RocList.empty());
                     out.is_initialized = true;
                     return out;
                 }
@@ -2520,8 +2501,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -2540,7 +2520,7 @@ pub const Interpreter = struct {
                 // Extract element layout from List(a)
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst); // low-level .list_get_unsafe expects list layout
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
                 const index = index_arg.asI128(); // U64 stored as i128
 
                 // Get element layout
@@ -2698,8 +2678,8 @@ pub const Interpreter = struct {
                 std.debug.assert(list_a_arg.layout.tag == .list or list_a_arg.layout.tag == .list_of_zst);
                 std.debug.assert(list_b_arg.layout.tag == .list or list_b_arg.layout.tag == .list_of_zst);
 
-                const list_a: *const builtins.list.RocList = @ptrCast(@alignCast(list_a_arg.ptr.?));
-                const list_b: *const builtins.list.RocList = @ptrCast(@alignCast(list_b_arg.ptr.?));
+                const list_a = list_a_arg.asRocList().?;
+                const list_b = list_b_arg.asRocList().?;
 
                 // Get element layout - handle list_of_zst by checking both lists for a proper element layout.
                 // When concatenating a list_of_zst (e.g., empty list []) with a regular list,
@@ -2759,7 +2739,6 @@ pub const Interpreter = struct {
                 const result_rt_var = return_rt_var orelse list_a_arg.rt_var;
                 var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
-                const header: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
 
                 const runtime_list = builtins.list.RocList.allocateExact(
                     elem_alignment_u32,
@@ -2783,7 +2762,7 @@ pub const Interpreter = struct {
                     }
                 }
 
-                header.* = runtime_list;
+                out.setRocList(runtime_list);
                 out.is_initialized = true;
 
                 // Handle refcounting for copied elements - increment refcount for each element
@@ -2833,7 +2812,7 @@ pub const Interpreter = struct {
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const roc_list = roc_list_arg.asRocList().?;
 
                     // If the element is also ZST, just bump the length
                     if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
@@ -2841,8 +2820,7 @@ pub const Interpreter = struct {
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        out.setRocList(result_list);
                         out.is_initialized = true;
                         return out;
                     }
@@ -2932,14 +2910,13 @@ pub const Interpreter = struct {
                     // Push result with upgraded layout
                     var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    out.setRocList(result_list);
                     out.is_initialized = true;
                     return out;
                 }
 
                 // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const roc_list = roc_list_arg.asRocList().?;
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
@@ -3031,8 +3008,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3052,7 +3028,7 @@ pub const Interpreter = struct {
                 // Handle ZST lists: appending to a list of ZSTs doesn't actually store anything
                 // The list header tracks the length but elements are zero-sized.
                 if (roc_list_arg.layout.tag == .list_of_zst) {
-                    const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                    const roc_list = roc_list_arg.asRocList().?;
 
                     // If the element is also ZST, just bump the length
                     if (self.runtime_layout_store.isZeroSized(elt_arg.layout)) {
@@ -3060,8 +3036,7 @@ pub const Interpreter = struct {
                         result_list.length += 1;
                         var out = try self.pushRaw(roc_list_arg.layout, 0, roc_list_arg.rt_var);
                         out.is_initialized = false;
-                        const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                        result_ptr.* = result_list;
+                        out.setRocList(result_list);
                         out.is_initialized = true;
                         return out;
                     }
@@ -3151,14 +3126,13 @@ pub const Interpreter = struct {
                     // Push result with upgraded layout
                     var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
                     out.is_initialized = false;
-                    const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                    result_ptr.* = result_list;
+                    out.setRocList(result_list);
                     out.is_initialized = true;
                     return out;
                 }
 
                 // Format arguments into proper types
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(roc_list_arg.ptr.?));
+                const roc_list = roc_list_arg.asRocList().?;
                 const non_null_bytes: [*]u8 = @ptrCast(elt_arg.ptr.?);
                 const append_elt: builtins.list.Opaque = non_null_bytes;
 
@@ -3250,8 +3224,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3266,7 +3239,7 @@ pub const Interpreter = struct {
 
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
 
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
 
                 // Get element layout from the list layout
                 const elem_layout_idx = list_arg.layout.data.list;
@@ -3307,8 +3280,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -3320,7 +3292,7 @@ pub const Interpreter = struct {
                 // Check and extract first element as a typed RocList
                 const list_arg = args[0];
                 std.debug.assert(list_arg.layout.tag == .list or list_arg.layout.tag == .list_of_zst);
-                const roc_list: *const builtins.list.RocList = @ptrCast(@alignCast(list_arg.ptr.?));
+                const roc_list = list_arg.asRocList().?;
 
                 // Access second argument as a record and extract its specific fields
                 const sublist_config = args[1].asRecord(&self.runtime_layout_store) catch debugUnreachable(roc_ops, "sublist config argument should be a valid record", @src());
@@ -3370,8 +3342,7 @@ pub const Interpreter = struct {
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
-                const result_ptr: *builtins.list.RocList = @ptrCast(@alignCast(out.ptr.?));
-                result_ptr.* = result_list;
+                out.setRocList(result_list);
 
                 out.is_initialized = true;
                 return out;
@@ -4075,13 +4046,13 @@ pub const Interpreter = struct {
                 const after_field = acc.getFieldByIndex(after_idx, field_rt3) catch debugUnreachable(roc_ops, "failed to get digits_after_pt field from Numeral record", @src());
 
                 // Extract list data from digits_before_pt
-                const before_list: *const builtins.list.RocList = @ptrCast(@alignCast(before_field.ptr.?));
+                const before_list = before_field.asRocList().?;
                 const before_len = before_list.len();
                 const before_ptr = before_list.elements(u8);
                 const digits_before: []const u8 = if (before_ptr) |ptr| ptr[0..before_len] else &[_]u8{};
 
                 // Extract list data from digits_after_pt
-                const after_list: *const builtins.list.RocList = @ptrCast(@alignCast(after_field.ptr.?));
+                const after_list = after_field.asRocList().?;
                 const after_len = after_list.len();
                 const after_ptr = after_list.elements(u8);
                 const digits_after: []const u8 = if (after_ptr) |ptr| ptr[0..after_len] else &[_]u8{};
@@ -4467,13 +4438,14 @@ pub const Interpreter = struct {
                                     if (err_acc.findFieldIndex(layout_env.idents.payload)) |inner_payload_idx| {
                                         const inner_payload_rt = try self.runtime_types.fresh();
                                         const inner_payload_field = try err_acc.getFieldByIndex(inner_payload_idx, inner_payload_rt);
-                                        if (inner_payload_field.ptr) |str_ptr| {
-                                            const str_dest: *RocStr = @ptrCast(@alignCast(str_ptr));
-                                            str_dest.* = roc_str;
+                                        if (inner_payload_field.ptr != null) {
+                                            inner_payload_field.setRocStr(roc_str);
                                         }
                                     }
                                 } else if (err_payload_layout.tag == .scalar and err_payload_layout.data.scalar.tag == .str) {
                                     // Direct Str payload (single-tag union optimized away)
+                                    // Cannot use asRocStr() - outer_payload_ptr is a computed pointer
+                                    // from tag union payload offset, not a StackValue.
                                     const str_dest: *RocStr = @ptrCast(@alignCast(outer_payload_ptr));
                                     str_dest.* = roc_str;
                                 }
@@ -4762,8 +4734,7 @@ pub const Interpreter = struct {
                 // Dispatch to type-specific parsing using comptime generics
                 std.debug.assert(args.len == 1);
                 const str_arg = args[0];
-                std.debug.assert(str_arg.ptr != null);
-                const roc_str: *const RocStr = @ptrCast(@alignCast(str_arg.ptr.?));
+                const roc_str = str_arg.asRocStr().?;
 
                 const result_rt_var = return_rt_var orelse debugUnreachable(roc_ops, "return type required for num_from_str", @src());
                 const ok_payload_var = try self.getTryOkPayloadVar(result_rt_var);
@@ -4800,15 +4771,12 @@ pub const Interpreter = struct {
                 std.debug.assert(args.len == 1); // expects 1 argument: Dec
 
                 const dec_arg = args[0];
-                // Null argument is a compiler bug - the compiler should never produce code with null args
-                std.debug.assert(dec_arg.ptr != null);
-
                 const roc_dec: *const RocDec = @ptrCast(@alignCast(dec_arg.ptr.?));
                 const result_str = builtins.dec.to_str(roc_dec.*, roc_ops);
 
                 const str_rt_var = try self.getCanonicalStrRuntimeVar();
                 const value = try self.pushStr(str_rt_var);
-                const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                const roc_str_ptr = value.asRocStr().?;
                 roc_str_ptr.* = result_str;
                 return value;
             },
@@ -5117,8 +5085,6 @@ pub const Interpreter = struct {
     fn intToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         std.debug.assert(args.len == 1);
         const int_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
-        std.debug.assert(int_arg.ptr != null);
 
         const int_value: T = @as(*const T, @ptrCast(@alignCast(int_arg.ptr.?))).*;
 
@@ -5128,7 +5094,7 @@ pub const Interpreter = struct {
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str_ptr = value.asRocStr().?;
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
@@ -5137,8 +5103,6 @@ pub const Interpreter = struct {
     fn floatToStr(self: *Interpreter, comptime T: type, args: []const StackValue, roc_ops: *RocOps) !StackValue {
         std.debug.assert(args.len == 1);
         const float_arg = args[0];
-        // Null argument is a compiler bug - the compiler should never produce code with null args
-        std.debug.assert(float_arg.ptr != null);
 
         const float_value: T = @as(*const T, @ptrCast(@alignCast(float_arg.ptr.?))).*;
 
@@ -5148,7 +5112,7 @@ pub const Interpreter = struct {
 
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str_ptr: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str_ptr = value.asRocStr().?;
         roc_str_ptr.* = RocStr.init(&buf, result.len, roc_ops);
         return value;
     }
@@ -6398,8 +6362,8 @@ pub const Interpreter = struct {
                 },
                 .str => {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    const lhs_str = lhs.asRocStr().?;
+                    const rhs_str = rhs.asRocStr().?;
                     return lhs_str.eql(rhs_str.*);
                 },
                 else => {
@@ -6622,8 +6586,8 @@ pub const Interpreter = struct {
                 },
                 .str => blk: {
                     if (lhs.ptr == null or rhs.ptr == null) return error.TypeMismatch;
-                    const lhs_str: *const RocStr = @ptrCast(@alignCast(lhs.ptr.?));
-                    const rhs_str: *const RocStr = @ptrCast(@alignCast(rhs.ptr.?));
+                    const lhs_str = lhs.asRocStr().?;
+                    const rhs_str = rhs.asRocStr().?;
                     break :blk lhs_str.eql(rhs_str.*);
                 },
                 .opaque_ptr => blk: {
@@ -7504,12 +7468,11 @@ pub const Interpreter = struct {
             }
         } else list_layout;
 
-        const dest = try self.pushRaw(actual_list_layout, 0, rt_var);
+        var dest = try self.pushRaw(actual_list_layout, 0, rt_var);
         if (dest.ptr == null) return dest;
-        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
 
         if (count == 0) {
-            header.* = RocList.empty();
+            dest.setRocList(RocList.empty());
             return dest;
         }
 
@@ -7536,7 +7499,7 @@ pub const Interpreter = struct {
 
         source.incref(1, elements_refcounted, roc_ops);
         markListElementCount(&slice, elements_refcounted, roc_ops);
-        header.* = slice;
+        dest.setRocList(slice);
         return dest;
     }
 
@@ -7682,7 +7645,7 @@ pub const Interpreter = struct {
             .str_literal => |sl| {
                 if (!(value.layout.tag == .scalar and value.layout.data.scalar.tag == .str)) return false;
                 const lit = self.env.getString(sl.literal);
-                const rs: *const RocStr = @ptrCast(@alignCast(value.ptr.?));
+                const rs = value.asRocStr().?;
                 return rs.eqlSlice(lit);
             },
             .nominal => |n| {
@@ -9311,12 +9274,12 @@ pub const Interpreter = struct {
                                     },
                                     else => {
                                         // Closed union - use empty_tag_union
-                                        break :blk2 try self.runtime_types.register(.{ .content = .{ .structure = .empty_tag_union }, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                                        break :blk2 try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
                                     },
                                 }
                             };
                             const content = try self.runtime_types.mkTagUnion(rt_tags.items, rt_ext);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .empty_tag_union => {
                             break :blk try self.runtime_types.freshFromContent(.{ .structure = .empty_tag_union });
@@ -9407,7 +9370,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncPure(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_effectful => |f| {
                             const fne_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_effectful");
@@ -9421,7 +9384,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncEffectful(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .fn_unbound => |f| {
                             const fnu_trace = tracy.traceNamed(@src(), "translateTypeVar.fn_unbound");
@@ -9435,7 +9398,7 @@ pub const Interpreter = struct {
                             }
                             const rt_ret = try self.translateTypeVar(module, f.ret);
                             const content = try self.runtime_types.mkFuncUnbound(buf, rt_ret);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                         .nominal_type => |nom| {
                             const nom_trace = tracy.traceNamed(@src(), "translateTypeVar.nominal_type");
@@ -9497,7 +9460,7 @@ pub const Interpreter = struct {
                                 break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             } else nom.origin_module;
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk try self.runtime_types.freshFromContent(content);
                         },
                     }
                 },
@@ -9515,7 +9478,7 @@ pub const Interpreter = struct {
                     const rt_alias_ident_idx = try self.runtime_layout_store.env.insertIdent(base_pkg.Ident.for_text(source_alias_str));
                     const rt_alias_ident = types.TypeIdent{ .ident_idx = rt_alias_ident_idx };
                     const content = try self.runtime_types.mkAlias(rt_alias_ident, rt_backing, buf);
-                    break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                    break :blk try self.runtime_types.freshFromContent(content);
                 },
                 .flex => |flex| {
                     // Note: flex_type_context is checked at the top of translateTypeVar,
@@ -9714,8 +9677,10 @@ pub const Interpreter = struct {
             .store = self.runtime_types,
             .idents = self.runtime_layout_store.env.common.getIdentStore(),
             .var_map = &self.instantiate_scratch,
-            .current_rank = types.Rank.top_level,
             .rigid_behavior = .fresh_flex,
+            // Rank is not material to runtime types, so ignore it
+            .current_rank = types.Rank.generalized,
+            .rank_behavior = .ignore_rank,
         };
         const result = try instantiator.instantiateVar(type_var);
 
@@ -10970,7 +10935,7 @@ pub const Interpreter = struct {
                     traceDbg(roc_ops, "e_str: empty string", .{});
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const value = try self.pushStr(str_rt_var);
-                    const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+                    const roc_str = value.asRocStr().?;
                     roc_str.* = RocStr.empty();
                     try value_stack.push(value);
                 } else {
@@ -11253,10 +11218,10 @@ pub const Interpreter = struct {
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
                     if (lambda_expr == .e_low_level_lambda) {
                         const low_level = lambda_expr.e_low_level_lambda;
-                        var args = [0]StackValue{};
+                        var no_args = [0]StackValue{};
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
-                        const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, return_rt_var);
+                        const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -11323,9 +11288,22 @@ pub const Interpreter = struct {
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                     } else {
-                        method_func.decref(&self.runtime_layout_store, roc_ops);
-                        self.env = saved_env;
-                        return error.TypeMismatch;
+                        // Check if hosted lambda and invoke with no arguments
+                        const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
+                        const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                        var no_args = [0]StackValue{};
+
+                        if (try self.tryInvokeHostedClosure(closure_header, &no_args, return_rt_var, roc_ops)) |result| {
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            self.env = saved_env;
+                            self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                            try value_stack.push(result);
+                        } else {
+                            method_func.decref(&self.runtime_layout_store, roc_ops);
+                            self.env = saved_env;
+                            return error.TypeMismatch;
+                        }
                     }
                 } else {
                     // Has arguments - need to evaluate them first
@@ -11632,8 +11610,7 @@ pub const Interpreter = struct {
                     const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                     const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                     if (dest.ptr != null) {
-                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                        header.* = RocList.empty();
+                        dest.setRocList(RocList.empty());
                     }
                     try value_stack.push(dest);
                 } else {
@@ -11664,9 +11641,9 @@ pub const Interpreter = struct {
                         const list_layout = layout.Layout{ .tag = .list_of_zst, .data = undefined };
                         const dest = try self.pushRaw(list_layout, 0, list_rt_var);
                         if (dest.ptr != null) {
-                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                            header.* = RocList.empty();
-                            header.length = elems.len;
+                            var list = RocList.empty();
+                            list.length = elems.len;
+                            dest.setRocList(list);
                         }
                         try value_stack.push(dest);
                     } else {
@@ -12995,7 +12972,7 @@ pub const Interpreter = struct {
         const content = self.env.getString(seg.literal);
         const str_rt_var = try self.getCanonicalStrRuntimeVar();
         const value = try self.pushStr(str_rt_var);
-        const roc_str: *RocStr = @ptrCast(@alignCast(value.ptr.?));
+        const roc_str = value.asRocStr().?;
         // Use arena allocator for string literals - freed wholesale at interpreter deinit
         roc_str.* = try self.createConstantStr(content);
         return value;
@@ -13092,9 +13069,8 @@ pub const Interpreter = struct {
         };
 
         const dest = try self.pushRaw(list_layout, 0, final_rt_var);
-        if (dest.ptr) |ptr| {
-            const header: *RocList = @ptrCast(@alignCast(ptr));
-            header.* = RocList.empty();
+        if (dest.ptr != null) {
+            dest.setRocList(RocList.empty());
         }
         return dest;
     }
@@ -14601,8 +14577,7 @@ pub const Interpreter = struct {
                         var dest = try self.pushRaw(list_layout, 0, lc.list_rt_var);
                         dest.rt_var = lc.list_rt_var;
                         if (dest.ptr != null) {
-                            const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
-                            header.* = RocList.empty();
+                            dest.setRocList(RocList.empty());
                         }
                         try value_stack.push(dest);
                     } else {
@@ -14702,7 +14677,6 @@ pub const Interpreter = struct {
                             return true;
                         }
 
-                        const header: *RocList = @ptrCast(@alignCast(dest.ptr.?));
                         const elem_alignment = list_elem_layout.alignment(self.runtime_layout_store.targetUsize()).toByteUnits();
                         const elem_alignment_u32: u32 = @intCast(elem_alignment);
                         const elem_size: usize = @intCast(self.runtime_layout_store.layoutSize(list_elem_layout));
@@ -14747,7 +14721,7 @@ pub const Interpreter = struct {
                         }
 
                         markListElementCount(&runtime_list, elements_refcounted, roc_ops);
-                        header.* = runtime_list;
+                        dest.setRocList(runtime_list);
 
                         // Decref temporary values after they've been copied into the list
                         {
@@ -15149,6 +15123,44 @@ pub const Interpreter = struct {
                         const payload_field = try acc.getFieldByIndex(payload_field_idx, field_rt2);
                         if (payload_field.ptr) |payload_ptr| {
                             if (total_count == 1) {
+                                // Check for layout mismatch (similar to layout_type == 1)
+                                const arg_size = self.runtime_layout_store.layoutSize(values[0].layout);
+                                const payload_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const layouts_differ = arg_size != payload_size or !layoutsEqual(values[0].layout, payload_field.layout);
+
+                                if (layouts_differ) {
+                                    // Create a new record layout with the actual payload layout
+                                    const field_layouts = [2]Layout{ tag_field.layout, values[0].layout };
+                                    const field_names = [2]base_pkg.Ident.Idx{ self.env.idents.tag, self.env.idents.payload };
+                                    const proper_record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts, &field_names);
+                                    const proper_record_layout = self.runtime_layout_store.getLayout(proper_record_idx);
+                                    var proper_dest = try self.pushRaw(proper_record_layout, 0, tc.rt_var);
+                                    var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
+
+                                    // Write tag discriminant
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_field_rt = try self.runtime_types.fresh();
+                                    const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write payload
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_field_rt2 = try self.runtime_types.fresh();
+                                    const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
+                                    if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                        try values[0].copyToPtr(&self.runtime_layout_store, proper_payload_ptr, roc_ops);
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
                                 try values[0].copyToPtr(&self.runtime_layout_store, payload_ptr, roc_ops);
                             } else {
                                 // Multiple args - create tuple payload
@@ -15162,6 +15174,54 @@ pub const Interpreter = struct {
                                 }
                                 const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                                 const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                                // Check if the tuple layout differs from expected payload layout
+                                const expected_size = self.runtime_layout_store.layoutSize(payload_field.layout);
+                                const actual_size = self.runtime_layout_store.layoutSize(tuple_layout);
+                                const tuple_layouts_differ = actual_size != expected_size or !layoutsEqual(tuple_layout, payload_field.layout);
+
+                                if (tuple_layouts_differ) {
+                                    // Create a new record layout with the actual tuple payload layout
+                                    const field_layouts_arr = [2]Layout{ tag_field.layout, tuple_layout };
+                                    const field_names_arr = [2]base_pkg.Ident.Idx{ self.env.idents.tag, self.env.idents.payload };
+                                    const proper_record_idx = try self.runtime_layout_store.putRecord(self.env, &field_layouts_arr, &field_names_arr);
+                                    const proper_record_layout = self.runtime_layout_store.getLayout(proper_record_idx);
+                                    var proper_dest = try self.pushRaw(proper_record_layout, 0, tc.rt_var);
+                                    var proper_acc = try proper_dest.asRecord(&self.runtime_layout_store);
+
+                                    // Write tag discriminant
+                                    const proper_tag_field_idx = proper_acc.findFieldIndex(self.env.idents.tag) orelse unreachable;
+                                    const proper_field_rt = try self.runtime_types.fresh();
+                                    const proper_tag_field = try proper_acc.getFieldByIndex(proper_tag_field_idx, proper_field_rt);
+                                    if (proper_tag_field.layout.tag == .scalar and proper_tag_field.layout.data.scalar.tag == .int) {
+                                        var tmp = proper_tag_field;
+                                        tmp.is_initialized = false;
+                                        try tmp.setInt(@intCast(tc.tag_index));
+                                    }
+
+                                    // Write tuple payload
+                                    const proper_payload_field_idx = proper_acc.findFieldIndex(self.env.idents.payload) orelse unreachable;
+                                    const proper_field_rt2 = try self.runtime_types.fresh();
+                                    const proper_payload_field = try proper_acc.getFieldByIndex(proper_payload_field_idx, proper_field_rt2);
+                                    if (proper_payload_field.ptr) |proper_payload_ptr| {
+                                        // Create tuple type from element types
+                                        const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
+                                        const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
+                                        const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
+                                        var tuple_dest = StackValue{ .layout = tuple_layout, .ptr = proper_payload_ptr, .is_initialized = true, .rt_var = tuple_rt_var };
+                                        var tup_acc = try tuple_dest.asTuple(&self.runtime_layout_store);
+                                        for (values, 0..) |val, idx| {
+                                            try tup_acc.setElement(idx, val, roc_ops);
+                                        }
+                                    }
+
+                                    for (values) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    try value_stack.push(proper_dest);
+                                    return true;
+                                }
+
                                 // Create tuple type from element types
                                 const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                                 const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
@@ -15397,15 +15457,72 @@ pub const Interpreter = struct {
                                 elem_rt_vars[idx] = val.rt_var;
                             }
                             // Override with expected layouts using original indices
+                            // BUT preserve actual layouts for container types (list, tuple, record)
+                            // that may have different nested layouts - the actual layout must be
+                            // used for correct decref handling.
                             for (0..expected_fields.len) |sorted_idx| {
                                 const field = expected_fields.get(sorted_idx);
                                 const orig_idx = field.index;
                                 if (orig_idx < total_count) {
-                                    elem_layouts[orig_idx] = self.runtime_layout_store.getLayout(field.layout);
+                                    const expected_layout = self.runtime_layout_store.getLayout(field.layout);
+                                    const actual_layout = elem_layouts[orig_idx];
+                                    // Only override if the layouts are the same type and don't have
+                                    // different nested layouts. Container types (list, tuple, record)
+                                    // with the same tag but different nested layouts should keep
+                                    // the actual layout to ensure correct decref behavior.
+                                    const should_override = blk: {
+                                        if (actual_layout.tag != expected_layout.tag) {
+                                            // Different types - may need boxing, use expected
+                                            break :blk true;
+                                        }
+                                        // Same top-level type - check if it's a container with nested layouts
+                                        switch (actual_layout.tag) {
+                                            .list => {
+                                                // Lists have nested element layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .tuple => {
+                                                // Tuples have nested element layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .record => {
+                                                // Records have nested field layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            .tag_union => {
+                                                // Tag unions have nested variant layouts - keep actual
+                                                break :blk false;
+                                            },
+                                            else => {
+                                                // Scalars, boxes, etc. - can use expected
+                                                break :blk true;
+                                            },
+                                        }
+                                    };
+                                    if (should_override) {
+                                        elem_layouts[orig_idx] = expected_layout;
+                                    }
                                 }
                             }
                             const tuple_layout_idx = try self.runtime_layout_store.putTuple(elem_layouts);
                             const tuple_layout = self.runtime_layout_store.getLayout(tuple_layout_idx);
+
+                            // Check if the actual tuple layout has nested containers with size mismatches.
+                            // If so, create a new tag_union layout with the correct variant payload
+                            // to ensure proper decref behavior. This preserves the tag_union type
+                            // (unlike the wrapper tuple approach) so comptime evaluation still works.
+                            const has_nested_mismatch = hasNestedLayoutMismatch(tuple_layout, expected_payload_layout, &self.runtime_layout_store);
+                            if (has_nested_mismatch) {
+                                // Create a new tag_union layout with this variant's payload replaced
+                                const new_tu_layout = try self.runtime_layout_store.createTagUnionWithPayload(
+                                    tu_idx,
+                                    @intCast(tc.tag_index),
+                                    tuple_layout_idx,
+                                );
+                                // Update dest's layout to use the new tag_union
+                                dest.layout = new_tu_layout;
+                            }
+
                             const elem_vars_range = try self.runtime_types.appendVars(elem_rt_vars);
                             const tuple_content = types.Content{ .structure = .{ .tuple = .{ .elems = elem_vars_range } } };
                             const tuple_rt_var = try self.runtime_types.freshFromContent(tuple_content);
@@ -15650,7 +15767,7 @@ pub const Interpreter = struct {
                     // Push as string value
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const str_value = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(str_value.ptr.?));
+                    const roc_str_ptr = str_value.asRocStr().?;
                     roc_str_ptr.* = segment_str;
                     try value_stack.push(str_value);
                     collected_count += 1;
@@ -15686,8 +15803,7 @@ pub const Interpreter = struct {
                     var i: usize = 0;
                     while (i < sc.total_count) : (i += 1) {
                         const str_val = value_stack.pop() orelse return error.Crash;
-                        if (str_val.ptr) |ptr| {
-                            const roc_str: *RocStr = @ptrCast(@alignCast(ptr));
+                        if (str_val.asRocStr()) |roc_str| {
                             try segment_strings.append(roc_str.*);
                         } else {
                             try segment_strings.append(RocStr.empty());
@@ -15720,7 +15836,7 @@ pub const Interpreter = struct {
 
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const result = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(result.ptr.?));
+                    const roc_str_ptr = result.asRocStr().?;
                     roc_str_ptr.* = result_str;
                     try value_stack.push(result);
                     return true;
@@ -15737,7 +15853,7 @@ pub const Interpreter = struct {
                     const seg_str = try self.createConstantStr(content);
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const seg_value = try self.pushStr(str_rt_var);
-                    const roc_str_ptr: *RocStr = @ptrCast(@alignCast(seg_value.ptr.?));
+                    const roc_str_ptr = seg_value.asRocStr().?;
                     roc_str_ptr.* = seg_str;
                     try value_stack.push(seg_value);
 
@@ -15958,16 +16074,13 @@ pub const Interpreter = struct {
                         return true;
                     }
 
-                    // Check if this is a hosted lambda
-                    if (lambda_expr == .e_hosted_lambda) {
-                        const hosted = lambda_expr.e_hosted_lambda;
-                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
-                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    // Check if this is a hosted lambda and invoke it
+                    const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
+                    const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
 
-                        const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
-                        const result = try self.callHostedFunction(hosted.index, arg_values, roc_ops, ret_rt_var);
-
+                    if (try self.tryInvokeHostedClosure(header, arg_values, ret_rt_var, roc_ops)) |result| {
                         // Decref all args
                         for (arg_values) |arg| {
                             arg.decref(&self.runtime_layout_store, roc_ops);
@@ -16331,6 +16444,23 @@ pub const Interpreter = struct {
                     var args = [1]StackValue{operand};
                     const result = try self.callLowLevelBuiltin(low_level.op, &args, roc_ops, null);
 
+                    // Note: We do NOT decref the operand here.
+                    // The defer statement at the top of unary_op_apply already handles decrefing.
+                    // Decrefing here too would cause a double-free bug.
+
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Check if hosted lambda and invoke with operand
+                const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                const return_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ua.operand_rt_var;
+                var args = [1]StackValue{operand};
+
+                if (try self.tryInvokeHostedClosure(closure_header, &args, return_rt_var, roc_ops)) |result| {
                     // Note: We do NOT decref the operand here.
                     // The defer statement at the top of unary_op_apply already handles decrefing.
                     // Decrefing here too would cause a double-free bug.
@@ -16809,6 +16939,59 @@ pub const Interpreter = struct {
                         closure_val.decref(&self.runtime_layout_store, roc_ops);
                     }
                     return error.TypeMismatch;
+                }
+
+                // Check if this is a hosted lambda and invoke it
+                // First try to check if it's actually hosted before collecting bindings
+                const binary_op_lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
+                if (binary_op_lambda_expr == .e_hosted_lambda) {
+                    const hosted = binary_op_lambda_expr.e_hosted_lambda;
+                    const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
+                    const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                    // Collect the two bound arguments from bindings
+                    var hosted_args = try self.allocator.alloc(StackValue, 2);
+                    defer self.allocator.free(hosted_args);
+                    for (params[0..2], 0..) |param, param_idx| {
+                        // Find this parameter's binding by searching backwards through bindings
+                        var found = false;
+                        var binding_idx: usize = self.bindings.items.len;
+                        while (binding_idx > saved_bindings_len) {
+                            binding_idx -= 1;
+                            if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            return error.Crash;
+                        }
+                    }
+
+                    const result = try self.callHostedFunction(hosted.index, hosted_args, roc_ops, return_rt_var);
+
+                    // Cleanup
+                    if (self.active_closures.pop()) |closure_val| {
+                        closure_val.decref(&self.runtime_layout_store, roc_ops);
+                    }
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    saved_flex_type_context.deinit();
+                    self.poly_context_generation +%= 1;
+
+                    // Apply negate if needed (for != operator)
+                    if (ba.negate_result) {
+                        const is_true = self.boolValueEquals(true, result, roc_ops);
+                        result.decref(&self.runtime_layout_store, roc_ops);
+                        const negated = try self.makeBoolValue(!is_true);
+                        try value_stack.push(negated);
+                    } else {
+                        try value_stack.push(result);
+                    }
+                    return true;
                 }
 
                 // Push cleanup and evaluate body
@@ -17322,6 +17505,12 @@ pub const Interpreter = struct {
 
                 // If no additional args, invoke method directly with receiver
                 if (arg_exprs.len == 0) {
+                    if (method_func.ptr == null) {
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.triggerCrash("Hosted lambda closure has null pointer", false, roc_ops);
+                        return error.Crash;
+                    }
                     const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
 
                     const saved_env = self.env;
@@ -17345,6 +17534,21 @@ pub const Interpreter = struct {
                         if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
                             receiver_value.decref(&self.runtime_layout_store, roc_ops);
                         }
+
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+                        self.env = saved_env;
+                        try value_stack.push(result);
+                        return true;
+                    }
+
+                    // Check if hosted lambda and invoke it
+                    const return_ct_var = can.ModuleEnv.varFrom(da.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+                    var args = [1]StackValue{receiver_value};
+
+                    if (try self.tryInvokeHostedClosure(closure_header, &args, return_rt_var, roc_ops)) |result| {
+                        // Decref receiver (borrowed)
+                        receiver_value.decref(&self.runtime_layout_store, roc_ops);
 
                         method_func.decref(&self.runtime_layout_store, roc_ops);
                         self.env = saved_env;
@@ -17683,11 +17887,7 @@ pub const Interpreter = struct {
                             for (0..arg_count_to_unify) |unify_idx| {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
-                                const arg_copy = try self.runtime_types.register(.{
-                                    .content = arg_resolved.desc.content,
-                                    .rank = arg_resolved.desc.rank,
-                                    .mark = types.Mark.none,
-                                });
+                                const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
                                 _ = unify.unifyWithConf(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
@@ -17774,11 +17974,7 @@ pub const Interpreter = struct {
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
-                    const recv_copy = try self.runtime_types.register(.{
-                        .content = recv_resolved.desc.content,
-                        .rank = recv_resolved.desc.rank,
-                        .mark = types.Mark.none,
-                    });
+                    const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
                     _ = unify.unifyWithConf(
                         self.env,
                         self.runtime_types,
@@ -18011,6 +18207,41 @@ pub const Interpreter = struct {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
 
+                    // Check if the body is a hosted lambda
+                    const tvd_body_expr = self.env.store.getExpr(lambda_expr.e_lambda.body);
+                    if (tvd_body_expr == .e_hosted_lambda) {
+                        const hosted = tvd_body_expr.e_hosted_lambda;
+                        // Collect bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
+                        defer self.allocator.free(hosted_args);
+                        for (params_slice, 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > saved_bindings_len) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        const result = try self.callHostedFunction(hosted.index, hosted_args, roc_ops, return_rt_var);
+
+                        // Cleanup
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -18063,6 +18294,41 @@ pub const Interpreter = struct {
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
 
+                    // Check if the body is a hosted lambda
+                    const tvd_closure_body_expr = self.env.store.getExpr(underlying_lambda.e_lambda.body);
+                    if (tvd_closure_body_expr == .e_hosted_lambda) {
+                        const hosted = tvd_closure_body_expr.e_hosted_lambda;
+                        // Collect bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, params_slice.len);
+                        defer self.allocator.free(hosted_args);
+                        for (params_slice, 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > saved_bindings_len) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        const result = try self.callHostedFunction(hosted.index, hosted_args, roc_ops, return_rt_var);
+
+                        // Cleanup
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                        method_func.decref(&self.runtime_layout_store, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     // Push cleanup continuation
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_bindings_len = saved_bindings_len,
@@ -18084,6 +18350,24 @@ pub const Interpreter = struct {
                     } });
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);
+                    return true;
+                }
+
+                // Check if this is a hosted lambda and invoke it
+                const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
+                const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                if (try self.tryInvokeHostedClosure(closure_header, arg_values, return_rt_var, roc_ops)) |result| {
+                    // Decref arguments
+                    for (arg_values) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+
+                    try value_stack.push(result);
                     return true;
                 } else {
                     method_func.decref(&self.runtime_layout_store, roc_ops);
@@ -18528,7 +18812,7 @@ pub const Interpreter = struct {
                     }
                 };
 
-                const working_list_ptr: *builtins.list.RocList = @ptrCast(@alignCast(sc.list_value.ptr.?));
+                const working_list_ptr = sc.list_value.asRocList().?;
 
                 if (is_less_than) {
                     // Current element is less than compared element - swap them
@@ -18613,6 +18897,43 @@ pub const Interpreter = struct {
                         });
 
                         const bindings_start = self.bindings.items.len - 2;
+
+                        // Check if this is a hosted lambda and invoke it
+                        const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
+                        const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                        const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                        // Collect the two bound arguments
+                        var hosted_args = try self.allocator.alloc(StackValue, 2);
+                        defer self.allocator.free(hosted_args);
+                        for (cmp_params[0..2], 0..) |param, param_idx| {
+                            // Find this parameter's binding by searching backwards through bindings
+                            var found = false;
+                            var binding_idx: usize = self.bindings.items.len;
+                            while (binding_idx > bindings_start) {
+                                binding_idx -= 1;
+                                if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                    hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                return error.Crash;
+                            }
+                        }
+
+                        if (try self.tryInvokeHostedClosure(cmp_header, hosted_args, return_rt_var, roc_ops)) |result| {
+                            // Cleanup
+                            _ = self.active_closures.pop();
+                            self.env = cmp_saved_env;
+                            self.trimBindingList(&self.bindings, bindings_start, roc_ops);
+
+                            try value_stack.push(result);
+                            return true;
+                        }
+
                         try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                             .saved_env = cmp_saved_env,
                             .saved_bindings_len = bindings_start,
@@ -18696,6 +19017,43 @@ pub const Interpreter = struct {
                     });
 
                     const bindings_start = self.bindings.items.len - 2;
+
+                    // Check if this is a hosted lambda and invoke it
+                    const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
+                    const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
+                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
+
+                    // Collect the two bound arguments
+                    var hosted_args = try self.allocator.alloc(StackValue, 2);
+                    defer self.allocator.free(hosted_args);
+                    for (cmp_params[0..2], 0..) |param, param_idx| {
+                        // Find this parameter's binding by searching backwards through bindings
+                        var found = false;
+                        var binding_idx: usize = self.bindings.items.len;
+                        while (binding_idx > bindings_start) {
+                            binding_idx -= 1;
+                            if (self.bindings.items[binding_idx].pattern_idx == param) {
+                                hosted_args[param_idx] = self.bindings.items[binding_idx].value;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            return error.Crash;
+                        }
+                    }
+
+                    if (try self.tryInvokeHostedClosure(cmp_header, hosted_args, return_rt_var, roc_ops)) |result| {
+                        // Cleanup
+                        _ = self.active_closures.pop();
+                        self.env = cmp_saved_env;
+                        self.trimBindingList(&self.bindings, bindings_start, roc_ops);
+
+                        try value_stack.push(result);
+                        return true;
+                    }
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = cmp_saved_env,
                         .saved_bindings_len = bindings_start,
@@ -18851,7 +19209,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     const ct_str = try env.types.freshFromContent(.{ .structure = .{ .nominal_type = str_nominal } });
 
     const ct_alias_content = try env.types.mkAlias(type_ident, ct_str, &.{});
-    const ct_alias_var = try env.types.register(.{ .content = ct_alias_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -18905,7 +19263,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
 
     // backing type is Str for simplicity
     const ct_nominal_content = try env.types.mkNominal(type_ident, ct_str, &.{}, name_nominal, false);
-    const ct_nominal_var = try env.types.register(.{ .content = ct_nominal_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const ct_nominal_var = try env.types.freshFromContent(ct_nominal_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
     const resolved = interp.runtime_types.resolveVar(rt_var);
@@ -19063,7 +19421,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     // runtime flex var 'a'
     const a = try interp.runtime_types.freshFromContent(.{ .flex = types.Flex.init() });
     const func_content = try interp.runtime_types.mkFuncPure(&.{a}, a);
-    const func_var = try interp.runtime_types.register(.{ .content = func_content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+    const func_var = try interp.runtime_types.freshFromContent(func_content);
 
     // Call with Str
     // Get the real Str type from the loaded builtin module and translate to runtime

@@ -282,7 +282,7 @@ NO CHANGE
 		(patt (type "Error")))
 	(expressions
 		(expr (type "Error"))
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Error -> Error"))
 		(expr (type "Error"))
 		(expr (type "Error"))

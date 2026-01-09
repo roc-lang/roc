@@ -228,10 +228,12 @@ pub const Store = struct {
 
     /// Create a new variable with the provided desc
     /// Used in tests
+    /// TODO: Can we remove this function? It hardcodes rank, which is fine for
+    /// test but we can never use this in actual typechecking
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
         defer trace.end();
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost, .mark = Mark.none });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -1579,7 +1581,7 @@ test "DescStore.Serialized roundtrip" {
     };
     const desc2 = Descriptor{
         .content = Content{ .structure = .empty_record },
-        .rank = Rank.top_level,
+        .rank = Rank.outermost,
         .mark = Mark.visited,
     };
 

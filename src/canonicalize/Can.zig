@@ -120,7 +120,6 @@ current_alias_name: ?Ident.Idx = null,
 /// Used to detect self-referential definitions like `a = a` or `a = [a]`.
 /// This is null when we're inside a lambda (where self-references are valid for recursion).
 defining_pattern: ?Pattern.Idx = null,
-
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -2753,7 +2752,9 @@ fn createAnnoOnlyDef(
     // type-qualified, unqualified). For top-level items, there are no placeholders to update.
 
     // Create the e_anno_only expression
-    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+    const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+        .ident = ident,
+    } }, region);
 
     // Create the annotation structure
     const annotation = CIR.Annotation{
@@ -9814,7 +9815,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             };
 
                             // Create the e_anno_only expression
-                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                                .ident = name_ident,
+                            } }, region);
 
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
@@ -9923,7 +9926,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                             };
 
                             // Create the e_anno_only expression
-                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                            const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                                .ident = name_ident,
+                            } }, region);
 
                             // Create the annotation structure
                             const annotation = CIR.Annotation{
@@ -9993,7 +9998,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                         };
 
                         // Create the e_anno_only expression
-                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                        const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                            .ident = name_ident,
+                        } }, region);
 
                         // Create the annotation structure
                         const annotation = CIR.Annotation{
@@ -10063,7 +10070,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 };
 
                 // Create the e_anno_only expression
-                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{} }, region);
+                const anno_only_expr = try self.env.addExpr(Expr{ .e_anno_only = .{
+                    .ident = name_ident,
+                } }, region);
 
                 // Create the annotation structure
                 const annotation = CIR.Annotation{
@@ -10299,6 +10308,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     self.defining_pattern = saved_defining_pattern;
 
     // Determine if we should generalize based on RHS
+    // TODO: Remove, generalization is handled solely in type checking
     const should_generalize = self.shouldGeneralizeBinding(expr.idx);
 
     // Create a declaration statement (generalized or not)
@@ -10320,6 +10330,7 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
 
 /// Determines whether a let binding should be generalized based on its RHS expression.
 /// According to Roc's value restriction, only lambdas and number literals should be generalized.
+// TODO: Remove, generalization is handled solely in type checking
 fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
     const expr = self.env.store.getExpr(expr_idx);
     return switch (expr) {
