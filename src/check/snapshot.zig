@@ -156,6 +156,9 @@ const Rigid = types.Rigid;
 /// Entry point is `snapshotVarForError`
 const TypeWriter = types.TypeWriter;
 
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = struct { start: usize, count: usize };
+
 /// Stores snapshots of types captured before unification errors overwrite them with `.err`.
 /// This allows error messages to display the original conflicting types rather than the
 /// error state. Also stores pre-formatted type strings for efficient error reporting.
@@ -183,7 +186,8 @@ pub const Store = struct {
     scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     /// Formatted type strings, indexed by SnapshotContentIdx
-    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
+    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
+    formatted_strings_backing: ByteList,
 
     /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
     extra_strings: std.ArrayListUnmanaged([]const u8),
@@ -201,18 +205,20 @@ pub const Store = struct {
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
-            .formatted_strings = .{},
+            .formatted_strings = blk: {
+                var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange){};
+                try map.ensureTotalCapacity(gpa, 32);
+                break :blk map;
+            },
+            .formatted_strings_backing = try ByteList.initCapacity(gpa, 512),
             .extra_strings = .{},
         };
     }
 
     pub fn deinit(self: *Self) void {
         // Free all stored formatted strings
-        var iter = self.formatted_strings.valueIterator();
-        while (iter.next()) |str| {
-            self.gpa.free(str.*);
-        }
         self.formatted_strings.deinit(self.gpa);
+        self.formatted_strings_backing.deinit();
 
         // Free all extra strings
         for (self.extra_strings.items) |str| {
@@ -244,7 +250,12 @@ pub const Store = struct {
 
     /// Get the pre-formatted string for a snapshot.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
-        return self.formatted_strings.get(idx);
+        const mb_range = self.formatted_strings.get(idx);
+
+        if (mb_range == null) return null;
+        const range = mb_range.?;
+
+        return self.formatted_strings_backing.items[range.start..][0..range.count];
     }
 
     /// Store an extra string (e.g., formatted pattern) and return its index.
@@ -305,13 +316,23 @@ pub const Store = struct {
         try self.seen_vars.append(resolved.var_);
         defer _ = self.seen_vars.pop();
 
+        // Recursively copy content
         const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content, var_);
 
         // Format this type and store the formatted string
-        type_writer.reset();
-        try type_writer.write(var_, .wrap);
-        const formatted = try self.gpa.dupe(u8, type_writer.get());
-        try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
+        // Here, we run the TypeWriter, writing directly into our backing
+        {
+            const formatted_strings_start = self.formatted_strings_backing.items.len;
+            try type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap);
+            const formatted_strings_end = self.formatted_strings_backing.items.len;
+
+            const formatted_range = ByteListRange{
+                .start = formatted_strings_start,
+                .count = formatted_strings_end - formatted_strings_start,
+            };
+
+            try self.formatted_strings.put(self.gpa, snapshot_idx, formatted_range);
+        }
 
         return snapshot_idx;
     }
