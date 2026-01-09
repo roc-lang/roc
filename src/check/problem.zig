@@ -3512,11 +3512,15 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free the indices slice in non_exhaustive_match problems
-        // (the actual strings are managed by the SnapshotStore)
+        // Free allocated memory in problem data
         for (self.problems.items) |prob| {
             switch (prob) {
                 .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
+                // Free comptime evaluation messages - these are allocated by ComptimeEvaluator
+                // and ownership is transferred to ProblemStore
+                .comptime_crash => |cc| gpa.free(cc.message),
+                .comptime_expect_failed => |cef| gpa.free(cef.message),
+                .comptime_eval_error => |cee| gpa.free(cee.error_name),
                 else => {},
             }
         }
