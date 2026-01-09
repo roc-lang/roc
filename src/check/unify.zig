@@ -157,8 +157,8 @@ pub const Conf = struct {
 /// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unifyAssumeOk (
-	module_env: *ModuleEnv,
+pub fn unifyAssumeOk(
+    module_env: *ModuleEnv,
     types: *types_mod.Store,
     unify_scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
@@ -167,7 +167,7 @@ pub fn unifyAssumeOk (
     /// The "actual" variable
     b: Var,
 ) void {
-	const trace = tracy.trace(@src());
+    const trace = tracy.trace(@src());
     defer trace.end();
 
     // First reset the scratch store
@@ -176,7 +176,6 @@ pub fn unifyAssumeOk (
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch {};
-
 }
 
 /// Unify two type variables
