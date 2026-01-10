@@ -14954,6 +14954,30 @@ pub const Interpreter = struct {
                                         val.decref(&self.runtime_layout_store, roc_ops);
                                     }
                                 },
+                                .dot_access_resolve => |da| {
+                                    // Decref the receiver value stored in the continuation
+                                    da.receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .dot_access_collect_args => |dac| {
+                                    // Decref collected argument values
+                                    self.popCollectedValues(value_stack, dac.collected_count, roc_ops);
+                                    // Method function is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    // Receiver value is also on the stack (pushed before method function)
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                },
+                                .type_var_dispatch_collect_args => |tvc| {
+                                    // Decref collected argument values
+                                    self.popCollectedValues(value_stack, tvc.collected_count, roc_ops);
+                                    // Method function is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                },
                                 else => {
                                     // Skip this continuation - it's part of the function body being early-returned from
                                 },
