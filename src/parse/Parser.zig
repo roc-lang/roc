@@ -3259,14 +3259,15 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
             while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
                 if (self.peek() == .DoubleDot) {
                     // Handle open tag union extension: [Tag, ..ext] or [Tag, .._ext] or [Tag, ..]
+                    const double_dot_pos = self.pos;
                     self.advance(); // consume DoubleDot
 
                     if (self.peek() == .LowerIdent or self.peek() == .NamedUnderscore) {
                         // Parse the named extension type variable
                         ext = .{ .named = try self.parseTypeAnno(.looking_for_args) };
                     } else {
-                        // Anonymous extension (just ..)
-                        ext = .open;
+                        // Anonymous extension (just ..) - store the DoubleDot token position
+                        ext = .{ .open = double_dot_pos };
                     }
                     // Break out since .. must be the last element
                     self.expect(.Comma) catch {};
