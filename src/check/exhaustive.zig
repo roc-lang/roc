@@ -2104,9 +2104,12 @@ fn collectCtorsSketched(
     }
 
     if (found_list) {
-        if (found_wildcard) {
-            return .non_exhaustive_wildcards;
-        }
+        // When we have both list patterns and wildcards, we still need to check
+        // all list arities. The wildcards will be expanded during specialization
+        // (specializeByListAritySketched handles wildcards by expanding them).
+        // Previously this returned .non_exhaustive_wildcards when wildcards were
+        // present, which caused false non-exhaustive errors because wildcards
+        // covering all list arities weren't being considered.
         var arities: std.ArrayList(ListArity) = .empty;
         for (first_col) |pat| {
             if (pat == .list) {

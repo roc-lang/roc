@@ -857,23 +857,27 @@ test "non-exhaustive - list with only rest pattern missing empty case" {
     try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
 }
 
-// Regression test for issue #8896: non-exhaustive tuple with list pattern
-// Previously caused "Invalid free" panic due to allocator mismatch when freeing
-// the missing_patterns slice in the NonExhaustiveMatch error.
+// Regression test for issue #8935: wrong exhaustiveness error for match on tuple
+// The patterns ([], _), (_, 0), ([_, ..], _) together cover all cases:
+// - [] with any U64 (first pattern)
+// - [_, ..] with any U64 (third pattern)
+// Together these cover all lists. The middle pattern (_, 0) is just an optimization.
 
-test "non-exhaustive - tuple with list pattern" {
+test "exhaustive - tuple with list and integer patterns" {
     const source =
-        \\f : (List(I64), I64) -> I64
-        \\f = |l, i| {
-        \\    match (l, i) {
-        \\        ([], _) => 0
-        \\        (_, 0) => 0
-        \\        ([_x, ..], _) => 0
-        \\    }
+        \\x : (List(I64), I64)
+        \\x = ([1, 2, 3], 42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    ([], _) => 0
+        \\    (_, 0) => 1
+        \\    ([_head, ..], _) => 2
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("NON-EXHAUSTIVE MATCH");
+    // This should be exhaustive - patterns 1 and 3 together cover all lists
+    try test_env.assertLastDefType("I64");
 }
