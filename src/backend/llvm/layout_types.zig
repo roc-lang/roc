@@ -11,14 +11,12 @@
 //! - Boxes → ptr (opaque pointer)
 //! - ZST (zero-sized types) → void/i1 placeholder
 
-const std = @import("../../std.zig");
-const Allocator = std.mem.Allocator;
+const std = @import("std");
 const Builder = @import("Builder.zig");
 const layout = @import("../../layout/mod.zig");
 const types = @import("../../types/types.zig");
 
 const Layout = layout.Layout;
-const LayoutTag = layout.LayoutTag;
 const Store = layout.Store;
 const Idx = layout.Idx;
 

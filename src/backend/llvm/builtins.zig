@@ -21,7 +21,7 @@
 //!
 //! For now, this module focuses on the JIT path since that's what the REPL uses.
 
-const std = @import("../../std.zig");
+const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");

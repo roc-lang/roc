@@ -16,6 +16,10 @@ pub const codegen = @import("codegen.zig");
 pub const emit = @import("emit.zig");
 pub const bitcode_writer = @import("bitcode_writer.zig");
 pub const BitcodeReader = @import("BitcodeReader.zig");
+pub const builtins = @import("builtins.zig");
+pub const cir_emit = @import("cir_emit.zig");
+pub const layout_types = @import("layout_types.zig");
+pub const refcount = @import("refcount.zig");
 
 test "backend llvm tests" {
     const std = @import("std");
@@ -26,4 +30,8 @@ test "backend llvm tests" {
     std.testing.refAllDecls(emit);
     std.testing.refAllDecls(bitcode_writer);
     std.testing.refAllDecls(BitcodeReader);
+    std.testing.refAllDecls(builtins);
+    std.testing.refAllDecls(cir_emit);
+    std.testing.refAllDecls(layout_types);
+    std.testing.refAllDecls(refcount);
 }

@@ -19,8 +19,7 @@
 //! Complex expressions (if, match, block) create control flow structures.
 //! Refcounted values are handled via the refcount module.
 
-const std = @import("../../std.zig");
-const builtin = @import("builtin");
+const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");
 const emit = @import("emit.zig");
