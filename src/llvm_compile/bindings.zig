@@ -75,11 +75,20 @@ pub const Module = opaque {
     pub const setTargetTriple = LLVMSetTarget;
     extern fn LLVMSetTarget(M: *Module, Triple: [*:0]const u8) void;
 
+    pub const getTargetTriple = LLVMGetTarget;
+    extern fn LLVMGetTarget(M: *const Module) [*:0]const u8;
+
     pub const setDataLayout = LLVMSetDataLayout;
     extern fn LLVMSetDataLayout(M: *Module, DataLayoutStr: [*:0]const u8) void;
 
     pub const getDataLayout = LLVMGetDataLayoutStr;
     extern fn LLVMGetDataLayoutStr(M: *const Module) [*:0]const u8;
+
+    /// Links the source module into this module.
+    /// The source module is destroyed after a successful link.
+    /// Returns true on error, false on success.
+    pub const link = LLVMLinkModules2;
+    extern fn LLVMLinkModules2(Dest: *Module, Src: *Module) Bool;
 };
 
 /// Frees a message string allocated by LLVM.

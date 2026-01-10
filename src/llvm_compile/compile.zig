@@ -167,6 +167,7 @@ pub const Error = error{
     OutOfMemory,
     JITCreationFailed,
     ModuleAddFailed,
+    ModuleLinkFailed,
     SymbolNotFound,
     ExecutionFailed,
     BitcodeParseError,
@@ -242,6 +243,17 @@ pub fn compileAndExecute(
         return error.BitcodeParseError;
     }
     // Note: mem_buf is consumed by parseBitcodeInContext2, don't dispose
+
+    // TODO: Merge builtin bitcode into user module when builtins are actually called.
+    // Currently the REPL only evaluates simple expressions that don't call builtins,
+    // so we skip the bitcode merge. When builtins are needed (e.g., for Dec arithmetic,
+    // List/Str operations), uncomment this block and ensure the bitcode is compiled
+    // without TLS symbols that aren't available on all platforms.
+    //
+    // The infrastructure for bitcode merging is in place:
+    // - build.zig generates builtins.bc from src/builtins/static_lib.zig
+    // - bindings.zig has Module.link() wrapping LLVMLinkModules2
+    // - The process symbol generator below handles platform symbols
 
     // Wrap module in thread-safe module (takes ownership of module)
     const ts_module = bindings.OrcThreadSafeModule.create(module, ts_context);
@@ -327,9 +339,10 @@ pub fn compileAndExecute(
     // Get main JIT dylib
     const dylib = jit.getMainJITDylib();
 
-    // Add a generator so the JIT can find symbols from the current process
-    // (not needed for roc_eval since it doesn't call external functions,
-    // but keep it for future flexibility)
+    // Add a generator so the JIT can find symbols from the current process.
+    // This handles:
+    // - Platform symbols (TLS, compiler-rt, etc.)
+    // - Builtin functions (until bitcode merging is enabled)
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -339,6 +352,7 @@ pub fn compileAndExecute(
         null, // no filter context
     )) |err| {
         bindings.consumeError(err);
+        ts_module.dispose();
         return error.JITCreationFailed;
     }
     bindings.jitDylibAddGenerator(dylib, process_syms_generator);

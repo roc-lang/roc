@@ -2329,6 +2329,34 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     snapshot_exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     try addStaticLlvmOptionsToModule(snapshot_exe.root_module);
+
+    // Generate LLVM bitcode from builtins for embedding in the LLVM JIT pipeline.
+    // This bitcode is merged with user code at JIT time instead of looking up
+    // symbols from the process address space.
+    // We use static_lib.zig as the entry point since it has minimal dependencies
+    // and compiles standalone without needing tracy or other external modules.
+    const builtins_bc_obj = b.addObject(.{
+        .name = "roc_builtins_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/static_lib.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+        }),
+    });
+    builtins_bc_obj.root_module.omit_frame_pointer = true;
+    builtins_bc_obj.root_module.stack_check = false;
+    builtins_bc_obj.use_llvm = true;
+    builtins_bc_obj.bundle_compiler_rt = true;
+    // Getting the emitted bin is required to trigger LLVM IR generation
+    _ = builtins_bc_obj.getEmittedBin();
+    const builtins_bc_file = builtins_bc_obj.getEmittedLlvmBc();
+    // Copy the bitcode to src/llvm_compile/ for @embedFile
+    const copy_builtins_bc = b.addUpdateSourceFiles();
+    copy_builtins_bc.addCopyFileToSource(builtins_bc_file, "src/llvm_compile/builtins.bc");
+    snapshot_exe.step.dependOn(&copy_builtins_bc.step);
+
     // Add llvm_compile module for LLVM compilation pipeline
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
@@ -2541,6 +2569,8 @@ pub fn build(b: *std.Build) void {
         snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths_test.lib });
         snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths_test.include });
         try addStaticLlvmOptionsToModule(snapshot_test.root_module);
+        // Depend on builtins bitcode being generated
+        snapshot_test.step.dependOn(&copy_builtins_bc.step);
         snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
             .imports = &.{
