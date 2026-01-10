@@ -2262,7 +2262,7 @@ pub const Store = struct {
                             // IMPORTANT: Keep the reserved placeholder as a Box pointing to the real layout.
                             // This ensures recursive references remain boxed (correct size).
                             if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
-                                // Debug: ensure reserved_idx != layout_idx to prevent self-boxing
+                                // reserved_idx should never equal layout_idx (would create self-referential box)
                                 std.debug.assert(reserved_idx != layout_idx);
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
