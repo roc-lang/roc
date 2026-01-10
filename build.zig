@@ -2333,7 +2333,7 @@ pub fn build(b: *std.Build) void {
     snapshot_exe.root_module.addAnonymousImport("llvm_compile", .{
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
-            .{ .name = "result_type", .module = roc_modules.result_type },
+            .{ .name = "layout", .module = roc_modules.layout },
         },
     });
 
@@ -2544,7 +2544,7 @@ pub fn build(b: *std.Build) void {
         snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
             .imports = &.{
-                .{ .name = "result_type", .module = roc_modules.result_type },
+                .{ .name = "layout", .module = roc_modules.layout },
             },
         });
 

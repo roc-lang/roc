@@ -300,7 +300,6 @@ pub const ModuleType = enum {
     unbundle,
     base58,
     lsp,
-    result_type,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -318,7 +317,7 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .result_type },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
             .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
@@ -328,7 +327,6 @@ pub const ModuleType = enum {
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs },
-            .result_type => &.{},
         };
     }
 };
@@ -359,7 +357,6 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     roc_target: *Module,
-    result_type: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
         const self = RocModules{
@@ -393,7 +390,6 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
-            .result_type = b.addModule("result_type", .{ .root_source_file = b.path("src/result_type/mod.zig") }),
         };
 
         // Link zstd to bundle module if available (it's unsupported on wasm32, so don't link it)
@@ -432,7 +428,6 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp,
-            .result_type,
         };
 
         // Setup dependencies for each module
@@ -508,7 +503,6 @@ pub const RocModules = struct {
             .unbundle => self.unbundle,
             .base58 => self.base58,
             .lsp => self.lsp,
-            .result_type => self.result_type,
         };
     }
 

@@ -16,9 +16,9 @@ const base = @import("base");
 const can = @import("can");
 const parse = @import("parse");
 const check = @import("check");
+const layout = @import("layout");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
-const result_type_mod = @import("result_type");
 
 // LLVM Builder from Zig's standard library (for IR generation)
 const LlvmBuilder = std.zig.llvm.Builder;
@@ -97,6 +97,7 @@ pub const LlvmEvaluator = struct {
         OutOfMemory,
         CompilationFailed,
         UnsupportedType,
+        UnsupportedLayout,
         ParseError,
         CanonicalizeError,
         TypeError,
@@ -132,14 +133,10 @@ pub const LlvmEvaluator = struct {
         self.builtin_module.deinit();
     }
 
-    /// Type of the result value for JIT execution.
-    /// Shared with llvm_compile module via result_type module.
-    pub const ResultType = result_type_mod.ResultType;
-
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
-        result_type: ResultType,
+        output_layout: layout.Idx,
         allocator: Allocator,
 
         pub fn deinit(self: *BitcodeResult) void {
@@ -148,7 +145,7 @@ pub const LlvmEvaluator = struct {
     };
 
     /// Generate LLVM bitcode for a CIR expression
-    /// Returns the bitcode and whether it's a float type (for printf formatting)
+    /// Returns the bitcode and the output layout for JIT execution
     /// The caller is responsible for freeing the bitcode via result.deinit()
     pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
         // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
@@ -166,14 +163,14 @@ pub const LlvmEvaluator = struct {
         const value_type = try self.getExprLlvmType(&builder, expr);
         const value = try self.emitExprValue(&builder, module_env, expr);
 
-        // Determine the result type for JIT execution
+        // Determine the output layout for JIT execution
         // We need to look at the original expression to get signedness,
         // since LLVM types don't distinguish signed from unsigned
-        const result_type: ResultType = self.getExprResultType(expr);
+        const output_layout: layout.Idx = self.getExprOutputLayout(expr);
 
         // Generate a main function that returns the result
-        // The return type must match what compile.zig expects based on result_type
-        try self.emitMainWithPrint(&builder, value_type, value, result_type);
+        // The return type must match what compile.zig expects based on output_layout
+        try self.emitMainWithPrint(&builder, value_type, value, output_layout);
 
         // Serialize to bitcode
         const producer = LlvmBuilder.Producer{
@@ -185,7 +182,7 @@ pub const LlvmEvaluator = struct {
 
         return BitcodeResult{
             .bitcode = bitcode,
-            .result_type = result_type,
+            .output_layout = output_layout,
             .allocator = self.allocator,
         };
     }
@@ -267,25 +264,27 @@ pub const LlvmEvaluator = struct {
         return self.generateBitcode(&module_env, expr);
     }
 
-    /// Get the ResultType for JIT execution from a CIR expression
+    /// Get the output layout for JIT execution from a CIR expression
     /// This captures signedness which LLVM types don't distinguish
-    fn getExprResultType(_: *LlvmEvaluator, expr: CIR.Expr) ResultType {
+    fn getExprOutputLayout(_: *LlvmEvaluator, expr: CIR.Expr) layout.Idx {
         return switch (expr) {
             .e_num => |num| switch (num.kind) {
-                // Signed types that fit in i64
-                .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-                // Unsigned types that fit in u64
-                .u8, .u16, .u32, .u64 => .u64,
-                // 128-bit signed
+                .i8 => .i8,
+                .i16 => .i16,
+                .i32 => .i32,
+                .i64, .num_unbound, .int_unbound => .i64,
+                .u8 => .u8,
+                .u16 => .u16,
+                .u32 => .u32,
+                .u64 => .u64,
                 .i128 => .i128,
-                // 128-bit unsigned
                 .u128 => .u128,
-                // Float types
-                .f32, .f64 => .f64,
-                // Dec type (fixed-point decimal stored as i128)
+                .f32 => .f32,
+                .f64 => .f64,
                 .dec => .dec,
             },
-            .e_frac_f32, .e_frac_f64 => .f64,
+            .e_frac_f32 => .f32,
+            .e_frac_f64 => .f64,
             .e_dec, .e_dec_small => .dec,
             else => .i64, // Default for other expression types
         };
@@ -360,19 +359,21 @@ pub const LlvmEvaluator = struct {
     /// This makes the ABI simple and platform-independent: "return pointer, done."
     ///
     /// Function signature: void roc_eval(<type>* out_ptr)
-    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
+    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, output_layout: layout.Idx) !void {
         // Determine the value type to store
-        const final_type: LlvmBuilder.Type = switch (result_type) {
-            .i64, .u64 => .i64,
+        const final_type: LlvmBuilder.Type = switch (output_layout) {
+            .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
             .i128, .u128, .dec => .i128,
-            .f64 => .double,
+            .f32, .f64 => .double,
+            else => return error.UnsupportedLayout,
         };
 
         // Determine signedness for integer extension
-        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
-            .i64, .i128 => .signed,
-            .u64, .u128 => .unsigned,
-            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
+        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (output_layout) {
+            .i8, .i16, .i32, .i64, .i128 => .signed,
+            .u8, .u16, .u32, .u64, .u128 => .unsigned,
+            .f32, .f64, .dec => .unneeded, // floats use fpext, dec is already i128
+            else => .unneeded,
         };
 
         // All platforms: void roc_eval(<type>* out_ptr)

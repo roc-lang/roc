@@ -23,12 +23,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const bindings = @import("bindings.zig");
+const layout = @import("layout");
 
 const Allocator = std.mem.Allocator;
-
-/// Type of the result value for JIT execution.
-/// Shared between llvm_compile and eval modules.
-pub const ResultType = @import("result_type").ResultType;
+const LayoutIdx = layout.Idx;
 
 /// Dec (fixed-point decimal) has 18 decimal places.
 /// The internal representation is i128 scaled by 10^18.
@@ -175,6 +173,8 @@ pub const Error = error{
     /// JIT is not supported on this platform (e.g., statically-linked musl binaries
     /// don't support dynamic loading which LLVM ORC JIT requires).
     JITNotSupported,
+    /// The layout is not supported for JIT execution (e.g., non-scalar types).
+    UnsupportedLayout,
 };
 
 /// Returns true if JIT compilation is supported on this platform.
@@ -205,7 +205,7 @@ pub fn isJITSupported() bool {
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
-    result_type: ResultType,
+    output_layout: LayoutIdx,
 ) Error![]const u8 {
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
@@ -370,15 +370,17 @@ pub fn compileAndExecute(
     // This makes the ABI simple and platform-independent on all targets.
     //
     // Function signature: void roc_eval(<type>* out_ptr)
-    switch (result_type) {
-        .i64 => {
+    switch (output_layout) {
+        // Signed integers that fit in i64
+        .i8, .i16, .i32, .i64 => {
             const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i64 = undefined;
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
-        .u64 => {
+        // Unsigned integers that fit in u64
+        .u8, .u16, .u32, .u64 => {
             const EvalFn = *const fn (*u64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: u64 = undefined;
@@ -399,7 +401,7 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
         },
-        .f64 => {
+        .f32, .f64 => {
             const EvalFn = *const fn (*f64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: f64 = undefined;
@@ -413,5 +415,6 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
+        else => return error.UnsupportedLayout,
     }
 }
