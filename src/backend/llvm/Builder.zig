@@ -7555,18 +7555,16 @@ pub const Constant = enum(u32) {
     }
 
     pub fn getBase(self: Constant, builder: *const Builder) Global.Index {
-        return self.getBaseWithDepth(builder, 0);
-    }
-
-    /// Maximum depth for constant expression traversal to prevent infinite loops on cyclic constants.
-    const max_constant_depth = 1000;
-
-    fn getBaseWithDepth(self: Constant, builder: *const Builder, depth: u32) Global.Index {
-        if (depth >= max_constant_depth) return .none; // Bail out if too deep (likely cycle)
-
         var cur = self;
-        var iteration: u32 = 0;
-        while (iteration < max_constant_depth) : (iteration += 1) {
+        // Track iteration count in debug builds to detect cyclic constants
+        var debug_iteration: usize = 0;
+        while (true) {
+            if (@import("builtin").mode == .Debug) {
+                debug_iteration += 1;
+                if (debug_iteration > 10000) {
+                    @panic("getBase: excessive iterations, likely cyclic constants");
+                }
+            }
             switch (cur.unwrap()) {
                 .constant => |constant| {
                     const item = builder.constant_items.get(constant);
@@ -7578,15 +7576,15 @@ pub const Constant = enum(u32) {
                         .getelementptr => cur = builder.constantExtraData(GetElementPtr, item.data).base,
                         .add => {
                             const extra = builder.constantExtraData(Binary, item.data);
-                            const lhs_base = extra.lhs.getBaseWithDepth(builder, depth + 1);
-                            const rhs_base = extra.rhs.getBaseWithDepth(builder, depth + 1);
+                            const lhs_base = extra.lhs.getBase(builder);
+                            const rhs_base = extra.rhs.getBase(builder);
                             return if (lhs_base != .none and rhs_base != .none)
                                 .none
                             else if (lhs_base != .none) lhs_base else rhs_base;
                         },
                         .sub => {
                             const extra = builder.constantExtraData(Binary, item.data);
-                            if (extra.rhs.getBaseWithDepth(builder, depth + 1) != .none) return .none;
+                            if (extra.rhs.getBase(builder) != .none) return .none;
                             cur = extra.lhs;
                         },
                         else => return .none,
@@ -7599,7 +7597,6 @@ pub const Constant = enum(u32) {
                 },
             }
         }
-        return .none; // Bail out if too many iterations (likely cycle)
     }
 
     const FormatData = struct {
