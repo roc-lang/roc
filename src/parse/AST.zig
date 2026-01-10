@@ -511,6 +511,9 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
         .match_branch_wrong_arrow => {
             try report.document.addReflowingText("Match branches use `=>` instead of `->`.");
         },
+        .match_has_no_branches => {
+            try report.document.addReflowingText("A match expression must have at least one branch.");
+        },
         .multi_arrow_needs_parens => {
             try report.document.addReflowingText("Function types with multiple arrows need parentheses.");
             try report.document.addLineBreak();
@@ -672,6 +675,7 @@ pub const Diagnostic = struct {
         for_expected_in,
         match_branch_wrong_arrow,
         match_branch_missing_arrow,
+        match_has_no_branches,
         expected_ty_anno_close_round,
         expected_ty_anno_close_round_or_comma,
         expected_expr_comma,
