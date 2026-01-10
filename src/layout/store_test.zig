@@ -765,3 +765,111 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     // The size should be > 0 (a tag union with payloads has non-zero size)
     try testing.expect(size > 0);
 }
+
+test "addTypeVar - recursive nominal with Box has no double-boxing (issue #8916)" {
+    // Regression test for issue #8916:
+    // When computing layouts for recursive nominal types like Nat := [Zero, Suc(Box(Nat))],
+    // the inner Box's element layout was incorrectly being set to another Box layout
+    // instead of the tag_union layout. This caused Box.unbox to return a value with
+    // the wrong layout, leading to incorrect pattern matching results.
+    //
+    // The bug was in the container finalization code: when a tag union backing a
+    // recursive nominal finished processing, the code would incorrectly update
+    // layout_idx to the boxed layout even for Box/List containers, causing double-boxing.
+
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers
+    const nat_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Nat"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create a recursive type: Nat := [Zero, Suc(Box(Nat))]
+
+    // Create a fresh var for the recursive reference
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+
+    // Create Box(recursive_var)
+    const box_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = box_ident_idx },
+        recursive_var,
+        &[_]types.Var{recursive_var},
+        builtin_module_idx,
+        false,
+    );
+    const box_recursive_var = try lt.type_store.freshFromContent(box_content);
+
+    // Create [Zero, Suc(Box(Nat))]
+    const zero_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Zero")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{}), // No payload
+    };
+    const suc_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Suc")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{box_recursive_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ zero_tag, suc_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    // Create the nominal type content: Nat := [Zero, Suc(Box(Nat))]
+    const nat_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = nat_ident_idx },
+        tag_union_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+
+    // Close the recursive loop
+    try lt.type_store.setVarContent(recursive_var, nat_content);
+
+    // Create a var for Nat
+    const nat_var = try lt.type_store.freshFromContent(nat_content);
+
+    // Compute the layout
+    const nat_layout_idx = try lt.layout_store.addTypeVar(nat_var, &lt.type_scope);
+    const nat_layout = lt.layout_store.getLayout(nat_layout_idx);
+
+    // Nat should have a tag_union layout
+    try testing.expect(nat_layout.tag == .tag_union);
+
+    // Get the tag union data to inspect the Suc variant's payload layout
+    const tu_data = lt.layout_store.getTagUnionData(nat_layout.data.tag_union.idx);
+    const variants = lt.layout_store.getTagUnionVariants(tu_data);
+
+    // Find the Suc variant
+    // Variants should be ordered by tag name, so we need to find which one has a payload
+    try testing.expect(variants.len == 2);
+
+    // Find which variant has a non-zst payload (that's the Suc variant with Box(Nat))
+    var suc_variant_idx: usize = 0;
+    for (0..variants.len) |i| {
+        const payload_layout = lt.layout_store.getLayout(variants.get(i).payload_layout);
+        if (payload_layout.tag != .zst) {
+            suc_variant_idx = i;
+            break;
+        }
+    }
+
+    // The Suc variant's payload should be Box(Nat), which means its layout should be .box
+    const suc_payload_layout = lt.layout_store.getLayout(variants.get(suc_variant_idx).payload_layout);
+    try testing.expect(suc_payload_layout.tag == .box);
+
+    // CRITICAL: The element of this Box should be a tag_union, NOT another box.
+    // Before the fix, this would be .box (double-boxing bug).
+    const box_elem_idx = suc_payload_layout.data.box;
+    const box_elem_layout = lt.layout_store.getLayout(box_elem_idx);
+    try testing.expect(box_elem_layout.tag == .tag_union);
+}

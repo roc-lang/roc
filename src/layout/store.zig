@@ -1328,6 +1328,8 @@ pub const Store = struct {
                 // When we cache a nominal's placeholder (Box) and later hit that cache from
                 // within the nominal's backing type computation, we need to mark it as recursive.
                 // This can happen when the recursive reference uses the same var as the nominal.
+                var is_in_progress_recursive = false;
+                var maybe_progress: ?*work.Work.NominalProgress = null;
                 if (current.desc.content == .structure) {
                     const flat_type = current.desc.content.structure;
                     if (flat_type == .nominal_type) {
@@ -1339,6 +1341,8 @@ pub const Store = struct {
                         if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
                             // This cache hit is a recursive reference - mark the nominal as recursive
                             progress.is_recursive = true;
+                            is_in_progress_recursive = true;
+                            maybe_progress = progress;
                         }
                     }
                 }
@@ -1351,6 +1355,22 @@ pub const Store = struct {
                     if (pending_item.container == .list or pending_item.container == .box) {
                         if (self.recursive_boxed_layouts.get(current.var_)) |boxed_idx| {
                             layout_idx = boxed_idx;
+                        } else if (is_in_progress_recursive) {
+                            // This is a recursive reference to an in-progress nominal, and we're
+                            // inside a Box/List container. We need to use a raw layout placeholder
+                            // instead of the boxed placeholder, because the Box/List container
+                            // itself provides the heap allocation - using the boxed placeholder
+                            // would cause double-boxing.
+                            const progress = maybe_progress.?;
+                            if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                layout_idx = raw_idx;
+                            } else {
+                                // Create a new placeholder for the raw layout.
+                                // Use opaque_ptr as a temporary that can be updated later.
+                                const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                try self.raw_layout_placeholders.put(self.env.gpa, progress.nominal_var, raw_placeholder);
+                                layout_idx = raw_placeholder;
+                            }
                         } else {
                             layout_idx = cached_idx;
                         }
@@ -2242,6 +2262,8 @@ pub const Store = struct {
                             // IMPORTANT: Keep the reserved placeholder as a Box pointing to the real layout.
                             // This ensures recursive references remain boxed (correct size).
                             if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
+                                // reserved_idx should never equal layout_idx (would create self-referential box)
+                                std.debug.assert(reserved_idx != layout_idx);
                                 // Update the placeholder to Box(layout_idx) instead of replacing it
                                 // with the raw layout. This keeps recursive references boxed.
                                 self.updateLayout(reserved_idx, Layout.box(layout_idx));
@@ -2252,10 +2274,23 @@ pub const Store = struct {
                                     try self.recursive_boxed_layouts.put(self.env.gpa, progress.nominal_var, reserved_idx);
                                 }
                             }
-                            // Also update the raw layout placeholder if one was created
+                            // Also update the raw layout placeholder if one was created.
+                            // The raw placeholder holds the unboxed layout for recursive nominals
+                            // used inside Box/List containers (to avoid double-boxing).
                             if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
-                                self.updateLayout(raw_idx, self.getLayout(layout_idx));
+                                const new_layout = self.getLayout(layout_idx);
+                                // Raw placeholder should get the raw layout, not a boxed wrapper
+                                std.debug.assert(new_layout.tag != .box);
+                                // Raw and reserved placeholders should be at different indices
+                                if (self.layouts_by_var.get(progress.nominal_var)) |reserved| {
+                                    std.debug.assert(raw_idx != reserved);
+                                }
+                                self.updateLayout(raw_idx, new_layout);
                             }
+                            // Note: It's valid for is_recursive to be true without a raw_placeholder
+                            // when the recursion doesn't go through a Box/List container directly.
+                            // For example: IntList := [Nil, Cons(I64, IntList)] - the recursion is
+                            // handled by implicit boxing, not an explicit Box type.
                             // Update the cache so direct lookups get the actual layout
                             try self.layouts_by_var.put(self.env.gpa, progress.nominal_var, layout_idx);
                             try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
@@ -2263,10 +2298,18 @@ pub const Store = struct {
                             // CRITICAL: If there are more pending containers, update layout_idx
                             // to use the boxed layout. Container elements need boxed layouts for
                             // recursive types to have fixed size.
+                            //
+                            // HOWEVER: For Box/List containers, we should NOT use the boxed layout.
+                            // Box/List elements are heap-allocated, so they should use the raw layout.
+                            // Using the boxed layout would cause double-boxing (issue #8916).
                             if (self.work.pending_containers.len > 0) {
-                                if (self.recursive_boxed_layouts.get(progress.nominal_var)) |boxed_layout_idx| {
-                                    // Use the boxed layout for pending containers
-                                    layout_idx = boxed_layout_idx;
+                                const next_container = self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1];
+                                const is_heap_container = next_container == .box or next_container == .list;
+                                if (!is_heap_container) {
+                                    if (self.recursive_boxed_layouts.get(progress.nominal_var)) |boxed_layout_idx| {
+                                        // Use the boxed layout for pending containers (record/tuple fields)
+                                        layout_idx = boxed_layout_idx;
+                                    }
                                 }
                             }
                         }
