@@ -7033,9 +7033,12 @@ pub const Interpreter = struct {
                     }
                 } else if (arg_vars.len == 1) {
                     const arg_var = arg_vars[0];
-                    const arg_layout = try self.getRuntimeLayout(arg_var);
+                    // Use the variant layout from the actual tag union data, not computed from type.
+                    // This is critical for recursive types where the payload is boxed in memory
+                    // even though the type says it's the recursive type directly.
+                    const variant_layout = acc.getVariantLayout(tag_index);
                     payload_value = StackValue{
-                        .layout = arg_layout,
+                        .layout = variant_layout,
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
