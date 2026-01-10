@@ -2343,6 +2343,9 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseFast,
             .strip = true,
             .pic = true,
+            // Single-threaded mode disables TLS (thread-local storage) which avoids
+            // references to __tlsdesc_resolver that don't exist on all platforms.
+            .single_threaded = true,
         }),
     });
     builtins_bc_obj.root_module.omit_frame_pointer = true;

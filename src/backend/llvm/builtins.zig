@@ -9,20 +9,20 @@
 //!
 //! ## Implementation Strategy
 //!
-//! The Zig builtins in src/builtins/ are compiled into the same binary as the
-//! compiler. For LLVM code generation, we have infrastructure for two paths:
+//! The Zig builtins in src/builtins/ are compiled to LLVM bitcode at build time
+//! and embedded into the compiler binary. For JIT execution:
 //!
-//! 1. **Process symbol lookup (current)**: Builtins are looked up from the
-//!    process's address space via `LLVMOrcCreateDynamicLibrarySearchGeneratorForProcess`.
+//! 1. The builtins bitcode is parsed into an LLVM module
+//! 2. It's merged with the user code module via `LLVMLinkModules2()`
+//! 3. The merged module is JIT compiled and executed
 //!
-//! 2. **Bitcode merging (future)**: Builtins bitcode is generated at build time
-//!    and can be merged with user code via `LLVMLinkModules2()`. This will enable:
-//!    - Cross-compilation (builtins for target, not host)
-//!    - LLVM optimization across builtin/user code boundary
-//!    - Works with statically-linked musl binaries
+//! This approach enables:
+//! - Cross-compilation (builtins for target, not host)
+//! - LLVM optimization across builtin/user code boundary
+//! - Works on all platforms without dlopen/dlsym
 //!
-//! Currently using path #1 since the REPL doesn't call builtins yet. The bitcode
-//! merging infrastructure is in place in build.zig and llvm_compile/compile.zig.
+//! The builtins are compiled with `single_threaded=true` to avoid TLS symbols
+//! that aren't available on all platforms (e.g., `__tlsdesc_resolver` on macOS).
 
 const std = @import("std");
 const builtin = @import("builtin");

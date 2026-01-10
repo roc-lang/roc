@@ -244,16 +244,39 @@ pub fn compileAndExecute(
     }
     // Note: mem_buf is consumed by parseBitcodeInContext2, don't dispose
 
-    // TODO: Merge builtin bitcode into user module when builtins are actually called.
-    // Currently the REPL only evaluates simple expressions that don't call builtins,
-    // so we skip the bitcode merge. When builtins are needed (e.g., for Dec arithmetic,
-    // List/Str operations), uncomment this block and ensure the bitcode is compiled
-    // without TLS symbols that aren't available on all platforms.
-    //
-    // The infrastructure for bitcode merging is in place:
-    // - build.zig generates builtins.bc from src/builtins/static_lib.zig
-    // - bindings.zig has Module.link() wrapping LLVMLinkModules2
-    // - The process symbol generator below handles platform symbols
+    // Load and merge builtin bitcode into the user module.
+    // This makes all builtin functions available for the JIT to call.
+    // The builtins are compiled with single_threaded=true to avoid TLS symbols.
+    {
+        const builtin_bitcode = @embedFile("builtins.bc");
+        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+            builtin_bitcode.ptr,
+            builtin_bitcode.len,
+            "roc_builtins",
+            bindings.Bool.False,
+        );
+
+        var builtin_module: *bindings.Module = undefined;
+        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+            builtin_mem_buf.dispose();
+            module.dispose();
+            return error.BitcodeParseError;
+        }
+        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+        // Set the builtin module's target triple and data layout to match the user module.
+        // This prevents "Linking two modules of different target triples" warnings and
+        // ensures the merged module is compatible with the JIT.
+        builtin_module.setTargetTriple(module.getTargetTriple());
+        builtin_module.setDataLayout(module.getDataLayout());
+
+        // Link builtins into user module (destroys builtin_module on success)
+        if (module.link(builtin_module).toBool()) {
+            module.dispose();
+            return error.ModuleLinkFailed;
+        }
+        // Note: builtin_module is now invalid - do NOT dispose it
+    }
 
     // Wrap module in thread-safe module (takes ownership of module)
     const ts_module = bindings.OrcThreadSafeModule.create(module, ts_context);
