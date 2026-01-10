@@ -117,49 +117,32 @@ pub const Codegen = struct {
         // Convert u32 words to u8 bytes for the bindings
         const bitcode_bytes = std.mem.sliceAsBytes(bitcode_words);
 
-        // Convert strings to null-terminated for C API.
-        // Validate lengths upfront to provide clear error messages.
-        const triple_max = 255;
-        const output_max = 1023;
-        const cpu_max = 63;
-        const features_max = 255;
+        // Convert strings to null-terminated for C API
+        const triple_z = self.allocator.dupeZ(u8, options.target_triple) catch {
+            return CodegenResult.err("Failed to allocate target triple");
+        };
+        defer self.allocator.free(triple_z);
 
-        if (options.target_triple.len > triple_max) {
-            return CodegenResult.err("Target triple too long (max 255 chars)");
-        }
-        if (options.output_path.len > output_max) {
-            return CodegenResult.err("Output path too long (max 1023 chars)");
-        }
-        if (options.cpu) |cpu| {
-            if (cpu.len > cpu_max) {
-                return CodegenResult.err("CPU name too long (max 63 chars)");
+        const output_z = self.allocator.dupeZ(u8, options.output_path) catch {
+            return CodegenResult.err("Failed to allocate output path");
+        };
+        defer self.allocator.free(output_z);
+
+        const cpu_z: ?[:0]const u8 = if (options.cpu) |cpu|
+            self.allocator.dupeZ(u8, cpu) catch {
+                return CodegenResult.err("Failed to allocate CPU name");
             }
-        }
-        if (options.features) |features| {
-            if (features.len > features_max) {
-                return CodegenResult.err("Features string too long (max 255 chars)");
-            }
-        }
-
-        var triple_buf: [triple_max + 1]u8 = undefined;
-        const triple_z = std.fmt.bufPrintZ(&triple_buf, "{s}", .{options.target_triple}) catch unreachable;
-
-        var output_buf: [output_max + 1]u8 = undefined;
-        const output_z = std.fmt.bufPrintZ(&output_buf, "{s}", .{options.output_path}) catch unreachable;
-
-        // Handle optional CPU string
-        var cpu_buf: [cpu_max + 1]u8 = undefined;
-        const cpu_z: ?[*:0]const u8 = if (options.cpu) |cpu|
-            std.fmt.bufPrintZ(&cpu_buf, "{s}", .{cpu}) catch unreachable
         else
             null;
+        defer if (cpu_z) |z| self.allocator.free(z);
 
-        // Handle optional features string
-        var features_buf: [features_max + 1]u8 = undefined;
-        const features_z: ?[*:0]const u8 = if (options.features) |features|
-            std.fmt.bufPrintZ(&features_buf, "{s}", .{features}) catch unreachable
+        const features_z: ?[:0]const u8 = if (options.features) |features|
+            self.allocator.dupeZ(u8, features) catch {
+                return CodegenResult.err("Failed to allocate features string");
+            }
         else
             null;
+        defer if (features_z) |z| self.allocator.free(z);
 
         // Compile bitcode to object file using LLVM bindings
         const error_msg = bindings.compileBitcodeToObject(
