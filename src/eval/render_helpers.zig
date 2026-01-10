@@ -167,7 +167,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         switch (value.layout.tag) {
                             .box => {
                                 const elem_layout = ctx.layout_store.getLayout(value.layout.data.box);
-                                const data_ptr_opt = value.boxDataPointer() orelse return error.TypeMismatch;
+                                const data_ptr_opt = value.getBoxedData() orelse return error.TypeMismatch;
                                 if (!elem_layout.eql(payload_layout)) {
                                     return error.TypeMismatch;
                                 }
@@ -827,7 +827,7 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         const elem_size = ctx.layout_store.layoutSize(elem_layout);
 
         if (elem_size > 0) {
-            if (value.boxDataPointer()) |data_ptr| {
+            if (value.getBoxedData()) |data_ptr| {
                 const elem_val = StackValue{
                     .layout = elem_layout,
                     .ptr = @ptrCast(data_ptr),

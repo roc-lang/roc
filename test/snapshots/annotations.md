@@ -366,7 +366,7 @@ NO CHANGE
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(U8)"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "a, b -> Error"))))
+		(expr (type "Pair(U8)"))
+		(expr (type "Pair(U64)"))
+		(expr (type "a, b -> Pair(a)"))))
 ~~~
