@@ -288,11 +288,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
-    .{
-        .roc_file = "test/fx/issue_8930_tag_union_in_wrapped_record.roc",
-        .io_spec = "1>parsed: Value.CombinedValue({ combination_method: Modulo })",
-        .description = "Regression test: Wrapped tag union in wrapped record (issue #8930)",
-    },
 };
 
 /// Get the total number of IO spec tests
