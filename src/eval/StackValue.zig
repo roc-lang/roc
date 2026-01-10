@@ -27,6 +27,17 @@ const Closure = layout_mod.Closure;
 
 const StackValue = @This();
 
+/// Read an aligned integer from memory.
+inline fn readAligned(comptime T: type, raw_ptr: [*]u8) T {
+    return builtins.utils.alignedPtrCast(*const T, raw_ptr, @src()).*;
+}
+
+/// Write an i128 value to memory with alignment handling and overflow checking.
+inline fn writeChecked(comptime T: type, raw_ptr: [*]u8, value: i128) error{IntegerOverflow}!void {
+    const ptr = builtins.utils.alignedPtrCast(*T, raw_ptr, @src());
+    ptr.* = std.math.cast(T, value) orelse return error.IntegerOverflow;
+}
+
 // Internal helper functions for memory operations that don't need rt_var
 
 /// Read the discriminant for a tag union, handling single-tag unions which don't store one.
@@ -332,51 +343,21 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 return;
             },
             .int => {
-                // Use type-specific integer copying with precision
                 std.debug.assert(self.ptr != null);
-                const precision = self.layout.data.scalar.data.int;
                 const value = self.asI128();
                 const dest_bytes: [*]u8 = @ptrCast(dest_ptr);
-                switch (precision) {
-                    .u8 => {
-                        const typed_ptr: *u8 = builtins.utils.alignedPtrCast(*u8, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
-                    },
-                    .u16 => {
-                        const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
-                    },
-                    .u32 => {
-                        const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
-                    },
-                    .u64 => {
-                        const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
-                    },
-                    .u128 => {
-                        const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
-                    },
-                    .i8 => {
-                        const typed_ptr: *i8 = builtins.utils.alignedPtrCast(*i8, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
-                    },
-                    .i16 => {
-                        const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
-                    },
-                    .i32 => {
-                        const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
-                    },
-                    .i64 => {
-                        const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, dest_bytes, @src());
-                        typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
-                    },
+                switch (self.layout.data.scalar.data.int) {
+                    .u8 => try writeChecked(u8, dest_bytes, value),
+                    .i8 => try writeChecked(i8, dest_bytes, value),
+                    .u16 => try writeChecked(u16, dest_bytes, value),
+                    .i16 => try writeChecked(i16, dest_bytes, value),
+                    .u32 => try writeChecked(u32, dest_bytes, value),
+                    .i32 => try writeChecked(i32, dest_bytes, value),
+                    .u64 => try writeChecked(u64, dest_bytes, value),
+                    .i64 => try writeChecked(i64, dest_bytes, value),
+                    .u128 => try writeChecked(u128, dest_bytes, value),
                     .i128 => {
-                        const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, dest_bytes, @src());
-                        typed_ptr.* = value;
+                        builtins.utils.alignedPtrCast(*i128, dest_bytes, @src()).* = value;
                     },
                 }
                 return;
@@ -517,7 +498,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         @memmove(dst, src);
 
         // Get the closure header to find the captures layout
-        const closure = self.asClosure(roc_ops);
+        const closure = self.asClosure().?;
 
         // Debug assertion: closure layout index must be within bounds.
         // If this trips, it indicates a compiler bug in layout index assignment.
@@ -589,22 +570,19 @@ pub fn asI128(self: StackValue) i128 {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    return switch (precision) {
-        .u8 => @as(i128, @as(*const u8, @ptrCast(raw_ptr)).*),
-        .u16 => @as(i128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
-        .u32 => @as(i128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
-        .u64 => @as(i128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
-        // Use @bitCast instead of @intCast to avoid panic for values > i128 max
-        // Callers needing correct u128 values should use asU128() instead
-        .u128 => @bitCast(@as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*),
-        .i8 => @as(i128, @as(*const i8, @ptrCast(raw_ptr)).*),
-        .i16 => @as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*),
-        .i32 => @as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*),
-        .i64 => @as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*),
-        .i128 => @as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*,
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    return switch (self.layout.data.scalar.data.int) {
+        .u8 => readAligned(u8, raw_ptr),
+        .i8 => readAligned(i8, raw_ptr),
+        .u16 => readAligned(u16, raw_ptr),
+        .i16 => readAligned(i16, raw_ptr),
+        .u32 => readAligned(u32, raw_ptr),
+        .i32 => readAligned(i32, raw_ptr),
+        .u64 => readAligned(u64, raw_ptr),
+        .i64 => readAligned(i64, raw_ptr),
+        .i128 => readAligned(i128, raw_ptr),
+        // Use @bitCast to avoid panic for values > i128 max
+        .u128 => @bitCast(readAligned(u128, raw_ptr)),
     };
 }
 
@@ -615,21 +593,19 @@ pub fn asU128(self: StackValue) u128 {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
 
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    return switch (precision) {
-        .u8 => @as(u128, @as(*const u8, @ptrCast(raw_ptr)).*),
-        .u16 => @as(u128, @as(*const u16, builtins.utils.alignedPtrCast(*u16, raw_ptr, @src())).*),
-        .u32 => @as(u128, @as(*const u32, builtins.utils.alignedPtrCast(*u32, raw_ptr, @src())).*),
-        .u64 => @as(u128, @as(*const u64, builtins.utils.alignedPtrCast(*u64, raw_ptr, @src())).*),
-        .u128 => @as(*const u128, builtins.utils.alignedPtrCast(*u128, raw_ptr, @src())).*,
-        // For signed types, cast to u128 (will give large positive values for negative numbers)
-        .i8 => @bitCast(@as(i128, @as(*const i8, @ptrCast(raw_ptr)).*)),
-        .i16 => @bitCast(@as(i128, @as(*const i16, builtins.utils.alignedPtrCast(*i16, raw_ptr, @src())).*)),
-        .i32 => @bitCast(@as(i128, @as(*const i32, builtins.utils.alignedPtrCast(*i32, raw_ptr, @src())).*)),
-        .i64 => @bitCast(@as(i128, @as(*const i64, builtins.utils.alignedPtrCast(*i64, raw_ptr, @src())).*)),
-        .i128 => @bitCast(@as(*const i128, builtins.utils.alignedPtrCast(*i128, raw_ptr, @src())).*),
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    return switch (self.layout.data.scalar.data.int) {
+        .u8 => readAligned(u8, raw_ptr),
+        .u16 => readAligned(u16, raw_ptr),
+        .u32 => readAligned(u32, raw_ptr),
+        .u64 => readAligned(u64, raw_ptr),
+        .u128 => readAligned(u128, raw_ptr),
+        // Signed types: widen to i128 first to preserve sign, then bitcast to u128
+        .i8 => @bitCast(@as(i128, readAligned(i8, raw_ptr))),
+        .i16 => @bitCast(@as(i128, readAligned(i16, raw_ptr))),
+        .i32 => @bitCast(@as(i128, readAligned(i32, raw_ptr))),
+        .i64 => @bitCast(@as(i128, readAligned(i64, raw_ptr))),
+        .i128 => @bitCast(readAligned(i128, raw_ptr)),
     };
 }
 
@@ -642,63 +618,24 @@ pub fn getIntPrecision(self: StackValue) types.Int.Precision {
 /// Initialise the StackValue integer value
 /// Returns error.IntegerOverflow if the value doesn't fit in the target type
 pub fn setInt(self: *StackValue, value: i128) error{IntegerOverflow}!void {
-
-    // Assert this is pointing to a valid memory location
     std.debug.assert(self.ptr != null);
-
-    // Assert this is an integer
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .int);
+    std.debug.assert(!self.is_initialized); // Avoid accidental overwrite
 
-    // Assert this is uninitialised memory
-    //
-    // Avoid accidental overwrite, manually toggle this if updating an already initialized value
-    std.debug.assert(!self.is_initialized);
-
-    const precision = self.layout.data.scalar.data.int;
-    const raw_ptr = @as([*]u8, @ptrCast(self.ptr.?));
-
-    // Inline integer writing logic with proper type casting and alignment
-    // Use std.math.cast to safely check if value fits, returning error instead of panicking
-    switch (precision) {
-        .u8 => {
-            const typed_ptr: *u8 = @ptrCast(raw_ptr);
-            typed_ptr.* = std.math.cast(u8, value) orelse return error.IntegerOverflow;
-        },
-        .u16 => {
-            const typed_ptr: *u16 = builtins.utils.alignedPtrCast(*u16, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u16, value) orelse return error.IntegerOverflow;
-        },
-        .u32 => {
-            const typed_ptr: *u32 = builtins.utils.alignedPtrCast(*u32, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u32, value) orelse return error.IntegerOverflow;
-        },
-        .u64 => {
-            const typed_ptr: *u64 = builtins.utils.alignedPtrCast(*u64, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u64, value) orelse return error.IntegerOverflow;
-        },
-        .u128 => {
-            const typed_ptr: *u128 = builtins.utils.alignedPtrCast(*u128, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(u128, value) orelse return error.IntegerOverflow;
-        },
-        .i8 => {
-            const typed_ptr: *i8 = @ptrCast(raw_ptr);
-            typed_ptr.* = std.math.cast(i8, value) orelse return error.IntegerOverflow;
-        },
-        .i16 => {
-            const typed_ptr: *i16 = builtins.utils.alignedPtrCast(*i16, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i16, value) orelse return error.IntegerOverflow;
-        },
-        .i32 => {
-            const typed_ptr: *i32 = builtins.utils.alignedPtrCast(*i32, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i32, value) orelse return error.IntegerOverflow;
-        },
-        .i64 => {
-            const typed_ptr: *i64 = builtins.utils.alignedPtrCast(*i64, raw_ptr, @src());
-            typed_ptr.* = std.math.cast(i64, value) orelse return error.IntegerOverflow;
-        },
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    switch (self.layout.data.scalar.data.int) {
+        .u8 => try writeChecked(u8, raw_ptr, value),
+        .i8 => try writeChecked(i8, raw_ptr, value),
+        .u16 => try writeChecked(u16, raw_ptr, value),
+        .i16 => try writeChecked(i16, raw_ptr, value),
+        .u32 => try writeChecked(u32, raw_ptr, value),
+        .i32 => try writeChecked(i32, raw_ptr, value),
+        .u64 => try writeChecked(u64, raw_ptr, value),
+        .i64 => try writeChecked(i64, raw_ptr, value),
+        .u128 => try writeChecked(u128, raw_ptr, value),
         .i128 => {
-            const typed_ptr: *i128 = builtins.utils.alignedPtrCast(*i128, raw_ptr, @src());
-            typed_ptr.* = value;
+            // i128 always fits - no overflow check needed
+            builtins.utils.alignedPtrCast(*i128, raw_ptr, @src()).* = value;
         },
     }
 }
@@ -1300,30 +1237,52 @@ pub fn setRocList(self: StackValue, value: RocList) void {
     list_ptr.* = value;
 }
 
-/// Get this value as a closure pointer
-pub fn asClosure(self: StackValue, roc_ops: *RocOps) *const Closure {
+/// Get this value as a closure header pointer, or null if ptr is null.
+/// Caller can use `.?` to panic on null if they're confident it's non-null.
+pub fn asClosure(self: StackValue) ?*const Closure {
     std.debug.assert(self.layout.tag == .closure);
-    std.debug.assert(self.ptr != null);
-    // Alignment check (debug builds only for performance)
-    if (comptime builtin.mode == .Debug) {
-        const ptr_val = @intFromPtr(self.ptr.?);
-        const required_align = @alignOf(Closure);
-        if (ptr_val % required_align != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[asClosure] alignment error: ptr=0x{x} align={}", .{ ptr_val, required_align }) catch "[asClosure] alignment error";
-            roc_ops.crash(msg);
-        }
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
     }
-    return @ptrCast(@alignCast(self.ptr.?));
+    return null;
 }
 
-/// Get the payload pointer stored inside a Box value (if any)
-pub fn boxDataPointer(self: StackValue) ?[*]u8 {
+/// Get the box slot pointer (holds address of heap data), or null if ptr is null.
+/// Use this for low-level slot manipulation (copy, zero, etc.)
+pub fn asBoxSlot(self: StackValue) ?*usize {
     std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
-    if (self.ptr == null) return null;
+    if (self.ptr) |ptr| {
+        return @ptrCast(@alignCast(ptr));
+    }
+    return null;
+}
+
+/// Get the heap data pointer from inside the box, or null if box is empty.
+/// This reads the slot and converts to a byte pointer.
+pub fn getBoxedData(self: StackValue) ?[*]u8 {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    if (self.ptr) |ptr| {
+        const slot: *const usize = @ptrCast(@alignCast(ptr));
+        if (slot.* == 0) return null;
+        return @ptrFromInt(slot.*);
+    }
+    return null;
+}
+
+/// Initialize a box slot with a data pointer.
+/// Used during box creation after allocation.
+pub fn initBoxSlot(self: StackValue, data_ptr: ?*anyopaque) void {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
     const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-    if (slot.* == 0) return null;
-    return @as([*]u8, @ptrFromInt(slot.*));
+    slot.* = if (data_ptr) |p| @intFromPtr(p) else 0;
+}
+
+/// Clear a box slot (set to 0/null).
+/// Used during destruction after decref.
+pub fn clearBoxSlot(self: StackValue) void {
+    std.debug.assert(self.layout.tag == .box or self.layout.tag == .box_of_zst);
+    const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+    slot.* = 0;
 }
 
 /// Move this value to binding (transfers ownership, no refcounts change)
@@ -1387,19 +1346,18 @@ pub fn copyTo(self: StackValue, dest: StackValue, layout_cache: *LayoutStore, ro
     }
 
     if (self.layout.tag == .box) {
-        const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+        const src_slot = self.asBoxSlot().?;
+        const dest_slot = dest.asBoxSlot().?;
         dest_slot.* = src_slot.*;
         if (dest_slot.* != 0) {
-            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(dest_slot.*));
+            const data_ptr: [*]u8 = @ptrFromInt(dest_slot.*);
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
     }
 
     if (self.layout.tag == .box_of_zst) {
-        const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
-        dest_slot.* = 0;
+        dest.clearBoxSlot();
         return;
     }
 
@@ -1427,8 +1385,8 @@ pub fn copyWithoutRefcount(self: StackValue, dest: StackValue, layout_cache: *La
         dest_str.* = src_str.*; // Just copy the struct, no refcount change
     } else {
         if (self.layout.tag == .box or self.layout.tag == .box_of_zst) {
-            const src_slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-            const dest_slot: *usize = @ptrCast(@alignCast(dest.ptr.?));
+            const src_slot = self.asBoxSlot().?;
+            const dest_slot = dest.asBoxSlot().?;
             dest_slot.* = src_slot.*;
             return;
         }
@@ -1490,13 +1448,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
         return;
     }
     if (self.layout.tag == .box) {
-        if (self.ptr == null) return;
-        const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+        const slot = self.asBoxSlot() orelse return;
         if (slot.* != 0) {
             if (comptime trace_refcount) {
                 traceRefcount("INCREF box ptr=0x{x}", .{slot.*});
             }
-            const data_ptr: [*]u8 = @as([*]u8, @ptrFromInt(slot.*));
+            const data_ptr: [*]u8 = @ptrFromInt(slot.*);
             builtins.utils.increfDataPtrC(@as(?[*]u8, data_ptr), 1, roc_ops);
         }
         return;
@@ -1674,11 +1631,10 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             return;
         },
         .box => {
-            if (self.ptr == null) return;
-            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
+            const slot = self.asBoxSlot() orelse return;
             const raw_ptr = slot.*;
             if (raw_ptr == 0) return;
-            const data_ptr = @as([*]u8, @ptrFromInt(raw_ptr));
+            const data_ptr: [*]u8 = @ptrFromInt(raw_ptr);
             const target_usize = layout_cache.targetUsize();
             const elem_layout = layout_cache.getLayout(self.layout.data.box);
             const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
@@ -1723,9 +1679,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             return;
         },
         .box_of_zst => {
-            if (self.ptr == null) return;
-            const slot: *usize = @ptrCast(@alignCast(self.ptr.?));
-            slot.* = 0;
+            if (self.ptr != null) {
+                self.clearBoxSlot();
+            }
             return;
         },
         .tuple => {
@@ -1779,9 +1735,9 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 ///
 /// - For closures, this includes both the Closure header and captured data
 /// - For all other types, this is just the layout size
-pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) u32 {
+pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, _: *RocOps) u32 {
     if (self.layout.tag == .closure and self.ptr != null) {
-        const closure = self.asClosure(roc_ops);
+        const closure = self.asClosure().?;
 
         // Debug assertion: closure layout index must be within bounds.
         // If this trips, it indicates a compiler bug in layout index assignment.

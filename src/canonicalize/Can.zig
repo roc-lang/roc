@@ -3862,7 +3862,21 @@ fn canonicalizeDeclWithAnnotation(
         }
     };
 
+    // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
+    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    const ast_body_expr = self.parse_ir.store.getExpr(decl.body);
+    const is_lambda = ast_body_expr == .lambda;
+
+    // Save and set defining_pattern for self-reference detection
+    const saved_defining_pattern = self.defining_pattern;
+    if (!is_lambda) {
+        self.defining_pattern = pattern_idx;
+    }
+
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+
+    // Restore defining_pattern
+    self.defining_pattern = saved_defining_pattern;
 
     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
     const def_idx = self.env.addDef(.{

@@ -207,22 +207,12 @@ pub const ComptimeEvaluator = struct {
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
-        // Free all crash messages we allocated
-        for (self.crash_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
+        // Note: crash_messages, expect_messages, and error_names are NOT freed here.
+        // Ownership of these strings is transferred to ProblemStore when problems are
+        // appended. ProblemStore.deinit() is responsible for freeing them.
+        // We only deinit the tracking arrays themselves.
         self.crash_messages.deinit();
-
-        // Free all expect failure messages we allocated
-        for (self.expect_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
         self.expect_messages.deinit();
-
-        // Free all error names we allocated
-        for (self.error_names.items) |name| {
-            self.allocator.free(name);
-        }
         self.error_names.deinit();
         self.failed_literal_exprs.deinit();
 

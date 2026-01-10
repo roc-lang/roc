@@ -146,6 +146,34 @@ fn hasNestedLayoutMismatch(actual: Layout, expected: Layout, layout_store: *layo
     };
 }
 
+/// Selects the appropriate copy function for the given element layout.
+/// Used by list_append, list_append_unsafe, and list_concat operations.
+fn selectCopyFallbackFn(elem_layout: Layout) builtins.list.CopyFallbackFn {
+    return switch (elem_layout.tag) {
+        .scalar => switch (elem_layout.data.scalar.tag) {
+            .str => &builtins.list.copy_str,
+            .int => switch (elem_layout.data.scalar.data.int) {
+                .u8 => &builtins.list.copy_u8,
+                .u16 => &builtins.list.copy_u16,
+                .u32 => &builtins.list.copy_u32,
+                .u64 => &builtins.list.copy_u64,
+                .u128 => &builtins.list.copy_u128,
+                .i8 => &builtins.list.copy_i8,
+                .i16 => &builtins.list.copy_i16,
+                .i32 => &builtins.list.copy_i32,
+                .i64 => &builtins.list.copy_i64,
+                .i128 => &builtins.list.copy_i128,
+            },
+            else => &builtins.list.copy_fallback,
+        },
+        .box => &builtins.list.copy_box,
+        .box_of_zst => &builtins.list.copy_box_zst,
+        .list => &builtins.list.copy_list,
+        .list_of_zst => &builtins.list.copy_list_zst,
+        else => &builtins.list.copy_fallback,
+    };
+}
+
 /// Interpreter that evaluates canonical Roc expressions against runtime types/layouts.
 pub const Interpreter = struct {
     pub const Error = error{
@@ -752,7 +780,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             }
 
-            const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+            const header = func_val.asClosure().?;
 
             // Switch to the closure's source module for correct expression evaluation.
             // This is critical because pattern indices and expression indices in the closure
@@ -1163,7 +1191,7 @@ pub const Interpreter = struct {
         saved_rigid_subst = null; // Ownership transferred to continuation
 
         // Invoke comparison function with (elem_at_outer, elem_at_inner)
-        const cmp_header: *const layout.Closure = @ptrCast(@alignCast(compare_fn.ptr.?));
+        const cmp_header = compare_fn.asClosure().?;
         const cmp_saved_env = self.env;
         self.env = @constCast(cmp_header.source_env);
 
@@ -2275,7 +2303,7 @@ pub const Interpreter = struct {
                         return out;
                     }
 
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                    const closure_header = method_func.asClosure().?;
                     const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
                     if (lambda_expr == .e_low_level_lambda) {
@@ -2856,33 +2884,7 @@ pub const Interpreter = struct {
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                        .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
-                                .str => break :copy &builtins.list.copy_str,
-                                .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
-                                        .u8 => break :copy &builtins.list.copy_u8,
-                                        .u16 => break :copy &builtins.list.copy_u16,
-                                        .u32 => break :copy &builtins.list.copy_u32,
-                                        .u64 => break :copy &builtins.list.copy_u64,
-                                        .u128 => break :copy &builtins.list.copy_u128,
-                                        .i8 => break :copy &builtins.list.copy_i8,
-                                        .i16 => break :copy &builtins.list.copy_i16,
-                                        .i32 => break :copy &builtins.list.copy_i32,
-                                        .i64 => break :copy &builtins.list.copy_i64,
-                                        .i128 => break :copy &builtins.list.copy_i128,
-                                    }
-                                },
-                                else => break :copy &builtins.list.copy_fallback,
-                            }
-                        },
-                        .box => break :copy &builtins.list.copy_box,
-                        .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                        .list => break :copy &builtins.list.copy_list,
-                        .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                        else => break :copy &builtins.list.copy_fallback,
-                    };
+                    const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
                     if (elements_refcounted) {
@@ -2959,33 +2961,7 @@ pub const Interpreter = struct {
                     .roc_ops = roc_ops,
                 };
 
-                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                    .scalar => {
-                        switch (elem_layout.data.scalar.tag) {
-                            .str => break :copy &builtins.list.copy_str,
-                            .int => {
-                                switch (elem_layout.data.scalar.data.int) {
-                                    .u8 => break :copy &builtins.list.copy_u8,
-                                    .u16 => break :copy &builtins.list.copy_u16,
-                                    .u32 => break :copy &builtins.list.copy_u32,
-                                    .u64 => break :copy &builtins.list.copy_u64,
-                                    .u128 => break :copy &builtins.list.copy_u128,
-                                    .i8 => break :copy &builtins.list.copy_i8,
-                                    .i16 => break :copy &builtins.list.copy_i16,
-                                    .i32 => break :copy &builtins.list.copy_i32,
-                                    .i64 => break :copy &builtins.list.copy_i64,
-                                    .i128 => break :copy &builtins.list.copy_i128,
-                                }
-                            },
-                            else => break :copy &builtins.list.copy_fallback,
-                        }
-                    },
-                    .box => break :copy &builtins.list.copy_box,
-                    .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                    .list => break :copy &builtins.list.copy_list,
-                    .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                    else => break :copy &builtins.list.copy_fallback,
-                };
+                const copy_fn = selectCopyFallbackFn(elem_layout);
 
                 // Increment refcount of the element being appended.
                 // The element is copied into the list, creating a second reference,
@@ -3072,33 +3048,7 @@ pub const Interpreter = struct {
                         .roc_ops = roc_ops,
                     };
 
-                    const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                        .scalar => {
-                            switch (elem_layout.data.scalar.tag) {
-                                .str => break :copy &builtins.list.copy_str,
-                                .int => {
-                                    switch (elem_layout.data.scalar.data.int) {
-                                        .u8 => break :copy &builtins.list.copy_u8,
-                                        .u16 => break :copy &builtins.list.copy_u16,
-                                        .u32 => break :copy &builtins.list.copy_u32,
-                                        .u64 => break :copy &builtins.list.copy_u64,
-                                        .u128 => break :copy &builtins.list.copy_u128,
-                                        .i8 => break :copy &builtins.list.copy_i8,
-                                        .i16 => break :copy &builtins.list.copy_i16,
-                                        .i32 => break :copy &builtins.list.copy_i32,
-                                        .i64 => break :copy &builtins.list.copy_i64,
-                                        .i128 => break :copy &builtins.list.copy_i128,
-                                    }
-                                },
-                                else => break :copy &builtins.list.copy_fallback,
-                            }
-                        },
-                        .box => break :copy &builtins.list.copy_box,
-                        .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                        .list => break :copy &builtins.list.copy_list,
-                        .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                        else => break :copy &builtins.list.copy_fallback,
-                    };
+                    const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
                     if (elements_refcounted) {
@@ -3175,33 +3125,7 @@ pub const Interpreter = struct {
                     .roc_ops = roc_ops,
                 };
 
-                const copy_fn: builtins.list.CopyFallbackFn = copy: switch (elem_layout.tag) {
-                    .scalar => {
-                        switch (elem_layout.data.scalar.tag) {
-                            .str => break :copy &builtins.list.copy_str,
-                            .int => {
-                                switch (elem_layout.data.scalar.data.int) {
-                                    .u8 => break :copy &builtins.list.copy_u8,
-                                    .u16 => break :copy &builtins.list.copy_u16,
-                                    .u32 => break :copy &builtins.list.copy_u32,
-                                    .u64 => break :copy &builtins.list.copy_u64,
-                                    .u128 => break :copy &builtins.list.copy_u128,
-                                    .i8 => break :copy &builtins.list.copy_i8,
-                                    .i16 => break :copy &builtins.list.copy_i16,
-                                    .i32 => break :copy &builtins.list.copy_i32,
-                                    .i64 => break :copy &builtins.list.copy_i64,
-                                    .i128 => break :copy &builtins.list.copy_i128,
-                                }
-                            },
-                            else => break :copy &builtins.list.copy_fallback,
-                        }
-                    },
-                    .box => break :copy &builtins.list.copy_box,
-                    .box_of_zst => break :copy &builtins.list.copy_box_zst,
-                    .list => break :copy &builtins.list.copy_list,
-                    .list_of_zst => break :copy &builtins.list.copy_list_zst,
-                    else => break :copy &builtins.list.copy_fallback,
-                };
+                const copy_fn = selectCopyFallbackFn(elem_layout);
 
                 // Increment refcount of the element being appended.
                 // The element is copied into the list, creating a second reference,
@@ -3408,12 +3332,12 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l == r,
-                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l == r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num == r.num,
-                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
                         else => return error.TypeMismatch,
                     },
                     .f32, .f64 => {
@@ -3432,7 +3356,7 @@ pub const Interpreter = struct {
                     .int => |l| switch (rhs) {
                         .int => |r| l > r,
                         // Int vs Dec: convert Dec to Int for comparison
-                        .dec => |r| l > @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l > r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3446,7 +3370,7 @@ pub const Interpreter = struct {
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num > r.num,
                         // Dec vs Int: convert Int to Dec for comparison
-                        .int => |r| l.num > @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num > RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3460,7 +3384,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l >= r,
-                        .dec => |r| l >= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l >= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3473,7 +3397,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num >= r.num,
-                        .int => |r| l.num >= @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num >= RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3487,7 +3411,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l < r,
-                        .dec => |r| l < @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l < r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3500,7 +3424,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num < r.num,
-                        .int => |r| l.num < @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num < RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3514,7 +3438,7 @@ pub const Interpreter = struct {
                 const result: bool = switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| l <= r,
-                        .dec => |r| l <= @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l <= r.toWholeInt(),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3527,7 +3451,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| l.num <= r.num,
-                        .int => |r| l.num <= @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| l.num <= RocDec.fromWholeInt(r).?.num,
                         else => return error.TypeMismatch,
                     },
                 };
@@ -3621,7 +3545,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l + r),
-                        .dec => |r| try out.setInt(l + @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l + r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3634,7 +3558,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3653,7 +3577,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l - r),
-                        .dec => |r| try out.setInt(l - @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l - r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3666,7 +3590,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3685,7 +3609,7 @@ pub const Interpreter = struct {
                 switch (lhs) {
                     .int => |l| switch (rhs) {
                         .int => |r| try out.setInt(l * r),
-                        .dec => |r| try out.setInt(l * @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                        .dec => |r| try out.setInt(l * r.toWholeInt()),
                         else => return error.TypeMismatch,
                     },
                     .f32 => |l| switch (rhs) {
@@ -3698,7 +3622,7 @@ pub const Interpreter = struct {
                     },
                     .dec => |l| switch (rhs) {
                         .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
-                        .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                        .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                         else => return error.TypeMismatch,
                     },
                 }
@@ -3721,7 +3645,7 @@ pub const Interpreter = struct {
                             try out.setInt(@divTrunc(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@divTrunc(l, r_int));
                         },
@@ -3748,7 +3672,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -3773,7 +3697,7 @@ pub const Interpreter = struct {
                             try out.setInt(@divTrunc(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@divTrunc(l, r_int));
                         },
@@ -3801,7 +3725,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.div(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -3826,7 +3750,7 @@ pub const Interpreter = struct {
                             try out.setInt(@rem(l, r));
                         },
                         .dec => |r| {
-                            const r_int = @divTrunc(r.num, RocDec.one_point_zero_i128);
+                            const r_int = r.toWholeInt();
                             if (r_int == 0) return error.DivisionByZero;
                             try out.setInt(@rem(l, r_int));
                         },
@@ -3853,7 +3777,7 @@ pub const Interpreter = struct {
                         },
                         .int => |r| {
                             if (r == 0) return error.DivisionByZero;
-                            const r_dec = RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 };
+                            const r_dec = RocDec.fromWholeInt(r).?;
                             out.setDec(RocDec.rem(l, r_dec, roc_ops), roc_ops);
                         },
                         else => return error.TypeMismatch,
@@ -5357,7 +5281,7 @@ pub const Interpreter = struct {
         std.debug.assert(int_arg.ptr != null);
 
         const from_value: From = @as(*const From, @ptrCast(@alignCast(int_arg.ptr.?))).*;
-        const dec_value = RocDec{ .num = @as(i128, from_value) * RocDec.one_point_zero_i128 };
+        const dec_value = RocDec.fromWholeInt(from_value).?;
 
         const dec_layout = Layout.frac(.dec);
         const result_rt_var = try self.runtime_types.fresh();
@@ -5391,7 +5315,7 @@ pub const Interpreter = struct {
             @compileError("intToDecTryUnsafe only supports u128 and i128");
 
         // Build the result record: { success: Bool, val_or_memory_garbage: Dec }
-        return try self.buildSuccessValRecord(success, if (success) RocDec{ .num = @as(i128, @intCast(from_value)) * RocDec.one_point_zero_i128 } else RocDec{ .num = 0 });
+        return try self.buildSuccessValRecord(success, if (success) RocDec.fromWholeInt(@intCast(from_value)).? else RocDec{ .num = 0 });
     }
 
     /// Helper for float to int truncating conversions
@@ -5501,7 +5425,7 @@ pub const Interpreter = struct {
         const dec_value: RocDec = @as(*const RocDec, @ptrCast(@alignCast(dec_arg.ptr.?))).*;
 
         // Get the whole number part by dividing by one_point_zero
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         // Saturate to target range
         const to_value: To = std.math.cast(To, whole_part) orelse if (whole_part < 0) std.math.minInt(To) else std.math.maxInt(To);
@@ -5529,7 +5453,7 @@ pub const Interpreter = struct {
         const is_int = remainder == 0;
 
         // Get the whole number part
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         // Check if in range for target type
         const in_range = std.math.cast(To, whole_part) != null;
@@ -5553,7 +5477,7 @@ pub const Interpreter = struct {
         const is_int = remainder == 0;
 
         // Get the whole number part - always fits in i128
-        const whole_part = @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
+        const whole_part = dec_value.toWholeInt();
 
         return try self.buildIsIntValRecord(is_int, whole_part);
     }
@@ -6046,7 +5970,7 @@ pub const Interpreter = struct {
             .add => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l + r),
-                    .dec => |r| try out.setInt(l + @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l + r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6059,14 +5983,14 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.add(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.add(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.add(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
             .sub => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l - r),
-                    .dec => |r| try out.setInt(l - @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l - r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6079,14 +6003,14 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.sub(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.sub(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.sub(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
             .mul => switch (lhs_val) {
                 .int => |l| switch (rhs_val) {
                     .int => |r| try out.setInt(l * r),
-                    .dec => |r| try out.setInt(l * @divTrunc(r.num, RocDec.one_point_zero_i128)),
+                    .dec => |r| try out.setInt(l * r.toWholeInt()),
                     else => return error.TypeMismatch,
                 },
                 .f32 => |l| switch (rhs_val) {
@@ -6099,7 +6023,7 @@ pub const Interpreter = struct {
                 },
                 .dec => |l| switch (rhs_val) {
                     .dec => |r| out.setDec(RocDec.mul(l, r, roc_ops), roc_ops),
-                    .int => |r| out.setDec(RocDec.mul(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops),
+                    .int => |r| out.setDec(RocDec.mul(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops),
                     else => return error.TypeMismatch,
                 },
             },
@@ -6140,7 +6064,7 @@ pub const Interpreter = struct {
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.div(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
+                        out.setDec(RocDec.div(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6174,7 +6098,7 @@ pub const Interpreter = struct {
                     },
                     .int => |r| {
                         if (r == 0) return error.DivisionByZero;
-                        out.setDec(RocDec.rem(l, RocDec{ .num = @as(i128, r) * RocDec.one_point_zero_i128 }, roc_ops), roc_ops);
+                        out.setDec(RocDec.rem(l, RocDec.fromWholeInt(r).?, roc_ops), roc_ops);
                     },
                     else => return error.TypeMismatch,
                 },
@@ -6259,8 +6183,7 @@ pub const Interpreter = struct {
                 return std.math.order(lhs_f, rhs.f64);
             },
             .dec => {
-                const lhs_dec = lhs * RocDec.one_point_zero_i128;
-                return std.math.order(lhs_dec, rhs.dec.num);
+                return std.math.order(RocDec.fromWholeInt(lhs).?.num, rhs.dec.num);
             },
         };
     }
@@ -6298,8 +6221,7 @@ pub const Interpreter = struct {
     fn orderDec(_: *Interpreter, lhs: RocDec, rhs: NumericValue) !std.math.Order {
         return switch (rhs) {
             .int => {
-                const rhs_dec = rhs.int * RocDec.one_point_zero_i128;
-                return std.math.order(lhs.num, rhs_dec);
+                return std.math.order(lhs.num, RocDec.fromWholeInt(rhs.int).?.num);
             },
             .dec => std.math.order(lhs.num, rhs.dec.num),
             else => return error.TypeMismatch,
@@ -6334,12 +6256,12 @@ pub const Interpreter = struct {
                 return switch (lhs_num) {
                     .int => |l| switch (rhs_num) {
                         .int => |r| l == r,
-                        .dec => |r| l == @divTrunc(r.num, RocDec.one_point_zero_i128),
+                        .dec => |r| l == r.toWholeInt(),
                         else => false,
                     },
                     .dec => |l| switch (rhs_num) {
                         .dec => |r| l.num == r.num,
-                        .int => |r| l.num == @as(i128, r) * RocDec.one_point_zero_i128,
+                        .int => |r| if (RocDec.fromWholeInt(r)) |d| l.num == d.num else false,
                         else => false,
                     },
                     .f32 => |l| switch (rhs_num) {
@@ -6628,7 +6550,7 @@ pub const Interpreter = struct {
             return error.TypeMismatch;
         }
 
-        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+        const closure_header = method_func.asClosure().?;
         const lambda_expr = closure_header.source_env.store.getExpr(closure_header.lambda_expr_idx);
 
         if (lambda_expr == .e_low_level_lambda) {
@@ -7111,9 +7033,12 @@ pub const Interpreter = struct {
                     }
                 } else if (arg_vars.len == 1) {
                     const arg_var = arg_vars[0];
-                    const arg_layout = try self.getRuntimeLayout(arg_var);
+                    // Use the variant layout from the actual tag union data, not computed from type.
+                    // This is critical for recursive types where the payload is boxed in memory
+                    // even though the type says it's the recursive type directly.
+                    const variant_layout = acc.getVariantLayout(tag_index);
                     payload_value = StackValue{
-                        .layout = arg_layout,
+                        .layout = variant_layout,
                         .ptr = value.ptr,
                         .is_initialized = true,
                         .rt_var = arg_var,
@@ -7157,8 +7082,7 @@ pub const Interpreter = struct {
                 };
 
                 // Get pointer to heap data from the box
-                const box_ptr: *const usize = @ptrCast(@alignCast(value.ptr.?));
-                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+                const data_ptr: *anyopaque = @ptrCast(value.getBoxedData().?);
 
                 // Create an unboxed value and recursively extract tag
                 const unboxed = StackValue{
@@ -7182,9 +7106,8 @@ pub const Interpreter = struct {
         switch (result_layout.tag) {
             .box_of_zst => {
                 traceDbg(roc_ops, "makeBoxValueFromLayout: handling box_of_zst", .{});
-                if (out.ptr) |ptr| {
-                    const slot: *usize = @ptrCast(@alignCast(ptr));
-                    slot.* = 0;
+                if (out.ptr != null) {
+                    out.initBoxSlot(null);
                 }
                 return out;
             },
@@ -7223,9 +7146,8 @@ pub const Interpreter = struct {
                     traceDbg(roc_ops, "makeBoxValueFromLayout: copy complete", .{});
                 }
 
-                if (out.ptr) |ptr| {
-                    const slot: *usize = @ptrCast(@alignCast(ptr));
-                    slot.* = @intFromPtr(data_ptr);
+                if (out.ptr != null) {
+                    out.initBoxSlot(data_ptr);
                 }
                 traceDbg(roc_ops, "makeBoxValueFromLayout: returning boxed value", .{});
                 return out;
@@ -7293,8 +7215,7 @@ pub const Interpreter = struct {
             const elem_size = self.runtime_layout_store.layoutSize(elem_layout);
 
             // Get pointer to heap data from the box
-            const box_ptr: *usize = @ptrCast(@alignCast(boxed_value.ptr.?));
-            const data_ptr: [*]u8 = @ptrFromInt(box_ptr.*);
+            const data_ptr = boxed_value.getBoxedData().?;
 
             // Allocate stack space and copy the value
             var result = try self.pushRaw(elem_layout, 0, elem_rt_var);
@@ -7381,7 +7302,7 @@ pub const Interpreter = struct {
         // Found to_inspect - call it synchronously
         if (method_func.layout.tag != .closure) return null;
 
-        const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+        const closure_header = method_func.asClosure().?;
         // Use closure's source_env for pattern lookup, not self.env
         const params = closure_header.source_env.store.slicePatterns(closure_header.params);
         if (params.len != 1) return null;
@@ -7634,10 +7555,8 @@ pub const Interpreter = struct {
                         // For Dec type, extract the value and compare
                         if (value.layout.data.scalar.data.frac != .dec) break :blk false;
                         const dec_value = value.asDec(roc_ops);
-                        // Dec stores values scaled by 10^18, so we need to compare scaled values
-                        // For integer literals, we scale the literal value
-                        const scaled_lit = lit * RocDec.one_point_zero_i128;
-                        break :blk dec_value.num == scaled_lit;
+                        // Dec stores values scaled by 10^18, so compare with scaled literal
+                        break :blk if (RocDec.fromWholeInt(lit)) |d| dec_value.num == d.num else false;
                     },
                     else => false,
                 };
@@ -11208,7 +11127,7 @@ pub const Interpreter = struct {
 
                 if (arg_exprs.len == 0) {
                     // No arguments - invoke method directly
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                    const closure_header = method_func.asClosure().?;
 
                     const saved_env = self.env;
                     const saved_bindings_len = self.bindings.items.len;
@@ -12643,7 +12562,7 @@ pub const Interpreter = struct {
                     },
                     .dec => {
                         const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        ptr.* = .{ .num = num_lit.value.toI128() * RocDec.one_point_zero_i128 };
+                        ptr.* = RocDec.fromWholeInt(num_lit.value.toI128()).?;
                     },
                 },
                 else => return error.TypeMismatch,
@@ -12878,7 +12797,7 @@ pub const Interpreter = struct {
                     },
                     .dec => {
                         const ptr = @as(*RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        ptr.* = .{ .num = typed_int.value.toI128() * RocDec.one_point_zero_i128 };
+                        ptr.* = RocDec.fromWholeInt(typed_int.value.toI128()).?;
                     },
                 },
                 else => return error.TypeMismatch,
@@ -13670,7 +13589,7 @@ pub const Interpreter = struct {
                     closure_idx -= 1;
                     const cls_val = self.active_closures.items[closure_idx];
                     if (cls_val.layout.tag == .closure and cls_val.ptr != null) {
-                        const header: *const layout.Closure = @ptrCast(@alignCast(cls_val.ptr.?));
+                        const header = cls_val.asClosure().?;
                         const lambda_expr = header.source_env.store.getExpr(header.lambda_expr_idx);
                         const has_real_captures = (lambda_expr == .e_closure);
                         if (has_real_captures) {
@@ -15422,8 +15341,7 @@ pub const Interpreter = struct {
                                 // but wrapped in a tag union (like Try) whose type says unboxed.
                                 // Dereference the box and copy the inner data.
                                 const inner_layout = self.runtime_layout_store.getLayout(values[0].layout.data.box);
-                                const box_ptr: *const usize = @ptrCast(@alignCast(values[0].ptr.?));
-                                const data_ptr: *anyopaque = @ptrFromInt(box_ptr.*);
+                                const data_ptr: *anyopaque = @ptrCast(values[0].getBoxedData().?);
                                 const inner_value = StackValue{
                                     .layout = inner_layout,
                                     .ptr = data_ptr,
@@ -15946,7 +15864,7 @@ pub const Interpreter = struct {
 
                 // Handle closure invocation
                 if (func_val.layout.tag == .closure) {
-                    const header: *const layout.Closure = @ptrCast(@alignCast(func_val.ptr.?));
+                    const header = func_val.asClosure().?;
                     traceDbg(roc_ops, "invoking closure, body_idx={d}, source_env=\"{s}\"", .{ @intFromEnum(header.body_idx), header.source_env.module_name });
 
                     // Switch to the closure's source module
@@ -16430,7 +16348,7 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
 
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const closure_header = method_func.asClosure().?;
 
                 // Switch to the closure's source module
                 const saved_env = self.env;
@@ -16820,7 +16738,7 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
 
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const closure_header = method_func.asClosure().?;
 
                 // Switch to the closure's source module
                 const saved_env = self.env;
@@ -17192,7 +17110,7 @@ pub const Interpreter = struct {
 
                                         if (arg_exprs.len == 0) {
                                             // No args - invoke directly
-                                            const closure_header: *const layout.Closure = @ptrCast(@alignCast(copied_field.ptr.?));
+                                            const closure_header = copied_field.asClosure().?;
                                             const saved_env = self.env;
                                             const saved_bindings_len = self.bindings.items.len;
                                             self.env = @constCast(closure_header.source_env);
@@ -17511,7 +17429,7 @@ pub const Interpreter = struct {
                         self.triggerCrash("Hosted lambda closure has null pointer", false, roc_ops);
                         return error.Crash;
                     }
-                    const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                    const closure_header = method_func.asClosure().?;
 
                     const saved_env = self.env;
                     const saved_bindings_len = self.bindings.items.len;
@@ -17661,7 +17579,7 @@ pub const Interpreter = struct {
                 // This is critical for type inference of polymorphic literals like numeric 0 in list.get(0).
                 // We get the parameter types from the method signature and use them as expected types,
                 // but only when they are concrete types (not flex/rigid type variables).
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const closure_header = method_func.asClosure().?;
                 const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                 const method_source_env = closure_header.source_env;
                 const method_lambda_rt_var = try self.translateTypeVar(@constCast(method_source_env), method_lambda_ct_var);
@@ -17812,7 +17730,7 @@ pub const Interpreter = struct {
                 const method_func = value_stack.pop() orelse return error.Crash;
                 const receiver_value = value_stack.pop() orelse return error.Crash;
 
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const closure_header = method_func.asClosure().?;
 
                 const saved_env = self.env;
                 const saved_bindings_len = self.bindings.items.len;
@@ -18145,7 +18063,7 @@ pub const Interpreter = struct {
                     return error.TypeMismatch;
                 }
 
-                const closure_header: *const layout.Closure = @ptrCast(@alignCast(method_func.ptr.?));
+                const closure_header = method_func.asClosure().?;
 
                 const saved_env = self.env;
                 const saved_bindings_len = self.bindings.items.len;
@@ -18875,7 +18793,7 @@ pub const Interpreter = struct {
                         saved_rigid_subst = null;
 
                         // Invoke comparison function
-                        const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
+                        const cmp_header = sc.compare_fn.asClosure().?;
                         const cmp_saved_env = self.env;
                         self.env = @constCast(cmp_header.source_env);
 
@@ -18995,7 +18913,7 @@ pub const Interpreter = struct {
                     saved_rigid_subst = null;
 
                     // Invoke comparison function
-                    const cmp_header: *const layout.Closure = @ptrCast(@alignCast(sc.compare_fn.ptr.?));
+                    const cmp_header = sc.compare_fn.asClosure().?;
                     const cmp_saved_env = self.env;
                     self.env = @constCast(cmp_header.source_env);
 
