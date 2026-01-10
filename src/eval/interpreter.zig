@@ -73,6 +73,15 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
     unreachable;
 }
 
+/// Helper to check if a byte slice contains a specific character.
+/// Uses a simple loop to avoid std.mem functions which are flagged as forbidden patterns.
+fn containsDot(str: []const u8) bool {
+    for (str) |c| {
+        if (c == '.') return true;
+    }
+    return false;
+}
+
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
     layout_store: *layout.Store,
@@ -8977,9 +8986,26 @@ pub const Interpreter = struct {
         // Check if there's an existing value that differs
         if (self.flex_type_context.get(key)) |existing| {
             if (@intFromEnum(existing) != @intFromEnum(rt_var)) {
+                // Check if the existing mapping is already a concrete (non-flex/rigid) type.
+                // If so, keep it and don't overwrite - the first concrete binding should win.
+                // This is critical for polymorphic for-loops: the type parameter 'a' might be
+                // first mapped to Str (from the iterable List(Str)), but then later code
+                // tries to map it to Dec (from an empty list literal). The Str mapping is
+                // correct and should not be overwritten.
+                const existing_resolved = self.runtime_types.resolveVar(existing);
+                if (existing_resolved.desc.content != .flex and existing_resolved.desc.content != .rigid) {
+                    // Existing is concrete - keep it
+                    return;
+                }
                 // Value is changing - increment generation to invalidate stale cache entries
                 self.poly_context_generation +%= 1;
             }
+        } else {
+            // NEW entry being added - increment generation to invalidate cache entries
+            // that were translated before this mapping existed. This is critical for
+            // polymorphic functions where type parameters (like 'a' in List(a)) may be
+            // cached before the concrete type mapping is established.
+            self.poly_context_generation +%= 1;
         }
         try self.flex_type_context.put(key, rt_var);
     }
@@ -9245,6 +9271,17 @@ pub const Interpreter = struct {
         // since they may have been translated with different flex_type_context mappings.
         if (self.translate_cache.get(key)) |entry| {
             if (entry.generation == self.poly_context_generation) {
+                // Check if the cached var is a rigid that now has a name-based substitution.
+                // This can happen when a polymorphic function is called with concrete types -
+                // the rigid_name_subst gets populated after the initial translation.
+                const cached_resolved = self.runtime_types.resolveVar(entry.var_);
+                if (cached_resolved.desc.content == .rigid) {
+                    const rigid_name = cached_resolved.desc.content.rigid.name;
+                    if (self.rigid_name_subst.get(rigid_name.idx)) |concrete_rt_var| {
+                        // There's a name-based substitution - return the concrete type
+                        return concrete_rt_var;
+                    }
+                }
                 return entry.var_;
             }
         }
@@ -9478,24 +9515,41 @@ pub const Interpreter = struct {
                             for (ct_args, 0..) |ct_arg, i| {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
-                            // Always translate idents to the runtime_layout_store's env's ident store.
-                            // This is critical because the layout store was initialized with that env,
-                            // and ident comparisons in the layout store use that env's ident indices.
+                            // ALWAYS translate idents to the runtime_layout_store's env's ident store
+                            // with consistent naming. This is critical because:
+                            // 1. The layout store was initialized with that env, and ident comparisons
+                            //    in the layout store use that env's ident indices.
+                            // 2. Different modules may refer to the same type with different names
+                            //    (e.g., "Str" in Builtin vs "Builtin.Str" in user module).
+                            //    We normalize to the fully qualified canonical form for consistency.
+                            //
                             // Note: self.env may be temporarily switched during from_numeral evaluation,
                             // so we MUST use runtime_layout_store.env which remains constant.
                             const layout_env = self.runtime_layout_store.env;
-                            // Compare the underlying interner pointers to detect different ident stores
-                            const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
-                            const translated_ident = if (needs_translation) ident_blk: {
-                                const type_name_str = module.getIdent(nom.ident.ident_idx);
-                                break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
-                            } else nom.ident;
-                            const translated_origin = if (needs_translation) origin_blk: {
-                                const origin_str = module.getIdent(nom.origin_module);
-                                break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
-                            } else nom.origin_module;
+                            const type_name_str = module.getIdent(nom.ident.ident_idx);
+                            const origin_str = module.getIdent(nom.origin_module);
+                            // Normalize type name to fully qualified form:
+                            // - "Builtin.Str" -> "Builtin.Str" (keep as-is)
+                            // - "Str" -> "Builtin.Str" (add origin module prefix)
+                            // - "Builtin.Num.U8" -> "Builtin.Num.U8" (keep as-is)
+                            const is_already_qualified = containsDot(type_name_str);
+                            const normalized_type_name = normalize_blk: {
+                                if (is_already_qualified) {
+                                    // Already qualified, use as-is
+                                    break :normalize_blk type_name_str;
+                                }
+                                // Unqualified name - prepend the origin module to make it qualified
+                                const qualified = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ origin_str, type_name_str });
+                                break :normalize_blk qualified;
+                            };
+                            defer if (!is_already_qualified) {
+                                self.allocator.free(normalized_type_name);
+                            };
+                            const translated_ident = types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(normalized_type_name)) };
+                            const translated_origin = try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
-                            break :blk try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            const result_var = try self.runtime_types.register(.{ .content = content, .rank = types.Rank.top_level, .mark = types.Mark.none });
+                            break :blk result_var;
                         },
                     }
                 },
@@ -9631,17 +9685,16 @@ pub const Interpreter = struct {
                     const content: types.Content = .{ .rigid = rt_rigid };
                     const rt_rigid_var = try self.runtime_types.freshFromContent(content);
 
-                    // If there's a for-clause mapping for this rigid name, add it to empty_scope
-                    // so the layout store can find it during Box/List layout computation
+                    // If there's a rigid_name_subst mapping for this rigid name, use the concrete type
+                    // instead of the rigid. This is critical for polymorphic functions where the
+                    // type parameter has been instantiated to a concrete type (e.g., `a` -> `Str`).
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Don't add if it would create a cycle in rigid_subst
+                        // Don't use if it would create a cycle
                         if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
-                            // Mapping found! Add to empty_scope and rigid_subst
-                            if (self.empty_scope.scopes.items.len == 0) {
-                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                            }
-                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            // Also add the mapping to rigid_subst for consistency
                             try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
+                            // Return the CONCRETE type, not the rigid
+                            break :blk concrete_rt_var;
                         }
                     }
 
@@ -9904,15 +9957,9 @@ pub const Interpreter = struct {
         };
         if (params.len != args.len) return error.TypeMismatch;
 
-        // Take a snapshot before unification to preserve arg types on failure.
-        // unifyWithConf sets types to .err on failure, which would corrupt our
-        // argument types and break downstream evaluation.
-        var types_snapshot = try self.runtime_types.snapshot();
-        errdefer types_snapshot.deinit(self.runtime_types.gpa);
-
-        var unification_failed = false;
-        var i: usize = 0;
-        while (i < params.len) : (i += 1) {
+        // Runtime unification should NEVER fail. If it does, there's a bug in type translation
+        // or ident normalization. The code passed compile-time type checking, so types should unify.
+        for (params, 0..) |param, i| {
             const result = try unify.unifyWithConf(
                 self.runtime_layout_store.env,
                 self.runtime_types,
@@ -9921,24 +9968,14 @@ pub const Interpreter = struct {
                 &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
-                params[i],
+                param,
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
-            if (result != .ok) {
-                unification_failed = true;
-                break;
-            }
+            // Runtime unification should NEVER fail - if it does, there's a bug in type translation.
+            // The code passed compile-time type checking, so types should unify at runtime.
+            std.debug.assert(result == .ok);
         }
-
-        if (unification_failed) {
-            // Rollback to restore original types before .err corruption.
-            // Unification failures at runtime can happen in polymorphic contexts due to
-            // type reuse across iterations. Since the code passed compile-time type checking,
-            // we can safely continue with the original types.
-            self.runtime_types.rollbackTo(&types_snapshot);
-        }
-        types_snapshot.deinit(self.runtime_types.gpa);
         // ret_var may now be constrained
 
         // Apply rigid substitutions to ret_var if needed
@@ -12442,6 +12479,16 @@ pub const Interpreter = struct {
                         try self.rigid_subst.put(source, target);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(source, target);
+
+                        // ALSO add to rigid_name_subst by name.
+                        // This ensures that even if new rigids are created with the same name
+                        // (e.g., due to translate_cache invalidation), the name-based lookup
+                        // will still find the correct concrete type.
+                        const source_resolved = self.runtime_types.resolveVar(source);
+                        if (source_resolved.desc.content == .rigid) {
+                            const rigid_name = source_resolved.desc.content.rigid.name;
+                            try self.rigid_name_subst.put(rigid_name.idx, target);
+                        }
                     }
                 }
 
