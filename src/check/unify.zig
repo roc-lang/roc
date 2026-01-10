@@ -175,7 +175,7 @@ pub fn unifyAssumeOk(
 
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
-    unifier.unifyGuarded(a, b) catch {};
+    unifier.unifyGuarded(a, b) catch unreachable;
 }
 
 /// Unify two type variables
