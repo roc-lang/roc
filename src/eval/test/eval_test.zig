@@ -1980,3 +1980,36 @@ test "issue 8892: nominal type wrapping tag union with match expression" {
         \\}
     , .no_trace);
 }
+
+test "issue 8927: early return in method argument leaks memory" {
+    // Regression test for GitHub issue #8927: memory leak when using ? operator
+    // inside a for loop that accumulates to a mutable variable via method call.
+    //
+    // When ? triggers early return during method argument evaluation (like
+    // list.append(x?)), the receiver value and method function on the value
+    // stack were not being decreffed, causing a memory leak.
+    //
+    // The fix adds cleanup handlers for dot_access_resolve, dot_access_collect_args,
+    // and type_var_dispatch_collect_args in the early_return section.
+    //
+    // This test uses test_allocator which detects memory leaks.
+    try runExpectI64(
+        \\{
+        \\    fold_try = |tries| {
+        \\        var $ok_list = [0i64]
+        \\        $ok_list = []
+        \\        for a_try in tries {
+        \\            $ok_list = $ok_list.append(a_try?)
+        \\        }
+        \\        Ok($ok_list)
+        \\    }
+        \\
+        \\    tries = [Ok(1i64), Ok(2i64), Err(NaN), Ok(4i64)]
+        \\
+        \\    match fold_try(tries) {
+        \\        Ok(list) => List.len(list)
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 0, .no_trace);
+}
