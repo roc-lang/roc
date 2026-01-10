@@ -2826,3 +2826,25 @@ test "comptime eval - issue 8901: pattern matching on nominal type" {
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "issue 8930: wrapped tag union in wrapped record should not crash" {
+    // Regression test for issue #8930: Wrapped type (opaque) containing a tag
+    // union with a record payload that contains another wrapped tag union.
+    // Previously crashed with "increfDataPtrC: ptr=0x2 is not 8-byte aligned"
+    // because discriminant values were incorrectly treated as pointers.
+    const src =
+        \\ValueCombinationMethod := [Divide, Modulo, Add, Subtract]
+        \\Value := [CombinedValue({combination_method: ValueCombinationMethod})]
+        \\
+        \\v = Value.CombinedValue({combination_method: ValueCombinationMethod.Add})
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // The value should be created without crashing
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
