@@ -23,3 +23,4 @@ pub const LinkWasm = bindings.LinkWasm;
 pub const compileAndExecute = compile.compileAndExecute;
 pub const Error = compile.Error;
 pub const ResultType = compile.ResultType;
+pub const isJITSupported = compile.isJITSupported;

@@ -136,7 +136,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
-        .io_spec = "1>done",
+        .io_spec = "1>done: 42",
         .description = "Numeric lookup",
     },
     .{
@@ -252,6 +252,41 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/dbg_corrupts_recursive_tag_union.roc",
         .io_spec = "1>Child is Text: hello",
         .description = "Regression test: dbg on recursive tag union preserves variant discriminant (issue #8804)",
+    },
+    .{
+        .roc_file = "test/fx/primitive_encode.roc",
+        .io_spec = "1>Bool.encode(True): true|1>U64.encode(42): 42|1>Done",
+        .description = "Primitive types have encode methods for static dispatch (issue #8853)",
+    },
+    .{
+        .roc_file = "test/fx/issue8866.roc",
+        .io_spec = "1>Done: 2",
+        .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Multiple expects with polymorphic function panic (issue #8897)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897_min.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Minimal repro for issue #8897 panic",
+    },
+    .{
+        .roc_file = "test/fx/issue8923.roc",
+        .io_spec = "1>converted to utf8|1>Parsing block|1>parsed: Try.Err(\"wildcard\")",
+        .description = "Regression test: Infinite recursion in layout size computation for recursive opaque types (issue #8923)",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_platform_module.roc",
+        .io_spec = "1>Result: start-middle-end",
+        .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_effect_bug.roc",
+        .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
+        .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
 };
 

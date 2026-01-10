@@ -40,6 +40,12 @@ pub const Diagnostic = union(enum) {
         ident: Ident.Idx,
         region: Region,
     },
+    /// A non-function value is defined in terms of itself, which would cause an infinite loop.
+    /// For example: `a = a` or `a = [a, b]`. Only functions can reference themselves (for recursion).
+    self_referential_definition: struct {
+        ident: Ident.Idx,
+        region: Region,
+    },
     qualified_ident_does_not_exist: struct {
         ident: Ident.Idx, // The full qualified identifier (e.g., "Stdout.line!")
         region: Region,
@@ -252,6 +258,21 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    /// Two or more type aliases form a cycle where each references another.
+    /// This is not allowed because type aliases are transparent synonyms.
+    /// Use nominal types (:=) for recursive types.
+    mutually_recursive_type_aliases: struct {
+        name: Ident.Idx,
+        other_name: Ident.Idx,
+        region: Region,
+        other_region: Region,
+    },
+    /// A number literal uses the deprecated suffix syntax (e.g., 123u64 instead of 123.U64)
+    deprecated_number_suffix: struct {
+        suffix: StringLiteral.Idx,
+        suggested: StringLiteral.Idx,
+        region: Region,
+    },
 
     pub const Idx = enum(u32) { _ };
     pub const Span = extern struct { span: base.DataSpan };
@@ -265,6 +286,7 @@ pub const Diagnostic = union(enum) {
             .invalid_num_literal => |d| d.region,
             .ident_already_in_scope => |d| d.region,
             .ident_not_in_scope => |d| d.region,
+            .self_referential_definition => |d| d.region,
             .qualified_ident_does_not_exist => |d| d.region,
             .invalid_top_level_statement => |d| d.region,
             .expr_not_canonicalized => |d| d.region,
@@ -319,6 +341,8 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .mutually_recursive_type_aliases => |d| d.region,
+            .deprecated_number_suffix => |d| d.region,
         };
     }
 
@@ -526,6 +550,36 @@ pub const Diagnostic = union(enum) {
             try report.document.addReflowingTextWithBackticks(tip);
         }
 
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+        return report;
+    }
+
+    /// Build a report for "self-referential assignment" diagnostic
+    pub fn buildSelfReferentialDefinitionReport(
+        allocator: Allocator,
+        ident_name: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "INVALID ASSIGNMENT TO ITSELF", .runtime_error);
+        const owned_ident = try report.addOwnedString(ident_name);
+        try report.document.addReflowingText("The value ");
+        try report.document.addUnqualifiedSymbol(owned_ident);
+        try report.document.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         const owned_filename = try report.addOwnedString(filename);
@@ -1718,6 +1772,44 @@ pub const Diagnostic = union(enum) {
         try report.document.addReflowingText("Underscores in type annotations mean \"I don't care about this type\", which doesn't make sense when declaring a type. ");
         try report.document.addReflowingText("If you need a placeholder type variable, use a named type variable like ");
         try report.document.addInlineCode("a");
+        try report.document.addReflowingText(" instead.");
+
+        return report;
+    }
+
+    /// Build a report for "deprecated number suffix" diagnostic
+    pub fn buildDeprecatedNumberSuffixReport(
+        allocator: Allocator,
+        suffix: []const u8,
+        suggested: []const u8,
+        region_info: base.RegionInfo,
+        filename: []const u8,
+        source: []const u8,
+        line_starts: []const u32,
+    ) !Report {
+        var report = Report.init(allocator, "DEPRECATED NUMBER SUFFIX", .runtime_error);
+
+        const owned_suffix = try report.addOwnedString(suffix);
+        const owned_suggested = try report.addOwnedString(suggested);
+
+        try report.document.addReflowingText("This number literal uses a deprecated suffix syntax:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const owned_filename = try report.addOwnedString(filename);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            owned_filename,
+            source,
+            line_starts,
+        );
+
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("The ");
+        try report.document.addInlineCode(owned_suffix);
+        try report.document.addReflowingText(" suffix is no longer supported. Use ");
+        try report.document.addInlineCode(owned_suggested);
         try report.document.addReflowingText(" instead.");
 
         return report;

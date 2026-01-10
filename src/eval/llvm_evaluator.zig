@@ -30,6 +30,59 @@ const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
 
+/// Get the LLVM target triple for the current platform.
+/// This must match the triple that LLVM's GetDefaultTargetTriple() returns,
+/// or there will be calling convention mismatches when JIT-compiling.
+///
+/// Note: Zig on Windows uses GNU ABI (mingw), not MSVC!
+fn getLlvmTriple() []const u8 {
+    const arch = switch (builtin.cpu.arch) {
+        .x86_64 => "x86_64",
+        .aarch64 => "aarch64",
+        .x86 => "i686",
+        .arm, .armeb => "arm",
+        .thumb, .thumbeb => "thumb",
+        .wasm32 => "wasm32",
+        .wasm64 => "wasm64",
+        .riscv32 => "riscv32",
+        .riscv64 => "riscv64",
+        else => "unknown",
+    };
+
+    const vendor_os = switch (builtin.os.tag) {
+        // Windows 64-bit uses w64 (mingw-w64) vendor, not pc
+        .windows => "-w64-windows",
+        .macos => "-apple-darwin",
+        .ios => "-apple-ios",
+        .linux => "-unknown-linux",
+        .freebsd => "-unknown-freebsd",
+        .openbsd => "-unknown-openbsd",
+        .netbsd => "-unknown-netbsd",
+        .freestanding => "-unknown-unknown",
+        .wasi => "-wasi",
+        else => "-unknown-unknown",
+    };
+
+    // ABI suffix - Zig's LLVM on Windows uses GNU (mingw), not MSVC!
+    const abi = switch (builtin.os.tag) {
+        .windows => "-gnu", // Zig uses mingw/GNU toolchain on Windows
+        .linux => switch (builtin.abi) {
+            .musleabihf => "-musleabihf",
+            .gnueabihf => "-gnueabihf",
+            .musleabi => "-musleabi",
+            .gnueabi => "-gnueabi",
+            .musl => "-musl",
+            .gnu => "-gnu",
+            .android => "-android",
+            else => "-gnu",
+        },
+        .freestanding, .wasi => "",
+        else => "", // macOS, iOS, BSDs don't need ABI suffix
+    };
+
+    return arch ++ vendor_os ++ abi;
+}
+
 /// LLVM-based evaluator for Roc expressions
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
@@ -98,11 +151,14 @@ pub const LlvmEvaluator = struct {
     /// Returns the bitcode and whether it's a float type (for printf formatting)
     /// The caller is responsible for freeing the bitcode via result.deinit()
     pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
-        // Create LLVM Builder
+        // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
+        // The triple must match what LLVM's GetDefaultTargetTriple() returns on the host,
+        // otherwise calling convention mismatches will cause segfaults on Windows.
         var builder = LlvmBuilder.init(.{
             .allocator = self.allocator,
             .name = "roc_repl_eval",
             .target = &builtin.target,
+            .triple = getLlvmTriple(),
         }) catch return error.OutOfMemory;
         defer builder.deinit();
 
@@ -115,8 +171,9 @@ pub const LlvmEvaluator = struct {
         // since LLVM types don't distinguish signed from unsigned
         const result_type: ResultType = self.getExprResultType(expr);
 
-        // Generate a main function that prints the result
-        try self.emitMainWithPrint(&builder, value_type, value);
+        // Generate a main function that returns the result
+        // The return type must match what compile.zig expects based on result_type
+        try self.emitMainWithPrint(&builder, value_type, value, result_type);
 
         // Serialize to bitcode
         const producer = LlvmBuilder.Producer{
@@ -296,15 +353,33 @@ pub const LlvmEvaluator = struct {
         };
     }
 
-    /// Emit an eval function that returns the computed value directly.
-    /// For JIT execution, this avoids printf complexity and vararg ABI issues.
-    /// Returns the value in its native LLVM type.
-    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant) !void {
-        // Use the actual value type as the return type (no conversion needed)
-        const return_type = value_type;
+    /// Emit an eval function that writes the computed value to a pointer.
+    ///
+    /// Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
+    /// exposed to the host return void and write their result to a pointer.
+    /// This makes the ABI simple and platform-independent: "return pointer, done."
+    ///
+    /// Function signature: void roc_eval(<type>* out_ptr)
+    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
+        // Determine the value type to store
+        const final_type: LlvmBuilder.Type = switch (result_type) {
+            .i64, .u64 => .i64,
+            .i128, .u128, .dec => .i128,
+            .f64 => .double,
+        };
 
-        // Create eval function
-        const eval_type = try builder.fnType(return_type, &.{}, .normal);
+        // Determine signedness for integer extension
+        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
+            .i64, .i128 => .signed,
+            .u64, .u128 => .unsigned,
+            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
+        };
+
+        // All platforms: void roc_eval(<type>* out_ptr)
+        // This follows Roc's host ABI where all exposed functions return void
+        // and write their result to a pointer argument.
+        const ptr_type = try builder.ptrType(.default);
+        const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
         const eval_name = if (builtin.os.tag == .macos)
             try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
         else
@@ -312,18 +387,47 @@ pub const LlvmEvaluator = struct {
         const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
         eval_fn.setLinkage(.external, builder);
 
-        // Build eval function body
+        // Explicitly set the calling convention for the platform.
+        // Without this, LLVM may not know which C convention to use.
+        // On Windows x64, we need win64cc for correct argument passing (RCX for first arg).
+        // On System V x64, we need x86_64_sysvcc (RDI for first arg).
+        if (builtin.cpu.arch == .x86_64) {
+            if (builtin.os.tag == .windows) {
+                eval_fn.setCallConv(.win64cc, builder);
+            } else {
+                eval_fn.setCallConv(.x86_64_sysvcc, builder);
+            }
+        }
+        // Other architectures use the default ccc which maps correctly
+
+        // Build function body
         var wip = try LlvmBuilder.WipFunction.init(builder, .{
             .function = eval_fn,
             .strip = false,
         });
         defer wip.deinit();
 
-        const entry_block = try wip.block(0, "entry");
+        const entry_block = try wip.block(0, "entry"); // entry block has 0 incoming branches
         wip.cursor = .{ .block = entry_block };
 
-        // Return the value directly - types match exactly
-        _ = try wip.ret(value.toValue());
+        // Get the pointer argument
+        const out_ptr = wip.arg(0);
+
+        // Convert value if needed and store through pointer
+        const store_value = if (value_type == final_type)
+            value.toValue()
+        else
+            try wip.conv(signedness, value.toValue(), final_type, "");
+
+        // Use natural alignment for the stored type
+        const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
+            .i64 => 8,
+            .i128 => 16,
+            .double => 8,
+            else => 0, // default
+        });
+        _ = try wip.store(.normal, store_value, out_ptr, alignment);
+        _ = try wip.retVoid();
         try wip.finish();
     }
 };

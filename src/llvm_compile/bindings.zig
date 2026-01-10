@@ -9,9 +9,7 @@
 //! the standard LLVM C API doesn't expose all necessary functionality.
 //! These wrappers are implemented in src/build/zig_llvm.cpp.
 //!
-//! Adapted from the Zig compiler's LLVM bindings.
-
-const std = @import("std");
+//! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
 /// LLVM boolean type compatible with C int. Do not compare directly to .True, use toBool() instead.
 pub const Bool = enum(c_int) {

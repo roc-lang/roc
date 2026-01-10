@@ -558,3 +558,92 @@ test "addTypeVar - type alias inside Try nominal (issue #8708)" {
     // Try should have a tag_union layout
     try testing.expect(result_layout.tag == .tag_union);
 }
+
+test "addTypeVar - recursive nominal type with nested Box at depth 2+ (issue #8816)" {
+    // Regression test for issue #8816:
+    // Recursive nominal types where the recursion goes through Box at depth 2+
+    // would cause a segfault during layout computation.
+    //
+    // The bug was that when computing the layout of a recursive type inside a Box,
+    // we would try to create a placeholder for the raw layout (not the boxed layout),
+    // but the raw_layout_placeholders cache was missing, causing the placeholder lookup
+    // to fail when we encountered the recursive type at depth 2+.
+    //
+    // Example Roc code that triggered the bug:
+    //   RichDoc := [PlainText(Str), Wrapped(Box(RichDoc))]
+    //   depth2 = RichDoc.Wrapped(Box.box(RichDoc.Wrapped(Box.box(RichDoc.PlainText("two")))))
+
+    var lt: LayoutTest = undefined;
+    lt.gpa = testing.allocator;
+    lt.module_env = try ModuleEnv.init(lt.gpa, "");
+    lt.type_store = try types_store.Store.init(lt.gpa);
+
+    // Setup identifiers
+    const rich_doc_ident_idx = try lt.module_env.insertIdent(Ident.for_text("RichDoc"));
+    const box_ident_idx = try lt.module_env.insertIdent(Ident.for_text("Box"));
+    const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
+    lt.module_env.idents.builtin_module = builtin_module_idx;
+
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.type_scope = TypeScope.init(lt.gpa);
+    defer lt.deinit();
+
+    // Create a recursive type: RichDoc := [PlainText(Str), Wrapped(Box(RichDoc))]
+    // We create the recursive reference by first creating a flex var, then updating it
+    // to point to the nominal type content after we've created the full structure.
+
+    // Create a fresh var for the recursive reference
+    const recursive_var = try lt.type_store.freshFromContent(.{ .flex = types.Flex.init() });
+
+    // Create Box(recursive_var) - this references the recursive var before we define the nominal
+    const box_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = box_ident_idx },
+        recursive_var,
+        &[_]types.Var{recursive_var},
+        builtin_module_idx,
+        false,
+    );
+    const box_recursive_var = try lt.type_store.freshFromContent(box_content);
+
+    // Create Str (simplified as empty record for this test)
+    const str_var = try lt.type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // Create [PlainText(Str), Wrapped(Box(RichDoc))]
+    const plain_text_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("PlainText")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{str_var}),
+    };
+    const wrapped_tag = types.Tag{
+        .name = try lt.module_env.insertIdent(Ident.for_text("Wrapped")),
+        .args = try lt.type_store.appendVars(&[_]types.Var{box_recursive_var}),
+    };
+    const tags_range = try lt.type_store.appendTags(&[_]types.Tag{ plain_text_tag, wrapped_tag });
+    const tag_union = types.TagUnion{
+        .tags = tags_range,
+        .ext = try lt.type_store.freshFromContent(.{ .structure = .empty_tag_union }),
+    };
+    const tag_union_var = try lt.type_store.freshFromContent(.{ .structure = .{ .tag_union = tag_union } });
+
+    // Create the nominal type content: RichDoc := [PlainText(Str), Wrapped(Box(RichDoc))]
+    const rich_doc_content = try lt.type_store.mkNominal(
+        .{ .ident_idx = rich_doc_ident_idx },
+        tag_union_var,
+        &[_]types.Var{},
+        builtin_module_idx,
+        false,
+    );
+
+    // Close the recursive loop by updating the recursive_var to point to the nominal content
+    try lt.type_store.setVarContent(recursive_var, rich_doc_content);
+
+    // Also create a fresh var with the content for testing (layout computation will follow the recursion)
+    const rich_doc_var = try lt.type_store.freshFromContent(rich_doc_content);
+
+    // This should succeed without segfault.
+    // Before the fix, this would fail when computing the layout for depth 2+ nesting.
+    const result_idx = try lt.layout_store.addTypeVar(rich_doc_var, &lt.type_scope);
+    const result_layout = lt.layout_store.getLayout(result_idx);
+
+    // RichDoc should have a tag_union layout (since the nominal wraps a tag union)
+    try testing.expect(result_layout.tag == .tag_union);
+}

@@ -274,14 +274,89 @@ pub const TagUnionData = struct {
     }
 
     /// Read the discriminant value from memory at the given base pointer.
-    /// Uses manual byte reading to avoid std.mem which triggers the forbidden pattern check.
+    /// Adds discriminant_offset internally to find the discriminant location.
     pub fn readDiscriminant(self: TagUnionData, base_ptr: [*]const u8) u32 {
-        const disc_ptr = base_ptr + self.discriminant_offset;
+        return self.readDiscriminantFromPtr(base_ptr + self.discriminant_offset);
+    }
+
+    /// Read the discriminant value from a pointer already at the discriminant location.
+    /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
+    pub fn readDiscriminantFromPtr(self: TagUnionData, disc_ptr: [*]const u8) u32 {
         return switch (self.discriminant_size) {
             1 => disc_ptr[0],
             2 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8),
             4 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24),
-            else => unreachable, // discriminant_size is always 1, 2, or 4
+            8 => @as(u32, disc_ptr[0]) | (@as(u32, disc_ptr[1]) << 8) | (@as(u32, disc_ptr[2]) << 16) | (@as(u32, disc_ptr[3]) << 24), // truncate to u32
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        };
+    }
+
+    /// Write a discriminant value to memory at the given base pointer.
+    /// Adds discriminant_offset internally to find the discriminant location.
+    pub fn writeDiscriminant(self: TagUnionData, base_ptr: [*]u8, value: u32) void {
+        self.writeDiscriminantToPtr(base_ptr + self.discriminant_offset, value);
+    }
+
+    /// Write a discriminant value to a pointer already at the discriminant location.
+    /// Use this when you have a pre-computed discriminant pointer (e.g., from getTagUnionDiscriminantOffset).
+    pub fn writeDiscriminantToPtr(self: TagUnionData, disc_ptr: [*]u8, value: u32) void {
+        switch (self.discriminant_size) {
+            1 => disc_ptr[0] = @intCast(value),
+            2 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+            },
+            4 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+                disc_ptr[2] = @intCast((value >> 16) & 0xFF);
+                disc_ptr[3] = @intCast((value >> 24) & 0xFF);
+            },
+            8 => {
+                disc_ptr[0] = @intCast(value & 0xFF);
+                disc_ptr[1] = @intCast((value >> 8) & 0xFF);
+                disc_ptr[2] = @intCast((value >> 16) & 0xFF);
+                disc_ptr[3] = @intCast((value >> 24) & 0xFF);
+                disc_ptr[4] = 0;
+                disc_ptr[5] = 0;
+                disc_ptr[6] = 0;
+                disc_ptr[7] = 0;
+            },
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        }
+    }
+
+    /// Get the alignment requirement for this discriminant.
+    pub fn discriminantAlignment(self: TagUnionData) std.mem.Alignment {
+        return alignmentForDiscriminantSize(self.discriminant_size);
+    }
+
+    /// Get the alignment requirement for a given discriminant size.
+    /// Can be called before a TagUnionData is created.
+    pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
+        return switch (size) {
+            1 => .@"1",
+            2 => .@"2",
+            4 => .@"4",
+            8 => .@"8",
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
+        };
+    }
+
+    /// Get the integer precision for this discriminant (always unsigned).
+    pub fn discriminantPrecision(self: TagUnionData) types.Int.Precision {
+        return precisionForDiscriminantSize(self.discriminant_size);
+    }
+
+    /// Get the integer precision for a given discriminant size (always unsigned).
+    /// Can be called before a TagUnionData is created.
+    pub fn precisionForDiscriminantSize(size: u8) types.Int.Precision {
+        return switch (size) {
+            1 => .u8,
+            2 => .u16,
+            4 => .u32,
+            8 => .u64,
+            else => unreachable, // discriminant_size is 1, 2, 4, or 8
         };
     }
 };

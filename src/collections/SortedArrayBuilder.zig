@@ -155,11 +155,12 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
 
             for (0..len) |read_index| {
                 const entry = self.entries.items[read_index];
-                const is_last = read_index == len - 1;
 
-                // Check if next entry has the same key (if not last)
-                const has_duplicate_after = if (is_last) false else blk: {
-                    const next_entry = self.entries.items[read_index + 1];
+                // Check if next entry has the same key (bounds check first)
+                const has_duplicate_after: bool = blk: {
+                    const next_index = read_index + 1;
+                    if (next_index >= self.entries.items.len) break :blk false;
+                    const next_entry = self.entries.items[next_index];
                     break :blk if (K == []const u8)
                         std.mem.eql(u8, entry.key, next_entry.key)
                     else

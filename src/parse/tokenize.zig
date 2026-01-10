@@ -165,46 +165,6 @@ pub const Token = struct {
 
         MalformedUnknownToken,
 
-        /// Returns true if the node is a keyword.
-        pub fn isKeyword(tok: Tag) bool {
-            return switch (tok) {
-                .KwApp,
-                .KwAs,
-                .KwCrash,
-                .KwDbg,
-                .KwElse,
-                .KwExpect,
-                .KwExposes,
-                .KwExposing,
-                .KwFor,
-                .KwGenerates,
-                .KwHas,
-                .KwHosted,
-                .KwIf,
-                .KwImplements,
-                .KwImport,
-                .KwImports,
-                .KwIn,
-                .KwInterface,
-                .KwMatch,
-                .KwModule,
-                .KwPackage,
-                .KwPackages,
-                .KwPlatform,
-                .KwProvides,
-                .KwRequires,
-                .KwReturn,
-                .KwTargets,
-                .KwVar,
-                .KwWhere,
-                .KwWhile,
-                .KwWith,
-                .KwBreak,
-                => true,
-                else => false,
-            };
-        }
-
         /// Returns true if the node is malformed.
         pub fn isMalformed(tok: Tag) bool {
             // This function explicitly lists all variants to ensure new malformed nodes aren't missed.
@@ -1685,6 +1645,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var output = tokenizer.finishAndDeinit();
     defer output.tokens.deinit(gpa);
 
+    // Debug output (excluded from coverage via --exclude-line=std.debug.print)
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
@@ -1745,6 +1706,7 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
         same = same and (length1 == length2);
     }
 
+    // Diagnostic output when tokens don't match (excluded from coverage via --exclude-line)
     if (!same) {
         var prefix_len: usize = 0;
         var suffix_len: usize = 0;
@@ -2430,6 +2392,18 @@ test "tokenizer" {
     try testTokenization(gpa, "$123", &[_]Token.Tag{ .MalformedUnknownToken, .Int });
     try testTokenization(gpa, "$ ", &[_]Token.Tag{.MalformedUnknownToken});
     try testTokenization(gpa, "$foo $bar", &[_]Token.Tag{ .LowerIdent, .LowerIdent });
+
+    // Carriage return handling
+    try testTokenization(gpa, "a\r\nb", &[_]Token.Tag{ .LowerIdent, .LowerIdent }); // Windows line ending
+    try testTokenization(gpa, "a\rb", &[_]Token.Tag{ .LowerIdent, .LowerIdent }); // Standalone CR (will emit diagnostic)
+
+    // Octal, binary, and hex numbers
+    try testTokenization(gpa, "0o755", &[_]Token.Tag{.Int}); // Octal
+    try testTokenization(gpa, "0O755", &[_]Token.Tag{.Int}); // Uppercase octal (will emit warning)
+    try testTokenization(gpa, "0b1010", &[_]Token.Tag{.Int}); // Binary
+    try testTokenization(gpa, "0B1010", &[_]Token.Tag{.Int}); // Uppercase binary (will emit warning)
+    try testTokenization(gpa, "0x1A", &[_]Token.Tag{.Int}); // Hex
+    try testTokenization(gpa, "0X1A", &[_]Token.Tag{.Int}); // Uppercase hex (will emit warning)
 }
 
 test "tokenizer with invalid UTF-8" {
@@ -2610,5 +2584,253 @@ test "dollar sign in middle of identifier" {
         const token_tags = tokenizer.output.tokens.items(.tag);
         try std.testing.expect(token_tags.len >= 2);
         try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+}
+
+test "tokenizer invariants with various token types" {
+    const gpa = std.testing.allocator;
+
+    // Test various token types that should pass invariant checks
+    // These are carefully chosen to NOT produce any diagnostic messages
+
+    // Float tokens
+    try checkTokenizerInvariants(gpa, "3.14", false);
+    try checkTokenizerInvariants(gpa, "-3.14", false);
+
+    // Single quote tokens (various lengths to cover different UTF-8 sizes)
+    try checkTokenizerInvariants(gpa, "'A'", false); // length 3: ASCII
+    try checkTokenizerInvariants(gpa, "'\\\\'", false); // length 4: escaped backslash
+    try checkTokenizerInvariants(gpa, "'Å'", false); // length 4: 2-byte UTF-8 (Latin Extended)
+    try checkTokenizerInvariants(gpa, "'Ἀ'", false); // length 5: 3-byte UTF-8 (Greek Extended)
+    try checkTokenizerInvariants(gpa, "'𐙝'", false); // length 6: 4-byte UTF-8 (Emoji-like)
+    try checkTokenizerInvariants(gpa, "'\\u(0041)'", false); // length >6: Unicode escape
+
+    // String tokens
+    try checkTokenizerInvariants(gpa, "\"hello\"", false);
+    try checkTokenizerInvariants(gpa, "\"a${b}c\"", false);
+
+    // Multiline strings
+    try checkTokenizerInvariants(gpa, "\"\"\"hello\"\"\"", false);
+    try checkTokenizerInvariants(gpa, "\\\\hello", false);
+
+    // Identifiers
+    try checkTokenizerInvariants(gpa, "$foo", false);
+    try checkTokenizerInvariants(gpa, "$Foo", false);
+    try checkTokenizerInvariants(gpa, "foo", false);
+    try checkTokenizerInvariants(gpa, "Foo", false);
+
+    // Keywords
+    try checkTokenizerInvariants(gpa, "if", false);
+    try checkTokenizerInvariants(gpa, "else", false);
+    try checkTokenizerInvariants(gpa, "match", false);
+
+    // Various operators
+    try checkTokenizerInvariants(gpa, "+", false);
+    try checkTokenizerInvariants(gpa, "-", false);
+    try checkTokenizerInvariants(gpa, "*", false);
+    try checkTokenizerInvariants(gpa, "=", false);
+    try checkTokenizerInvariants(gpa, "==", false);
+
+    // Underscore and named underscore
+    try checkTokenizerInvariants(gpa, "_", false);
+    try checkTokenizerInvariants(gpa, "_foo", false);
+
+    // Dot identifiers and dot int
+    try checkTokenizerInvariants(gpa, ".foo", false);
+    try checkTokenizerInvariants(gpa, ".Foo", false);
+    try checkTokenizerInvariants(gpa, ".1", false);
+
+    // No space dot tokens (after identifier)
+    try checkTokenizerInvariants(gpa, "x.foo", false);
+    try checkTokenizerInvariants(gpa, "x.Foo", false);
+    try checkTokenizerInvariants(gpa, "x.1", false);
+
+    // Opaque names
+    try checkTokenizerInvariants(gpa, "@Foo", false);
+
+    // Negative hex int
+    try checkTokenizerInvariants(gpa, "-0x1", false);
+    try checkTokenizerInvariants(gpa, "-0xABC", false);
+
+    // Positive hex int (various lengths)
+    try checkTokenizerInvariants(gpa, "0x1", false);
+    try checkTokenizerInvariants(gpa, "0xABCD", false);
+
+    // Exclamation mark and not equals
+    try checkTokenizerInvariants(gpa, "!", false);
+    try checkTokenizerInvariants(gpa, "!=", false);
+
+    // Binary minus vs unary minus context
+    try checkTokenizerInvariants(gpa, "a - b", false);
+    try checkTokenizerInvariants(gpa, "a-b", false);
+}
+
+test "additional operators" {
+    const gpa = std.testing.allocator;
+
+    // Pizza operator |>
+    try testTokenization(gpa, "|>", &[_]Token.Tag{.OpPizza});
+    try testTokenization(gpa, "a |> b", &[_]Token.Tag{ .LowerIdent, .OpPizza, .LowerIdent });
+
+    // Pipe operator |
+    try testTokenization(gpa, "|", &[_]Token.Tag{.OpBar});
+
+    // Percent operator %
+    try testTokenization(gpa, "%", &[_]Token.Tag{.OpPercent});
+    try testTokenization(gpa, "a % b", &[_]Token.Tag{ .LowerIdent, .OpPercent, .LowerIdent });
+
+    // Caret operator ^
+    try testTokenization(gpa, "^", &[_]Token.Tag{.OpCaret});
+    try testTokenization(gpa, "a ^ b", &[_]Token.Tag{ .LowerIdent, .OpCaret, .LowerIdent });
+
+    // Single backslash operator
+    try testTokenization(gpa, "\\", &[_]Token.Tag{.OpBackslash});
+
+    // Double slash //
+    try testTokenization(gpa, "//", &[_]Token.Tag{.OpDoubleSlash});
+    try testTokenization(gpa, "a // b", &[_]Token.Tag{ .LowerIdent, .OpDoubleSlash, .LowerIdent });
+
+    // Slash /
+    try testTokenization(gpa, "/", &[_]Token.Tag{.OpSlash});
+    try testTokenization(gpa, "a / b", &[_]Token.Tag{ .LowerIdent, .OpSlash, .LowerIdent });
+}
+
+test "malformed unicode identifiers" {
+    const gpa = std.testing.allocator;
+
+    // Dot followed by unicode character - malformed dot unicode ident
+    // Japanese character "日" = 0xE6 0x97 0xA5 in UTF-8
+    {
+        const source = ".日";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.MalformedDotUnicodeIdent, token_tags[0]);
+    }
+
+    // No-space dot followed by unicode character
+    {
+        const source = "foo.日本";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        // Should be LowerIdent followed by MalformedNoSpaceDotUnicodeIdent or similar
+        try std.testing.expect(token_tags.len >= 2);
+        try std.testing.expectEqual(Token.Tag.LowerIdent, token_tags[0]);
+    }
+
+    // Unicode character in lower identifier that starts with ASCII
+    {
+        const source = "foo日bar";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        const token_tags = tokenizer.output.tokens.items(.tag);
+        try std.testing.expect(token_tags.len >= 1);
+        // Should tokenize as MalformedUnicodeIdent
+        try std.testing.expectEqual(Token.Tag.MalformedUnicodeIdent, token_tags[0]);
+    }
+}
+
+test "incomplete UTF-8 at end of input" {
+    const gpa = std.testing.allocator;
+
+    // Incomplete UTF-8 sequence at end of string literal
+    // 0xC3 is a 2-byte UTF-8 start byte, but we only have 1 byte
+    // The consumeNextCharToEof function will be called during string processing
+    {
+        const source = [_]u8{ '"', 'a', 0xC3 };
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, &source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUtf8InSource diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUtf8InSource, messages[0].tag);
+    }
+}
+
+test "invalid unicode escape sequence in string" {
+    const gpa = std.testing.allocator;
+
+    // Invalid unicode escape - non-hex characters in \u(...)
+    {
+        const source = "\"\\u(GHIJ)\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
+    }
+
+    // Incomplete unicode escape - no closing paren
+    {
+        const source = "\"\\u(1234\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
+    }
+
+    // Empty unicode escape \u()
+    {
+        const source = "\"\\u()\"";
+        var diagnostics: [10]Diagnostic = undefined;
+
+        var env = try CommonEnv.init(gpa, try gpa.dupe(u8, ""));
+        defer env.deinit(gpa);
+
+        var tokenizer = try Tokenizer.init(&env, gpa, source, &diagnostics);
+        defer tokenizer.deinit(gpa);
+        try tokenizer.tokenize(gpa);
+
+        // Should have InvalidUnicodeEscapeSequence diagnostic
+        const messages = tokenizer.cursor.messages[0..tokenizer.cursor.message_count];
+        try std.testing.expect(messages.len > 0);
+        try std.testing.expectEqual(Diagnostic.Tag.InvalidUnicodeEscapeSequence, messages[0].tag);
     }
 }

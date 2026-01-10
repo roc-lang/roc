@@ -172,14 +172,47 @@ pub const Error = error{
     SymbolNotFound,
     ExecutionFailed,
     BitcodeParseError,
+    /// JIT is not supported on this platform (e.g., statically-linked musl binaries
+    /// don't support dynamic loading which LLVM ORC JIT requires).
+    JITNotSupported,
 };
 
-/// JIT compile LLVM bitcode and execute it, returning the formatted result
+/// Returns true if JIT compilation is supported on this platform.
+///
+/// LLVM ORC JIT requires dynamic loading (`dlopen`/`dlsym`). On statically-linked
+/// musl binaries, musl intentionally stubs out `dlopen` to always fail:
+///
+/// ```c
+/// static void *stub_dlopen(const char *file, int mode) {
+///     __dl_seterr("Dynamic loading not supported");
+///     return 0;
+/// }
+/// ```
+///
+/// This is by design - if a statically-linked binary loaded a dynamic library,
+/// that library would need its own libc (you can't share the statically-linked
+/// libc with dynamically loaded code), causing issues with global state and
+/// symbol tables.
+///
+/// See: https://www.openwall.com/lists/musl/2017/05/17/2
+pub fn isJITSupported() bool {
+    return comptime !(builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf);
+}
+
+/// JIT compile LLVM bitcode and execute it, returning the formatted result.
+/// Returns `error.JITNotSupported` on platforms where JIT is not available
+/// (e.g., statically-linked musl binaries).
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
     result_type: ResultType,
 ) Error![]const u8 {
+    // LLVM ORC JIT requires dynamic loading, which is not available on
+    // statically-linked musl binaries.
+    if (comptime !isJITSupported()) {
+        return error.JITNotSupported;
+    }
+
     // Convert u32 slice to u8 slice for the bindings
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
@@ -218,8 +251,8 @@ pub fn compileAndExecute(
     const builder = bindings.OrcLLJITBuilder.create();
     // Note: builder is consumed by createLLJIT
 
-    // Configure the JIT to use a generic CPU target to avoid issues with
-    // unrecognized CPU features on various ARM64 platforms.
+    // Configure the JIT to use a baseline CPU target to avoid issues with
+    // unrecognized CPU features on various platforms.
     // LLVM's default host detection may return CPU names/features that
     // the bundled LLVM version doesn't fully support.
     {
@@ -236,13 +269,30 @@ pub fn compileAndExecute(
             return error.JITCreationFailed;
         }
 
-        // Create a target machine with "generic" CPU and no specific features.
+        // Use a baseline CPU that has the required features for each architecture.
+        // The CPU name must enable required features for the platform's calling convention.
+        //
+        // x86_64: "x86-64" enables SSE2 which is required for the Windows x64 ABI
+        //         (floats are returned in XMM0). "generic" doesn't guarantee SSE2.
+        // x86:    "pentium4" enables SSE2 for consistent float handling.
+        //         "i686" only guarantees SSE, not SSE2.
+        // aarch64: "generic" is fine - NEON/FP are part of the base AArch64 architecture.
+        // arm:    "generic" works, but hard-float targets need VFP which is enabled
+        //         by the target triple's ABI suffix (gnueabihf/musleabihf).
+        // Other:  "generic" as a safe fallback.
+        const cpu: [*:0]const u8 = switch (builtin.cpu.arch) {
+            .x86_64 => "x86-64",
+            .x86 => "pentium4",
+            else => "generic",
+        };
+
+        // Create a target machine with the baseline CPU and no specific extra features.
         // This avoids issues where LLVM detects CPU features it doesn't fully support.
         const target_machine = bindings.TargetMachine.create(
             target,
             triple,
-            "generic", // Use generic CPU instead of detecting specific CPU
-            "", // No specific features
+            cpu,
+            "", // No specific extra features
             .Default, // optimization level
             .Default, // reloc mode
             .Default, // code model
@@ -313,64 +363,54 @@ pub fn compileAndExecute(
         return error.SymbolNotFound;
     }
 
-    // Call the function and format the result based on the return type
+    // Call the function and format the result.
+    //
+    // Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
+    // exposed to the host return void and write their result to a pointer.
+    // This makes the ABI simple and platform-independent on all targets.
+    //
+    // Function signature: void roc_eval(<type>* out_ptr)
     switch (result_type) {
-        .f64 => {
-            // Function returns f64
-            const EvalFn = *const fn () callconv(.c) f64;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the float result
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
-        .i128 => {
-            // Function returns i128 (signed)
-            const EvalFn = *const fn () callconv(.c) i128;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the i128 result
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
-        .u128 => {
-            // Function returns u128 (unsigned)
-            // At the LLVM level, i128 and u128 have the same representation,
-            // but we interpret the bits as unsigned here
-            const EvalFn = *const fn () callconv(.c) u128;
-            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the u128 result
-            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
-        },
         .i64 => {
-            // Function returns i64 (signed)
-            const EvalFn = *const fn () callconv(.c) i64;
+            const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the integer result
+            var result: i64 = undefined;
+            eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .u64 => {
-            // Function returns u64 (unsigned)
-            // At the LLVM level, i64 and u64 have the same representation,
-            // but we interpret the bits as unsigned here
-            const EvalFn = *const fn () callconv(.c) u64;
+            const EvalFn = *const fn (*u64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the u64 result
+            var result: u64 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .i128 => {
+            const EvalFn = *const fn (*i128) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i128 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
+        },
+        .u128 => {
+            const EvalFn = *const fn (*i128) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i128 = undefined;
+            eval_fn(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
+        },
+        .f64 => {
+            const EvalFn = *const fn (*f64) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: f64 = undefined;
+            eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .dec => {
-            // Function returns i128 representing a Dec (fixed-point with 18 decimal places)
-            const EvalFn = *const fn () callconv(.c) i128;
+            const EvalFn = *const fn (*i128) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-            const result = eval_fn();
-
-            // Format the Dec result with proper decimal formatting
+            var result: i128 = undefined;
+            eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
     }

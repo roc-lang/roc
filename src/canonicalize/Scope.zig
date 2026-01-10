@@ -303,7 +303,47 @@ pub fn introduceTypeDecl(
     }
 
     // Add type binding (single source of truth)
+    // Use the correct binding type based on the statement type
     try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = type_decl });
+
+    if (shadowed_stmt) |stmt| {
+        return TypeIntroduceResult{ .shadowing_warning = stmt };
+    }
+
+    return TypeIntroduceResult{ .success = {} };
+}
+
+/// Introduce a type declaration into the scope with explicit binding type
+pub fn introduceTypeDeclWithKind(
+    scope: *Scope,
+    gpa: std.mem.Allocator,
+    name: Ident.Idx,
+    type_decl: CIR.Statement.Idx,
+    is_alias: bool,
+    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.Statement.Idx,
+) std.mem.Allocator.Error!TypeIntroduceResult {
+    // Check if type already exists in this scope
+    if (scope.type_bindings.getPtr(name)) |existing| {
+        return switch (existing.*) {
+            .local_nominal => |stmt| TypeIntroduceResult{ .redeclared_error = stmt },
+            .local_alias => |stmt| TypeIntroduceResult{ .type_alias_redeclared = stmt },
+            .associated_nominal => |stmt| TypeIntroduceResult{ .nominal_type_redeclared = stmt },
+            .external_nominal => TypeIntroduceResult{ .nominal_type_redeclared = type_decl },
+        };
+    }
+
+    // Check for shadowing in parent scopes and issue warnings
+    var shadowed_stmt: ?CIR.Statement.Idx = null;
+    if (parent_lookup_fn) |lookup_fn| {
+        shadowed_stmt = lookup_fn(name);
+    }
+
+    // Add type binding with the correct type (alias vs nominal)
+    const binding = if (is_alias)
+        TypeBinding{ .local_alias = type_decl }
+    else
+        TypeBinding{ .local_nominal = type_decl };
+    try scope.type_bindings.put(gpa, name, binding);
 
     if (shadowed_stmt) |stmt| {
         return TypeIntroduceResult{ .shadowing_warning = stmt };

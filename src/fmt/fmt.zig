@@ -549,6 +549,9 @@ const Formatter = struct {
                 }
             },
             .type_anno => |t| {
+                if (t.is_var) {
+                    try fmt.pushAll("var ");
+                }
                 try fmt.pushTokenText(t.name);
                 if (multiline and try fmt.flushCommentsAfter(t.name)) {
                     fmt.curr_indent += 1;
@@ -816,6 +819,68 @@ const Formatter = struct {
         try fmt.push(braces.end());
     }
 
+    /// Format a record type annotation with an extension (e.g., { name: Str, ..ext } or { name: Str, .. })
+    fn formatRecordWithExtension(fmt: *Formatter, fields_span: AST.AnnoRecordField.Span, ext: AST.TypeAnno.Idx, record_region: AST.TokenizedRegion) anyerror!void {
+        const fields = fmt.ast.store.annoRecordFieldSlice(fields_span);
+        const record_multiline = fmt.ast.regionIsMultiline(record_region);
+        const record_indent = fmt.curr_indent;
+        defer {
+            fmt.curr_indent = record_indent;
+        }
+        try fmt.push('{');
+        if (fields.len == 0) {
+            // Just the extension, e.g. { .. } or { ..a }
+            try fmt.push(' ');
+        } else {
+            if (record_multiline) {
+                fmt.curr_indent += 1;
+            } else {
+                try fmt.push(' ');
+            }
+            for (fields, 0..) |field_idx, i| {
+                const field_region = fmt.nodeRegion(@intFromEnum(field_idx));
+                if (record_multiline) {
+                    _ = try fmt.flushCommentsBefore(field_region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+                _ = try @as(fn (*Formatter, AST.AnnoRecordField.Idx) anyerror!AST.TokenizedRegion, Formatter.formatAnnoRecordField)(fmt, field_idx);
+                if (record_multiline) {
+                    try fmt.push(',');
+                } else if (i < (fields.len - 1)) {
+                    try fmt.pushAll(", ");
+                } else {
+                    // Last field before extension
+                    try fmt.pushAll(", ");
+                }
+            }
+        }
+        // Handle the record extension (..ext or ..)
+        const ext_region = fmt.nodeRegion(@intFromEnum(ext));
+        if (record_multiline) {
+            _ = try fmt.flushCommentsBefore(ext_region.start);
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        }
+        const ext_anno = fmt.ast.store.getTypeAnno(ext);
+        try fmt.pushAll("..");
+        // Only output the extension type if it's not an anonymous underscore
+        switch (ext_anno) {
+            .underscore => {}, // Anonymous extension - just output ".."
+            else => _ = try @as(fn (*Formatter, AST.TypeAnno.Idx) anyerror!AST.TokenizedRegion, Formatter.formatTypeAnno)(fmt, ext),
+        }
+        if (record_multiline) {
+            try fmt.push(',');
+            _ = try fmt.flushCommentsBefore(record_region.end - 1);
+            fmt.curr_indent -= 1;
+            try fmt.ensureNewline();
+            try fmt.pushIndent();
+        } else {
+            try fmt.push(' ');
+        }
+        try fmt.push('}');
+    }
+
     fn formatRecordField(fmt: *Formatter, idx: AST.RecordField.Idx) !AST.TokenizedRegion {
         const field = fmt.ast.store.getRecordField(idx);
         try fmt.pushTokenText(field.name);
@@ -960,17 +1025,17 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
                 }
-                // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                // Always format with parens after `->` for consistency and idempotence.
+                // Without parens, `0->b.c` would parse `b.c` as a qualified identifier,
+                // but `0->b().c` unambiguously parses as field access on `0->b()`.
+                // (See issue #8851)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
-                if (right_expr == .apply) {
-                    const apply = right_expr.apply;
-                    if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: just format the function, not the empty parens
-                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
-                    } else {
-                        _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-                    }
+                if (right_expr == .ident) {
+                    // Plain identifier: add () after it
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.pushAll("()");
                 } else {
+                    // Already has parens (apply) or other expr: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                 }
             },
@@ -979,6 +1044,16 @@ const Formatter = struct {
             },
             .frac => |f| {
                 try fmt.pushTokenText(f.token);
+            },
+            .typed_int => |ti| {
+                try fmt.pushTokenText(ti.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(ti.type_token);
+            },
+            .typed_frac => |tf| {
+                try fmt.pushTokenText(tf.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(tf.type_token);
             },
             .list => |l| {
                 try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -1988,19 +2063,25 @@ const Formatter = struct {
             },
             .record => |r| {
                 region = r.region;
-                try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                if (r.ext) |ext| {
+                    // Record with extension - handle specially
+                    try fmt.formatRecordWithExtension(r.fields, ext, region);
+                } else {
+                    // Regular record without extension - use formatCollection
+                    try fmt.formatCollection(region, .curly, AST.AnnoRecordField.Idx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
+                }
             },
             .tag_union => |t| {
                 region = t.region;
                 const tags = fmt.ast.store.typeAnnoSlice(t.tags);
-                const has_open = t.open_anno != null;
+                const is_open = t.ext != .closed;
                 const tag_multiline = fmt.ast.regionIsMultiline(region) or fmt.nodesWillBeMultiline(AST.TypeAnno.Idx, tags);
                 const tag_indent = fmt.curr_indent;
                 defer {
                     fmt.curr_indent = tag_indent;
                 }
                 try fmt.push('[');
-                if (tags.len == 0 and !has_open) {
+                if (tags.len == 0 and !is_open) {
                     try fmt.push(']');
                 } else {
                     if (tag_multiline) {
@@ -2016,20 +2097,22 @@ const Formatter = struct {
                         _ = try fmt.formatTypeAnno(tag_idx);
                         if (tag_multiline) {
                             try fmt.push(',');
-                        } else if (i < (tags.len - 1) or has_open) {
+                        } else if (i < (tags.len - 1) or is_open) {
                             try fmt.pushAll(", ");
                         }
                     }
-                    // Handle the open extension (..others)
-                    if (t.open_anno) |open| {
-                        const open_region = fmt.nodeRegion(@intFromEnum(open));
+                    // Handle open tag unions - always format as just ".." (silently drop any named extension)
+                    if (is_open) {
+                        // If there was a named extension, use its region for comment flushing
+                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
                         if (tag_multiline) {
-                            _ = try fmt.flushCommentsBefore(open_region.start);
+                            if (open_region) |oreg| {
+                                _ = try fmt.flushCommentsBefore(oreg.start);
+                            }
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
                         try fmt.pushAll("..");
-                        _ = try fmt.formatTypeAnno(open);
                         if (tag_multiline) {
                             try fmt.push(',');
                         }
@@ -2561,4 +2644,60 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// These test cases verify that formatting is stable (idempotent) - formatting twice
+// produces the same output as formatting once.
+
+test "issue 8851: local dispatch with space before field access is idempotent" {
+    // a=0->b .c() should format stably (not progressively strip parens)
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+    // a = 0->b()().c() should format stably - must preserve ALL levels of function application
+    const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
+}
+
+test "issue 8851: multiline local dispatch with field access is idempotent" {
+    // Multiline case from issue comment 1
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=0->b
+        \\      .c()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
+}
+
+test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
+    // ()->b()()() from issue comment 2
+    const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
+}
+
+test "issue 8851: chained field access after local dispatch is idempotent" {
+    // 0->b .c .d() - multiple field accesses
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
+}
+
+test "issue 8894: typed integer literal formats correctly" {
+    // Typed integer literals like 0.F or 123.U64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 0.F", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 0.F\n", result);
+}
+
+test "issue 8894: typed frac literal formats correctly" {
+    // Typed frac literals like 3.14.F64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
 }
