@@ -29,9 +29,12 @@ fn rand_idx_u16(comptime T: type) T {
 }
 
 /// Helper to create a `DataSpan` from raw start and length positions.
+/// Constrained to fit packed span format: 20 bits start, 11 bits len.
+/// This supports up to ~1M entries and 2K items per span, which is sufficient
+/// for any realistic module. (11 bits for len because e_match uses 1 bit for is_try_suffix)
 fn rand_span() base.DataSpan {
-    const start = rand.random().int(u32);
-    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
+    const start = rand.random().int(u20);
+    const len = rand.random().int(u11);
     return base.DataSpan{
         .start = start,
         .len = len,
