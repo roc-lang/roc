@@ -2826,3 +2826,36 @@ test "comptime eval - issue 8901: pattern matching on nominal type" {
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "issue 8944: wrapper function for List.get with match" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8944
+    // When using a wrapper function that calls List.get and pattern matches on the result,
+    // the expect statements would pass or fail depending on their order. This was caused
+    // by the same bug as issue #8754: extractTagValue was computing the payload layout
+    // from the type variable instead of using the actual variant layout from the tag union.
+    //
+    // The fix in 3d5f8a420a uses acc.getVariantLayout(tag_index) instead of
+    // getRuntimeLayout(arg_var), which correctly handles boxed payloads in recursive types.
+    const src =
+        \\nth = |l, i| {
+        \\    match List.get(l, i) {
+        \\        Ok(e) => Ok(e)
+        \\        Err(OutOfBounds) => Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\# Order should not matter - both expects should pass
+        \\expect nth(["a", "b", "c", "d", "e"], 2) == Ok("c")
+        \\expect nth(["a"], 2) == Err(OutOfBounds)
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Both expects should pass (0 crashed means they all evaluated to true)
+    // nth function is evaluated; expects may not increment evaluated count
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
