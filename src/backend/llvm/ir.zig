@@ -1,4 +1,6 @@
 //! LLVM IR data structures and types.
+//!
+//! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
 const std = @import("std");
 const Builder = @import("Builder.zig");

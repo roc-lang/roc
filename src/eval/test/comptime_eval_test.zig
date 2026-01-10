@@ -2583,6 +2583,28 @@ test "comptime eval - recursive nominal: command chain" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "comptime eval - recursive nominal inside Try with tuple (issue #8855)" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8855
+    // A recursive nominal type used inside Try with a tuple caused TypeContainedMismatch
+    // because cycle detection only checked the last container, not the full stack.
+    const src =
+        \\Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+        \\
+        \\# This function signature triggers the bug: recursive nominal inside Try with tuple
+        \\parse_block : List(U8), U64, List(Statement) -> [Ok((List(Statement), U64)), Err(Str)]
+        \\parse_block = |_file, index, acc| Ok((acc, index))
+        \\
+        \\x = parse_block([], 0, [])
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 2), summary.evaluated); // parse_block and x
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" {
     // Regression test for issue #8795: recursive opaque types where the recursion
     // goes through a tuple field would crash with "increfDataPtrC: ptr not aligned"
@@ -2599,6 +2621,22 @@ test "comptime eval - recursive nominal: recursion through tuple (issue #8795)" 
 
     const summary = try result.evaluator.evalAll();
     try testing.expectEqual(@as(u32, 2), summary.evaluated);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "comptime eval - nested nominal in tuple causes alignment crash (issue #8874)" {
+    // Regression test for issue #8874: nested nominal types (like Try) inside tuples
+    // caused "increfDataPtrC: ptr not aligned" crashes. The bug occurred when
+    // accessing the payload of an outer Try containing a tuple with an inner Try.
+    const src =
+        \\result : Try((Try(Str, Str), U64), Str) = Ok((Ok("todo"), 3))
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
@@ -2640,14 +2678,14 @@ test "comptime eval - recursive nominal: deeply nested record recursion" {
 
 test "encode - custom format type with infallible encoding (empty error type)" {
     // Test that a custom format type can define an encode_str method that can't fail.
-    // Using [] as the error type means encoding always succeeds.
+    // Using [EncodeErr] as the error type (which is never instantiated).
     // This matches the signature required by Str.encode's where clause:
     //   where [fmt.encode_str : fmt, Str -> Try(ok, err)]
     const src =
-        \\# Define a format type with infallible encoding (error type is [])
-        \\Utf8 := [].{
-        \\    encode_str : Str -> Try(List(U8), [])
-        \\    encode_str = |str| Ok(Str.to_utf8(str))
+        \\# Define a format type with infallible encoding
+        \\Utf8 := [Format].{
+        \\    encode_str : Utf8, Str -> Try(List(U8), [EncodeErr])
+        \\    encode_str = |_self, str| Ok(Str.to_utf8(str))
         \\}
         \\
         \\fmt = Utf8
@@ -2661,6 +2699,62 @@ test "encode - custom format type with infallible encoding (empty error type)" {
     // Type definition and value creation should succeed
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8754: pattern matching on recursive tag union variant payload" {
+    // Regression test for issue #8754: pattern matching on direct recursive tag union
+    // variant payload was returning the wrong discriminant.
+    //
+    // When Wrapper(Tree) is created where Tree := [..., Wrapper(Tree)], the payload is
+    // stored as a Box. The bug was extractTagValue using getRuntimeLayout(arg_var)
+    // which returns the non-boxed layout, causing pattern matching on the extracted
+    // payload to fail.
+    const src =
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+        \\
+        \\result = match wrapped {
+        \\    Wrapper(inner_tree) =>
+        \\        match inner_tree {
+        \\            Text(_) => 1
+        \\            Node(_, _) => 2
+        \\            Wrapper(_) => 3
+        \\        }
+        \\    _ => 0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'result' was folded to 1 (matched Text, not Wrapper)
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "result")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 1), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
 }
 
 test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
@@ -2687,5 +2781,81 @@ test "comptime eval - attached methods on tag union type aliases (issue #8637)" 
 
     // All declarations should evaluate without crashes
     try testing.expect(summary.evaluated >= 3);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+// Issue #8901: Recursive nominal type with Box where one variant has no payload
+// The interpreter crashed at extractTagValue when matching on such types.
+test "comptime eval - issue 8901: recursive nominal with Box and no-payload variant" {
+    // Test 1: Create Nat.Zero - a no-payload variant of a recursive nominal type
+    const src1 =
+        \\Nat := [Zero, Suc(Box(Nat))]
+        \\
+        \\zero_val = Nat.Zero
+    ;
+
+    var res1 = try parseCheckAndEvalModule(src1);
+    defer cleanupEvalModule(&res1);
+
+    const summary1 = try res1.evaluator.evalAll();
+
+    // Creating Zero should not crash
+    try testing.expect(summary1.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary1.crashed);
+}
+
+test "comptime eval - issue 8901: pattern matching on nominal type" {
+    // Test pattern matching on a nominal type with no-payload variant
+    const src =
+        \\Color := [Red, Green, Blue]
+        \\
+        \\color = Color.Red
+        \\
+        \\result = match color {
+        \\    Color.Red -> 1
+        \\    _ -> 0
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Pattern matching on no-payload variant should not crash
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8944: wrapper function for List.get with match" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8944
+    // When using a wrapper function that calls List.get and pattern matches on the result,
+    // the expect statements would pass or fail depending on their order. This was caused
+    // by the same bug as issue #8754: extractTagValue was computing the payload layout
+    // from the type variable instead of using the actual variant layout from the tag union.
+    //
+    // The fix in 3d5f8a420a uses acc.getVariantLayout(tag_index) instead of
+    // getRuntimeLayout(arg_var), which correctly handles boxed payloads in recursive types.
+    const src =
+        \\nth = |l, i| {
+        \\    match List.get(l, i) {
+        \\        Ok(e) => Ok(e)
+        \\        Err(OutOfBounds) => Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\# Order should not matter - both expects should pass
+        \\expect nth(["a", "b", "c", "d", "e"], 2) == Ok("c")
+        \\expect nth(["a"], 2) == Err(OutOfBounds)
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Both expects should pass (0 crashed means they all evaluated to true)
+    // nth function is evaluated; expects may not increment evaluated count
+    try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }

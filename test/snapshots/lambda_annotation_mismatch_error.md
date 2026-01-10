@@ -14,24 +14,9 @@ wrong_type_function : I64 -> I64
 wrong_type_function = |x| x * 3.14
 ~~~
 # EXPECTED
-MISSING METHOD - lambda_annotation_mismatch_error.md:3:27:3:29
 MISSING METHOD - lambda_annotation_mismatch_error.md:3:23:3:29
 + - :0:0:0:0
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**lambda_annotation_mismatch_error.md:3:27:3:29:**
-```roc
-string_function = |x| x + 42
-```
-                          ^^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
 **lambda_annotation_mismatch_error.md:3:23:3:29:**
@@ -125,6 +110,6 @@ NO CHANGE
 		(patt (type "Str -> Str"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Str"))
 		(expr (type "I64 -> I64"))))
 ~~~

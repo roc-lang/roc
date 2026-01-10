@@ -489,6 +489,31 @@ test "roc check reports type error - plus operator with incompatible types" {
     try testing.expect(has_type_error);
 }
 
+test "roc check test/int/app.roc does not panic" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that roc check does not panic on test/int/app.roc.
+    // Prior to fix for issue #8947, this would panic with:
+    // "trying unifyWith unexpected ranks 1 & 0"
+    // Now it should fail gracefully (exit code 1) with type errors, not panic (abort).
+
+    // 1. Should not abort (panic would cause exit code 134 on macOS/Linux)
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // 2. Should not contain "panic" in output
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic_text);
+}
+
 test "roc test/int/app.roc runs successfully" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
@@ -705,4 +730,111 @@ test "roc test with nested list chunks does not panic on layout upgrade" {
     const has_panic = std.mem.indexOf(u8, result.stderr, "panic") != null or
         std.mem.indexOf(u8, result.stderr, "overflow") != null;
     try testing.expect(!has_panic);
+}
+
+// Exit code tests for warnings
+
+test "roc check returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+
+    // 3. Output shows 0 errors and at least 1 warning
+    const has_zero_errors = std.mem.indexOf(u8, result.stderr, "0 error") != null;
+    try testing.expect(has_zero_errors);
+}
+
+test "roc check returns exit code 0 for no warnings or errors" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command exits with code 0 (no warnings, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check returns exit code 1 for errors" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/has_type_error_annotation.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command exits with code 1 (errors present)
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+}
+
+test "roc run returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{"--no-cache"}, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+}
+
+test "roc build returns exit code 2 for warnings" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // Create a temp directory for the output
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const tmp_path = try tmp_dir.dir.realpathAlloc(gpa, ".");
+    defer gpa.free(tmp_path);
+
+    const output_path = try std.fs.path.join(gpa, &.{ tmp_path, "test_app_warning" });
+    defer gpa.free(output_path);
+
+    const output_arg = try std.fmt.allocPrint(gpa, "--output={s}", .{output_path});
+    defer gpa.free(output_arg);
+
+    const result = try util.runRoc(gpa, &.{ "build", output_arg }, "test/fx/run_warning_only.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command exits with code 2 (warnings present, no errors)
+    try testing.expect(result.term == .Exited and result.term.Exited == 2);
+
+    // 2. Stderr contains warning information
+    const has_warning = std.mem.indexOf(u8, result.stderr, "UNUSED VARIABLE") != null or
+        std.mem.indexOf(u8, result.stderr, "warning") != null;
+    try testing.expect(has_warning);
+
+    // 3. Binary was still created successfully
+    const stat = tmp_dir.dir.statFile("test_app_warning") catch |err| {
+        std.debug.print("Failed to stat output file: {}\nstderr: {s}\n", .{ err, result.stderr });
+        return err;
+    };
+    try testing.expect(stat.size > 0);
+
+    // 4. Success message was printed
+    try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
 }

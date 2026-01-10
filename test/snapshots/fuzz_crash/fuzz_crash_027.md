@@ -227,13 +227,8 @@ UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
 INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-UNUSED VALUE - fuzz_crash_027.md:1:1:1:1
 TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
-MISSING METHOD - fuzz_crash_027.md:125:6:125:9
-MISSING METHOD - fuzz_crash_027.md:102:15:102:18
-MISSING METHOD - fuzz_crash_027.md:129:12:129:22
-+ - :0:0:0:0
-TYPE MISMATCH - fuzz_crash_027.md:143:2:147:3
+TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 # PROBLEMS
 **LEADING ZERO**
@@ -969,18 +964,6 @@ But all the previous patterns have this type:
 
 All patterns in an `match` must have compatible types.
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_027.md:1:1:1:1:**
-```roc
-# Thnt!
-```
-^
-
-It has the type:
-
-    _d
-
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_027.md:111:2:113:3:**
@@ -994,64 +977,19 @@ The function has the signature:
 
     [Blue, Red, .._others], _arg -> Error
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_027.md:125:6:125:9:**
-```roc
-		),	456, # ee
-```
-		  	^^^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_027.md:102:15:102:18:**
-```roc
-	var number = 123
-```
-	             ^^^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**fuzz_crash_027.md:129:12:129:22:**
-```roc
-		number = number + n
-```
-		         ^^^^^^^^^^
-
-The value's type, which does not have a method named **plus**, is:
-
-    Str
-
-**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
-**fuzz_crash_027.md:143:2:147:3:**
+**fuzz_crash_027.md:106:3:106:6:**
 ```roc
-	Stdoline!(
-		"How about ${ #
-			Num.toStr(number) # on expr
-		} as a",
-	)
+		tag
 ```
+		^^^
 
 It has the type:
 
-    [Stdoline!(Error), .._others]
+    [Blue, .._others]
 
-But the type annotation says it should have the type:
+But I expected it to be:
 
     Try({  }, err)
 
@@ -2488,7 +2426,7 @@ expect {
 (inferred-types
 	(defs
 		(patt (type "(Error, Error)"))
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "[Red, Blue, .._others], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2525,10 +2463,10 @@ expect {
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "(Error, Error)"))
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "Error -> U64"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(expr (type "U64 -> U64"))
 		(expr (type "[Red, Blue, .._others], _arg -> Error"))
-		(expr (type "Error"))
+		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

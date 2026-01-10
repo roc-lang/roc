@@ -222,6 +222,6 @@ answer = composed([42])
 	(expressions
 		(expr (type "a -> { tag: Str, value: a }"))
 		(expr (type "{ tag: Str, value: a } -> a"))
-		(expr (type "Error -> Error"))
+		(expr (type "List(a) -> Str"))
 		(expr (type "Str"))))
 ~~~

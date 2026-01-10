@@ -1,4 +1,6 @@
 //! LLVM bitcode writer for serializing IR to bitcode format.
+//!
+//! Adapted from the Zig compiler at https://codeberg.org/ziglang/zig and licensed under the MIT license. Thanks, Zig team!
 
 const std = @import("std");
 

@@ -13,7 +13,7 @@ match color {
 ~~~
 # EXPECTED
 UNDEFINED VARIABLE - basic_tag_union.md:1:7:1:12
-MISSING METHOD - basic_tag_union.md:3:10:3:11
+TYPE MISMATCH - basic_tag_union.md:3:10:3:11
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `color` in this scope.
@@ -26,19 +26,24 @@ match color {
       ^^^^^
 
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **basic_tag_union.md:3:10:3:11:**
 ```roc
 	Blue => 2
 ```
 	        ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**basic_tag_union.md:4:11:4:14:**
+```roc
+	Green => "3"
+```
+	         ^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

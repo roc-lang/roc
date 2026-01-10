@@ -108,7 +108,7 @@ pub const Descriptor = struct {
 pub const Rank = enum(u8) {
     /// When the corresponding type is generic, like in `List.len`.
     generalized = 0,
-    top_level = 1,
+    outermost = 1,
     _,
 
     /// Get the lowest rank

@@ -266,10 +266,9 @@ UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-UNUSED VALUE - syntax_grab_bag.md:1:1:1:1
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
-UNUSED VALUE - syntax_grab_bag.md:190:2:190:29
+TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
 **UNDECLARED TYPE**
@@ -934,18 +933,6 @@ But all the previous patterns have this type:
 
 All patterns in an `match` must have compatible types.
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-It has the type:
-
-    _d
-
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
 **syntax_grab_bag.md:155:2:157:3:**
@@ -975,17 +962,21 @@ But `add_one` needs the first argument to be:
 
     U64
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**syntax_grab_bag.md:190:2:190:29:**
+**TYPE MISMATCH**
+This expression is used in an unexpected way:
+**syntax_grab_bag.md:150:3:150:6:**
 ```roc
-	Stdout.line!(interpolated)?
+		tag # Comment after return statement
 ```
-	^^^^^^^^^^^^^^^^^^^^^^^^^^^
+		^^^
 
 It has the type:
 
-    _d
+    [Blue, .._others]
+
+But I expected it to be:
+
+    Try({  }, err)
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2496,8 +2487,8 @@ NO CHANGE
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "U64 -> U64"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
@@ -2542,10 +2533,10 @@ NO CHANGE
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
-		(expr (type "Error"))
+		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

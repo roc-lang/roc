@@ -1839,30 +1839,21 @@ test "issue 8814: List.get with numeric literal on function parameter - regressi
     , "hello", .no_trace);
 }
 
-// TODO: Enable this test once cross-module type variable dispatch is fixed.
-// The issue is that the flex_type_context mapping needs to properly connect
-// the parameter's type variable to the type alias's type variable.
-// test "encode: Str.encode with local format type" {
-//     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
-//     // where Fmt is a local type defined in the test.
-//     // This exercises the flex_type_context propagation in type_var_dispatch_invoke.
-//     try runExpectListI64(
-//         \\{
-//         \\    # Define a local format type that converts strings to UTF-8
-//         \\    Utf8Format := {}.{
-//         \\        encode_str : Utf8Format, Str -> List(U8)
-//         \\        encode_str = |_fmt, s| Str.to_utf8(s)
-//         \\    }
-//         \\
-//         \\    fmt : Utf8Format
-//         \\    fmt = {}
-//         \\
-//         \\    # The result is List(U8) but we cast it to List(I64) for the test helper
-//         \\    bytes = Str.encode("hi", fmt)
-//         \\    List.map(bytes, |b| U8.to_i64(b))
-//         \\}
-//     , &[_]i64{ 104, 105 }, .no_trace);
-// }
+test "encode: Str.encode with local format type" {
+    // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
+    // where Fmt is a local type defined in the test.
+    try runExpectListI64(
+        \\{
+        \\    Utf8Format := {}.{
+        \\        encode_str : Utf8Format, Str -> List(U8)
+        \\        encode_str = |_fmt, s| Str.to_utf8(s)
+        \\    }
+        \\    fmt = Utf8Format
+        \\    bytes = Str.encode("hi", fmt)
+        \\    List.map(bytes, |b| U8.to_i64(b))
+        \\}
+    , &[_]i64{ 104, 105 }, .no_trace);
+}
 
 test "issue 8831: self-referential value definition should produce error, not crash" {
     // Regression test for GitHub issue #8831
@@ -1909,4 +1900,83 @@ test "recursive function with record - stack memory restoration (issue #8813)" {
         \\    f(1000)
         \\}
     , 500500, .no_trace);
+}
+
+test "issue 8872: polymorphic tag union payload layout in match expressions" {
+    // Regression test for GitHub issue #8872: when using a polymorphic function
+    // that transforms Err(a) to Err(b) via a lambda, the Str payload was being
+    // corrupted because the layout was computed from a flex var (defaulting to
+    // Dec = 16 bytes) instead of the actual Str type (24 bytes).
+    //
+    // The bug manifested when:
+    // 1. A polymorphic function takes a lambda that returns type `b`
+    // 2. The function wraps the lambda result in Err(b)
+    // 3. The match expression extracts the Err payload
+    // 4. The extracted value is corrupted due to wrong layout
+    try runExpectStr(
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "issue 8899: closure decref index out of bounds in for loop" {
+    // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
+    // when running roc test on code with closures and for loops.
+    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
+    // instead of using the layout parameter.
+    //
+    // The original code was a compress function that removes consecutive duplicates.
+    // The issue manifested when closures were created inside the for loop (match branches)
+    // and List operations like List.last and List.append were used.
+    try runExpectI64(
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0i64
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
+
+test "issue 8892: nominal type wrapping tag union with match expression" {
+    // Regression test for GitHub issue #8892: when evaluating a tag expression
+    // inside a function where the expected type is a nominal type wrapping a tag union,
+    // the interpreter would crash with "e_tag: unexpected layout type: box".
+    //
+    // The bug was in e_tag evaluation: it was using getRuntimeLayout(rt_var) where
+    // rt_var was the nominal type (which has a box layout), instead of using the
+    // unwrapped backing type's layout (which is the actual tag union layout).
+    //
+    // The fix: use getRuntimeLayout(resolved.var_) to get the backing type's layout.
+    try runExpectSuccess(
+        \\{
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
+        \\}
+    , .no_trace);
 }

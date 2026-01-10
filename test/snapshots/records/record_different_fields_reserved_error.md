@@ -51,8 +51,8 @@ UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:7:7:8
 DOES NOT EXIST - record_different_fields_reserved_error.md:7:9:7:19
 UNRECOGNIZED SYNTAX - record_different_fields_reserved_error.md:7:19:7:20
 UNUSED VARIABLE - record_different_fields_reserved_error.md:3:5:3:12
-UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:29
-UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:26
+UNUSED VALUE - record_different_fields_reserved_error.md:4:13:4:13
+UNUSED VALUE - record_different_fields_reserved_error.md:5:13:5:13
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **:** is not expected in an expression.
@@ -450,7 +450,7 @@ The unused variable is declared here:
 
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**record_different_fields_reserved_error.md:4:13:4:29:**
+**record_different_fields_reserved_error.md:4:13:**
 ```roc
     expect: "test assertion",
 ```
@@ -460,9 +460,11 @@ It has the type:
 
     Str
 
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**record_different_fields_reserved_error.md:5:13:5:26:**
+**record_different_fields_reserved_error.md:5:13:**
 ```roc
     import: "module load",
 ```
@@ -471,6 +473,8 @@ This expression produces a value, but it's not being used:
 It has the type:
 
     Str
+
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

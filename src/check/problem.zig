@@ -160,6 +160,8 @@ pub const TypePair = struct {
 pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
+    /// A statement expression must evaluate to {} but has a different type
+    statement_not_unit,
     incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
@@ -318,6 +320,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Optional numeric literal info for from_numeral constraints
+    num_literal: ?types_mod.NumeralInfo = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -474,6 +478,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_if_cond => {
                             return self.buildInvalidIfCondition(mismatch.types);
+                        },
+                        .statement_not_unit => {
+                            return self.buildStatementNotUnit(mismatch.types);
                         },
                         .incompatible_if_branches => |data| {
                             return self.buildIncompatibleIfBranches(mismatch.types, data);
@@ -861,6 +868,74 @@ pub const ReportBuilder = struct {
         try report.document.addAnnotated("True", .tag_name);
         try report.document.addText(" or ");
         try report.document.addAnnotated("False", .tag_name);
+        try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for statement expressions that don't return {}
+    fn buildStatementNotUnit(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned strings
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
+        try report.document.addLineBreak();
+
+        // Get the region info for the expression
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            actual_region.start.offset,
+            actual_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = actual_region_info.start_line_idx + 1,
+            .start_column = actual_region_info.start_col_idx + 1,
+            .end_line = actual_region_info.end_line_idx + 1,
+            .end_column = actual_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type
+        try report.document.addReflowingText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
+        try report.document.addLineBreak();
+
+        // Add explanation
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Since this expression is used as a statement, it must evaluate to ");
+        try report.document.addAnnotated("{}", .type_variable);
+        try report.document.addText(". ");
+        try report.document.addReflowingText("If you don't need the value, you can ignore it with ");
+        try report.document.addAnnotated("_ =", .keyword);
         try report.document.addText(".");
 
         return report;
@@ -2166,6 +2241,11 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) !Report {
+        // Special case: number literal being used where a non-number type is expected
+        if (data.origin == .from_numeral) {
+            return self.buildNumberUsedAsNonNumber(data);
+        }
+
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
@@ -2261,6 +2341,63 @@ pub const ReportBuilder = struct {
                 }
             },
         }
+
+        return report;
+    }
+
+    /// Build a report for when a number literal is used where a non-number type is expected
+    fn buildNumberUsedAsNonNumber(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        // Get the region of the number literal from the num_literal info
+        const num_literal = data.num_literal.?;
+        const num_region = num_literal.region;
+        const num_region_info = self.module_env.calcRegionInfo(num_region);
+
+        // Get the region of the dispatcher (the type that was expected)
+        // This might be different if the type came from somewhere else (e.g., a type annotation)
+        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+
+        try report.document.addReflowingText("This number is being used where a non-number type is needed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            num_region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Check if we have a different origin region we can show
+        if (dispatcher_region.start.offset != num_region.start.offset or
+            dispatcher_region.end.offset != num_region.end.offset)
+        {
+            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region);
+            try report.document.addReflowingText("The type was determined to be non-numeric here:");
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                dispatcher_region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addReflowingText("Other code expects this to have the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
 
         return report;
     }
@@ -3375,11 +3512,15 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free the indices slice in non_exhaustive_match problems
-        // (the actual strings are managed by the SnapshotStore)
+        // Free allocated memory in problem data
         for (self.problems.items) |prob| {
             switch (prob) {
                 .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
+                // Free comptime evaluation messages - these are allocated by ComptimeEvaluator
+                // and ownership is transferred to ProblemStore
+                .comptime_crash => |cc| gpa.free(cc.message),
+                .comptime_expect_failed => |cef| gpa.free(cef.message),
+                .comptime_eval_error => |cee| gpa.free(cee.error_name),
                 else => {},
             }
         }
