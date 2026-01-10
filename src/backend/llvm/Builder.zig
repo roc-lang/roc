@@ -13559,7 +13559,9 @@ pub fn toBitcode(self: *Builder, allocator: Allocator, producer: Producer) bitco
                     try record.ensureUnusedCapacity(self.gpa, 2);
 
                     record.appendAssumeCapacity(attr_gop.index);
-                    // For the first parameter (i=0), use max u32 as sentinel meaning "no previous"
+                    // LLVM bitcode uses 0xFFFFFFFF for function attributes, 0 for return,
+                    // and 1-based indices for parameters. Our internal representation uses
+                    // i=0 for function, i=1 for return, i=2+ for params, so we map accordingly.
                     record.appendAssumeCapacity(switch (i) {
                         0 => std.math.maxInt(u32),
                         else => i - 1,
