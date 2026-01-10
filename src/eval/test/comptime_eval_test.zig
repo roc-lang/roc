@@ -2701,6 +2701,62 @@ test "encode - custom format type with infallible encoding (empty error type)" {
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
 
+test "issue 8754: pattern matching on recursive tag union variant payload" {
+    // Regression test for issue #8754: pattern matching on direct recursive tag union
+    // variant payload was returning the wrong discriminant.
+    //
+    // When Wrapper(Tree) is created where Tree := [..., Wrapper(Tree)], the payload is
+    // stored as a Box. The bug was extractTagValue using getRuntimeLayout(arg_var)
+    // which returns the non-boxed layout, causing pattern matching on the extracted
+    // payload to fail.
+    const src =
+        \\Tree := [Node(Str, List(Tree)), Text(Str), Wrapper(Tree)]
+        \\
+        \\inner : Tree
+        \\inner = Text("hello")
+        \\
+        \\wrapped : Tree
+        \\wrapped = Wrapper(inner)
+        \\
+        \\result = match wrapped {
+        \\    Wrapper(inner_tree) =>
+        \\        match inner_tree {
+        \\            Text(_) => 1
+        \\            Node(_, _) => 2
+        \\            Wrapper(_) => 3
+        \\        }
+        \\    _ => 0
+        \\}
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    const summary = try result.evaluator.evalAll();
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+
+    // Verify 'result' was folded to 1 (matched Text, not Wrapper)
+    const defs = result.module_env.store.sliceDefs(result.module_env.all_defs);
+
+    for (defs) |def_idx| {
+        const def = result.module_env.store.getDef(def_idx);
+        const pattern = result.module_env.store.getPattern(def.pattern);
+
+        if (pattern == .assign) {
+            const ident_text = result.module_env.getIdent(pattern.assign.ident);
+            if (std.mem.eql(u8, ident_text, "result")) {
+                const expr = result.module_env.store.getExpr(def.expr);
+                try testing.expect(expr == .e_num);
+                const value = expr.e_num.value.toI128();
+                try testing.expectEqual(@as(i128, 1), value);
+                return; // Test passed
+            }
+        }
+    }
+
+    return error.TestExpectedDefNotFound;
+}
+
 test "comptime eval - attached methods on tag union type aliases (issue #8637)" {
     // Regression test for GitHub issue #8637
     // Methods attached to transparent tag union type aliases with type parameters
@@ -2767,6 +2823,39 @@ test "comptime eval - issue 8901: pattern matching on nominal type" {
     const summary = try res.evaluator.evalAll();
 
     // Pattern matching on no-payload variant should not crash
+    try testing.expect(summary.evaluated >= 1);
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
+test "issue 8944: wrapper function for List.get with match" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8944
+    // When using a wrapper function that calls List.get and pattern matches on the result,
+    // the expect statements would pass or fail depending on their order. This was caused
+    // by the same bug as issue #8754: extractTagValue was computing the payload layout
+    // from the type variable instead of using the actual variant layout from the tag union.
+    //
+    // The fix in 3d5f8a420a uses acc.getVariantLayout(tag_index) instead of
+    // getRuntimeLayout(arg_var), which correctly handles boxed payloads in recursive types.
+    const src =
+        \\nth = |l, i| {
+        \\    match List.get(l, i) {
+        \\        Ok(e) => Ok(e)
+        \\        Err(OutOfBounds) => Err(OutOfBounds)
+        \\    }
+        \\}
+        \\
+        \\# Order should not matter - both expects should pass
+        \\expect nth(["a", "b", "c", "d", "e"], 2) == Ok("c")
+        \\expect nth(["a"], 2) == Err(OutOfBounds)
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Both expects should pass (0 crashed means they all evaluated to true)
+    // nth function is evaluated; expects may not increment evaluated count
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }

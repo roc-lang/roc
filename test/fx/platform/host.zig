@@ -751,12 +751,53 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
     stdout.writeAll("\n") catch {};
 }
 
+/// Hosted function: Builder.print_value! (index 0 - sorted alphabetically: "Builder.print_value!" comes before "Stderr.line!")
+/// Follows RocCall ABI: (ops, ret_ptr, args_ptr)
+/// Returns {} and takes Builder as argument
+fn hostedBuilderPrintValue(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_ptr: *anyopaque) callconv(.c) void {
+    _ = ret_ptr; // Return value is {} which is zero-sized
+
+    // Builder is a record with { value: Str, count: U64 }
+    // Roc may order fields alphabetically or by alignment, so let's try count first
+    const Args = extern struct {
+        count: u64,
+        value: RocStr,
+    };
+
+    const args: *Args = @ptrCast(@alignCast(args_ptr));
+    const value_slice = args.value.asSlice();
+
+    // Format the output messages
+    var buf: [256]u8 = undefined;
+    const count_str = std.fmt.bufPrint(&buf, "{d}", .{args.count}) catch "?";
+
+    // Use hostedStdoutLine to respect test mode tracking
+    // Create temporary RocStr instances for each line
+    var empty_ret: u8 = 0;
+    var line1 = RocStr.fromSlice("SUCCESS: Builder.print_value! called via static dispatch!", ops);
+    defer line1.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line1));
+
+    var line2_buf: [256]u8 = undefined;
+    const line2_str = std.fmt.bufPrint(&line2_buf, "  value: {s}", .{value_slice}) catch "  value: ?";
+    var line2 = RocStr.fromSlice(line2_str, ops);
+    defer line2.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line2));
+
+    var line3_buf: [256]u8 = undefined;
+    const line3_str = std.fmt.bufPrint(&line3_buf, "  count: {s}", .{count_str}) catch "  count: ?";
+    var line3 = RocStr.fromSlice(line3_str, ops);
+    defer line3.decref(ops);
+    hostedStdoutLine(ops, @ptrCast(&empty_ret), @ptrCast(&line3));
+}
+
 /// Array of hosted function pointers, sorted alphabetically by fully-qualified name
-/// These correspond to the hosted functions defined in Stderr, Stdin, and Stdout Type Modules
+/// These correspond to the hosted functions defined in Stderr, Stdin, Stdout, and Builder Type Modules
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{
-    hostedStderrLine, // Stderr.line! (index 0)
-    hostedStdinLine, // Stdin.line! (index 1)
-    hostedStdoutLine, // Stdout.line! (index 2)
+    hostedBuilderPrintValue, // Builder.print_value! (index 0)
+    hostedStderrLine, // Stderr.line! (index 1)
+    hostedStdinLine, // Stdin.line! (index 2)
+    hostedStdoutLine, // Stdout.line! (index 3)
 };
 
 /// Platform host entrypoint

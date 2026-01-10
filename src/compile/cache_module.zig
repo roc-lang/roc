@@ -9,20 +9,49 @@ const collections = @import("collections");
 
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
+// Note: We use SHA256 instead of Blake3 because std.crypto.hash.Blake3 has a bug
+// that prevents comptime evaluation (integer truncation issue in fillBlockBuf).
+const Sha256 = std.crypto.hash.sha2.Sha256;
 
 const SERIALIZATION_ALIGNMENT = collections.SERIALIZATION_ALIGNMENT;
 
 /// Magic number for cache validation
 const CACHE_MAGIC: u32 = 0x524F4343; // "ROCC" in ASCII
-const CACHE_VERSION: u32 = 1;
+
+/// Compute a version hash for a struct type using SHA256 at comptime.
+/// This hash changes when the struct layout changes, enabling automatic cache invalidation.
+fn computeVersionHash(comptime StructType: type) [32]u8 {
+    @setEvalBranchQuota(100000);
+
+    const type_info = @typeInfo(StructType);
+    const layout_str = if (type_info != .@"struct")
+        "not_a_struct"
+    else blk: {
+        var result: []const u8 = @typeName(StructType);
+        for (type_info.@"struct".fields) |field| {
+            result = result ++ ";" ++ field.name ++ ":" ++ @typeName(field.type);
+        }
+        break :blk result;
+    };
+
+    var hasher = Sha256.init(.{});
+    hasher.update(layout_str);
+    var result: [32]u8 = undefined;
+    hasher.final(&result);
+    return result;
+}
+
+/// Version hash of ModuleEnv.Serialized computed at comptime
+const MODULE_ENV_VERSION_HASH: [32]u8 = computeVersionHash(ModuleEnv.Serialized);
 
 /// Cache header that gets written to disk before the cached data
 pub const Header = struct {
     /// Magic number for validation
     magic: u32,
 
-    /// Version for compatibility checking
-    version: u32,
+    /// Version hash of ModuleEnv.Serialized layout.
+    /// Invalidates cache if ModuleEnv.Serialized layout changes.
+    version_hash: [32]u8,
 
     /// Total size of the data section (excluding this header)
     data_size: u32,
@@ -32,13 +61,13 @@ pub const Header = struct {
     warning_count: u32,
 
     /// Padding to ensure alignment
-    _padding: [12]u8 = [_]u8{0} ** 12,
+    _padding: [4]u8 = [_]u8{0} ** 4,
 
     /// Error specific to initializing a Header from bytes
     pub const InitError = error{
         PartialRead,
         InvalidMagic,
-        InvalidVersion,
+        InvalidVersionHash,
     };
 
     /// Verify that the given buffer begins with a valid Header
@@ -56,9 +85,13 @@ pub const Header = struct {
             return InitError.PartialRead;
         }
 
-        // Validate magic and version
+        // Validate magic
         if (header.magic != CACHE_MAGIC) return InitError.InvalidMagic;
-        if (header.version != CACHE_VERSION) return InitError.InvalidVersion;
+
+        // Validate version hash
+        if (!std.mem.eql(u8, &header.version_hash, &MODULE_ENV_VERSION_HASH)) {
+            return InitError.InvalidVersionHash;
+        }
 
         return header;
     }
@@ -105,11 +138,11 @@ pub const CacheModule = struct {
         const header = @as(*Header, @ptrCast(cache_data.ptr));
         header.* = Header{
             .magic = CACHE_MAGIC,
-            .version = CACHE_VERSION,
+            .version_hash = MODULE_ENV_VERSION_HASH,
             .data_size = @intCast(total_data_size),
             .error_count = error_count,
             .warning_count = warning_count,
-            ._padding = [_]u8{0} ** 12,
+            ._padding = [_]u8{0} ** 4,
         };
 
         // Consolidate the scattered iovecs into the cache data buffer
@@ -132,9 +165,14 @@ pub const CacheModule = struct {
 
         const header = @as(*const Header, @ptrCast(mapped_data.ptr));
 
-        // Validate magic number and version
-        if (header.magic != CACHE_MAGIC) return error.InvalidMagicNumber;
-        if (header.version != CACHE_VERSION) return error.InvalidVersion;
+        // Validate header (including version hash)
+        _ = Header.initFromBytes(@constCast(mapped_data)) catch |err| {
+            return switch (err) {
+                error.PartialRead => error.BufferTooSmall,
+                error.InvalidMagic => error.InvalidMagicNumber,
+                error.InvalidVersionHash => error.CacheVersionHashMismatch,
+            };
+        };
 
         // Validate data size
         const expected_total_size = @sizeOf(Header) + header.data_size;

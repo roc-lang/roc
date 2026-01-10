@@ -110,6 +110,6 @@ NO CHANGE
 		(patt (type "Str -> Str"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Str -> Str"))
 		(expr (type "I64 -> I64"))))
 ~~~
