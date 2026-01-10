@@ -12,12 +12,12 @@ r : [
 ]
 ~~~
 # EXPECTED
-MALFORMED TYPE - fmt_open_tag_union_stability.md:2:2:2:3
+MALFORMED TYPE - open_tag_union_stability.md:2:2:2:3
 # PROBLEMS
 **MALFORMED TYPE**
 This type annotation is malformed or contains invalid syntax.
 
-**fmt_open_tag_union_stability.md:2:2:2:3:**
+**open_tag_union_stability.md:2:2:2:3:**
 ```roc
 	a,
 ```
