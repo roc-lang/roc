@@ -18573,6 +18573,19 @@ pub const Interpreter = struct {
                     return true;
                 }
 
+                // The condition evaluated to True. Check if the original condition expression
+                // was a literal `True` tag - if so, this is an infinite loop at compile time.
+                const cond_expr = self.env.store.getExpr(wl.cond);
+                const is_literal_true = switch (cond_expr) {
+                    .e_tag => |tag| tag.name == self.env.idents.true_tag and tag.args.span.len == 0,
+                    .e_zero_argument_tag => |tag| tag.name == self.env.idents.true_tag,
+                    else => false,
+                };
+                if (is_literal_true) {
+                    self.triggerCrash("This while loop's condition is the literal `True`, which causes an infinite loop at compile time. Use a mutable variable for the condition instead, e.g. `var $continue = True; while ($continue) { ... }`", false, roc_ops);
+                    return error.Crash;
+                }
+
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .while_loop_body_done = .{
                     .cond = wl.cond,

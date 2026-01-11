@@ -2883,3 +2883,23 @@ test "issue 8944: wrapper function for List.get with match" {
     try testing.expect(summary.evaluated >= 1);
     try testing.expectEqual(@as(u32, 0), summary.crashed);
 }
+
+test "issue 8979: while (True) {} should crash instead of hanging" {
+    // while (True) {} with no break would cause an infinite loop at compile time.
+    // The fix detects when the condition is a literal True and triggers a crash
+    // with a helpful error message instead of hanging.
+    const src =
+        \\e = {
+        \\    while (True) {}
+        \\}
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Should crash with error about infinite loop
+    try testing.expectEqual(@as(u32, 1), summary.evaluated);
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
+}
