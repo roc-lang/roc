@@ -29,7 +29,7 @@ pub const BuiltinModules = struct {
     builtin_indices: BuiltinIndices,
 
     /// Get an array of all builtin modules for iteration
-    /// For compatibility, we expose the Builtin module three times (once for each nested type)
+    /// For compatibility, we expose the Builtin module for each auto-imported type
     pub fn modules(self: *const BuiltinModules) [3]ModuleInfo {
         return .{
             .{ .name = "Bool", .module = &self.builtin_module },

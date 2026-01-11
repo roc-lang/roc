@@ -942,10 +942,18 @@ const Unifier = struct {
                             return;
                         }
 
-                        // Check if the nominal's backing is also an empty record
-                        if (b_backing_resolved.desc.content == .structure and
-                            b_backing_resolved.desc.content.structure == .empty_record)
-                        {
+                        // Check if the nominal's backing is also an empty record (or record with 0 fields)
+                        const backing_is_empty = blk: {
+                            if (b_backing_resolved.desc.content != .structure) break :blk false;
+                            const backing_flat = b_backing_resolved.desc.content.structure;
+                            if (backing_flat == .empty_record) break :blk true;
+                            if (backing_flat == .record) {
+                                const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
+                                if (fields.len == 0) break :blk true;
+                            }
+                            break :blk false;
+                        };
+                        if (backing_is_empty) {
                             // Both are empty, unify with the nominal
                             self.merge(vars, vars.b.desc.content);
                         } else {

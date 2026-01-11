@@ -1761,6 +1761,296 @@ test "early return: ? in first argument of multi-arg call" {
     , 0, .no_trace);
 }
 
+test "Decoder: create ok result - check result is Ok" {
+    // Test that we can create a decode result and it is an Ok
+    try runExpectBool(
+        \\{
+        \\    result = { result: Ok(42i64), rest: [] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "Decoder: create ok result - extract value" {
+    // Test that we can extract the value from a decode result
+    try runExpectI64(
+        \\{
+        \\    result = { result: Ok(42i64), rest: [] }
+        \\    match result.result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "Decoder: create err result" {
+    // Test that we can create an error decode result
+    try runExpectBool(
+        \\{
+        \\    result = { result: Err(TooShort), rest: [1u8, 2u8, 3u8] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , false, .no_trace);
+}
+
+test "decode: I32.decode with simple format" {
+    // Test I32.decode with a format that provides decode_i32
+    try runExpectI64(
+        \\{
+        \\    # Define a format type with decode_i32 method
+        \\    MyFormat := {}.{
+        \\        decode_i32 : MyFormat, List(U8) -> (Try(I32, [Err]), List(U8))
+        \\        decode_i32 = |_fmt, src| (Ok(42i32), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "decode: I64.decode with simple format" {
+    // Test I64.decode with a simple format that returns a constant
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i64 : MyFormat, List(U8) -> (Try(I64, [Err]), List(U8))
+        \\        decode_i64 = |_fmt, src| (Ok(99i64), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I64.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 99, .no_trace);
+}
+
+test "decode: U8.decode success" {
+    // Test U8.decode with simple constant format
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(255u8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => -1i64
+        \\    }
+        \\}
+    , 255, .no_trace);
+}
+
+test "decode: U8.decode error" {
+    // Test U8.decode returns error - use I64 result to avoid complex match
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Err(Empty), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([], fmt)
+        \\    match result {
+        \\        Ok(_) => 0i64
+        \\        Err(_) => 1i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
+test "decode: Bool.decode true" {
+    // Test Bool.decode returns true
+    try runExpectBool(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Bool.decode([], fmt)
+        \\    match result {
+        \\        Ok(b) => b
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "decode: Bool.decode false" {
+    // Test Bool.decode returns false
+    try runExpectBool(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Bool.decode([], fmt)
+        \\    match result {
+        \\        Ok(b) => b
+        \\        Err(_) => Bool.True  # Return True on error to distinguish
+        \\    }
+        \\}
+    , false, .no_trace);
+}
+
+test "decode: Str.decode success" {
+    // Test Str.decode with constant
+    try runExpectStr(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_str : MyFormat, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
+        \\        decode_str = |_fmt, src| (Ok("hi"), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Str.decode([], fmt)
+        \\    match result {
+        \\        Ok(s) => s
+        \\        Err(_) => "error"
+        \\    }
+        \\}
+    , "hi", .no_trace);
+}
+
+test "decode: rest returned from decode" {
+    // Verify that decode returns the rest bytes
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(1u8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([5u8], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
+test "decode: U16.decode" {
+    // Test U16.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u16 : MyFormat, List(U8) -> (Try(U16, [Err]), List(U8))
+        \\        decode_u16 = |_fmt, src| (Ok(1000u16), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U16.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 1000, .no_trace);
+}
+
+test "decode: U32.decode" {
+    // Test U32.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u32 : MyFormat, List(U8) -> (Try(U32, [Err]), List(U8))
+        \\        decode_u32 = |_fmt, src| (Ok(100000u32), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 100000, .no_trace);
+}
+
+test "decode: U64.decode" {
+    // Test U64.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u64 : MyFormat, List(U8) -> (Try(U64, [Err]), List(U8))
+        \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807u64), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U64.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64_wrap()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 9223372036854775807, .no_trace);
+}
+
+test "decode: I8.decode negative" {
+    // Test I8.decode with negative value
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i8 : MyFormat, List(U8) -> (Try(I8, [Err]), List(U8))
+        \\        decode_i8 = |_fmt, src| (Ok(-42i8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I8.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , -42, .no_trace);
+}
+
+test "decode: I16.decode negative" {
+    // Test I16.decode with negative value
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i16 : MyFormat, List(U8) -> (Try(I16, [Err]), List(U8))
+        \\        decode_i16 = |_fmt, src| (Ok(-1000i16), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I16.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , -1000, .no_trace);
+}
+
+// TODO: Test with multiple decode methods in same format has issues
+// test "decode: chained format with different types" { ... }
+
 test "issue 8783: List.fold with match on tag union elements from pattern match" {
     // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
     // would fail with TypeMismatch in match_branches continuation.

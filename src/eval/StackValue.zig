@@ -22,6 +22,7 @@ const RocOps = builtins.host_abi.RocOps;
 const RocList = builtins.list.RocList;
 const RocStr = builtins.str.RocStr;
 const RocDec = builtins.dec.RocDec;
+
 const Closure = layout_mod.Closure;
 
 const StackValue = @This();
@@ -247,6 +248,10 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             });
         }
 
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
         const captures_layout = layout_cache.getLayout(captures_layout_idx);
 
         if (comptime trace_refcount) {
@@ -432,7 +437,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        @memcpy(dst, src);
+        @memmove(dst, src);
 
         const record_data = layout_cache.getRecordData(self.layout.data.record.idx);
         if (record_data.fields.count == 0) return;
@@ -463,7 +468,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        @memcpy(dst, src);
+        @memmove(dst, src);
 
         const tuple_data = layout_cache.getTupleData(self.layout.data.tuple.idx);
         if (tuple_data.fields.count == 0) return;
@@ -490,10 +495,16 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        @memcpy(dst, src);
+        @memmove(dst, src);
 
         // Get the closure header to find the captures layout
         const closure = self.asClosure().?;
+
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
+        const idx_as_usize = @intFromEnum(closure.captures_layout_idx);
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
 
         // Only incref if there are actual captures (record with fields)
@@ -526,7 +537,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         std.debug.assert(self.ptr != null);
         const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
         const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-        @memcpy(dst, src);
+        @memmove(dst, src);
 
         const base_ptr = @as([*]const u8, @ptrCast(self.ptr.?));
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
@@ -548,38 +559,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
     std.debug.assert(self.ptr != null);
     const src = @as([*]u8, @ptrCast(self.ptr.?))[0..result_size];
     const dst = @as([*]u8, @ptrCast(dest_ptr))[0..result_size];
-
-    // Skip memcpy if source and destination overlap to avoid aliasing error
-    const src_start = @intFromPtr(src.ptr);
-    const src_end = src_start + result_size;
-    const dst_start = @intFromPtr(dst.ptr);
-    const dst_end = dst_start + result_size;
-
-    // Check if ranges overlap
-    if ((src_start < dst_end) and (dst_start < src_end)) {
-        // Overlapping regions - skip if they're identical, otherwise use memmove
-        if (src.ptr == dst.ptr) {
-            return;
-        }
-        // Use manual copy for overlapping but non-identical regions
-        if (dst_start < src_start) {
-            // Copy forward
-            var i: usize = 0;
-            while (i < result_size) : (i += 1) {
-                dst[i] = src[i];
-            }
-        } else {
-            // Copy backward
-            var i: usize = result_size;
-            while (i > 0) {
-                i -= 1;
-                dst[i] = src[i];
-            }
-        }
-        return;
-    }
-
-    @memcpy(dst, src);
+    @memmove(dst, src);
 }
 
 /// Read this StackValue's integer value, ensuring it's initialized
@@ -1511,6 +1491,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     if (self.layout.tag == .closure) {
         if (self.ptr == null) return;
         const closure_header: *const layout_mod.Closure = @ptrCast(@alignCast(self.ptr.?));
+
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
+        const idx_as_usize = @intFromEnum(closure_header.captures_layout_idx);
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
         const captures_layout = layout_cache.getLayout(closure_header.captures_layout_idx);
 
         // Only incref if there are actual captures (record with fields)
@@ -1752,6 +1738,12 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 pub fn getTotalSize(self: StackValue, layout_cache: *LayoutStore, _: *RocOps) u32 {
     if (self.layout.tag == .closure and self.ptr != null) {
         const closure = self.asClosure().?;
+
+        // Debug assertion: closure layout index must be within bounds.
+        // If this trips, it indicates a compiler bug in layout index assignment.
+        const idx_as_usize = @intFromEnum(closure.captures_layout_idx);
+        std.debug.assert(idx_as_usize < layout_cache.layouts.len());
+
         const captures_layout = layout_cache.getLayout(closure.captures_layout_idx);
         const captures_alignment = captures_layout.alignment(layout_cache.targetUsize());
         const header_size = @sizeOf(Closure);
