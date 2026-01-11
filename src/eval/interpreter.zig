@@ -8899,9 +8899,26 @@ pub const Interpreter = struct {
         // Check if there's an existing value that differs
         if (self.flex_type_context.get(key)) |existing| {
             if (@intFromEnum(existing) != @intFromEnum(rt_var)) {
+                // Check if the existing mapping is already a concrete (non-flex/rigid) type.
+                // If so, keep it and don't overwrite - the first concrete binding should win.
+                // This is critical for polymorphic for-loops: the type parameter 'a' might be
+                // first mapped to Str (from the iterable List(Str)), but then later code
+                // tries to map it to Dec (from an empty list literal). The Str mapping is
+                // correct and should not be overwritten.
+                const existing_resolved = self.runtime_types.resolveVar(existing);
+                if (existing_resolved.desc.content != .flex and existing_resolved.desc.content != .rigid) {
+                    // Existing is concrete - keep it
+                    return;
+                }
                 // Value is changing - increment generation to invalidate stale cache entries
                 self.poly_context_generation +%= 1;
             }
+        } else {
+            // NEW entry being added - increment generation to invalidate cache entries
+            // that were translated before this mapping existed. This is critical for
+            // polymorphic functions where type parameters (like 'a' in List(a)) may be
+            // cached before the concrete type mapping is established.
+            self.poly_context_generation +%= 1;
         }
         try self.flex_type_context.put(key, rt_var);
     }
@@ -9167,6 +9184,17 @@ pub const Interpreter = struct {
         // since they may have been translated with different flex_type_context mappings.
         if (self.translate_cache.get(key)) |entry| {
             if (entry.generation == self.poly_context_generation) {
+                // Check if the cached var is a rigid that now has a name-based substitution.
+                // This can happen when a polymorphic function is called with concrete types -
+                // the rigid_name_subst gets populated after the initial translation.
+                const cached_resolved = self.runtime_types.resolveVar(entry.var_);
+                if (cached_resolved.desc.content == .rigid) {
+                    const rigid_name = cached_resolved.desc.content.rigid.name;
+                    if (self.rigid_name_subst.get(rigid_name.idx)) |concrete_rt_var| {
+                        // There's a name-based substitution - return the concrete type
+                        return concrete_rt_var;
+                    }
+                }
                 return entry.var_;
             }
         }
@@ -9553,17 +9581,16 @@ pub const Interpreter = struct {
                     const content: types.Content = .{ .rigid = rt_rigid };
                     const rt_rigid_var = try self.runtime_types.freshFromContent(content);
 
-                    // If there's a for-clause mapping for this rigid name, add it to empty_scope
-                    // so the layout store can find it during Box/List layout computation
+                    // If there's a rigid_name_subst mapping for this rigid name, use the concrete type
+                    // instead of the rigid. This is critical for polymorphic functions where the
+                    // type parameter has been instantiated to a concrete type (e.g., `a` -> `Str`).
                     if (self.rigid_name_subst.get(rt_name.idx)) |concrete_rt_var| {
-                        // Don't add if it would create a cycle in rigid_subst
+                        // Don't use if it would create a cycle
                         if (!self.wouldCreateRigidSubstCycle(rt_rigid_var, concrete_rt_var)) {
-                            // Mapping found! Add to empty_scope and rigid_subst
-                            if (self.empty_scope.scopes.items.len == 0) {
-                                try self.empty_scope.scopes.append(types.VarMap.init(self.allocator));
-                            }
-                            try self.empty_scope.scopes.items[0].put(rt_rigid_var, concrete_rt_var);
+                            // Also add the mapping to rigid_subst for consistency
                             try self.rigid_subst.put(rt_rigid_var, concrete_rt_var);
+                            // Return the CONCRETE type, not the rigid
+                            break :blk concrete_rt_var;
                         }
                     }
 
@@ -9828,9 +9855,10 @@ pub const Interpreter = struct {
         };
         if (params.len != args.len) return error.TypeMismatch;
 
-        var i: usize = 0;
-        while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithConf(
+        // Runtime unification should NEVER fail. If it does, there's a bug in type translation
+        // or ident normalization. The code passed compile-time type checking, so types should unify.
+        for (params, 0..) |param, i| {
+            const result = try unify.unifyWithConf(
                 self.runtime_layout_store.env,
                 self.runtime_types,
                 &self.problems,
@@ -9838,10 +9866,13 @@ pub const Interpreter = struct {
                 &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
-                params[i],
+                param,
                 args[i],
                 unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
+            // Runtime unification should NEVER fail - if it does, there's a bug in type translation.
+            // The code passed compile-time type checking, so types should unify at runtime.
+            std.debug.assert(result == .ok);
         }
         // ret_var may now be constrained
 
@@ -11576,11 +11607,14 @@ pub const Interpreter = struct {
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    // Debug assertion: list type should be a structure (nominal_type for List).
+                    // If this fails, it indicates a bug in type translation or unification.
                     std.debug.assert(list_resolved.desc.content == .structure);
                     std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
                     const nom = list_resolved.desc.content.structure.nominal_type;
                     const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    // vars[0] = backing, vars[1] = element type
+                    std.debug.assert(vars.len >= 2);
                     const elem_rt_var = vars[1];
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
@@ -12385,6 +12419,16 @@ pub const Interpreter = struct {
                         try self.rigid_subst.put(source, target);
                         // Also add to empty_scope so layout store finds the mapping
                         try scope.put(source, target);
+
+                        // ALSO add to rigid_name_subst by name.
+                        // This ensures that even if new rigids are created with the same name
+                        // (e.g., due to translate_cache invalidation), the name-based lookup
+                        // will still find the correct concrete type.
+                        const source_resolved = self.runtime_types.resolveVar(source);
+                        if (source_resolved.desc.content == .rigid) {
+                            const rigid_name = source_resolved.desc.content.rigid.name;
+                            try self.rigid_name_subst.put(rigid_name.idx, target);
+                        }
                     }
                 }
 

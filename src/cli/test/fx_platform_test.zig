@@ -1180,6 +1180,23 @@ test "external platform memory alignment regression" {
     // try checkSuccess(run_result);
 }
 
+test "fx platform issue8898 list literal in polymorphic for loop" {
+    // Regression test for GitHub issue #8898
+    // Creating a list literal inside a for loop over a polymorphic list would panic
+    // with "reached unreachable code" because the list's type was a flex variable.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/issue8898.roc", .{ .extra_args = &[_][]const u8{"test"} });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    try checkSuccess(run_result);
+
+    // When all tests pass produce short output message
+    try testing.expectStringStartsWith(run_result.stdout, "All (1) tests passed in ");
+    try testing.expectEqualStrings("", run_result.stderr);
+}
+
 test "fx platform issue8826 app vs platform type mismatch" {
     // Regression test for https://github.com/roc-lang/roc/issues/8826
     // The bug was that `roc check` reported "No errors found" when the app's main!
