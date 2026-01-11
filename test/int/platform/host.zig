@@ -127,34 +127,37 @@ fn platform_main() !void {
     try stdout.print("\x1b[32mSUCCESS\x1b[0m: init completed!\n", .{});
     success_count += 1;
 
-    // Test 2: render takes Box(model), returns Simple(Model) - an opaque type
-    // Simple(Model) is a tag union, so it has a discriminant + payload
-    // For now, just treat it as a blob and check we can call without crashing
-    try stdout.print("\n=== Test 2: render(Box(model)) -> Simple(Model) ===\n", .{});
-    // Use aligned buffer - Simple(Model) contains Str which requires pointer alignment
-    var render_result: [64]u8 align(@alignOf(usize)) = undefined;
-    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&render_result)), @as(*anyopaque, @ptrCast(&boxed_model)));
-    try stdout.print("render completed without crash\n", .{});
-    try stdout.print("\x1b[32mSUCCESS\x1b[0m: render returned Simple(Model)!\n", .{});
-    success_count += 1;
-
-    // Test 3: update takes (Box(model), I64), returns Box(model)
-    try stdout.print("\n=== Test 3: update(Box(model), 42) -> Box(model) ===\n", .{});
+    // Test 2: update takes (Box(model), I64), returns Box(model)
+    // Note: update calls Box.unbox which CONSUMES the input Box, so we can't reuse boxed_model after this
+    try stdout.print("\n=== Test 2: update(Box(model), 42) -> Box(model) ===\n", .{});
     const UpdateArgs = extern struct { boxed_model: Box, delta: i64 };
     var update_args = UpdateArgs{ .boxed_model = boxed_model, .delta = 42 };
-    var new_boxed_model: Box = undefined;
-    roc__update(&roc_ops, @as(*anyopaque, @ptrCast(&new_boxed_model)), @as(*anyopaque, @ptrCast(&update_args)));
-    try stdout.print("update returned new Box: 0x{x}\n", .{new_boxed_model});
+    var updated_model: Box = undefined;
+    roc__update(&roc_ops, @as(*anyopaque, @ptrCast(&updated_model)), @as(*anyopaque, @ptrCast(&update_args)));
+    try stdout.print("update returned new Box: 0x{x}\n", .{updated_model});
     try stdout.print("\x1b[32mSUCCESS\x1b[0m: update completed!\n", .{});
     success_count += 1;
 
-    // Test 4: render the updated model
-    try stdout.print("\n=== Test 4: render(updated Box(model)) -> Simple(Model) ===\n", .{});
+    // Test 3: render takes Box(model), returns Simple(Model) - an opaque type
+    // Simple(Model) is a tag union, so it has a discriminant + payload
+    // Note: render calls Box.unbox which CONSUMES the input Box
+    try stdout.print("\n=== Test 3: render(Box(model)) -> Simple(Model) ===\n", .{});
     // Use aligned buffer - Simple(Model) contains Str which requires pointer alignment
-    var final_result: [64]u8 align(@alignOf(usize)) = undefined;
-    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&final_result)), @as(*anyopaque, @ptrCast(&new_boxed_model)));
+    var render_result: [64]u8 align(@alignOf(usize)) = undefined;
+    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&render_result)), @as(*anyopaque, @ptrCast(&updated_model)));
     try stdout.print("render completed without crash\n", .{});
     try stdout.print("\x1b[32mSUCCESS\x1b[0m: render returned Simple(Model)!\n", .{});
+    success_count += 1;
+
+    // Test 4: init again to get a fresh Box, then render it
+    // This tests that we can create and consume multiple Boxes
+    try stdout.print("\n=== Test 4: init + render (fresh Box) ===\n", .{});
+    var fresh_model: Box = undefined;
+    roc__init(&roc_ops, @as(*anyopaque, @ptrCast(&fresh_model)), @as(*anyopaque, @ptrCast(&empty_input)));
+    var final_result: [64]u8 align(@alignOf(usize)) = undefined;
+    roc__render(&roc_ops, @as(*anyopaque, @ptrCast(&final_result)), @as(*anyopaque, @ptrCast(&fresh_model)));
+    try stdout.print("render completed without crash\n", .{});
+    try stdout.print("\x1b[32mSUCCESS\x1b[0m: fresh init + render worked!\n", .{});
     success_count += 1;
 
     // Final summary

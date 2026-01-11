@@ -874,10 +874,24 @@ pub const Interpreter = struct {
                         return error.Crash;
                     }
                     // Decref refcounted argument values (lists, strings) after binding.
-                    // patternMatchesBind made copies, so we need to decref the originals.
-                    // EXCEPT: Don't decref Box types because that zeros the slot in host memory.
-                    // The host owns box slots and will manage them.
-                    if (arg_value.layout.tag != .box and arg_value.layout.tag != .box_of_zst) {
+                    // patternMatchesBind made copies (which incref), so we need to decref the originals.
+                    // For Box types from host memory: decref the data pointer directly without
+                    // zeroing the slot (host owns the slot memory). This fixes issue #8981 where
+                    // Box.unbox wasn't properly decrementing refcounts for boxes passed through FFI.
+                    if (arg_value.layout.tag == .box) {
+                        const slot = arg_value.asBoxSlot();
+                        if (slot) |s| {
+                            const raw_ptr = s.*;
+                            if (raw_ptr != 0) {
+                                const data_ptr: [*]u8 = @ptrFromInt(raw_ptr);
+                                const elem_layout = self.runtime_layout_store.getLayout(arg_value.layout.data.box);
+                                const target_usize = self.runtime_layout_store.targetUsize();
+                                const elem_alignment: u32 = @intCast(elem_layout.alignment(target_usize).toByteUnits());
+                                // Decref the data pointer but don't zero the host's slot
+                                builtins.utils.decrefDataPtrC(@as(?[*]u8, data_ptr), elem_alignment, false, roc_ops);
+                            }
+                        }
+                    } else if (arg_value.layout.tag != .box_of_zst) {
                         arg_value.decref(&self.runtime_layout_store, roc_ops);
                     }
                 }
@@ -2909,8 +2923,14 @@ pub const Interpreter = struct {
                     // Decref the original list_of_zst (it may have capacity allocated)
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    // Push result with upgraded layout and runtime type.
+                    // When upgrading from list_of_zst, we need to update the runtime type
+                    // to reflect the element's actual type. This is critical for closures
+                    // that capture for-loop elements: without the correct runtime type,
+                    // the captured value's layout may be computed as opaquePtr() instead
+                    // of the correct numeric layout. (fixes issue #8946)
+                    const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
+                    var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
                     out.is_initialized = false;
                     out.setRocList(result_list);
                     out.is_initialized = true;
@@ -2980,7 +3000,15 @@ pub const Interpreter = struct {
                     Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+
+                // When upgrading element layout, also update runtime type to match.
+                // This ensures closures that capture for-loop elements get correct layouts.
+                // (fixes issue #8946)
+                const result_rt_var = if (needs_element_layout_upgrade)
+                    try self.createListTypeWithElement(elt_arg.rt_var)
+                else
+                    roc_list_arg.rt_var;
+                var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
@@ -3073,8 +3101,11 @@ pub const Interpreter = struct {
                     // Decref the original list_of_zst (it may have capacity allocated)
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    // Push result with upgraded layout and runtime type.
+                    // When upgrading from list_of_zst, we need to update the runtime type
+                    // to reflect the element's actual type. (fixes issue #8946)
+                    const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
+                    var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
                     out.is_initialized = false;
                     out.setRocList(result_list);
                     out.is_initialized = true;
@@ -3144,7 +3175,14 @@ pub const Interpreter = struct {
                     Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+
+                // When upgrading element layout, also update runtime type to match.
+                // (fixes issue #8946)
+                const result_rt_var = if (needs_element_layout_upgrade)
+                    try self.createListTypeWithElement(elt_arg.rt_var)
+                else
+                    roc_list_arg.rt_var;
+                var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
