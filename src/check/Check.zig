@@ -113,9 +113,6 @@ bool_var: Var,
 str_var: Var,
 /// Map representation of Ident -> Var, used in checking static dispatch constraints
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
-/// Current block's statements - used to find local nominal types when checking deferred constraints.
-/// This is set when entering a block and cleared when exiting.
-current_block_statements: ?[]const CIR.Statement.Idx,
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
 /// The expected return type of the enclosing function, if any.
@@ -210,7 +207,6 @@ pub fn init(
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
-        .current_block_statements = null,
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
         .enclosing_func_return_type = null,
         .enclosing_func_name = null,
@@ -4137,11 +4133,6 @@ const BlockStatementsResult = struct {
 /// Given a slice of stmts, type check each one
 /// Returns whether any statement has effects and whether the block diverges (return/crash)
 fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env: *Env, _: Region) std.mem.Allocator.Error!BlockStatementsResult {
-    // Track current block statements for deferred constraint checking
-    const prev_block_statements = self.current_block_statements;
-    self.current_block_statements = statements;
-    defer self.current_block_statements = prev_block_statements;
-
     var does_fx = false;
     var diverges = false;
     for (statements) |stmt_idx| {
