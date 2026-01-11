@@ -16,6 +16,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Builder = @import("Builder.zig");
+const layout_mod = @import("../../layout/mod.zig");
+
+const Layout = layout_mod.Layout;
 
 /// Roc numeric type kinds (mirrors CIR.NumKind for type mapping)
 pub const NumKind = enum {
@@ -86,6 +89,9 @@ pub const LlvmEmitter = struct {
     /// Current work-in-progress function being built
     wip_function: ?*Builder.WipFunction,
 
+    /// Current scope for variable bindings (forms a parent chain)
+    current_scope: ?*Scope,
+
     /// Error type for emission failures
     pub const Error = error{
         OutOfMemory,
@@ -112,11 +118,20 @@ pub const LlvmEmitter = struct {
             .builder = builder,
             .allocator = allocator,
             .wip_function = null,
+            .current_scope = null,
         };
     }
 
     /// Clean up the emitter
     pub fn deinit(self: *LlvmEmitter) void {
+        // Clean up any remaining scopes
+        while (self.current_scope) |scope| {
+            const parent = scope.parent;
+            scope.deinit();
+            self.allocator.destroy(scope);
+            self.current_scope = parent;
+        }
+
         if (self.wip_function) |wip| {
             wip.deinit();
             self.allocator.destroy(wip);
@@ -332,10 +347,55 @@ pub const LlvmEmitter = struct {
     /// Finish building a function body
     pub fn endFunction(self: *LlvmEmitter) Error!void {
         if (self.wip_function) |wip| {
+            // In debug builds, verify the function IR before finishing
+            if (builtin.mode == .Debug) {
+                verifyFunction(wip);
+            }
+
             wip.finish() catch return error.OutOfMemory;
             wip.deinit();
             self.allocator.destroy(wip);
             self.wip_function = null;
+        }
+    }
+
+    /// Verify that a function's IR is valid.
+    /// This is called automatically in debug builds before finishing a function.
+    /// Checks:
+    /// - All blocks are properly terminated (end with ret, br, switch, or unreachable)
+    fn verifyFunction(wip: *Builder.WipFunction) void {
+        for (wip.blocks.items, 0..) |block, block_idx| {
+            // Each block must have at least one instruction (the terminator)
+            if (block.instructions.items.len == 0) {
+                std.debug.panic(
+                    "LLVM IR verification failed: Block {d} '{s}' has no instructions (missing terminator)",
+                    .{ block_idx, wip.builder.getString(block.name).slice(wip.builder) },
+                );
+            }
+
+            // Get the last instruction in the block
+            const last_inst_idx = block.instructions.items[block.instructions.items.len - 1];
+            const last_inst = wip.instructions.items[@intFromEnum(last_inst_idx)];
+
+            // Check if it's a terminator instruction
+            const is_terminator = switch (last_inst.tag) {
+                .ret,
+                .@"ret void",
+                .br,
+                .br_cond,
+                .@"switch",
+                .indirectbr,
+                .@"unreachable",
+                => true,
+                else => false,
+            };
+
+            if (!is_terminator) {
+                std.debug.panic(
+                    "LLVM IR verification failed: Block {d} '{s}' does not end with a terminator instruction (found {s})",
+                    .{ block_idx, wip.builder.getString(block.name).slice(wip.builder), @tagName(last_inst.tag) },
+                );
+            }
         }
     }
 
@@ -472,10 +532,35 @@ pub const LlvmEmitter = struct {
 
     // Memory Operations
 
-    /// Emit an alloca instruction (allocate on stack)
+    /// Emit an alloca instruction (allocate on stack).
+    /// Allocas are always placed in the entry block to ensure proper LLVM semantics
+    /// and prevent stack growth when called in loops.
     pub fn emitAlloca(self: *LlvmEmitter, ty: Builder.Type) Error!Builder.Value {
+        return self.emitAllocaAligned(ty, .default);
+    }
+
+    /// Emit an alloca instruction with explicit alignment.
+    /// For i128 on ARM platforms, use 16-byte alignment.
+    /// Allocas are always placed in the entry block to ensure proper LLVM semantics.
+    pub fn emitAllocaAligned(self: *LlvmEmitter, ty: Builder.Type, alignment: Builder.Alignment) Error!Builder.Value {
         const wip = self.wip_function orelse return error.NoActiveFunction;
-        return wip.alloca(.normal, ty, .none, "") catch return error.OutOfMemory;
+        // Save current cursor position
+        const saved_cursor = wip.cursor;
+        // Move to start of entry block (allocas should be at function entry, not in loops)
+        wip.cursor = .{ .block = .entry, .instruction = 0 };
+        const result = wip.alloca(.normal, ty, .none, alignment, .default, "") catch return error.OutOfMemory;
+        // Restore cursor
+        wip.cursor = saved_cursor;
+        return result;
+    }
+
+    /// Get the required alignment for a given LLVM type.
+    /// Returns 16-byte alignment for i128 (important for ARM), default otherwise.
+    pub fn getTypeAlignment(ty: Builder.Type) Builder.Alignment {
+        return switch (ty) {
+            .i128 => Builder.Alignment.fromByteUnits(16),
+            else => .default,
+        };
     }
 
     /// Emit a load instruction
@@ -492,15 +577,27 @@ pub const LlvmEmitter = struct {
 
     // Call Operations
 
-    /// Emit a function call
+    /// Emit a function call with default C calling convention and no attributes
     pub fn emitCall(
         self: *LlvmEmitter,
         fn_type: Builder.Type,
         callee: Builder.Value,
         args: []const Builder.Value,
     ) Error!Builder.Value {
+        return self.emitCallWithConv(fn_type, callee, args, .ccc, .none);
+    }
+
+    /// Emit a function call with explicit calling convention and attributes
+    pub fn emitCallWithConv(
+        self: *LlvmEmitter,
+        fn_type: Builder.Type,
+        callee: Builder.Value,
+        args: []const Builder.Value,
+        call_conv: Builder.CallConv,
+        function_attributes: Builder.FunctionAttributes,
+    ) Error!Builder.Value {
         const wip = self.wip_function orelse return error.NoActiveFunction;
-        return wip.call(.normal, fn_type, callee, args, "") catch return error.OutOfMemory;
+        return wip.call(.normal, call_conv, function_attributes, fn_type, callee, args, "") catch return error.OutOfMemory;
     }
 
     // PHI Node Operations
@@ -556,6 +653,154 @@ pub const LlvmEmitter = struct {
     /// Get the current WipFunction for advanced operations
     pub fn getWipFunction(self: *LlvmEmitter) ?*Builder.WipFunction {
         return self.wip_function;
+    }
+
+    // Scope Management
+
+    /// Push a new scope onto the scope stack
+    pub fn pushScope(self: *LlvmEmitter) Error!void {
+        const new_scope = self.allocator.create(Scope) catch return error.OutOfMemory;
+        new_scope.* = Scope.init(self.allocator, self.current_scope);
+        self.current_scope = new_scope;
+    }
+
+    /// Pop the current scope, returning to parent scope
+    /// Note: Does NOT emit decrefs - caller must handle cleanup if needed
+    pub fn popScope(self: *LlvmEmitter) void {
+        if (self.current_scope) |scope| {
+            const parent = scope.parent;
+            scope.deinit();
+            self.allocator.destroy(scope);
+            self.current_scope = parent;
+        }
+    }
+
+    /// Define a variable in the current scope
+    pub fn defineVar(self: *LlvmEmitter, name: []const u8, value: ScopedValue) Error!void {
+        if (self.current_scope) |scope| {
+            scope.define(name, value) catch return error.OutOfMemory;
+        }
+    }
+
+    /// Look up a variable by name, searching from current scope up to parents
+    pub fn lookupVar(self: *LlvmEmitter, name: []const u8) ?ScopedValue {
+        var scope_opt = self.current_scope;
+        while (scope_opt) |scope| {
+            if (scope.lookup(name)) |value| {
+                return value;
+            }
+            scope_opt = scope.parent;
+        }
+        return null;
+    }
+
+    /// Get all values in current scope that need decref on exit
+    pub fn getDecrefValues(self: *LlvmEmitter) []const ScopedValue {
+        if (self.current_scope) |scope| {
+            return scope.getDecrefValues();
+        }
+        return &.{};
+    }
+};
+
+/// A value bound in a scope, with metadata for cleanup
+pub const ScopedValue = struct {
+    /// The LLVM value (could be a direct value or a pointer to stack slot)
+    value: Builder.Value,
+
+    /// The LLVM type of the value
+    llvm_type: Builder.Type,
+
+    /// The Roc layout of the value (needed for proper refcount cleanup)
+    layout: ?Layout,
+
+    /// Whether this value is stored on the stack (and value is a pointer to it)
+    is_ptr: bool,
+
+    /// Whether this value needs decref when the scope exits
+    needs_decref: bool,
+
+    /// Create a simple value that doesn't need decref (scalars, etc.)
+    pub fn simple(value: Builder.Value, llvm_type: Builder.Type) ScopedValue {
+        return .{
+            .value = value,
+            .llvm_type = llvm_type,
+            .layout = null,
+            .is_ptr = false,
+            .needs_decref = false,
+        };
+    }
+
+    /// Create a refcounted value that needs decref on scope exit
+    pub fn refcounted(value: Builder.Value, llvm_type: Builder.Type, layout: Layout, is_ptr: bool) ScopedValue {
+        return .{
+            .value = value,
+            .llvm_type = llvm_type,
+            .layout = layout,
+            .is_ptr = is_ptr,
+            .needs_decref = true,
+        };
+    }
+};
+
+/// Scope for tracking variable bindings and cleanup
+/// Scopes form a parent chain for lexical scoping
+pub const Scope = struct {
+    /// Variable bindings in this scope (name → value)
+    bindings: std.StringHashMapUnmanaged(ScopedValue),
+
+    /// Values that need decref when this scope exits
+    decref_on_exit: std.ArrayListUnmanaged(ScopedValue),
+
+    /// Parent scope (for lexical lookup)
+    parent: ?*Scope,
+
+    /// Allocator for this scope's data
+    allocator: Allocator,
+
+    /// Initialize a new scope
+    pub fn init(allocator: Allocator, parent: ?*Scope) Scope {
+        return .{
+            .bindings = .{},
+            .decref_on_exit = .{},
+            .parent = parent,
+            .allocator = allocator,
+        };
+    }
+
+    /// Clean up scope resources
+    pub fn deinit(self: *Scope) void {
+        // Free the string keys (they were duped when inserted)
+        var key_iter = self.bindings.keyIterator();
+        while (key_iter.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
+        self.bindings.deinit(self.allocator);
+        self.decref_on_exit.deinit(self.allocator);
+    }
+
+    /// Define a variable in this scope
+    pub fn define(self: *Scope, name: []const u8, value: ScopedValue) Allocator.Error!void {
+        // Dupe the name so we own it
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+
+        try self.bindings.put(self.allocator, owned_name, value);
+
+        // Track for decref if needed
+        if (value.needs_decref) {
+            try self.decref_on_exit.append(self.allocator, value);
+        }
+    }
+
+    /// Look up a variable in this scope only (not parents)
+    pub fn lookup(self: *const Scope, name: []const u8) ?ScopedValue {
+        return self.bindings.get(name);
+    }
+
+    /// Get values that need decref when this scope exits
+    pub fn getDecrefValues(self: *const Scope) []const ScopedValue {
+        return self.decref_on_exit.items;
     }
 };
 

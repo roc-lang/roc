@@ -23,42 +23,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const bindings = @import("bindings.zig");
+const layout = @import("layout");
 
 const Allocator = std.mem.Allocator;
-
-/// Type of the result value for JIT execution.
-///
-/// NOTE: This enum is duplicated in llvm_evaluator.zig because of module boundary
-/// constraints. The eval module may be compiled without LLVM linked, while this
-/// module (llvm_compile) requires LLVM. The two definitions must stay in sync,
-/// which is enforced by comptime validation in both files.
-pub const ResultType = enum {
-    i64,
-    u64,
-    i128,
-    u128,
-    f64,
-    dec,
-
-    /// Compile-time validation that this enum matches the expected structure.
-    /// This helps catch accidental divergence from llvm_evaluator.ResultType.
-    pub fn validate() void {
-        comptime {
-            const fields = @typeInfo(ResultType).@"enum".fields;
-            if (fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-            if (!std.mem.eql(u8, fields[0].name, "i64")) @compileError("ResultType[0] must be i64");
-            if (!std.mem.eql(u8, fields[1].name, "u64")) @compileError("ResultType[1] must be u64");
-            if (!std.mem.eql(u8, fields[2].name, "i128")) @compileError("ResultType[2] must be i128");
-            if (!std.mem.eql(u8, fields[3].name, "u128")) @compileError("ResultType[3] must be u128");
-            if (!std.mem.eql(u8, fields[4].name, "f64")) @compileError("ResultType[4] must be f64");
-            if (!std.mem.eql(u8, fields[5].name, "dec")) @compileError("ResultType[5] must be dec");
-        }
-    }
-};
-
-comptime {
-    ResultType.validate();
-}
+const LayoutIdx = layout.Idx;
 
 /// Dec (fixed-point decimal) has 18 decimal places.
 /// The internal representation is i128 scaled by 10^18.
@@ -199,12 +167,15 @@ pub const Error = error{
     OutOfMemory,
     JITCreationFailed,
     ModuleAddFailed,
+    ModuleLinkFailed,
     SymbolNotFound,
     ExecutionFailed,
     BitcodeParseError,
     /// JIT is not supported on this platform (e.g., statically-linked musl binaries
     /// don't support dynamic loading which LLVM ORC JIT requires).
     JITNotSupported,
+    /// The layout is not supported for JIT execution (e.g., non-scalar types).
+    UnsupportedLayout,
 };
 
 /// Returns true if JIT compilation is supported on this platform.
@@ -235,7 +206,7 @@ pub fn isJITSupported() bool {
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
-    result_type: ResultType,
+    output_layout: LayoutIdx,
 ) Error![]const u8 {
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
@@ -272,6 +243,40 @@ pub fn compileAndExecute(
         return error.BitcodeParseError;
     }
     // Note: mem_buf is consumed by parseBitcodeInContext2, don't dispose
+
+    // Load and merge builtin bitcode into the user module.
+    // This makes all builtin functions available for the JIT to call.
+    // The builtins are compiled with single_threaded=true to avoid TLS symbols.
+    {
+        const builtin_bitcode = @embedFile("builtins.bc");
+        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+            builtin_bitcode.ptr,
+            builtin_bitcode.len,
+            "roc_builtins",
+            bindings.Bool.False,
+        );
+
+        var builtin_module: *bindings.Module = undefined;
+        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+            builtin_mem_buf.dispose();
+            module.dispose();
+            return error.BitcodeParseError;
+        }
+        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+        // Set the builtin module's target triple and data layout to match the user module.
+        // This prevents "Linking two modules of different target triples" warnings and
+        // ensures the merged module is compatible with the JIT.
+        builtin_module.setTargetTriple(module.getTargetTriple());
+        builtin_module.setDataLayout(module.getDataLayout());
+
+        // Link builtins into user module (destroys builtin_module on success)
+        if (module.link(builtin_module).toBool()) {
+            module.dispose();
+            return error.ModuleLinkFailed;
+        }
+        // Note: builtin_module is now invalid - do NOT dispose it
+    }
 
     // Wrap module in thread-safe module (takes ownership of module)
     const ts_module = bindings.OrcThreadSafeModule.create(module, ts_context);
@@ -357,9 +362,10 @@ pub fn compileAndExecute(
     // Get main JIT dylib
     const dylib = jit.getMainJITDylib();
 
-    // Add a generator so the JIT can find symbols from the current process
-    // (not needed for roc_eval since it doesn't call external functions,
-    // but keep it for future flexibility)
+    // Add a generator so the JIT can find symbols from the current process.
+    // This handles:
+    // - Platform symbols (TLS, compiler-rt, etc.)
+    // - Builtin functions (until bitcode merging is enabled)
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -369,6 +375,7 @@ pub fn compileAndExecute(
         null, // no filter context
     )) |err| {
         bindings.consumeError(err);
+        ts_module.dispose();
         return error.JITCreationFailed;
     }
     bindings.jitDylibAddGenerator(dylib, process_syms_generator);
@@ -400,15 +407,17 @@ pub fn compileAndExecute(
     // This makes the ABI simple and platform-independent on all targets.
     //
     // Function signature: void roc_eval(<type>* out_ptr)
-    switch (result_type) {
-        .i64 => {
+    switch (output_layout) {
+        // Signed integers that fit in i64
+        .i8, .i16, .i32, .i64 => {
             const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i64 = undefined;
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
-        .u64 => {
+        // Unsigned integers that fit in u64
+        .u8, .u16, .u32, .u64 => {
             const EvalFn = *const fn (*u64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: u64 = undefined;
@@ -429,7 +438,7 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
         },
-        .f64 => {
+        .f32, .f64 => {
             const EvalFn = *const fn (*f64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: f64 = undefined;
@@ -443,5 +452,6 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
+        else => return error.UnsupportedLayout,
     }
 }
