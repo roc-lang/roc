@@ -422,16 +422,7 @@ pub fn increfDataPtrC(
 
     const ptr = @intFromPtr(bytes);
 
-    // Verify original pointer is properly aligned (can fail if seamless slice encoding produces bad pointer)
-    if (comptime builtin.mode == .Debug) {
-        if (ptr % @alignOf(usize) != 0) {
-            var buf: [128]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "increfDataPtrC: ORIGINAL ptr=0x{x} is not {d}-byte aligned", .{ ptr, @alignOf(usize) }) catch "increfDataPtrC: original alignment error";
-            roc_ops.crash(msg);
-            return;
-        }
-    }
-
+    // Strip tag bits from the pointer - recursive tag unions may store tag IDs in low bits
     const tag_mask: usize = if (@sizeOf(usize) == 8) 0b111 else 0b11;
     const masked_ptr = ptr & ~tag_mask;
     const rc_addr = masked_ptr - @sizeOf(usize);
