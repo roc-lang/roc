@@ -28,7 +28,7 @@ type=repl
 ---
 []
 ---
-[{ a: "Foo", b: { c: 11 } }, { a: "Foo", b: { c: 11 } }]
+[{ b: { c: 11 }, a: "Foo" }, { b: { c: 11 }, a: "Foo" }]
 ---
 assigned `x`
 ---

@@ -73,15 +73,6 @@ fn debugUnreachable(roc_ops: ?*RocOps, comptime msg: []const u8, src: std.builti
     unreachable;
 }
 
-/// Helper to check if a byte slice contains a specific character.
-/// Uses a simple loop to avoid std.mem functions which are flagged as forbidden patterns.
-fn containsDot(str: []const u8) bool {
-    for (str) |c| {
-        if (c == '.') return true;
-    }
-    return false;
-}
-
 /// Context structure for inc/dec callbacks in list operations
 const RefcountContext = struct {
     layout_store: *layout.Store,
@@ -9423,38 +9414,22 @@ pub const Interpreter = struct {
                             for (ct_args, 0..) |ct_arg, i| {
                                 buf[i] = try self.translateTypeVar(module, ct_arg);
                             }
-                            // ALWAYS translate idents to the runtime_layout_store's env's ident store
-                            // with consistent naming. This is critical because:
-                            // 1. The layout store was initialized with that env, and ident comparisons
-                            //    in the layout store use that env's ident indices.
-                            // 2. Different modules may refer to the same type with different names
-                            //    (e.g., "Str" in Builtin vs "Builtin.Str" in user module).
-                            //    We normalize to the fully qualified canonical form for consistency.
-                            //
+                            // Always translate idents to the runtime_layout_store's env's ident store.
+                            // This is critical because the layout store was initialized with that env,
+                            // and ident comparisons in the layout store use that env's ident indices.
                             // Note: self.env may be temporarily switched during from_numeral evaluation,
                             // so we MUST use runtime_layout_store.env which remains constant.
                             const layout_env = self.runtime_layout_store.env;
-                            const type_name_str = module.getIdent(nom.ident.ident_idx);
-                            const origin_str = module.getIdent(nom.origin_module);
-                            // Normalize type name to fully qualified form:
-                            // - "Builtin.Str" -> "Builtin.Str" (keep as-is)
-                            // - "Str" -> "Builtin.Str" (add origin module prefix)
-                            // - "Builtin.Num.U8" -> "Builtin.Num.U8" (keep as-is)
-                            const is_already_qualified = containsDot(type_name_str);
-                            const normalized_type_name = normalize_blk: {
-                                if (is_already_qualified) {
-                                    // Already qualified, use as-is
-                                    break :normalize_blk type_name_str;
-                                }
-                                // Unqualified name - prepend the origin module to make it qualified
-                                const qualified = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ origin_str, type_name_str });
-                                break :normalize_blk qualified;
-                            };
-                            defer if (!is_already_qualified) {
-                                self.allocator.free(normalized_type_name);
-                            };
-                            const translated_ident = types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(normalized_type_name)) };
-                            const translated_origin = try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                            // Compare the underlying interner pointers to detect different ident stores
+                            const needs_translation = @intFromPtr(&module.common.idents.interner) != @intFromPtr(&layout_env.common.idents.interner);
+                            const translated_ident = if (needs_translation) ident_blk: {
+                                const type_name_str = module.getIdent(nom.ident.ident_idx);
+                                break :ident_blk types.TypeIdent{ .ident_idx = try layout_env.insertIdent(base_pkg.Ident.for_text(type_name_str)) };
+                            } else nom.ident;
+                            const translated_origin = if (needs_translation) origin_blk: {
+                                const origin_str = module.getIdent(nom.origin_module);
+                                break :origin_blk try layout_env.insertIdent(base_pkg.Ident.for_text(origin_str));
+                            } else nom.origin_module;
                             const content = try self.runtime_types.mkNominal(translated_ident, rt_backing, buf, translated_origin, nom.is_opaque);
                             break :blk try self.runtime_types.freshFromContent(content);
                         },
