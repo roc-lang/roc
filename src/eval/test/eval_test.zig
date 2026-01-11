@@ -1809,6 +1809,7 @@ test "decode: I32.decode with simple format" {
         \\        decode_i32 : MyFormat, List(U8) -> (Try(I32, [Err]), List(U8))
         \\        decode_i32 = |_fmt, src| (Ok(42i32), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = I32.decode([], fmt)
         \\    match result {
@@ -1827,6 +1828,7 @@ test "decode: I64.decode with simple format" {
         \\        decode_i64 : MyFormat, List(U8) -> (Try(I64, [Err]), List(U8))
         \\        decode_i64 = |_fmt, src| (Ok(99i64), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = I64.decode([], fmt)
         \\    match result {
@@ -1845,6 +1847,7 @@ test "decode: U8.decode success" {
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Ok(255u8), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
@@ -1863,6 +1866,7 @@ test "decode: U8.decode error" {
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Err(Empty), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([], fmt)
         \\    match result {
@@ -1881,6 +1885,7 @@ test "decode: Bool.decode true" {
         \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
@@ -1899,6 +1904,7 @@ test "decode: Bool.decode false" {
         \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
         \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = Bool.decode([], fmt)
         \\    match result {
@@ -1917,6 +1923,7 @@ test "decode: Str.decode success" {
         \\        decode_str : MyFormat, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
         \\        decode_str = |_fmt, src| (Ok("hi"), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = Str.decode([], fmt)
         \\    match result {
@@ -1935,6 +1942,7 @@ test "decode: rest returned from decode" {
         \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
         \\        decode_u8 = |_fmt, src| (Ok(1u8), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U8.decode([5u8], fmt)
         \\    match result {
@@ -1953,6 +1961,7 @@ test "decode: U16.decode" {
         \\        decode_u16 : MyFormat, List(U8) -> (Try(U16, [Err]), List(U8))
         \\        decode_u16 = |_fmt, src| (Ok(1000u16), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U16.decode([], fmt)
         \\    match result {
@@ -1971,6 +1980,7 @@ test "decode: U32.decode" {
         \\        decode_u32 : MyFormat, List(U8) -> (Try(U32, [Err]), List(U8))
         \\        decode_u32 = |_fmt, src| (Ok(100000u32), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U32.decode([], fmt)
         \\    match result {
@@ -1989,6 +1999,7 @@ test "decode: U64.decode" {
         \\        decode_u64 : MyFormat, List(U8) -> (Try(U64, [Err]), List(U8))
         \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807u64), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = U64.decode([], fmt)
         \\    match result {
@@ -2007,6 +2018,7 @@ test "decode: I8.decode negative" {
         \\        decode_i8 : MyFormat, List(U8) -> (Try(I8, [Err]), List(U8))
         \\        decode_i8 = |_fmt, src| (Ok(-42i8), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = I8.decode([], fmt)
         \\    match result {
@@ -2025,6 +2037,7 @@ test "decode: I16.decode negative" {
         \\        decode_i16 : MyFormat, List(U8) -> (Try(I16, [Err]), List(U8))
         \\        decode_i16 = |_fmt, src| (Ok(-1000i16), src)
         \\    }
+        \\    fmt : MyFormat
         \\    fmt = {}
         \\    (result, _rest) = I16.decode([], fmt)
         \\    match result {
