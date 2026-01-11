@@ -70,6 +70,11 @@ extern fn roc__update(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_p
 extern fn roc__render(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 extern fn roc__test_mixed_args(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 extern fn roc__test_struct_arg(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_effectful_struct_arg(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_simple_pure(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_simple_effectful(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_three_floats_pure(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_three_floats_effectful(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -268,12 +273,137 @@ fn platform_main() !void {
         try stdout.print("\x1b[31mFAILED\x1b[0m: FrameInput values corrupted!\n", .{});
     }
 
+    // Test 7: EFFECTFUL version of test_struct_arg - tests issue 8991 with effectful entry points
+    // The bug report indicates that effectful entry points (`=>`) have a layout mismatch while
+    // pure entry points (`->`) work correctly. This test should reveal the bug.
+    try stdout.print("\n=== Test 7: EFFECTFUL test_struct_arg!(FrameInput) -> FrameInput (issue 8991 effectful) ===\n", .{});
+
+    // Use same input values as test 6
+    var effectful_frame_input = FrameInput{
+        .frame_count = 123456789,
+        .mouse_wheel = 0.5,
+        .mouse_x = 100.25,
+        .mouse_y = 200.75,
+        .mouse_left = true,
+        .mouse_middle = false,
+        .mouse_right = true,
+    };
+
+    var effectful_frame_output: FrameInput = undefined;
+
+    roc__test_effectful_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&effectful_frame_output)), @as(*anyopaque, @ptrCast(&effectful_frame_input)));
+
+    try stdout.print("Input:  frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+        effectful_frame_input.frame_count,
+        effectful_frame_input.mouse_wheel,
+        effectful_frame_input.mouse_x,
+        effectful_frame_input.mouse_y,
+        effectful_frame_input.mouse_left,
+        effectful_frame_input.mouse_middle,
+        effectful_frame_input.mouse_right,
+    });
+    try stdout.print("Output: frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+        effectful_frame_output.frame_count,
+        effectful_frame_output.mouse_wheel,
+        effectful_frame_output.mouse_x,
+        effectful_frame_output.mouse_y,
+        effectful_frame_output.mouse_left,
+        effectful_frame_output.mouse_middle,
+        effectful_frame_output.mouse_right,
+    });
+
+    const effectful_struct_match = effectful_frame_output.frame_count == effectful_frame_input.frame_count and
+        effectful_frame_output.mouse_wheel == effectful_frame_input.mouse_wheel and
+        effectful_frame_output.mouse_x == effectful_frame_input.mouse_x and
+        effectful_frame_output.mouse_y == effectful_frame_input.mouse_y and
+        effectful_frame_output.mouse_left == effectful_frame_input.mouse_left and
+        effectful_frame_output.mouse_middle == effectful_frame_input.mouse_middle and
+        effectful_frame_output.mouse_right == effectful_frame_input.mouse_right;
+
+    if (effectful_struct_match) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: EFFECTFUL FrameInput struct passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: EFFECTFUL FrameInput values corrupted! This is issue 8991.\n", .{});
+    }
+
+    // Test 8 & 9: Simple 2-field struct tests to isolate the issue
+    // SimpleInput layout: number (U64) at offset 0, flag (Bool) at offset 8
+    const SimpleInput = extern struct {
+        number: u64, // U64, 8-byte alignment - first
+        flag: bool, // Bool, 1-byte alignment - second
+    };
+
+    // Test 8: Pure function with SimpleInput
+    try stdout.print("\n=== Test 8: PURE test_simple_pure(SimpleInput) -> SimpleInput ===\n", .{});
+    var simple_pure_input = SimpleInput{ .number = 42, .flag = true };
+    var simple_pure_output: SimpleInput = undefined;
+    roc__test_simple_pure(&roc_ops, @as(*anyopaque, @ptrCast(&simple_pure_output)), @as(*anyopaque, @ptrCast(&simple_pure_input)));
+    try stdout.print("Input:  number={}, flag={}\n", .{ simple_pure_input.number, simple_pure_input.flag });
+    try stdout.print("Output: number={}, flag={}\n", .{ simple_pure_output.number, simple_pure_output.flag });
+    if (simple_pure_output.number == simple_pure_input.number and simple_pure_output.flag == simple_pure_input.flag) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: PURE SimpleInput passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: PURE SimpleInput values corrupted!\n", .{});
+    }
+
+    // Test 9: Effectful function with SimpleInput
+    try stdout.print("\n=== Test 9: EFFECTFUL test_simple_effectful!(SimpleInput) -> SimpleInput ===\n", .{});
+    var simple_eff_input = SimpleInput{ .number = 42, .flag = true };
+    var simple_eff_output: SimpleInput = undefined;
+    roc__test_simple_effectful(&roc_ops, @as(*anyopaque, @ptrCast(&simple_eff_output)), @as(*anyopaque, @ptrCast(&simple_eff_input)));
+    try stdout.print("Input:  number={}, flag={}\n", .{ simple_eff_input.number, simple_eff_input.flag });
+    try stdout.print("Output: number={}, flag={}\n", .{ simple_eff_output.number, simple_eff_output.flag });
+    if (simple_eff_output.number == simple_eff_input.number and simple_eff_output.flag == simple_eff_input.flag) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: EFFECTFUL SimpleInput passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: EFFECTFUL SimpleInput values corrupted! This is issue 8991.\n", .{});
+    }
+
+    // Test 10 & 11: Three floats with same alignment to test alphabetical sorting
+    // ThreeFloats layout: aaa (F32) at offset 0, bbb (F32) at offset 4, ccc (F32) at offset 8
+    const ThreeFloats = extern struct {
+        aaa: f32,
+        bbb: f32,
+        ccc: f32,
+    };
+
+    // Test 10: Pure function with ThreeFloats
+    try stdout.print("\n=== Test 10: PURE test_three_floats_pure(ThreeFloats) -> ThreeFloats ===\n", .{});
+    var three_pure_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
+    var three_pure_output: ThreeFloats = undefined;
+    roc__test_three_floats_pure(&roc_ops, @as(*anyopaque, @ptrCast(&three_pure_output)), @as(*anyopaque, @ptrCast(&three_pure_input)));
+    try stdout.print("Input:  aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_pure_input.aaa, three_pure_input.bbb, three_pure_input.ccc });
+    try stdout.print("Output: aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_pure_output.aaa, three_pure_output.bbb, three_pure_output.ccc });
+    if (three_pure_output.aaa == three_pure_input.aaa and three_pure_output.bbb == three_pure_input.bbb and three_pure_output.ccc == three_pure_input.ccc) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: PURE ThreeFloats passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: PURE ThreeFloats values corrupted!\n", .{});
+    }
+
+    // Test 11: Effectful function with ThreeFloats
+    try stdout.print("\n=== Test 11: EFFECTFUL test_three_floats_effectful!(ThreeFloats) -> ThreeFloats ===\n", .{});
+    var three_eff_input = ThreeFloats{ .aaa = 1.0, .bbb = 2.0, .ccc = 3.0 };
+    var three_eff_output: ThreeFloats = undefined;
+    roc__test_three_floats_effectful(&roc_ops, @as(*anyopaque, @ptrCast(&three_eff_output)), @as(*anyopaque, @ptrCast(&three_eff_input)));
+    try stdout.print("Input:  aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_eff_input.aaa, three_eff_input.bbb, three_eff_input.ccc });
+    try stdout.print("Output: aaa={d:.1}, bbb={d:.1}, ccc={d:.1}\n", .{ three_eff_output.aaa, three_eff_output.bbb, three_eff_output.ccc });
+    if (three_eff_output.aaa == three_eff_input.aaa and three_eff_output.bbb == three_eff_input.bbb and three_eff_output.ccc == three_eff_input.ccc) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: EFFECTFUL ThreeFloats passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: EFFECTFUL ThreeFloats values corrupted! This is issue 8991.\n", .{});
+    }
+
     // Final summary
     try stdout.print("\n=== FINAL RESULT ===\n", .{});
-    if (success_count == 6) {
+    if (success_count == 11) {
         try stdout.print("\x1b[32mALL TESTS PASSED\x1b[0m: Box(model) and mixed args work correctly across host boundary!\n", .{});
     } else {
-        try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/6 tests passed\n", .{success_count});
+        try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/11 tests passed\n", .{success_count});
         std.process.exit(1);
     }
 }
