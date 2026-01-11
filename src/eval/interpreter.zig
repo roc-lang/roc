@@ -9272,7 +9272,10 @@ pub const Interpreter = struct {
                                 try acc.put(f.name, f.var_);
                             }
 
-                            const rt_ext = try self.translateTypeVar(module, rec.ext);
+                            // Since we've flattened all extension fields into acc, the runtime record
+                            // should have an empty extension to avoid duplicate fields in layout.
+                            // The extension was only needed to collect its fields, which are now in acc.
+                            const rt_ext = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
                             var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
                             defer self.allocator.free(runtime_fields);
                             var j: usize = 0;
