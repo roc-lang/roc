@@ -97,7 +97,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try checker.checkFile();
 
     const problems = try gpa.create(check.problem.Store);
-    problems.* = .{};
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);

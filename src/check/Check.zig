@@ -35,7 +35,7 @@ const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
-const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
+const ExtraStringIdx = problem.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 /// Deferred numeric literal for compile-time validation
@@ -89,6 +89,8 @@ env_pool: EnvPool,
 generalizer: Generalizer,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
+/// A map from one var to another. Used in instantiation and var copying
+var_set: std.AutoHashMap(Var, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// scratch vars used to build up intermediate lists, used for various things
@@ -99,6 +101,8 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// scratch deferred static dispatch constraints
+scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -196,11 +200,13 @@ pub fn init(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
@@ -233,11 +239,13 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.scratch_deferred_static_dispatch_constraints.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
@@ -4079,11 +4087,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // For example, if the annotation is `I64 -> Str` and the expression has
         // an error in the return type (making it `I64 -> Error`), the pattern
         // should still get `I64 -> Str` from the annotation.
-        //
-        // TODO: Move this allocation to root and reuse across runs
-        var visited = std.AutoHashMap(Var, void).init(self.gpa);
-        defer visited.deinit();
-        if (self.varContainsError(expr_var, &visited)) {
+        self.var_set.clearRetainingCapacity();
+        if (self.varContainsError(expr_var, &self.var_set)) {
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
@@ -4752,20 +4757,24 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
-            // Format missing patterns and store in snapshot store for lifecycle management
-            // NOTE: We use self.gpa here (not self.cir.gpa) because snapshots.deinit() uses self.gpa
-            // to free the extra strings. Using different allocators would cause invalid free.
-            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+            // Format missing patterns and store in problems store for lifecycle management
+            // Track the start position for the missing patterns range
+            const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+
             for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
-                const idx = try self.snapshots.storeExtraString(formatted);
-                try missing_indices.append(self.gpa, idx);
+                const idx = try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                try self.problems.missing_patterns_backing.append(idx);
             }
+
+            const missing_patterns_range = problem.MissingPatternsRange{
+                .start = missing_patterns_start,
+                .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+            };
 
             _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_indices.toOwnedSlice(self.gpa),
+                .missing_patterns = missing_patterns_range,
             } });
         }
 
@@ -5360,8 +5369,10 @@ fn checkNominalTypeUsage(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var next_deferred = try DeferredConstraintCheck.SafeList.initCapacity(self.gpa, 8);
-    defer next_deferred.deinit(self.gpa);
+    // During this pass, we want to hold onto any flex vars we encounter and
+    // check them again later, when maybe they've been resolved
+    const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
+    defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
 
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
@@ -5663,7 +5674,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         } else if (dispatcher_content == .flex) {
             // If the thing we're dispatching is a flex, then hold onto the
             // constraint so we can try again later.
-            _ = try next_deferred.append(self.gpa, deferred_constraint);
+            _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
             // This handles function types, which do not support any methods
@@ -5699,7 +5710,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
     // Now that we've processed all constraints, reset the array
     env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
-    try env.deferred_static_dispatch_constraints.items.appendSlice(self.gpa, next_deferred.items.items);
+
+    // Copy any flex constraints to try again later
+    try env.deferred_static_dispatch_constraints.items.appendSlice(
+        self.gpa,
+        self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
+    );
 }
 
 /// Check if a structural type supports is_eq.
