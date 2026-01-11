@@ -210,7 +210,24 @@ pub fn write(self: *TypeWriter, var_: Var, format: Format) std.mem.Allocator.Err
     try self.writeVar(&writer, var_, var_);
 
     if (self.static_dispatch_constraints.items.len > 0) {
-        try self.writeWhereClause(&writer, var_, format);
+        try self.writeWhereClause(&writer, var_, self.buf.items.len, format);
+    }
+}
+
+/// Writes a type variable to the provided buffer, formatting it as a human-readable string.
+/// This APPENDS to the provided buffer
+/// Internal TypeWriter state will be reset before processing
+pub fn writeInto(self: *TypeWriter, into: *std.array_list.Managed(u8), var_: Var, format: Format) std.mem.Allocator.Error!void {
+    self.reset();
+
+    var writer = into.writer();
+
+    const into_start = into.items.len;
+    try self.writeVar(&writer, var_, var_);
+    const into_end = into.items.len;
+
+    if (self.static_dispatch_constraints.items.len > 0) {
+        try self.writeWhereClause(&writer, var_, into_end - into_start, format);
     }
 }
 
@@ -230,8 +247,7 @@ pub fn writeWithoutConstraints(self: *TypeWriter, var_: Var) std.mem.Allocator.E
 /// 1. All on same line: "where [a.plus : a -> a, b.minus : b -> b]"
 /// 2. All on next line: "\n  where [a.plus : a -> a, b.minus : b -> b]"
 /// 3. One per line: "\n  where [\n    a.plus : a -> a,\n    b.minus : b -> b,\n  ]"
-fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, format: Format) std.mem.Allocator.Error!void {
-    const var_len = self.buf.items.len;
+fn writeWhereClause(self: *TypeWriter, writer: *ByteWrite, root_var: Var, var_len: usize, format: Format) std.mem.Allocator.Error!void {
     var tmp_writer = self.buf_tmp.writer();
 
     // Ensure we have enough temp storage to collect dispatch constraints

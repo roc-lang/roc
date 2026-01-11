@@ -1758,6 +1758,7 @@ fn compileModule(
             module_env,
             module_env,
             &checker.snapshots,
+            &checker.problems,
             source_path,
             imported_envs.items,
             &checker.import_mapping,
