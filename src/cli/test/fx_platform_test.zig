@@ -1337,3 +1337,26 @@ test "fx platform issue8943 error message memory corruption" {
         return error.CorruptedCrashMessage;
     }
 }
+
+test "fx platform issue8934 recursive nominal type unification" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8934
+    // The bug was that the compiler would stack overflow when type-checking
+    // recursive nominal types with nested recursive calls, like:
+    //   Node(a) := [One(a), Many(List(Node(a)))]
+    //   flatten_aux(rest, flatten_aux(e, acc))
+    //
+    // The root cause was that unifyNominalType didn't do an early merge before
+    // unifying type arguments, causing infinite recursion when the nominal type
+    // referenced itself through the tag union backing type.
+    const allocator = testing.allocator;
+
+    const run_result = try runRoc(allocator, "test/fx/issue8934.roc", .{
+        .extra_args = &[_][]const u8{"check"},
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // The key thing is that the compiler should NOT crash with stack overflow.
+    // It should successfully type-check the file.
+    try checkSuccess(run_result);
+}

@@ -1092,6 +1092,14 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
+        // Early merge so self-referential types don't infinitely recurse.
+        // This is critical for recursive nominal types like:
+        //   Node(a) := [One(a), Many(List(Node(a)))]
+        // Without early merge, unifying the type arguments can trigger
+        // unification of the backing types, which recursively unifies
+        // the nominal type with itself, creating infinite recursion.
+        self.merge(vars, vars.b.desc.content);
+
         // Unify each pair of arguments using iterators
         const a_slice = self.types_store.sliceNominalArgs(a_type);
         const b_slice = self.types_store.sliceNominalArgs(b_type);
@@ -1100,8 +1108,6 @@ const Unifier = struct {
         }
 
         // Note that we *do not* unify backing variable
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     fn unifyTagUnionWithNominal(
