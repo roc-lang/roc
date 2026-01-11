@@ -21,7 +21,15 @@ const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 const Ident = base.Ident;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
-const ExtraStringIdx = snapshot.ExtraStringIdx;
+
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = struct { start: usize, count: usize };
+
+/// Alias into the Store.extra_strings_backing array
+pub const ExtraStringIdx = ByteListRange;
+
+/// A range of patterns
+pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 const Var = types_mod.Var;
 
@@ -261,8 +269,8 @@ pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
     /// Snapshot of the condition type for error messages
     condition_snapshot: SnapshotContentIdx,
-    /// Indices into the snapshot store's extra strings for missing pattern descriptions
-    missing_patterns: []const ExtraStringIdx,
+    /// Range into the problems store's missing_patterns_backing for pattern indices
+    missing_patterns: MissingPatternsRange,
 };
 
 /// Problem data for a redundant pattern in a match
@@ -399,6 +407,7 @@ pub const ReportBuilder = struct {
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
+    problems: *const Store,
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
@@ -411,6 +420,7 @@ pub const ReportBuilder = struct {
         module_env: *ModuleEnv,
         can_ir: *const ModuleEnv,
         snapshots: *const snapshot.Store,
+        problems: *const Store,
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
@@ -421,6 +431,7 @@ pub const ReportBuilder = struct {
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
+            .problems = problems,
             .import_mapping = import_mapping,
             .source = module_env.common.source,
             .filename = filename,
@@ -3339,8 +3350,9 @@ pub const ReportBuilder = struct {
         try report.document.addText("Missing patterns:");
         try report.document.addLineBreak();
 
-        for (data.missing_patterns) |pattern_idx| {
-            const pattern = self.snapshots.getExtraString(pattern_idx);
+        const missing_patterns = self.problems.getMissingPatterns(data.missing_patterns);
+        for (missing_patterns) |pattern_idx| {
+            const pattern = self.problems.getExtraString(pattern_idx);
             const owned_pattern = try report.addOwnedString(pattern);
             try report.document.addText("    ");
             try report.document.addCodeBlock(owned_pattern);
@@ -3505,9 +3517,24 @@ pub const Store = struct {
 
     problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
 
+    /// Backing storage for formatted pattern strings
+    extra_strings_backing: ByteList,
+    /// Backing storage for missing patterns index arrays
+    missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
+
+    pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
+        return .{
+            .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, 16),
+            .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
+            .missing_patterns_backing = try std.array_list.Managed(ExtraStringIdx).initCapacity(gpa, 64),
+        };
+    }
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
+            .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
+            .missing_patterns_backing = try std.array_list.Managed(ExtraStringIdx).initCapacity(gpa, 64),
         };
     }
 
@@ -3515,7 +3542,6 @@ pub const Store = struct {
         // Free allocated memory in problem data
         for (self.problems.items) |prob| {
             switch (prob) {
-                .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
                 // Free comptime evaluation messages - these are allocated by ComptimeEvaluator
                 // and ownership is transferred to ProblemStore
                 .comptime_crash => |cc| gpa.free(cc.message),
@@ -3524,7 +3550,20 @@ pub const Store = struct {
                 else => {},
             }
         }
+
+        self.extra_strings_backing.deinit();
+        self.missing_patterns_backing.deinit();
         self.problems.deinit(gpa);
+    }
+
+    /// Get a stored pattern string by its range
+    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
+        return self.extra_strings_backing.items[idx.start..][0..idx.count];
+    }
+
+    /// Get the slice of missing pattern indices by range
+    pub fn getMissingPatterns(self: *const Self, range: MissingPatternsRange) []const ExtraStringIdx {
+        return self.missing_patterns_backing.items[range.start..][0..range.count];
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
