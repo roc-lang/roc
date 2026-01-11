@@ -2560,6 +2560,9 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) Error!AST.Expr.Idx {
                 }
             }
             const branches = try self.store.matchBranchSpanFrom(scratch_top);
+            if (branches.span.len == 0) {
+                return try self.pushMalformed(AST.Expr.Idx, .match_has_no_branches, start);
+            }
             if (self.peek() != .CloseCurly) {
                 return try self.pushMalformed(AST.Expr.Idx, .expected_close_curly_at_end_of_match, self.pos);
             }
