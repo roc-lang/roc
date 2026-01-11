@@ -11552,7 +11552,14 @@ pub const Interpreter = struct {
                 const elems = self.env.store.sliceExpr(list_expr.elems);
 
                 // Get list type variable
-                const list_rt_var = expected_rt_var orelse blk: {
+                // If expected_rt_var is flex/rigid (polymorphic), fall back to expression's type
+                const list_rt_var = blk: {
+                    if (expected_rt_var) |expected| {
+                        const expected_resolved = self.runtime_types.resolveVar(expected);
+                        if (expected_resolved.desc.content != .flex and expected_resolved.desc.content != .rigid) {
+                            break :blk expected;
+                        }
+                    }
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     break :blk try self.translateTypeVar(self.env, ct_var);
                 };
@@ -11576,12 +11583,30 @@ pub const Interpreter = struct {
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
-                    std.debug.assert(list_resolved.desc.content == .structure);
-                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
-                    const nom = list_resolved.desc.content.structure.nominal_type;
-                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
-                    const elem_rt_var = vars[1];
+
+                    // Handle polymorphic list types (flex/rigid)
+                    // This can happen when the list literal appears in a polymorphic context
+                    // where the expected type is a bare type variable rather than List(elem).
+                    // In this case, create a fresh flex for element type and let element
+                    // evaluation infer the actual types.
+                    const elem_rt_var: types.Var = if (list_resolved.desc.content == .flex or
+                        list_resolved.desc.content == .rigid)
+                    blk: {
+                        break :blk try self.runtime_types.fresh();
+                    } else if (list_resolved.desc.content == .structure and
+                        list_resolved.desc.content.structure == .nominal_type)
+                    blk: {
+                        const nom = list_resolved.desc.content.structure.nominal_type;
+                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                        if (vars.len == 2) {
+                            break :blk vars[1]; // element type is second var
+                        }
+                        // Unexpected structure - fall back to fresh flex
+                        break :blk try self.runtime_types.fresh();
+                    } else blk: {
+                        // Other content types - fall back to fresh flex
+                        break :blk try self.runtime_types.fresh();
+                    };
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
