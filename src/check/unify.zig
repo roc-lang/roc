@@ -339,6 +339,65 @@ pub fn unifyWithConf(
     return .ok;
 }
 
+/// Simple unification result for runtime unification without detailed error reporting.
+/// Used by the interpreter where memory is constrained and detailed type error
+/// messages are not needed.
+pub const SimpleResult = enum {
+    ok,
+    type_mismatch,
+    allocator_error,
+
+    pub fn isOk(self: SimpleResult) bool {
+        return self == .ok;
+    }
+};
+
+/// Unify two type variables without taking a type store snapshot.
+///
+/// This is a memory-efficient variant for runtime unification (e.g., in the interpreter)
+/// where:
+/// - Memory is constrained (e.g., WASM linear memory)
+/// - Detailed type error messages are not required
+/// - Unification failures are handled differently (e.g., TypeMismatch error)
+///
+/// Unlike `unifyWithConf`, this function:
+/// - Does NOT clone the entire type store before unification
+/// - Does NOT roll back on failure (type store may be partially modified)
+/// - Returns a simple result enum instead of a Problem index
+///
+/// Use `unifyWithConf` during type-checking when detailed error messages are needed.
+/// Use this function during interpretation when memory efficiency is critical.
+pub fn unifyNoSnapshot(
+    module_env: *ModuleEnv,
+    types: *types_mod.Store,
+    unify_scratch: *Scratch,
+    occurs_scratch: *occurs.Scratch,
+    /// The "expected" variable
+    a: Var,
+    /// The "actual" variable
+    b: Var,
+) SimpleResult {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
+    // Reset the scratch store
+    unify_scratch.reset();
+
+    // Unify without taking a snapshot
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    unifier.unifyGuarded(a, b) catch |err| {
+        // Reset scratch state since unification failed
+        unify_scratch.reset();
+
+        return switch (err) {
+            error.AllocatorError => .allocator_error,
+            else => .type_mismatch,
+        };
+    };
+
+    return .ok;
+}
+
 /// A temporary unification context used to unify two type variables within a `Store`.
 ///
 /// `Unifier` is created per unification call and:
