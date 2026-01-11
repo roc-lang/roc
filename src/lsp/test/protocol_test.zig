@@ -47,3 +47,64 @@ test "InitializeParams parses fields" {
     try std.testing.expect(params.capabilities_json != null);
     try std.testing.expect(std.mem.indexOf(u8, params.capabilities_json.?, "textDocumentSync") != null);
 }
+
+test "SemanticTokensParams parses textDocument.uri" {
+    const allocator = std.testing.allocator;
+    const payload =
+        \\{"textDocument":{"uri":"file:///test.roc"}}
+    ;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+
+    var params = try protocol.SemanticTokensParams.fromJson(allocator, parsed.value);
+    defer params.deinit(allocator);
+
+    try std.testing.expectEqualStrings("file:///test.roc", params.textDocument.uri);
+}
+
+test "TextDocumentIdentifier parses uri" {
+    const allocator = std.testing.allocator;
+    const payload =
+        \\{"uri":"file:///path/to/file.roc"}
+    ;
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+
+    var doc = try protocol.TextDocumentIdentifier.fromJson(allocator, parsed.value);
+    defer doc.deinit(allocator);
+
+    try std.testing.expectEqualStrings("file:///path/to/file.roc", doc.uri);
+}
+
+test "SemanticTokens serializes data array" {
+    const allocator = std.testing.allocator;
+    const tokens = protocol.SemanticTokens{
+        .data = &[_]u32{ 0, 0, 5, 7, 0, 0, 6, 3, 3, 0 },
+    };
+
+    var writer: std.io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    std.json.Stringify.value(tokens, .{}, &writer.writer) catch return error.OutOfMemory;
+    const output = try writer.toOwnedSlice();
+    defer allocator.free(output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"data\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "[0,0,5,7,0,0,6,3,3,0]") != null);
+}
+
+test "empty SemanticTokens serializes correctly" {
+    const allocator = std.testing.allocator;
+    const tokens = protocol.SemanticTokens{
+        .data = &[_]u32{},
+    };
+
+    var writer: std.io.Writer.Allocating = .init(allocator);
+    defer writer.deinit();
+    std.json.Stringify.value(tokens, .{}, &writer.writer) catch return error.OutOfMemory;
+    const output = try writer.toOwnedSlice();
+    defer allocator.free(output);
+
+    try std.testing.expect(std.mem.indexOf(u8, output, "\"data\":[]") != null);
+}
