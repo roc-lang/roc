@@ -2909,8 +2909,14 @@ pub const Interpreter = struct {
                     // Decref the original list_of_zst (it may have capacity allocated)
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    // Push result with upgraded layout and runtime type.
+                    // When upgrading from list_of_zst, we need to update the runtime type
+                    // to reflect the element's actual type. This is critical for closures
+                    // that capture for-loop elements: without the correct runtime type,
+                    // the captured value's layout may be computed as opaquePtr() instead
+                    // of the correct numeric layout. (fixes issue #8946)
+                    const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
+                    var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
                     out.is_initialized = false;
                     out.setRocList(result_list);
                     out.is_initialized = true;
@@ -2980,7 +2986,15 @@ pub const Interpreter = struct {
                     Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+
+                // When upgrading element layout, also update runtime type to match.
+                // This ensures closures that capture for-loop elements get correct layouts.
+                // (fixes issue #8946)
+                const result_rt_var = if (needs_element_layout_upgrade)
+                    try self.createListTypeWithElement(elt_arg.rt_var)
+                else
+                    roc_list_arg.rt_var;
+                var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output
@@ -3073,8 +3087,11 @@ pub const Interpreter = struct {
                     // Decref the original list_of_zst (it may have capacity allocated)
                     roc_list_arg.decref(&self.runtime_layout_store, roc_ops);
 
-                    // Push result with upgraded layout
-                    var out = try self.pushRaw(new_list_layout, 0, roc_list_arg.rt_var);
+                    // Push result with upgraded layout and runtime type.
+                    // When upgrading from list_of_zst, we need to update the runtime type
+                    // to reflect the element's actual type. (fixes issue #8946)
+                    const upgraded_rt_var = try self.createListTypeWithElement(elt_arg.rt_var);
+                    var out = try self.pushRaw(new_list_layout, 0, upgraded_rt_var);
                     out.is_initialized = false;
                     out.setRocList(result_list);
                     out.is_initialized = true;
@@ -3144,7 +3161,14 @@ pub const Interpreter = struct {
                     Layout{ .tag = .list, .data = .{ .list = elem_layout_idx } }
                 else
                     roc_list_arg.layout; // Same layout as input
-                var out = try self.pushRaw(result_layout, 0, roc_list_arg.rt_var);
+
+                // When upgrading element layout, also update runtime type to match.
+                // (fixes issue #8946)
+                const result_rt_var = if (needs_element_layout_upgrade)
+                    try self.createListTypeWithElement(elt_arg.rt_var)
+                else
+                    roc_list_arg.rt_var;
+                var out = try self.pushRaw(result_layout, 0, result_rt_var);
                 out.is_initialized = false;
 
                 // Copy the result list structure to the output

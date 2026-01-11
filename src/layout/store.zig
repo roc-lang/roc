@@ -1987,12 +1987,21 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // Flex vars without from_numeral constraints are phantom types
-                        // (or have non-numeric constraints like is_eq that don't affect layout).
-                        // They can only be sent to the host if boxed.
+                        // For flex vars inside containers (list, box), we need to determine
+                        // the element layout. If the flex var has any constraints (like is_eq),
+                        // it's likely a numeric type that should default to Dec rather than
+                        // opaquePtr. opaquePtr causes crashes when elements are used in
+                        // numeric comparisons. (fixes issue #8946)
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {
+                                // If the flex var has any constraints, assume it's numeric and default to Dec.
+                                // This handles cases like `List(a) where a.is_eq : ...` where the type
+                                // should be numeric but doesn't have from_numeral because it was unified
+                                // through method calls rather than numeric literals.
+                                if (!flex.constraints.isEmpty()) {
+                                    break :blk Layout.default_num();
+                                }
                                 break :blk Layout.opaquePtr();
                             }
                         }
@@ -2024,12 +2033,18 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // Rigid vars without from_numeral constraints are phantom types
-                        // (or have non-numeric constraints like is_eq that don't affect layout).
-                        // They can only be sent to the host if boxed.
+                        // For rigid vars inside containers (list, box), we need to determine
+                        // the element layout. If the rigid var has any constraints (like is_eq),
+                        // it's likely a numeric type that should default to Dec rather than
+                        // opaquePtr. opaquePtr causes crashes when elements are used in
+                        // numeric comparisons. (fixes issue #8946)
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {
+                                // If the rigid var has any constraints, assume it's numeric and default to Dec.
+                                if (!rigid.constraints.isEmpty()) {
+                                    break :blk Layout.default_num();
+                                }
                                 break :blk Layout.opaquePtr();
                             }
                         }

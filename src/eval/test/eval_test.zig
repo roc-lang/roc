@@ -1980,3 +1980,34 @@ test "issue 8892: nominal type wrapping tag union with match expression" {
         \\}
     , .no_trace);
 }
+
+test "issue 8946: closure capturing for-loop element with == comparison" {
+    // Regression test for GitHub issue #8946: NotNumeric crash when closures
+    // capture for-loop elements and use them in == comparisons.
+    //
+    // The bug was in layout computation for flex/rigid type variables inside
+    // list containers: when the variable had is_eq constraint (from ==) but
+    // not from_numeral constraint, it was getting opaquePtr() layout instead
+    // of a numeric layout (Dec).
+    //
+    // The fix ensures flex/rigid vars with any constraints default to Dec layout.
+    try runExpectI64(
+        \\{
+        \\    my_any = |lst, pred| {
+        \\        for e in lst {
+        \\            if pred(e) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    check = |list| {
+        \\        var $built = []
+        \\        for item in list {
+        \\            _x = my_any($built, |x| x == item)
+        \\            $built = $built.append(item)
+        \\        }
+        \\        $built.len()
+        \\    }
+        \\    check([1, 2])
+        \\}
+    , 2, .no_trace);
+}
