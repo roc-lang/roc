@@ -2479,7 +2479,11 @@ pub fn checkExhaustiveSketched(
                 const specialized_types = try column_types.specializeForList(allocator, min_len);
                 const missing = try checkExhaustiveSketched(allocator, type_store, builtin_idents, specialized, specialized_types);
 
-                if (missing.len > 0) {
+                // For length-0 lists (empty list) with no matching rows, the specialized matrix
+                // is empty with 0 columns, which returns empty missing. But we still
+                // need to report the empty list as missing.
+                const is_missing = missing.len > 0 or (min_len == 0 and specialized.isEmpty());
+                if (is_missing) {
                     const elements = try allocator.alloc(Pattern, min_len);
                     for (0..min_len) |i| {
                         if (i < missing.len) {
