@@ -35,7 +35,6 @@ const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
-const ExtraStringIdx = problem.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 /// Deferred numeric literal for compile-time validation
