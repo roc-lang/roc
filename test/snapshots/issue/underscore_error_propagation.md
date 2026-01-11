@@ -161,6 +161,6 @@ NO CHANGE
 		(nominal (type "GoodDerived")
 			(ty-header (name "GoodDerived"))))
 	(expressions
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "BadDerived"))
+		(expr (type "GoodDerived"))))
 ~~~

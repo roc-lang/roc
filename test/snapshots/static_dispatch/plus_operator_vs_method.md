@@ -17,13 +17,20 @@ b = MyType.Val(10)
 result1 : MyType
 result1 = a + b
 
+c : MyType
+c = MyType.Val(5)
+
+d : MyType
+d = MyType.Val(10)
+
 # Using the .plus() method directly - should show generic "does not have a plus method" message
 result2 : MyType
-result2 = a.plus(b)
+result2 = c.plus(d)
 ~~~
 # EXPECTED
 MISSING METHOD - plus_operator_vs_method.md:11:11:11:16
 + - :0:0:0:0
+MISSING METHOD - plus_operator_vs_method.md:21:13:21:17
 # PROBLEMS
 **MISSING METHOD**
 The value before this **+** operator has a type that doesn't have a **plus** method:
@@ -39,6 +46,20 @@ The value's type, which does not have a method named **plus**, is:
 
 **Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
 
+**MISSING METHOD**
+This **plus** method is being called on a value whose type doesn't have that method:
+**plus_operator_vs_method.md:21:13:21:17:**
+```roc
+result2 = c.plus(d)
+```
+            ^^^^
+
+The value's type, which does not have a method named **plus**, is:
+
+    MyType
+
+**Hint:** For this to work, the type would need to have a method named **plus** associated with it in the type's declaration.
+
 # TOKENS
 ~~~zig
 UpperIdent,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseSquare,Dot,OpenCurly,CloseCurly,
@@ -48,6 +69,10 @@ LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,LowerIdent,OpPlus,LowerIdent,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,
+LowerIdent,OpColon,UpperIdent,
+LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,Int,CloseRound,
 LowerIdent,OpColon,UpperIdent,
 LowerIdent,OpAssign,LowerIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 EndOfFile,
@@ -87,15 +112,29 @@ EndOfFile,
 			(e-binop (op "+")
 				(e-ident (raw "a"))
 				(e-ident (raw "b"))))
+		(s-type-anno (name "c")
+			(ty (name "MyType")))
+		(s-decl
+			(p-ident (raw "c"))
+			(e-apply
+				(e-tag (raw "MyType.Val"))
+				(e-int (raw "5"))))
+		(s-type-anno (name "d")
+			(ty (name "MyType")))
+		(s-decl
+			(p-ident (raw "d"))
+			(e-apply
+				(e-tag (raw "MyType.Val"))
+				(e-int (raw "10"))))
 		(s-type-anno (name "result2")
 			(ty (name "MyType")))
 		(s-decl
 			(p-ident (raw "result2"))
 			(e-field-access
-				(e-ident (raw "a"))
+				(e-ident (raw "c"))
 				(e-apply
 					(e-ident (raw "plus"))
-					(e-ident (raw "b")))))))
+					(e-ident (raw "d")))))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -130,14 +169,30 @@ NO CHANGE
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(d-let
+		(p-assign (ident "c"))
+		(e-nominal (nominal "MyType")
+			(e-tag (name "Val")
+				(args
+					(e-num (value "5")))))
+		(annotation
+			(ty-lookup (name "MyType") (local))))
+	(d-let
+		(p-assign (ident "d"))
+		(e-nominal (nominal "MyType")
+			(e-tag (name "Val")
+				(args
+					(e-num (value "10")))))
+		(annotation
+			(ty-lookup (name "MyType") (local))))
+	(d-let
 		(p-assign (ident "result2"))
 		(e-dot-access (field "plus")
 			(receiver
 				(e-lookup-local
-					(p-assign (ident "a"))))
+					(p-assign (ident "c"))))
 			(args
 				(e-lookup-local
-					(p-assign (ident "b")))))
+					(p-assign (ident "d")))))
 		(annotation
 			(ty-lookup (name "MyType") (local))))
 	(s-nominal-decl
@@ -152,8 +207,10 @@ NO CHANGE
 	(defs
 		(patt (type "Error"))
 		(patt (type "MyType"))
+		(patt (type "Error"))
 		(patt (type "MyType"))
-		(patt (type "MyType")))
+		(patt (type "MyType"))
+		(patt (type "Error")))
 	(type_decls
 		(nominal (type "MyType")
 			(ty-header (name "MyType"))))
@@ -161,5 +218,7 @@ NO CHANGE
 		(expr (type "Error"))
 		(expr (type "MyType"))
 		(expr (type "Error"))
+		(expr (type "MyType"))
+		(expr (type "MyType"))
 		(expr (type "Error"))))
 ~~~

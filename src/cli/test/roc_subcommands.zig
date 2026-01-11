@@ -489,6 +489,31 @@ test "roc check reports type error - plus operator with incompatible types" {
     try testing.expect(has_type_error);
 }
 
+test "roc check test/int/app.roc does not panic" {
+    // Skip on Windows - test/int platform doesn't have Windows host libraries
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/int/app.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that roc check does not panic on test/int/app.roc.
+    // Prior to fix for issue #8947, this would panic with:
+    // "trying unifyWith unexpected ranks 1 & 0"
+    // Now it should fail gracefully (exit code 1) with type errors, not panic (abort).
+
+    // 1. Should not abort (panic would cause exit code 134 on macOS/Linux)
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // 2. Should not contain "panic" in output
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null;
+    try testing.expect(!has_panic_text);
+}
+
 test "roc test/int/app.roc runs successfully" {
     // Skip on Windows - test/int platform doesn't have Windows host libraries
     if (@import("builtin").os.tag == .windows) return error.SkipZigTest;

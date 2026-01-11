@@ -607,6 +607,6 @@ combineTrys = |result1, result2|
 		(expr (type "Str -> Error"))
 		(expr (type "Error -> Try(Error, Error)"))
 		(expr (type "Error"))
-		(expr (type "Error, Str -> Error"))
+		(expr (type "Error, Str -> Try(Error, Error)"))
 		(expr (type "Try(a, err), Try(b, err) -> Try((a, b), err)"))))
 ~~~

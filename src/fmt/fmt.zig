@@ -2103,12 +2103,14 @@ const Formatter = struct {
                     }
                     // Handle open tag unions - always format as just ".." (silently drop any named extension)
                     if (is_open) {
-                        // If there was a named extension, use its region for comment flushing
-                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
+                        // Get the token position for flushing comments before the ..
+                        const double_dot_token: Token.Idx = switch (t.ext) {
+                            .named => |named_idx| fmt.nodeRegion(@intFromEnum(named_idx)).start,
+                            .open => |tok| tok,
+                            .closed => unreachable, // is_open is true
+                        };
                         if (tag_multiline) {
-                            if (open_region) |oreg| {
-                                _ = try fmt.flushCommentsBefore(oreg.start);
-                            }
+                            _ = try fmt.flushCommentsBefore(double_dot_token);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }

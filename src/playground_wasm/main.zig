@@ -273,12 +273,18 @@ var host_message_buffer: ?[]u8 = null;
 var host_response_buffer: ?[]u8 = null;
 var last_error: ?[:0]const u8 = null;
 
+/// Flag to defer FBA reset until next processAndRespond call.
+/// This avoids resetting the allocator while there are in-flight allocations.
+var pending_fba_reset: bool = false;
+
 /// In-memory debug log buffer for WASM
 var debug_log_buffer: [4096]u8 = undefined;
 var debug_log_pos: usize = 0;
 var debug_log_oom: bool = false;
 
-/// Reset all global state and allocator
+/// Reset all global state and schedule allocator reset.
+/// The actual FBA reset is deferred to the start of the next processAndRespond call
+/// to avoid invalidating in-flight allocations.
 fn resetGlobalState() void {
     // Make sure everything is null
     compiler_data = null;
@@ -286,8 +292,15 @@ fn resetGlobalState() void {
     host_message_buffer = null;
     host_response_buffer = null;
 
-    // Reset allocator to clear all allocations
-    fba.reset();
+    // Schedule allocator reset for next processAndRespond call
+    pending_fba_reset = true;
+}
+
+fn performPendingAllocatorReset() void {
+    if (pending_fba_reset) {
+        fba.reset();
+        pending_fba_reset = false;
+    }
 }
 
 /// Writes a formatted string to the in-memory debug log.
@@ -489,6 +502,7 @@ export fn init() void {
 /// Allocate a buffer for incoming messages from the host.
 /// Returns null on allocation failure.
 export fn allocateMessageBuffer(size: usize) ?[*]u8 {
+    performPendingAllocatorReset();
     if (host_message_buffer) |buf| {
         allocator.free(buf);
         host_message_buffer = null;
@@ -500,6 +514,7 @@ export fn allocateMessageBuffer(size: usize) ?[*]u8 {
 /// Allocate a buffer for responses to the host.
 /// Returns null on allocation failure.
 export fn allocateResponseBuffer(size: usize) ?[*]u8 {
+    performPendingAllocatorReset();
     if (host_response_buffer) |buf| {
         allocator.free(buf);
         host_response_buffer = null;
@@ -604,6 +619,21 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 
             const source = source_value.string;
 
+            // Extract optional filename and derive module name
+            const filename = if (root.object.get("filename")) |filename_value|
+                filename_value.string
+            else
+                "main.roc";
+
+            // Set filename in filesystem for file operations
+            WasmFilesystem.setFilename(allocator, filename);
+
+            // Derive module name from filename (strip .roc extension)
+            const module_name = if (std.mem.endsWith(u8, filename, ".roc"))
+                filename[0 .. filename.len - 4]
+            else
+                filename;
+
             // Clean up previous compilation if any
             if (compiler_data) |*data| {
                 data.deinit();
@@ -611,7 +641,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
             }
 
             // Compile the source through all stages
-            const result = compileSource(source) catch |err| {
+            const result = compileSource(source, module_name) catch |err| {
                 try writeErrorResponse(response_buffer, .ERROR, @errorName(err));
                 return;
             };
@@ -813,7 +843,8 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 }
 
 /// Compile source through all compiler stages.
-fn compileSource(source: []const u8) !CompilerStageData {
+/// module_name should be the filename without the .roc extension (e.g., "Person" for "Person.roc")
+fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData {
     // Handle empty input gracefully to prevent crashes
     if (source.len == 0) {
         // Return empty compiler stage data for completely empty input
@@ -834,15 +865,20 @@ fn compileSource(source: []const u8) !CompilerStageData {
         return CompilerStageData.init(allocator, module_env);
     }
 
-    // Set up the source in WASM filesystem
+    // Set up the source in WASM filesystem - this creates a properly allocated copy
     WasmFilesystem.setSource(allocator, source);
 
-    logDebug("compileSource: Starting compilation (source len={})\n", .{source.len});
+    // Use the duplicated source from WasmFilesystem for the rest of compilation.
+    // The original `source` slice points to JSON parser memory which will be freed
+    // when processMessage returns, so we must use the stable copy stored in global_source.
+    const stable_source = WasmFilesystem.global_source orelse return error.OutOfMemory;
+
+    logDebug("compileSource: Starting compilation (source len={})\n", .{stable_source.len});
 
     // Initialize the ModuleEnv
     var module_env = try allocator.create(ModuleEnv);
 
-    module_env.* = try ModuleEnv.init(allocator, source);
+    module_env.* = try ModuleEnv.init(allocator, stable_source);
     try module_env.common.calcLineStarts(module_env.gpa);
     logDebug("compileSource: ModuleEnv initialized\n", .{});
 
@@ -932,7 +968,7 @@ fn compileSource(source: []const u8) !CompilerStageData {
     // Stage 2: Canonicalization (always run, even with parse errors)
     // The canonicalizer handles malformed parse nodes and continues processing
     const env = result.module_env;
-    try env.initCIRFields("main");
+    try env.initCIRFields(module_name);
 
     // Load builtin modules and inject Bool and Result type declarations
     // (following the pattern from eval.zig and TestEnv.zig)
@@ -1871,6 +1907,10 @@ fn writeJsonString(writer: *std.io.Writer, str: []const u8) !void {
 /// length prefix, so the host must use the custom `freeWasmString` function.
 /// Returns null on failure.
 export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]u8 {
+    // Perform deferred FBA reset if one was scheduled and not already handled
+    // by buffer allocation.
+    performPendingAllocatorReset();
+
     // Allocate a temporary buffer on the heap to avoid a stack overflow.
     var temp_response_buffer = allocator.alloc(u8, 131072) catch {
         return createSimpleErrorJson("Failed to allocate temporary response buffer");

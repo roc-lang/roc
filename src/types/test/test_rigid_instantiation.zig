@@ -23,18 +23,19 @@ const RecordField = types_mod.RecordField;
 const TagUnion = types_mod.TagUnion;
 const Tag = types_mod.Tag;
 
-test "instantiate - flex var creates new flex var" {
+test "instantiate - generalized flex var creates new flex var" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(.{ .flex = Flex.init() });
+    const original = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -47,18 +48,40 @@ test "instantiate - flex var creates new flex var" {
     try std.testing.expect(resolved.desc.content == .flex);
 }
 
-test "instantiate - rigid var with fresh_flex creates flex var" {
+test "instantiate - non-generalized flex var DOES NOT create new flex var" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const original = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .outermost);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+
+    const instantiated = try instantiator.instantiateVar(original);
+
+    // Should be a different variable
+    try std.testing.expect(instantiated == original);
+}
+
+test "instantiate - generalized rigid var with fresh_flex creates flex var" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const original = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -71,18 +94,19 @@ test "instantiate - rigid var with fresh_flex creates flex var" {
     try std.testing.expect(resolved.desc.content == .flex);
 }
 
-test "instantiate - rigid var with fresh_rigid creates new rigid var" {
+test "instantiate - generalized rigid var with fresh_rigid creates new rigid var" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const original = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const original = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_rigid,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -95,21 +119,22 @@ test "instantiate - rigid var with fresh_rigid creates new rigid var" {
     try std.testing.expect(resolved.desc.content == .rigid);
 }
 
-test "instantiate - preserves rigid var structure in function" {
+test "instantiate - preserves generalized rigid var structure in function" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
     // Create a -> a function
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const func_content = try env.mkFuncPure(&[_]Var{rigid_a}, rigid_a);
-    const original = try env.types.freshFromContent(func_content);
+    const original = try env.types.freshFromContentWithRank(func_content, .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -128,21 +153,65 @@ test "instantiate - preserves rigid var structure in function" {
     try std.testing.expectEqual(args[0], func.ret);
 }
 
-test "instantiate - tuple with multiple vars" {
+test "instantiate - func with some generalized and some not preserve non-generalized" {
     const gpa = std.testing.allocator;
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-    const rigid_b = try env.types.freshFromContent(try env.mkRigidVar("b"));
-    const tuple_content = try env.mkTuple(&[_]Var{ rigid_a, rigid_b, rigid_a });
-    const original = try env.types.freshFromContent(tuple_content);
+    // Create a, b -> a function
+    const var_a = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .generalized);
+    const var_b = try env.types.freshFromContentWithRank(.{ .flex = Flex.init() }, .outermost);
+    const var_fn = try env.types.freshFromContentWithRank(try env.mkFuncPure(&[_]Var{ var_a, var_b }, var_a), .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
+    };
+
+    const var_fn_inst = try instantiator.instantiateVar(var_fn);
+
+    // Should be a different function
+    try std.testing.expect(var_fn_inst != var_fn);
+
+    // Get the function structure
+    const resolved = env.types.resolveVar(var_fn_inst);
+    try std.testing.expect(resolved.desc.content == .structure);
+    try std.testing.expect(resolved.desc.content.structure == .fn_pure);
+    const fn_inst = resolved.desc.content.structure.fn_pure;
+
+    const args = env.types.sliceVars(fn_inst.args);
+    try std.testing.expectEqual(2, args.len);
+
+    const var_a_inst = args[0];
+    const var_b_inst = args[1];
+
+    // The arg and return should be the SAME new flex var
+    try std.testing.expect(var_a != var_a_inst);
+    try std.testing.expectEqual(var_a_inst, fn_inst.ret);
+
+    // Since var_b was NOT generalized, it should be the same after instantiation
+    try std.testing.expectEqual(var_b, var_b_inst);
+}
+
+test "instantiate - tuple with multiple vars" {
+    const gpa = std.testing.allocator;
+    var env = try TestEnv.init(gpa);
+    defer env.deinit();
+
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    const rigid_b = try env.types.freshFromContentWithRank(try env.mkRigidVar("b"), .generalized);
+    const tuple_content = try env.mkTuple(&[_]Var{ rigid_a, rigid_b, rigid_a });
+    const original = try env.types.freshFromContentWithRank(tuple_content, .generalized);
+
+    var instantiator = Instantiator{
+        .store = &env.types,
+        .idents = &env.idents,
+        .var_map = &env.var_map,
+        .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -163,21 +232,22 @@ test "instantiate - record with multiple fields" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
-    const rigid_b = try env.types.freshFromContent(try env.mkRigidVar("b"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
+    const rigid_b = try env.types.freshFromContentWithRank(try env.mkRigidVar("b"), .generalized);
 
     const record_info = try env.mkRecordClosed(&[_]RecordField{
         try env.mkRecordField("x", rigid_a),
         try env.mkRecordField("y", rigid_b),
         try env.mkRecordField("z", rigid_a),
     });
-    const original = try env.types.freshFromContent(record_info.content);
+    const original = try env.types.freshFromContentWithRank(record_info.content, .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -203,19 +273,20 @@ test "instantiate - tag union preserves structure" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
 
     const tag_union_info = try env.mkTagUnionClosed(&[_]Tag{
         try env.mkTag("Some", &[_]Var{rigid_a}),
         try env.mkTag("None", &[_]Var{}),
     });
-    const original = try env.types.freshFromContent(tag_union_info.content);
+    const original = try env.types.freshFromContentWithRank(tag_union_info.content, .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -254,7 +325,7 @@ test "instantiate - alias preserves structure" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const list_ident_idx = try env.idents.insert(gpa, .for_text("List"));
     const builtin_module_idx = try env.idents.insert(gpa, .for_text("Builtin"));
     const backing_content = try env.types.mkNominal(
@@ -264,15 +335,16 @@ test "instantiate - alias preserves structure" {
         builtin_module_idx,
         false,
     );
-    const backing = try env.types.freshFromContent(backing_content);
+    const backing = try env.types.freshFromContentWithRank(backing_content, .generalized);
     const alias_content = try env.mkAlias("MyList", backing, &[_]Var{rigid_a});
-    const original = try env.types.freshFromContent(alias_content);
+    const original = try env.types.freshFromContentWithRank(alias_content, .generalized);
 
     var instantiator = Instantiator{
         .store = &env.types,
         .idents = &env.idents,
         .var_map = &env.var_map,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const instantiated = try instantiator.instantiateVar(original);
@@ -300,7 +372,7 @@ test "instantiate - box and list" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
 
     // Test Box a
     {
@@ -313,13 +385,14 @@ test "instantiate - box and list" {
             builtin_module_idx,
             false,
         );
-        const box_var = try env.types.freshFromContent(box_content);
+        const box_var = try env.types.freshFromContentWithRank(box_content, .generalized);
 
         var instantiator = Instantiator{
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
             .rigid_behavior = .fresh_flex,
+            .current_rank = .outermost,
         };
 
         const instantiated = try instantiator.instantiateVar(box_var);
@@ -343,13 +416,14 @@ test "instantiate - box and list" {
             builtin_module_idx,
             false,
         );
-        const list_var = try env.types.freshFromContent(list_content);
+        const list_var = try env.types.freshFromContentWithRank(list_content, .generalized);
 
         var instantiator = Instantiator{
             .store = &env.types,
             .idents = &env.idents,
             .var_map = &env.var_map,
             .rigid_behavior = .fresh_flex,
+            .current_rank = .outermost,
         };
 
         const instantiated = try instantiator.instantiateVar(list_var);
@@ -367,9 +441,9 @@ test "instantiate - multiple instantiations are independent" {
     var env = try TestEnv.init(gpa);
     defer env.deinit();
 
-    const rigid_a = try env.types.freshFromContent(try env.mkRigidVar("a"));
+    const rigid_a = try env.types.freshFromContentWithRank(try env.mkRigidVar("a"), .generalized);
     const func_content = try env.mkFuncPure(&[_]Var{rigid_a}, rigid_a);
-    const original = try env.types.freshFromContent(func_content);
+    const original = try env.types.freshFromContentWithRank(func_content, .generalized);
 
     // First instantiation
     var var_map1 = std.AutoHashMap(Var, Var).init(gpa);
@@ -380,6 +454,7 @@ test "instantiate - multiple instantiations are independent" {
         .idents = &env.idents,
         .var_map = &var_map1,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const inst1 = try instantiator1.instantiateVar(original);
@@ -393,6 +468,7 @@ test "instantiate - multiple instantiations are independent" {
         .idents = &env.idents,
         .var_map = &var_map2,
         .rigid_behavior = .fresh_flex,
+        .current_rank = .outermost,
     };
 
     const inst2 = try instantiator2.instantiateVar(original);
@@ -487,7 +563,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordClosed(self: *Self, fields: []const RecordField) std.mem.Allocator.Error!RecordInfo {
-        const ext_var = try self.types.freshFromContent(.{ .structure = .empty_record });
+        const ext_var = try self.types.freshFromContentWithRank(.{ .structure = .empty_record }, .outermost);
         return self.mkRecord(fields, ext_var);
     }
 
@@ -513,7 +589,7 @@ const TestEnv = struct {
     }
 
     fn mkTagUnionClosed(self: *Self, tags: []const Tag) std.mem.Allocator.Error!TagUnionInfo {
-        const ext_var = try self.types.freshFromContent(.{ .structure = .empty_tag_union });
+        const ext_var = try self.types.freshFromContentWithRank(.{ .structure = .empty_tag_union }, .outermost);
         return self.mkTagUnion(tags, ext_var);
     }
 };

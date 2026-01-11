@@ -122,11 +122,11 @@ EndOfFile,
 	(defs
 		(patt (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
 		(patt (type "a -> (a -> (a -> [#1_make_adder({ .._others, y: a }), .._others]))"))
-		(patt (type "a -> b where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([#1_make_adder({ ..c, y: d }), ..e])]), b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]), b.plus : b, a -> b]"))
-		(patt (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.plus : a, b -> a, b.from_numeral : Numeral -> Try(b, [InvalidNumeral([#1_make_adder({ .._others, y: _field }), .._others])])]")))
+		(patt (type "a -> (b -> [#1_make_adder({ ..c, y: b }), ..d]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([#1_make_adder({ ..c, y: b }), ..d])])]"))
+		(patt (type "a -> [#1_make_adder({ .._others, y: a }), .._others]")))
 	(expressions
 		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
 		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
 		(expr (type "[#1_make_adder({ .._others, y: _field }), .._others]"))
-		(expr (type "(a -> [#1_make_adder({ ..b, y: a }), ..c]), a -> (a -> [#1_make_adder({ ..b, y: a }), ..c])"))))
+		(expr (type "Try(a -> [#1_make_adder({ ..b, y: a }), ..c], [InvalidNumeral([#1_make_adder({ ..b, y: a }), ..c])])"))))
 ~~~

@@ -262,6 +262,7 @@ pub const Document = struct {
                 .source_code_with_underlines => |underlines| {
                     self.allocator.free(underlines.underline_regions);
                     self.allocator.free(underlines.display_region.line_text);
+                    if (underlines.display_region.filename) |f| self.allocator.free(f);
                 },
                 else => {},
             }
@@ -381,9 +382,24 @@ pub const Document = struct {
         underline_regions: []const UnderlineRegion,
     ) std.mem.Allocator.Error!void {
         const owned_regions = try self.allocator.dupe(UnderlineRegion, underline_regions);
+
+        // Copy the filename to ensure lifetime safety (same as addSourceRegion)
+        const owned_filename: ?[]const u8 = if (display_region.filename) |f|
+            try self.allocator.dupe(u8, f)
+        else
+            null;
+
         try self.elements.append(.{
             .source_code_with_underlines = .{
-                .display_region = display_region,
+                .display_region = .{
+                    .line_text = display_region.line_text,
+                    .start_line = display_region.start_line,
+                    .start_column = display_region.start_column,
+                    .end_line = display_region.end_line,
+                    .end_column = display_region.end_column,
+                    .region_annotation = display_region.region_annotation,
+                    .filename = owned_filename,
+                },
                 .underline_regions = owned_regions,
             },
         });

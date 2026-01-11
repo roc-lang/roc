@@ -208,5 +208,5 @@ processColor = |color| {
 		(nominal (type "LocalStatus")
 			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr (type "Error -> LocalStatus"))))
+		(expr (type "_arg -> LocalStatus"))))
 ~~~

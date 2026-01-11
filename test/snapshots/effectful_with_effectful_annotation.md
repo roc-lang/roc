@@ -110,6 +110,6 @@ NO CHANGE
 		(patt (type "Str => {  }"))
 		(patt (type "{  }")))
 	(expressions
-		(expr (type "Str => Error"))
+		(expr (type "Str => {  }"))
 		(expr (type "{  }"))))
 ~~~

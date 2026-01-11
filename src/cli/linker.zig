@@ -118,7 +118,43 @@ pub const LinkError = error{
     InvalidArguments,
     LLVMNotAvailable,
     WindowsSDKNotFound,
+    DarwinSysrootNotFound,
 } || std.zig.system.DetectError;
+
+/// Find the Darwin sysroot directory at runtime.
+/// First looks for a 'darwin' directory next to the executable (for distributed builds),
+/// then falls back to the compile-time path (for local development builds).
+fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
+    // Get the path to the currently running executable
+    var exe_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const exe_path = std.fs.selfExePath(&exe_path_buf) catch |err| {
+        std.log.warn("Failed to get executable path: {}, falling back to compile-time path", .{err});
+        return build_options.darwin_sysroot;
+    };
+
+    // Get the directory containing the executable
+    const exe_dir = std.fs.path.dirname(exe_path) orelse {
+        std.log.warn("Failed to get executable directory, falling back to compile-time path", .{});
+        return build_options.darwin_sysroot;
+    };
+
+    // Try to find 'darwin' directory next to executable (for distributed builds)
+    const runtime_sysroot = std.fs.path.join(allocator, &.{ exe_dir, "darwin" }) catch {
+        return build_options.darwin_sysroot;
+    };
+
+    // Check if the runtime path exists and contains the expected libSystem.tbd
+    const tbd_path = std.fs.path.join(allocator, &.{ runtime_sysroot, "usr", "lib", "libSystem.tbd" }) catch {
+        return build_options.darwin_sysroot;
+    };
+
+    std.fs.cwd().access(tbd_path, .{}) catch {
+        // Runtime path doesn't exist, fall back to compile-time path (local dev builds)
+        return build_options.darwin_sysroot;
+    };
+
+    return runtime_sysroot;
+}
 
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
@@ -161,7 +197,8 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
 
             // Use bundled libSystem stub instead of requiring macOS SDK
             try args.append("-syslibroot");
-            try args.append(build_options.darwin_sysroot);
+            const darwin_sysroot = findDarwinSysroot(ctx.arena) catch return LinkError.DarwinSysrootNotFound;
+            try args.append(darwin_sysroot);
 
             // Link against system libraries on macOS
             try args.append("-lSystem");

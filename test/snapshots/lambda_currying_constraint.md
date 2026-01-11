@@ -215,7 +215,7 @@ NO CHANGE
 		(patt (type "(a -> a), a -> a"))
 		(patt (type "I64 -> I64")))
 	(expressions
-		(expr (type "Error -> (Error -> Error)"))
+		(expr (type "a -> (a -> a)"))
 		(expr (type "I64 -> I64"))
 		(expr (type "(a -> a), a -> a"))
 		(expr (type "I64 -> I64"))))

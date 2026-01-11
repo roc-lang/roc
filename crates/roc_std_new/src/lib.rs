@@ -74,14 +74,15 @@ pub enum RocOrder {
 /// Like a Rust `Result`, but following Roc's ABI instead of Rust's.
 /// (Using Rust's `Result` instead of this will not work properly with Roc code!)
 ///
+/// This uses zero-initialization to avoid uninitialized union memory issues.
 /// This can be converted to/from a Rust `Result` using `.into()`
 #[repr(C)]
-pub struct RocResult<T, E> {
-    payload: RocResultPayload<T, E>,
-    tag: RocResultTag,
+pub struct RocTry<T, E> {
+    payload: RocTryPayload<T, E>,
+    tag: RocTryTag,
 }
 
-impl<T, E> Debug for RocResult<T, E>
+impl<T, E> Debug for RocTry<T, E>
 where
     T: Debug,
     E: Debug,
@@ -102,14 +103,14 @@ where
     }
 }
 
-impl<T, E> Eq for RocResult<T, E>
+impl<T, E> Eq for RocTry<T, E>
 where
     T: Eq,
     E: Eq,
 {
 }
 
-impl<T, E> PartialEq for RocResult<T, E>
+impl<T, E> PartialEq for RocTry<T, E>
 where
     T: PartialEq,
     E: PartialEq,
@@ -119,7 +120,7 @@ where
     }
 }
 
-impl<T, E> Ord for RocResult<T, E>
+impl<T, E> Ord for RocTry<T, E>
 where
     T: Ord,
     E: Ord,
@@ -129,7 +130,7 @@ where
     }
 }
 
-impl<T, E> PartialOrd for RocResult<T, E>
+impl<T, E> PartialOrd for RocTry<T, E>
 where
     T: PartialOrd,
     E: PartialOrd,
@@ -140,7 +141,7 @@ where
     }
 }
 
-impl<T, E> Hash for RocResult<T, E>
+impl<T, E> Hash for RocTry<T, E>
 where
     T: Hash,
     E: Hash,
@@ -150,47 +151,45 @@ where
     }
 }
 
-impl<T, E> Clone for RocResult<T, E>
+impl<T, E> Clone for RocTry<T, E>
 where
     T: Clone,
     E: Clone,
 {
     fn clone(&self) -> Self {
         match self.as_result_of_refs() {
-            Ok(payload) => RocResult::ok(ManuallyDrop::into_inner(payload.clone())),
-            Err(payload) => RocResult::err(ManuallyDrop::into_inner(payload.clone())),
+            Ok(payload) => RocTry::ok(ManuallyDrop::into_inner(payload.clone())),
+            Err(payload) => RocTry::err(ManuallyDrop::into_inner(payload.clone())),
         }
     }
 }
 
-impl<T, E> RocResult<T, E> {
+impl<T, E> RocTry<T, E> {
     pub fn ok(payload: T) -> Self {
-        Self {
-            tag: RocResultTag::RocOk,
-            payload: RocResultPayload {
-                ok: ManuallyDrop::new(payload),
-            },
-        }
+        // Zero-initialize the entire struct to avoid uninitialized union memory
+        let mut result: Self = unsafe { core::mem::zeroed() };
+        result.tag = RocTryTag::RocOk;
+        result.payload.ok = ManuallyDrop::new(payload);
+        result
     }
 
     pub fn err(payload: E) -> Self {
-        Self {
-            tag: RocResultTag::RocErr,
-            payload: RocResultPayload {
-                err: ManuallyDrop::new(payload),
-            },
-        }
+        // Zero-initialize the entire struct to avoid uninitialized union memory
+        let mut result: Self = unsafe { core::mem::zeroed() };
+        result.tag = RocTryTag::RocErr;
+        result.payload.err = ManuallyDrop::new(payload);
+        result
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self.tag, RocResultTag::RocOk)
+        matches!(self.tag, RocTryTag::RocOk)
     }
 
     pub fn is_err(&self) -> bool {
-        matches!(self.tag, RocResultTag::RocErr)
+        matches!(self.tag, RocTryTag::RocErr)
     }
 
-    fn into_payload(self) -> RocResultPayload<T, E> {
+    fn into_payload(self) -> RocTryPayload<T, E> {
         let mut value = MaybeUninit::uninit();
 
         // copy the value into our MaybeUninit memory
@@ -206,7 +205,7 @@ impl<T, E> RocResult<T, E> {
     }
 
     fn as_result_of_refs(&self) -> Result<&ManuallyDrop<T>, &ManuallyDrop<E>> {
-        use RocResultTag::*;
+        use RocTryTag::*;
 
         unsafe {
             match self.tag {
@@ -217,7 +216,7 @@ impl<T, E> RocResult<T, E> {
     }
 }
 
-impl<T, E> RocRefcounted for RocResult<T, E>
+impl<T, E> RocRefcounted for RocTry<T, E>
 where
     T: RocRefcounted,
     E: RocRefcounted,
@@ -225,16 +224,16 @@ where
     fn inc(&mut self) {
         unsafe {
             match self.tag {
-                RocResultTag::RocOk => (*self.payload.ok).inc(),
-                RocResultTag::RocErr => (*self.payload.err).inc(),
+                RocTryTag::RocOk => (*self.payload.ok).inc(),
+                RocTryTag::RocErr => (*self.payload.err).inc(),
             }
         }
     }
     fn dec(&mut self) {
         unsafe {
             match self.tag {
-                RocResultTag::RocOk => (*self.payload.ok).dec(),
-                RocResultTag::RocErr => (*self.payload.err).dec(),
+                RocTryTag::RocOk => (*self.payload.ok).dec(),
+                RocTryTag::RocErr => (*self.payload.err).dec(),
             }
         }
     }
@@ -243,9 +242,9 @@ where
     }
 }
 
-impl<T, E> From<RocResult<T, E>> for Result<T, E> {
-    fn from(roc_result: RocResult<T, E>) -> Self {
-        use RocResultTag::*;
+impl<T, E> From<RocTry<T, E>> for Result<T, E> {
+    fn from(roc_result: RocTry<T, E>) -> Self {
+        use RocTryTag::*;
 
         let tag = roc_result.tag;
         let payload = roc_result.into_payload();
@@ -259,31 +258,31 @@ impl<T, E> From<RocResult<T, E>> for Result<T, E> {
     }
 }
 
-impl<T, E> From<Result<T, E>> for RocResult<T, E> {
+impl<T, E> From<Result<T, E>> for RocTry<T, E> {
     fn from(result: Result<T, E>) -> Self {
         match result {
-            Ok(payload) => RocResult::ok(payload),
-            Err(payload) => RocResult::err(payload),
+            Ok(payload) => RocTry::ok(payload),
+            Err(payload) => RocTry::err(payload),
         }
     }
 }
 
 #[repr(u8)]
 #[derive(Clone, Copy)]
-enum RocResultTag {
-    RocErr = 0,
-    RocOk = 1,
+enum RocTryTag {
+    RocErr = 0,  // Err comes first alphabetically
+    RocOk = 1,   // Ok comes second alphabetically
 }
 
 #[repr(C)]
-union RocResultPayload<T, E> {
+union RocTryPayload<T, E> {
     ok: ManuallyDrop<T>,
     err: ManuallyDrop<E>,
 }
 
-impl<T, E> Drop for RocResult<T, E> {
+impl<T, E> Drop for RocTry<T, E> {
     fn drop(&mut self) {
-        use RocResultTag::*;
+        use RocTryTag::*;
 
         match self.tag {
             RocOk => unsafe { ManuallyDrop::drop(&mut self.payload.ok) },

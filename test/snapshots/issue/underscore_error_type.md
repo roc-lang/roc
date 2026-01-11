@@ -394,8 +394,8 @@ quux = ("hello", 42)
 			(ty-header (name "BadTuple"))))
 	(expressions
 		(expr (type "BadType"))
-		(expr (type "Error"))
+		(expr (type "BadList"))
 		(expr (type "BadRecord"))
-		(expr (type "Error"))
-		(expr (type "Error"))))
+		(expr (type "BadFunction"))
+		(expr (type "BadTuple"))))
 ~~~

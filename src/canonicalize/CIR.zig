@@ -157,7 +157,37 @@ pub const Def = struct {
 
         const attrs = tree.beginNode();
 
-        try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        // Safety check: verify pattern index points to actual pattern node
+        // This prevents crashes from cross-module node index issues
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node = cir.store.nodes.get(pattern_node_idx);
+        const is_valid_pattern = switch (pattern_node.tag) {
+            .pattern_identifier,
+            .pattern_as,
+            .pattern_applied_tag,
+            .pattern_nominal,
+            .pattern_nominal_external,
+            .pattern_record_destructure,
+            .pattern_list,
+            .pattern_tuple,
+            .pattern_num_literal,
+            .pattern_dec_literal,
+            .pattern_f32_literal,
+            .pattern_f64_literal,
+            .pattern_small_dec_literal,
+            .pattern_str_literal,
+            .pattern_underscore,
+            => true,
+            else => false,
+        };
+
+        if (is_valid_pattern) {
+            try cir.store.getPattern(self.pattern).pushToSExprTree(cir, tree, self.pattern);
+        } else {
+            // Pattern index is invalid - output placeholder to avoid crash
+            try tree.pushStaticAtom("invalid-pattern");
+        }
+
         try cir.store.getExpr(self.expr).pushToSExprTree(cir, tree, self.expr);
 
         if (self.annotation) |annotation_idx| {

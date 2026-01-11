@@ -391,7 +391,10 @@ pub const Expr = union(enum) {
     /// ```roc
     /// foo : {} -> {}
     /// ```
-    e_anno_only: struct {},
+    e_anno_only: struct {
+        /// The identifier being defined (extracted from the pattern to avoid cross-module node index issues)
+        ident: Ident.Idx,
+    },
 
     /// Early return expression that exits the enclosing function with a value.
     /// This is used when `return` appears as the final expression in a block.

@@ -259,6 +259,19 @@ pub const RocDec = extern struct {
         return .{ .num = num };
     }
 
+    /// Extract the whole number part of a Dec via truncating division.
+    /// Truncates toward zero: -1.5 → -1, 1.5 → 1
+    pub fn toWholeInt(self: RocDec) i128 {
+        return @divTrunc(self.num, one_point_zero_i128);
+    }
+
+    /// Convert a whole number to Dec representation.
+    /// Returns null if the integer would overflow Dec's range.
+    pub fn fromWholeInt(int: i128) ?RocDec {
+        const result = @mulWithOverflow(int, one_point_zero_i128);
+        return if (result[1] == 1) null else RocDec{ .num = result[0] };
+    }
+
     pub fn eq(self: RocDec, other: RocDec) bool {
         return self.num == other.num;
     }

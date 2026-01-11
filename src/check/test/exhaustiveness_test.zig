@@ -838,3 +838,28 @@ test "exhaustive - record patterns with different field subsets" {
 
     try test_env.assertLastDefType("Str");
 }
+
+// Regression test for issue #8935: wrong exhaustiveness error for match on tuple
+// The patterns ([], _), (_, 0), ([_, ..], _) together cover all cases:
+// - [] with any U64 (first pattern)
+// - [_, ..] with any U64 (third pattern)
+// Together these cover all lists. The middle pattern (_, 0) is just an optimization.
+
+test "exhaustive - tuple with list and integer patterns" {
+    const source =
+        \\x : (List(I64), I64)
+        \\x = ([1, 2, 3], 42)
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    ([], _) => 0
+        \\    (_, 0) => 1
+        \\    ([_head, ..], _) => 2
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // This should be exhaustive - patterns 1 and 3 together cover all lists
+    try test_env.assertLastDefType("I64");
+}

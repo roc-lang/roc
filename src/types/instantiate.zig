@@ -40,10 +40,19 @@ pub const Instantiator = struct {
     idents: *const base.Ident.Store,
     var_map: *std.AutoHashMap(Var, Var),
 
-    current_rank: Rank = Rank.top_level,
+    current_rank: Rank,
     rigid_behavior: RigidBehavior,
+    rank_behavior: RankBehavior = .respect_rank,
 
-    /// The mode to use when instantiating
+    /// Controls whether to respect rank when deciding what to instantiate
+    pub const RankBehavior = enum {
+        /// Only instantiate generalized types (type checker semantics)
+        respect_rank,
+        /// Instantiate all types regardless of rank (runtime semantics)
+        ignore_rank,
+    };
+
+    /// The mode to use when instantiating rigids
     pub const RigidBehavior = union(enum) {
         /// In this mode, all rigids are instantiated as new flex vars
         /// Note that the the rigid var structure will be preserved.
@@ -72,6 +81,11 @@ pub const Instantiator = struct {
     ) std.mem.Allocator.Error!Var {
         const resolved = self.store.resolveVar(initial_var);
         const resolved_var = resolved.var_;
+
+        // Non-generalized variables should _not_ be instantiated (unless configured to ignore rank)
+        if (self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
+            return resolved_var;
+        }
 
         // Check if we've already instantiated this variable
         if (self.var_map.get(resolved_var)) |fresh_var| {
@@ -141,12 +155,13 @@ pub const Instantiator = struct {
                 return fresh_var;
             },
             else => {
+                // Generate the content
+
                 // Remember this substitution for recursive references
                 // IMPORTANT: This has to be inserted _before_ we recurse into `instantiateContent`
                 const fresh_var = try self.store.fresh();
                 try self.var_map.put(resolved_var, fresh_var);
 
-                // Generate the content
                 const fresh_content = try self.instantiateContent(resolved.desc.content);
 
                 // Update the placeholder fresh var with the real content

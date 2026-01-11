@@ -1001,8 +1001,14 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
                 .ext_kind = ext_kind,
                 .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
-            if (tu.ext == .named) {
-                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
+            switch (tu.ext) {
+                .named => |named_idx| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named_idx));
+                },
+                .open => |double_dot_tok| {
+                    try store.extra_data.append(store.gpa, double_dot_tok);
+                },
+                .closed => {},
             }
 
             node.data.lhs = data_start;
@@ -1969,7 +1975,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
             const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
                 0 => .closed,
-                1 => .open,
+                1 => .{ .open = store.extra_data.items[extra_data_pos] },
                 2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
                 3 => unreachable,
             };

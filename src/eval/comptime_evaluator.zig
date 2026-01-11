@@ -207,22 +207,12 @@ pub const ComptimeEvaluator = struct {
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
-        // Free all crash messages we allocated
-        for (self.crash_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
+        // Note: crash_messages, expect_messages, and error_names are NOT freed here.
+        // Ownership of these strings is transferred to ProblemStore when problems are
+        // appended. ProblemStore.deinit() is responsible for freeing them.
+        // We only deinit the tracking arrays themselves.
         self.crash_messages.deinit();
-
-        // Free all expect failure messages we allocated
-        for (self.expect_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
         self.expect_messages.deinit();
-
-        // Free all error names we allocated
-        for (self.error_names.items) |name| {
-            self.allocator.free(name);
-        }
         self.error_names.deinit();
         self.failed_literal_exprs.deinit();
 
@@ -660,10 +650,11 @@ pub const ComptimeEvaluator = struct {
         const tag_union_layout = stack_value.layout.data.tag_union;
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
-        // Read the discriminant
+        // Read the discriminant using dynamic offset calculation
         const base_ptr = stack_value.ptr orelse return;
+        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
         const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+        const tag_index: usize = disc_ptr[disc_offset];
 
         // Get the runtime type variable from the StackValue
         const rt_var = stack_value.rt_var;
@@ -1090,8 +1081,9 @@ pub const ComptimeEvaluator = struct {
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
         const base_ptr = stack_value.ptr orelse return error.NotImplemented;
+        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
         const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+        const tag_index: usize = disc_ptr[disc_offset];
 
         const rt_var = stack_value.rt_var;
 

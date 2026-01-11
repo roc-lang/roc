@@ -677,6 +677,25 @@ pub const BuildEnv = struct {
             if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);
             }
+
+            // Also add for-clause type alias names (Model, model) to the translation map
+            const all_aliases = platform_root_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
+                // the mapping can be created even if canonicalization hasn't added it yet.
+                // The app will provide the actual type alias definition which will be checked later.
+                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
+                const alias_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
+                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
+
+                // Add rigid name (e.g., "model") - insert it into app's ident store since
+                // the rigid name is a platform concept that gets copied during type processing.
+                // Using insert (not find) ensures the app's ident store has this name for later lookups.
+                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
+                const rigid_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
+            }
         }
 
         // Check platform requirements against app exports
