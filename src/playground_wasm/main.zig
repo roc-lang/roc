@@ -1153,6 +1153,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             result.module_env,
             type_can_ir,
             &solver.snapshots,
+            &solver.problems,
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
