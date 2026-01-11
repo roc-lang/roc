@@ -109,6 +109,11 @@ pub const LinkConfig = struct {
     /// Stack size for WASM targets (bytes). This is the amount of memory reserved for the
     /// call stack within the WASM linear memory. Must be a multiple of 16 (stack alignment).
     wasm_stack_size: usize = DEFAULT_WASM_STACK_SIZE,
+
+    /// Platform files directory (absolute path). Used to find platform-bundled sysroots.
+    /// For example, if this is "/path/to/platform/targets", the linker will look for
+    /// "/path/to/platform/targets/macos-sysroot" when linking for macOS.
+    platform_files_dir: ?[]const u8 = null,
 };
 
 /// Errors that can occur during linking
@@ -156,6 +161,60 @@ fn findDarwinSysroot(allocator: std.mem.Allocator) ![]const u8 {
     return runtime_sysroot;
 }
 
+/// Find a platform-provided sysroot for macOS cross-compilation.
+/// Looks for 'macos-sysroot' directory in the platform's files directory.
+/// For example, if platform_files_dir is "/path/to/platform/targets",
+/// this looks for "/path/to/platform/targets/macos-sysroot/".
+fn findPlatformSysroot(allocator: std.mem.Allocator, platform_files_dir: ?[]const u8) ?[]const u8 {
+    const files_dir = platform_files_dir orelse return null;
+
+    // Look for macos-sysroot in the platform files directory
+    const sysroot_path = std.fs.path.join(allocator, &.{ files_dir, "macos-sysroot" }) catch return null;
+
+    // Verify it exists and has the expected structure (usr/lib/libSystem.tbd)
+    const lib_path = std.fs.path.join(allocator, &.{ sysroot_path, "usr", "lib", "libSystem.tbd" }) catch return null;
+    std.fs.cwd().access(lib_path, .{}) catch return null;
+
+    std.log.info("Using platform-provided macOS sysroot: {s}", .{sysroot_path});
+    return sysroot_path;
+}
+
+/// Discover frameworks in a directory and add -framework flags for each.
+/// This allows platforms to control their framework dependencies by choosing
+/// which frameworks to bundle in their sysroot.
+/// Only links frameworks that have a .tbd file (skips header-only frameworks).
+fn discoverAndLinkFrameworks(allocator: std.mem.Allocator, args: *std.array_list.Managed([]const u8), frameworks_dir: []const u8) LinkError!void {
+    var dir = std.fs.cwd().openDir(frameworks_dir, .{ .iterate = true }) catch {
+        // No frameworks directory - that's fine, just skip
+        return;
+    };
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (iter.next() catch return) |entry| {
+        if (entry.kind != .directory) continue;
+
+        // Framework directories end with .framework
+        if (std.mem.endsWith(u8, entry.name, ".framework")) {
+            // Extract framework name (remove .framework suffix)
+            const fw_name = entry.name[0 .. entry.name.len - ".framework".len];
+
+            // Check if framework has a TBD file (skip header-only frameworks)
+            // TBD can be at X.framework/X.tbd or X.framework/Versions/Current/X.tbd
+            const tbd_name = std.fmt.allocPrint(allocator, "{s}.tbd", .{fw_name}) catch return LinkError.OutOfMemory;
+            const tbd_path1 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, tbd_name }) catch return LinkError.OutOfMemory;
+            const tbd_path2 = std.fs.path.join(allocator, &.{ frameworks_dir, entry.name, "Versions", "Current", tbd_name }) catch return LinkError.OutOfMemory;
+
+            const has_tbd = std.fs.cwd().access(tbd_path1, .{}) catch std.fs.cwd().access(tbd_path2, .{}) catch null;
+            if (has_tbd == null) continue; // Skip frameworks without TBD files
+
+            const fw_name_copy = allocator.dupe(u8, fw_name) catch return LinkError.OutOfMemory;
+            try args.append("-framework");
+            try args.append(fw_name_copy);
+        }
+    }
+}
+
 /// Build the linker command arguments for the given configuration.
 /// Returns the args array that would be passed to LLD.
 /// This is used both by link() and formatLinkCommand().
@@ -195,10 +254,30 @@ fn buildLinkArgs(ctx: *CliContext, config: LinkConfig) LinkError!std.array_list.
             try args.append("13.0"); // minimum deployment target
             try args.append("13.0"); // SDK version
 
-            // Use bundled libSystem stub instead of requiring macOS SDK
+            // Try to find a platform-provided sysroot first (for cross-compilation with bundled frameworks)
+            // Falls back to Roc's bundled darwin sysroot (minimal, only has libSystem.tbd)
             try args.append("-syslibroot");
-            const darwin_sysroot = findDarwinSysroot(ctx.arena) catch return LinkError.DarwinSysrootNotFound;
-            try args.append(darwin_sysroot);
+            if (findPlatformSysroot(ctx.arena, config.platform_files_dir)) |platform_sysroot| {
+                try args.append(platform_sysroot);
+
+                // Add framework search path to help linker resolve framework dependencies
+                const fw_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "System", "Library", "Frameworks" }) catch return LinkError.OutOfMemory;
+                try args.append("-F");
+                try args.append(fw_path);
+
+                // Add library path for libobjc and other usr/lib dependencies
+                const lib_path = std.fs.path.join(ctx.arena, &.{ platform_sysroot, "usr", "lib" }) catch return LinkError.OutOfMemory;
+                try args.append("-L");
+                try args.append(lib_path);
+
+                // Auto-discover and link all frameworks bundled in the platform sysroot.
+                // This keeps the compiler generic - platforms explicitly control their
+                // dependencies by choosing which frameworks to bundle in their sysroot.
+                try discoverAndLinkFrameworks(ctx.arena, &args, fw_path);
+            } else {
+                const darwin_sysroot = findDarwinSysroot(ctx.arena) catch return LinkError.DarwinSysrootNotFound;
+                try args.append(darwin_sysroot);
+            }
 
             // Link against system libraries on macOS
             try args.append("-lSystem");

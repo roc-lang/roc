@@ -1179,6 +1179,11 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // No pre/post files needed - everything comes from link spec in order
         const empty_files: []const []const u8 = &.{};
 
+        // Build full path to platform files directory for sysroot lookup
+        const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
+            return error.OutOfMemory;
+        };
+
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
             .output_path = exe_path,
@@ -1188,6 +1193,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
+            .platform_files_dir = platform_files_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -4589,6 +4595,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+
+    // Build full path to platform files directory for sysroot lookup
+    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
+
     const link_config = linker_mod.LinkConfig{
         .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
         .object_files = object_files.items,
@@ -4601,6 +4611,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .target_arch = target.toCpuArch(),
         .wasm_initial_memory = args.wasm_memory orelse linker_mod.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker_mod.DEFAULT_WASM_STACK_SIZE,
+        .platform_files_dir = platform_files_dir,
     };
 
     // Dump linker inputs to temp directory if requested
