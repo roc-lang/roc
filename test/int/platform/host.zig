@@ -68,6 +68,8 @@ const Box = usize;
 extern fn roc__init(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 extern fn roc__update(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 extern fn roc__render(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_mixed_args(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
+extern fn roc__test_struct_arg(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, arg_ptr: ?*anyopaque) callconv(.c) void;
 
 // OS-specific entry point handling
 comptime {
@@ -160,12 +162,118 @@ fn platform_main() !void {
     try stdout.print("\x1b[32mSUCCESS\x1b[0m: fresh init + render worked!\n", .{});
     success_count += 1;
 
+    // Test 5: test_mixed_args takes (Bool, I64) - tests issue 8991
+    // This tests that arguments with different alignments are correctly passed from host to Roc.
+    // Bool has 1-byte alignment, I64 has 8-byte alignment.
+    // According to Roc ABI, arguments are sorted by alignment descending, so I64 comes first in memory.
+    try stdout.print("\n=== Test 5: test_mixed_args(Bool, I64) -> (Bool, I64) (issue 8991) ===\n", .{});
+
+    // Arguments struct must match Roc's sorted layout: I64 (8-byte alignment) before Bool (1-byte alignment)
+    // Even though the Roc function signature is (Bool, I64), the memory layout is sorted by alignment.
+    const MixedArgs = extern struct { value: i64, flag: bool };
+    var mixed_args = MixedArgs{ .value = 12345, .flag = true };
+
+    // Result struct: (Bool, I64) tuple - laid out by Roc's tuple layout rules
+    // Since tuples are sorted by alignment, the layout is: I64 at offset 0, Bool at offset 8
+    const MixedResult = extern struct { value: i64, flag: bool };
+    var mixed_result: MixedResult = undefined;
+
+    roc__test_mixed_args(&roc_ops, @as(*anyopaque, @ptrCast(&mixed_result)), @as(*anyopaque, @ptrCast(&mixed_args)));
+
+    // Verify the values came through correctly
+    try stdout.print("Input: flag={}, value={}\n", .{ mixed_args.flag, mixed_args.value });
+    try stdout.print("Output: flag={}, value={}\n", .{ mixed_result.flag, mixed_result.value });
+
+    if (mixed_result.flag == mixed_args.flag and mixed_result.value == mixed_args.value) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: mixed args passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: values corrupted! Expected flag={}, value={}\n", .{ mixed_args.flag, mixed_args.value });
+    }
+
+    // Test 6: test_struct_arg takes FrameInput struct - tests issue 8991 with multiple mixed-alignment fields
+    // This matches the bug report example more closely.
+    // FrameInput has fields: frame_count (U64), mouse_x (F32), mouse_y (F32),
+    //                        mouse_left (Bool), mouse_middle (Bool), mouse_right (Bool), mouse_wheel (F32)
+    //
+    // Memory layout sorted by alignment descending, then field name alphabetically:
+    // - frame_count: U64 (8 bytes) at offset 0
+    // - mouse_wheel: F32 (4 bytes) at offset 8
+    // - mouse_x: F32 (4 bytes) at offset 12
+    // - mouse_y: F32 (4 bytes) at offset 16
+    // - mouse_left: Bool (1 byte) at offset 20
+    // - mouse_middle: Bool (1 byte) at offset 21
+    // - mouse_right: Bool (1 byte) at offset 22
+    // - padding (1 byte) at offset 23
+    // Total size: 24 bytes
+    try stdout.print("\n=== Test 6: test_struct_arg(FrameInput) -> FrameInput (issue 8991 full test) ===\n", .{});
+
+    // FrameInput struct must match Roc's sorted record layout
+    const FrameInput = extern struct {
+        frame_count: u64, // U64, 8-byte alignment - first by alignment
+        mouse_wheel: f32, // F32, 4-byte alignment - first alphabetically among F32s
+        mouse_x: f32, // F32, 4-byte alignment
+        mouse_y: f32, // F32, 4-byte alignment
+        mouse_left: bool, // Bool, 1-byte alignment - first alphabetically among Bools
+        mouse_middle: bool, // Bool, 1-byte alignment
+        mouse_right: bool, // Bool, 1-byte alignment
+    };
+
+    var frame_input = FrameInput{
+        .frame_count = 123456789,
+        .mouse_wheel = 0.5,
+        .mouse_x = 100.25,
+        .mouse_y = 200.75,
+        .mouse_left = true,
+        .mouse_middle = false,
+        .mouse_right = true,
+    };
+
+    var frame_output: FrameInput = undefined;
+
+    roc__test_struct_arg(&roc_ops, @as(*anyopaque, @ptrCast(&frame_output)), @as(*anyopaque, @ptrCast(&frame_input)));
+
+    // Verify all field values came through correctly
+    try stdout.print("Input:  frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+        frame_input.frame_count,
+        frame_input.mouse_wheel,
+        frame_input.mouse_x,
+        frame_input.mouse_y,
+        frame_input.mouse_left,
+        frame_input.mouse_middle,
+        frame_input.mouse_right,
+    });
+    try stdout.print("Output: frame_count={}, mouse_wheel={d:.2}, mouse_x={d:.2}, mouse_y={d:.2}, mouse_left={}, mouse_middle={}, mouse_right={}\n", .{
+        frame_output.frame_count,
+        frame_output.mouse_wheel,
+        frame_output.mouse_x,
+        frame_output.mouse_y,
+        frame_output.mouse_left,
+        frame_output.mouse_middle,
+        frame_output.mouse_right,
+    });
+
+    const struct_match = frame_output.frame_count == frame_input.frame_count and
+        frame_output.mouse_wheel == frame_input.mouse_wheel and
+        frame_output.mouse_x == frame_input.mouse_x and
+        frame_output.mouse_y == frame_input.mouse_y and
+        frame_output.mouse_left == frame_input.mouse_left and
+        frame_output.mouse_middle == frame_input.mouse_middle and
+        frame_output.mouse_right == frame_input.mouse_right;
+
+    if (struct_match) {
+        try stdout.print("\x1b[32mSUCCESS\x1b[0m: FrameInput struct passed correctly!\n", .{});
+        success_count += 1;
+    } else {
+        try stdout.print("\x1b[31mFAILED\x1b[0m: FrameInput values corrupted!\n", .{});
+    }
+
     // Final summary
     try stdout.print("\n=== FINAL RESULT ===\n", .{});
-    if (success_count == 4) {
-        try stdout.print("\x1b[32mALL TESTS PASSED\x1b[0m: Box(model) works correctly across host boundary!\n", .{});
+    if (success_count == 6) {
+        try stdout.print("\x1b[32mALL TESTS PASSED\x1b[0m: Box(model) and mixed args work correctly across host boundary!\n", .{});
     } else {
-        try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/4 tests passed\n", .{success_count});
+        try stdout.print("\x1b[31mSOME TESTS FAILED\x1b[0m: {}/6 tests passed\n", .{success_count});
         std.process.exit(1);
     }
 }
