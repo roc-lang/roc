@@ -283,6 +283,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
+    .{
+        .roc_file = "test/fx/issue8936.roc",
+        .io_spec = "1>Tests passed!",
+        .description = "Regression test: List pattern matching with rest operator panic (issue #8936)",
+    },
 };
 
 /// Get the total number of IO spec tests
