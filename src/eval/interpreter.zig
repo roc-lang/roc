@@ -12746,13 +12746,18 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Dec literals require Dec-compatible layout. If we reach here with a different layout
-        // (e.g., U8 integer), it means validation should have caught this and skipped evaluation.
-        std.debug.assert(layout_val.tag == .scalar and
+        // (e.g., function type from calling a literal like 0.0()), the type is incompatible.
+        // Return an error instead of crashing - the type checker will report the actual error.
+        const is_dec_layout = layout_val.tag == .scalar and
             layout_val.data.scalar.tag == .frac and
-            layout_val.data.scalar.data.frac == .dec);
+            layout_val.data.scalar.data.frac == .dec;
+        if (!is_dec_layout) {
+            // Fall back to Dec layout for the literal itself
+            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        }
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.

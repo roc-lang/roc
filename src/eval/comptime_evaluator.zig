@@ -1328,6 +1328,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
                     },
                 },
@@ -1349,6 +1351,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                     }
                     continue;
                 },
