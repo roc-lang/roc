@@ -315,6 +315,49 @@ pub const Token = struct {
             };
         }
 
+        /// Returns true if this token can end an expression, meaning a following
+        /// minus sign should be treated as a binary operator rather than unary.
+        /// For example, in `x-1`, the minus after `x` (LowerIdent) should be binary.
+        pub fn canEndExpression(tok: Tag) bool {
+            return switch (tok) {
+                // Identifiers can end expressions
+                .LowerIdent,
+                .UpperIdent,
+                .MalformedUnicodeIdent,
+                .NamedUnderscore,
+                .MalformedNamedUnderscoreUnicode,
+                .OpaqueName,
+                .MalformedOpaqueNameUnicode,
+                // Dot access can end expressions
+                .DotLowerIdent,
+                .DotUpperIdent,
+                .DotInt,
+                .NoSpaceDotLowerIdent,
+                .NoSpaceDotUpperIdent,
+                .NoSpaceDotInt,
+                .MalformedDotUnicodeIdent,
+                .MalformedNoSpaceDotUnicodeIdent,
+                // Numbers can end expressions
+                .Int,
+                .Float,
+                .MalformedNumberBadSuffix,
+                .MalformedNumberUnicodeSuffix,
+                .MalformedNumberNoDigits,
+                .MalformedNumberNoExponentDigits,
+                // Closing brackets can end expressions
+                .CloseRound,
+                .CloseSquare,
+                .CloseCurly,
+                .CloseStringInterpolation,
+                // String literals can end expressions
+                .StringEnd,
+                .SingleQuote,
+                .MalformedSingleQuote,
+                => true,
+                else => false,
+            };
+        }
+
         /// This function is used to keep around the first malformed node.
         /// For example, if an integer has no digits and a bad suffix `0bu22`,
         /// we keep the first malformed node that the integer has no digits instead of pointing out the bad suffix.
@@ -1078,6 +1121,13 @@ pub const Tokenizer = struct {
         };
     }
 
+    /// Returns the tag of the last token pushed, or null if no tokens have been pushed yet.
+    fn lastTokenTag(self: *const Tokenizer) ?Token.Tag {
+        const len = self.output.tokens.len;
+        if (len == 0) return null;
+        return self.output.tokens.items(.tag)[len - 1];
+    }
+
     /// Pushes a token with the given tag, token offset, and extra.
     fn pushTokenNormalHere(self: *Tokenizer, gpa: std.mem.Allocator, tag: Token.Tag, tok_offset: Token.Idx) std.mem.Allocator.Error!void {
         std.debug.assert(!tag.isInterned());
@@ -1205,9 +1255,20 @@ pub const Tokenizer = struct {
                             self.cursor.pos += 1;
                             try self.pushTokenNormalHere(gpa, .OpBinaryMinus, start);
                         } else if (n >= '0' and n <= '9') {
-                            self.cursor.pos += 1;
-                            const tag = self.cursor.chompNumber();
-                            try self.pushTokenNormalHere(gpa, tag, start);
+                            // When there's no whitespace before the minus (sp == false) and
+                            // the previous token can end an expression, this is binary minus
+                            // followed by a number (e.g., x-1), not a negative number literal.
+                            // When there is whitespace before minus (sp == true), treat -N as
+                            // a negative literal (e.g., `if True -10 else x`).
+                            const prev_can_end_expr = if (self.lastTokenTag()) |prev| prev.canEndExpression() else false;
+                            if (!sp and prev_can_end_expr) {
+                                self.cursor.pos += 1;
+                                try self.pushTokenNormalHere(gpa, .OpBinaryMinus, start);
+                            } else {
+                                self.cursor.pos += 1;
+                                const tag = self.cursor.chompNumber();
+                                try self.pushTokenNormalHere(gpa, tag, start);
+                            }
                         } else {
                             self.cursor.pos += 1;
                             // Look at what follows the minus to determine if it's unary

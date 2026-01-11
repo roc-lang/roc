@@ -308,6 +308,7 @@ fn renderTypeProblems(
         module_env,
         module_env,
         &checker.snapshots,
+        &checker.problems,
         filename,
         &.{},
         &checker.import_mapping,
@@ -2229,17 +2230,19 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             const all_aliases = penv.for_clause_aliases.items.items;
             const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
             for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - must exist in app since it's required
+                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
+                // the mapping can be created even if canonicalization hasn't added it yet.
+                // The app will provide the actual type alias definition which will be checked later.
                 const alias_name_text = penv.getIdent(alias.alias_name);
-                if (app_env.common.findIdent(alias_name_text)) |app_ident| {
-                    try platform_to_app_idents.put(alias.alias_name, app_ident);
-                }
+                const alias_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
+                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
+
                 // Add rigid name (e.g., "model") - insert it into app's ident store since
                 // the rigid name is a platform concept that gets copied during type processing.
                 // Using insert (not find) ensures the app's ident store has this name for later lookups.
                 const rigid_name_text = penv.getIdent(alias.rigid_name);
-                const app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, app_ident);
+                const rigid_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
             }
         }
 
@@ -3030,6 +3033,7 @@ fn compileModuleForSerialization(
         &env,
         &env,
         &checker.snapshots,
+        &checker.problems,
         file_path,
         &.{},
         &checker.import_mapping,
@@ -4915,6 +4919,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             &env,
             &env,
             &checker.snapshots,
+            &checker.problems,
             args.path,
             &.{},
             &checker.import_mapping,

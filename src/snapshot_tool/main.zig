@@ -406,6 +406,7 @@ fn generateAllReports(
             module_env,
             can_ir,
             &solver.snapshots,
+            &solver.problems,
             snapshot_path,
             empty_modules,
             &solver.import_mapping,

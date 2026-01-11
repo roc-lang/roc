@@ -1790,6 +1790,45 @@ test "check type - dbg" {
     );
 }
 
+// type modules //
+
+test "check type - type module - fn declarations " {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Person := [].{
+        \\    name : Str
+        \\    name = "Alice"
+        \\
+        \\    age : I32
+        \\    age = 25
+        \\
+        \\    height : Dec
+        \\    height = 5.8
+        \\
+        \\    is_active : Bool
+        \\    is_active = True
+        \\
+        \\    colors : List(Str)
+        \\    colors = ["red", "green", "blue"]
+        \\
+        \\    numbers : List(I32)
+        \\    numbers = [1, 2, 3, 4, 5]
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Person.name", .expected = "Str" },
+            .{ .def = "Test.Person.age", .expected = "I32" },
+            .{ .def = "Test.Person.height", .expected = "Dec" },
+            .{ .def = "Test.Person.is_active", .expected = "Bool" },
+            .{ .def = "Test.Person.colors", .expected = "List(Str)" },
+            .{ .def = "Test.Person.numbers", .expected = "List(I32)" },
+        },
+    );
+}
+
 // for //
 
 test "check type - for" {
