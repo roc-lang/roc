@@ -12,15 +12,6 @@ const Ident = base.Ident;
 /// Index enum for SnapshotContentList
 pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
-/// Index for extra strings stored in the snapshot store (e.g., formatted pattern strings)
-pub const ExtraStringIdx = enum(u32) {
-    _,
-
-    pub fn toInt(self: ExtraStringIdx) u32 {
-        return @intFromEnum(self);
-    }
-};
-
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
 const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
@@ -156,6 +147,9 @@ const Rigid = types.Rigid;
 /// Entry point is `snapshotVarForError`
 const TypeWriter = types.TypeWriter;
 
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = struct { start: usize, count: usize };
+
 /// Stores snapshots of types captured before unification errors overwrite them with `.err`.
 /// This allows error messages to display the original conflicting types rather than the
 /// error state. Also stores pre-formatted type strings for efficient error reporting.
@@ -183,10 +177,8 @@ pub const Store = struct {
     scratch_static_dispatch_constraints: base.Scratch(SnapshotStaticDispatchConstraint),
 
     /// Formatted type strings, indexed by SnapshotContentIdx
-    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, []const u8),
-
-    /// Extra strings (e.g., formatted pattern strings) that need lifecycle management
-    extra_strings: std.ArrayListUnmanaged([]const u8),
+    formatted_strings: std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange),
+    formatted_strings_backing: ByteList,
 
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
@@ -201,24 +193,19 @@ pub const Store = struct {
             .scratch_tags = try base.Scratch(SnapshotTag).init(gpa),
             .scratch_record_fields = try base.Scratch(SnapshotRecordField).init(gpa),
             .scratch_static_dispatch_constraints = try base.Scratch(SnapshotStaticDispatchConstraint).init(gpa),
-            .formatted_strings = .{},
-            .extra_strings = .{},
+            .formatted_strings = blk: {
+                var map = std.AutoHashMapUnmanaged(SnapshotContentIdx, ByteListRange){};
+                try map.ensureTotalCapacity(gpa, 32);
+                break :blk map;
+            },
+            .formatted_strings_backing = try ByteList.initCapacity(gpa, 512),
         };
     }
 
     pub fn deinit(self: *Self) void {
         // Free all stored formatted strings
-        var iter = self.formatted_strings.valueIterator();
-        while (iter.next()) |str| {
-            self.gpa.free(str.*);
-        }
         self.formatted_strings.deinit(self.gpa);
-
-        // Free all extra strings
-        for (self.extra_strings.items) |str| {
-            self.gpa.free(str);
-        }
-        self.extra_strings.deinit(self.gpa);
+        self.formatted_strings_backing.deinit();
 
         // Free all formatted tag strings
         const tags_len = self.tags.len();
@@ -244,20 +231,12 @@ pub const Store = struct {
 
     /// Get the pre-formatted string for a snapshot.
     pub fn getFormattedString(self: *const Self, idx: SnapshotContentIdx) ?[]const u8 {
-        return self.formatted_strings.get(idx);
-    }
+        const mb_range = self.formatted_strings.get(idx);
 
-    /// Store an extra string (e.g., formatted pattern) and return its index.
-    /// The string will be freed when the store is deinitialized.
-    pub fn storeExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
-        const idx: ExtraStringIdx = @enumFromInt(self.extra_strings.items.len);
-        try self.extra_strings.append(self.gpa, str);
-        return idx;
-    }
+        if (mb_range == null) return null;
+        const range = mb_range.?;
 
-    /// Get an extra string by index.
-    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
-        return self.extra_strings.items[idx.toInt()];
+        return self.formatted_strings_backing.items[range.start..][0..range.count];
     }
 
     /// Deep copy a type variable for error reporting. This snapshots the type structure
@@ -305,13 +284,23 @@ pub const Store = struct {
         try self.seen_vars.append(resolved.var_);
         defer _ = self.seen_vars.pop();
 
+        // Recursively copy content
         const snapshot_idx = try self.deepCopyContent(store, type_writer, resolved.var_, resolved.desc.content, var_);
 
         // Format this type and store the formatted string
-        type_writer.reset();
-        try type_writer.write(var_, .wrap);
-        const formatted = try self.gpa.dupe(u8, type_writer.get());
-        try self.formatted_strings.put(self.gpa, snapshot_idx, formatted);
+        // Here, we run the TypeWriter, writing directly into our backing
+        {
+            const formatted_strings_start = self.formatted_strings_backing.items.len;
+            try type_writer.writeInto(&self.formatted_strings_backing, var_, .wrap);
+            const formatted_strings_end = self.formatted_strings_backing.items.len;
+
+            const formatted_range = ByteListRange{
+                .start = formatted_strings_start,
+                .count = formatted_strings_end - formatted_strings_start,
+            };
+
+            try self.formatted_strings.put(self.gpa, snapshot_idx, formatted_range);
+        }
 
         return snapshot_idx;
     }
