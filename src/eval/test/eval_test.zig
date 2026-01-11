@@ -1996,7 +1996,7 @@ test "issue 8927: early return in method argument leaks memory" {
     try runExpectI64(
         \\{
         \\    fold_try = |tries| {
-        \\        var $ok_list = [0i64]
+        \\        var $ok_list = [""]
         \\        $ok_list = []
         \\        for a_try in tries {
         \\            $ok_list = $ok_list.append(a_try?)
@@ -2004,11 +2004,11 @@ test "issue 8927: early return in method argument leaks memory" {
         \\        Ok($ok_list)
         \\    }
         \\
-        \\    tries = [Ok(1i64), Ok(2i64), Err(NaN), Ok(4i64)]
+        \\    tries = [Ok("a"), Ok("b"), Err(Oops), Ok("d")]
         \\
         \\    match fold_try(tries) {
         \\        Ok(list) => List.len(list)
-        \\        Err(_) => 0i64
+        \\        Err(_) => 0
         \\    }
         \\}
     , 0, .no_trace);
