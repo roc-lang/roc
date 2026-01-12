@@ -2896,6 +2896,7 @@ const ModuleExpectation = union(enum) {
     pass: DefExpectation,
     fail,
     fail_first, // Allows multiple errors, checks first error title
+    fail_with,
 };
 
 const DefExpectation = union(enum) {
@@ -2929,6 +2930,9 @@ fn checkTypesModule(
         },
         .fail => {
             return test_env.assertOneTypeError(expected);
+        },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
         },
         .fail_first => {
             return test_env.assertFirstTypeError(expected);
@@ -3356,4 +3360,74 @@ test "check type - issue8934 recursive nominal type unification" {
     // The key thing is that the compiler should NOT crash with stack overflow.
     // It should successfully type-check the file.
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
+
+// recursive functions
+
+test "check type - self recursive function - fibonacci - pass" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib(n - 1.U8) + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fib" } }, "U8 -> U8");
+}
+
+test "check type - self recursive function - fibonacci - fail" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:5:5:5:8:**
+        \\```roc
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\```
+        \\    ^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str -> U8
+        \\
+        \\But I expected it to be:
+        \\
+        \\    U8 -> U8
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - mutually recursive functions - is_even and is_odd" {
+    const source =
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "is_odd" } }, "U64 -> Bool");
 }

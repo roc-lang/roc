@@ -17,6 +17,8 @@ const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 
+const MkSafeList = collections.SafeList;
+
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
@@ -84,6 +86,8 @@ seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
 env_pool: EnvPool,
 /// wrapper around generalization, contains some internal state used to do it's work
 generalizer: Generalizer,
+/// A list of generated constraints with solving deferred
+constraints: Constraint.SafeList,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
@@ -136,6 +140,16 @@ const HasProcessed = enum { processed, processing, not_processed };
 const ScratchStaticDispatchConstraint = struct {
     var_: Var,
     constraint: types_mod.StaticDispatchConstraint,
+};
+
+/// A constraint generated during type checking, to be checked at the end
+///
+/// In most cases, we don't defer constraint checking and unify things
+/// immediately. However, there are some cases where it's necessary.
+const Constraint = union(enum) {
+    eql: struct { expected: Var, actual: Var },
+
+    pub const SafeList = MkSafeList(@This());
 };
 
 /// Context for type checking: module identity, builtin type references, and the Builtin module itself.
@@ -194,6 +208,7 @@ pub fn init(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
@@ -231,6 +246,7 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.constraints.deinit(self.gpa);
     self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit();
@@ -265,7 +281,7 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const type_nodes: usize = @intCast(self.types.len());
     try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
-        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, @enumFromInt(15));
+        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, undefined);
     }
 }
 
@@ -1068,6 +1084,12 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     // Check any accumulated static dispatch constraints
     try self.checkDeferredStaticDispatchConstraints(&env);
+    try self.checkDeferredConstraints(&env);
+
+    // After solving all deferred constraints, check for infinite types
+    for (defs_slice) |def_idx| {
+        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+    }
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -1545,13 +1567,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
-    self.enclosing_func_name = blk: {
-        const pattern = self.cir.store.getPattern(def.pattern);
-        switch (pattern) {
-            .assign => |assign| break :blk assign.ident,
-            else => break :blk null,
-        }
-    };
+    self.enclosing_func_name = self.getPatternIdent(def.pattern);
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
@@ -1571,11 +1587,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Unify the def and ptrn
     _ = try self.unify(def_var, ptrn_var, env);
-
-    // After solving the definition, check for infinite types.
-    // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
-    // Similar to Rust's check_for_infinite_type called after LetCon.
-    try self.checkForInfiniteType(def_var);
 
     // Mark as processed
     try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
@@ -2777,6 +2788,14 @@ fn checkPatternHelp(
     return pattern_var;
 }
 
+fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
+    const pattern = self.cir.store.getPattern(ptrn_idx);
+    switch (pattern) {
+        .assign => |assign| return assign.ident,
+        else => return null,
+    }
+}
+
 // expr //
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
@@ -3302,7 +3321,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         // lookup //
-        .e_lookup_local => |lookup| {
+        .e_lookup_local => |lookup| blk: {
+            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+
             const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
             if (mb_processing_def) |processing_def| {
                 switch (processing_def.status) {
@@ -3321,35 +3342,33 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // TODO: Handle mutually recursive functions
                     },
                     .processing => {
-                        // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized).
+                        // This is a recursive reference
                         //
-                        // If the def has a type annotation, we need to instantiate it
-                        // to avoid polluting the pattern variable's rank. Without this,
-                        // unifying directly would pull the annotation's rigid vars down
-                        // to the pattern's rank, preventing proper generalization.
-                        // This fixes GitHub issue #8994.
-                        const def = self.cir.store.getDef(processing_def.def_idx);
-                        if (def.annotation) |annotation_idx| {
-                            const anno_var = ModuleEnv.varFrom(annotation_idx);
-                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
-                            _ = try self.unify(expr_var, instantiated, env);
-                            return does_fx;
-                        }
-                        // Otherwise, fall through to unify directly with pat_var
+                        // In this case, we simply assign the pattern to be a
+                        // flex var, then write down an eql constraint for later
+                        // validation. This deferred approach is necessary for
+                        // good error messages.
+
+                        // Assert that this def is NOT generalized nor outermost
+                        std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                        // Set the expr to be a flex
+                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                        // Write down this constraint for later validation
+                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                            .expected = pat_var,
+                            .actual = expr_var,
+                        } });
+
+                        break :blk;
                     },
                     .processed => {},
                 }
             }
 
-            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+            // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
-
-            // Only lambdas get generalized (value restriction), so we instantiate
-            // if and only if the variable has been generalized. Non-lambda definitions
-            // (like numeric literals, records, etc.) are NOT generalized and are
-            // unified directly, allowing type constraints to propagate back.
-            // This fixes GitHub issues #8666 and #8765.
             if (resolved_pat.desc.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
@@ -3937,6 +3956,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_return => |ret| {
             does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
+
+            // TODO: Unify with deferred constraint
 
             // Early return expression - check the inner expression against enclosing function's return type
             // If we're inside a function, use its return type. Otherwise fall back to expected.
@@ -5318,6 +5339,20 @@ fn checkNominalTypeUsage(
         } });
         try self.unifyWith(target_var, .err, env);
         return .err;
+    }
+}
+
+// validate constraints //
+
+fn checkDeferredConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var iter = self.constraints.iterIndices();
+    while (iter.next()) |idx| {
+        const constraint = self.constraints.get(idx);
+        switch (constraint.*) {
+            .eql => |eql| {
+                _ = try self.unify(eql.expected, eql.actual, env);
+            },
+        }
     }
 }
 
