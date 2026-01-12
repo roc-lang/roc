@@ -325,6 +325,12 @@ pub const SyntaxChecker = struct {
         range: ?LspRange,
     };
 
+    /// Result of a definition query containing location information
+    pub const DefinitionResult = struct {
+        uri: []const u8,
+        range: LspRange,
+    };
+
     /// Get type information at a specific position in a document.
     /// Returns the type as a formatted string, or null if no type info is available.
     pub fn getTypeAtPosition(
@@ -420,6 +426,82 @@ pub const SyntaxChecker = struct {
         };
     }
 
+    /// Get definition location at a specific position in a document.
+    /// Returns the location where the symbol is defined, or null if not found.
+    pub fn getDefinitionAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+    ) !?DefinitionResult {
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
+        defer self.allocator.free(absolute_path);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var env = try self.resetBuildEnv();
+
+        var provider_state = OverrideProvider{
+            .override_path = absolute_path,
+            .override_text = override_text,
+        };
+        const provider: ?FileProvider = if (override_text != null) .{
+            .ctx = &provider_state,
+            .read = OverrideProvider.read,
+        } else null;
+        env.setFileProvider(provider);
+        defer env.setFileProvider(null);
+
+        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
+        const dir_owned = try self.allocator.dupe(u8, dir_slice);
+        defer self.allocator.free(dir_owned);
+        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
+        defer if (prev_cwd) |cwd| {
+            std.process.changeCurDir(cwd) catch {};
+            self.allocator.free(cwd);
+        };
+        std.process.changeCurDir(dir_owned) catch {};
+
+        self.logDebug(.build, "definition: building {s}", .{absolute_path});
+        env.build(absolute_path) catch |err| {
+            self.logDebug(.build, "definition: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+            return null;
+        };
+
+        // Drain reports but ignore them for definition
+        const drained = env.drainReports() catch return null;
+        defer self.freeDrained(drained);
+
+        // Get any available scheduler and find the root module
+        const app_sched = env.schedulers.get("app") orelse blk: {
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env != null) {
+                        break :blk sched;
+                    }
+                }
+            }
+            return null;
+        };
+        const root_module = app_sched.getRootModule() orelse return null;
+        const module_env = if (root_module.env) |*e| e else return null;
+
+        // Convert LSP position to byte offset
+        const target_offset = self.positionToOffset(module_env, line, character) orelse return null;
+
+        // Find the definition at this position
+        const result = self.findDefinitionAtOffset(module_env, target_offset, uri) orelse return null;
+
+        return result;
+    }
+
     /// Convert LSP position (line, character) to byte offset in source
     fn positionToOffset(self: *SyntaxChecker, module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
         _ = self;
@@ -464,6 +546,186 @@ pub const SyntaxChecker = struct {
             .end_line = end_line,
             .end_col = end_col,
         };
+    }
+
+    /// Find the definition location for the expression at the given byte offset.
+    /// Looks for lookups (e_lookup_local, e_lookup_external) and returns the definition location.
+    fn findDefinitionAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32, current_uri: []const u8) ?DefinitionResult {
+        var best_expr: ?CIR.Expr.Idx = null;
+        var best_size: u32 = std.math.maxInt(u32);
+
+        // Iterate through all definitions
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const expr_idx = def.expr;
+            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+            const expr_region = module_env.store.getRegionAt(expr_node_idx);
+
+            if (regionContainsOffset(expr_region, target_offset)) {
+                // Search within this expression for the most specific lookup
+                if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
+                    best_expr = found;
+                }
+            }
+        }
+
+        // Also check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+
+            if (stmt_parts.expr) |expr_idx| {
+                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_region = module_env.store.getRegionAt(expr_node_idx);
+
+                if (regionContainsOffset(expr_region, target_offset)) {
+                    if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
+                        best_expr = found;
+                    }
+                }
+            }
+        }
+
+        // If we found a lookup expression, resolve it to a definition
+        if (best_expr) |expr_idx| {
+            const expr = module_env.store.getExpr(expr_idx);
+            switch (expr) {
+                .e_lookup_local => |lookup| {
+                    // Get the pattern's region - that's where it's defined
+                    const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
+                    const def_region = module_env.store.getRegionAt(pattern_node_idx);
+                    const range = self.regionToRange(module_env, def_region) orelse return null;
+                    return DefinitionResult{
+                        .uri = current_uri,
+                        .range = range,
+                    };
+                },
+                else => return null,
+            }
+        }
+
+        return null;
+    }
+
+    /// Find the narrowest lookup expression at the given offset
+    fn findLookupAtOffset(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        target_offset: u32,
+        best_size: *u32,
+    ) ?CIR.Expr.Idx {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const region = module_env.store.getRegionAt(node_idx);
+
+        if (!regionContainsOffset(region, target_offset)) {
+            return null;
+        }
+
+        const expr = module_env.store.getExpr(expr_idx);
+        var result: ?CIR.Expr.Idx = null;
+
+        // Check if this expression itself is a lookup
+        switch (expr) {
+            .e_lookup_local => {
+                const size = region.end.offset - region.start.offset;
+                if (size < best_size.*) {
+                    best_size.* = size;
+                    result = expr_idx;
+                }
+            },
+            .e_lookup_external => {
+                const size = region.end.offset - region.start.offset;
+                if (size < best_size.*) {
+                    best_size.* = size;
+                    result = expr_idx;
+                }
+            },
+            else => {},
+        }
+
+        // Recurse into child expressions
+        switch (expr) {
+            .e_lambda => |lambda| {
+                if (self.findLookupAtOffset(module_env, lambda.body, target_offset, best_size)) |found| {
+                    result = found;
+                }
+            },
+            .e_closure => |closure| {
+                if (self.findLookupAtOffset(module_env, closure.lambda_idx, target_offset, best_size)) |found| {
+                    result = found;
+                }
+            },
+            .e_block => |block| {
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt_parts = getStatementParts(stmt);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        if (self.findLookupAtOffset(module_env, stmt_expr, target_offset, best_size)) |found| {
+                            result = found;
+                        }
+                    }
+                }
+                if (self.findLookupAtOffset(module_env, block.final_expr, target_offset, best_size)) |found| {
+                    result = found;
+                }
+            },
+            .e_if => |if_expr| {
+                const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    if (self.findLookupAtOffset(module_env, branch.cond, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                    if (self.findLookupAtOffset(module_env, branch.body, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+                if (self.findLookupAtOffset(module_env, if_expr.final_else, target_offset, best_size)) |found| {
+                    result = found;
+                }
+            },
+            .e_call => |call| {
+                if (self.findLookupAtOffset(module_env, call.func, target_offset, best_size)) |found| {
+                    result = found;
+                }
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    if (self.findLookupAtOffset(module_env, arg, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+            },
+            .e_binop => |binop| {
+                if (self.findLookupAtOffset(module_env, binop.lhs, target_offset, best_size)) |found| {
+                    result = found;
+                }
+                if (self.findLookupAtOffset(module_env, binop.rhs, target_offset, best_size)) |found| {
+                    result = found;
+                }
+            },
+            .e_dot_access => |dot| {
+                // Check the receiver (e.g., 'trimmed' in 'trimmed.starts_with(...)')
+                if (self.findLookupAtOffset(module_env, dot.receiver, target_offset, best_size)) |found| {
+                    result = found;
+                }
+                // Check the arguments if present
+                if (dot.args) |args_span| {
+                    const args = module_env.store.sliceExpr(args_span);
+                    for (args) |arg| {
+                        if (self.findLookupAtOffset(module_env, arg, target_offset, best_size)) |found| {
+                            result = found;
+                        }
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return result;
     }
 
     /// Result of finding a type at an offset
