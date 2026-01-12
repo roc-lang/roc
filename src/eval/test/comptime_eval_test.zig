@@ -1148,20 +1148,15 @@ test "comptime eval - I8: -129 does not fit" {
 
 // Comprehensive numeric literal validation tests with error message verification
 
-/// Helper to extract error message from first comptime_eval_error problem
-fn getFirstComptimeEvalErrorMessage(problems: *check.problem.Store) ?[]const u8 {
-    for (problems.problems.items) |problem| {
-        if (problem == .comptime_eval_error) {
-            return problem.comptime_eval_error.error_name;
-        }
-    }
-    return null;
-}
-
 /// Helper to check if error message contains expected substring
 fn errorContains(problems: *check.problem.Store, expected: []const u8) bool {
-    if (getFirstComptimeEvalErrorMessage(problems)) |msg| {
-        return std.mem.indexOf(u8, msg, expected) != null;
+    for (problems.problems.items) |problem| {
+        switch (problem) {
+            .comptime_eval_error => |comptime_eval_error| {
+                return std.mem.indexOf(u8, problems.getExtraString(comptime_eval_error.error_name), expected) != null;
+            },
+            else => {},
+        }
     }
     return false;
 }
@@ -1183,7 +1178,7 @@ test "comptime eval - U8 valid max value" {
         for (result.problems.problems.items) |problem| {
             std.debug.print("  - {s}", .{@tagName(problem)});
             if (problem == .comptime_eval_error) {
-                std.debug.print(": {s}", .{problem.comptime_eval_error.error_name});
+                std.debug.print(": {s}", .{result.problems.getExtraString(problem.comptime_eval_error.error_name)});
             }
             std.debug.print("\n", .{});
         }
@@ -1684,7 +1679,7 @@ test "comptime eval - F32 valid" {
         for (result.problems.problems.items) |problem| {
             std.debug.print("  - {s}", .{@tagName(problem)});
             if (problem == .comptime_eval_error) {
-                std.debug.print(": {s}", .{problem.comptime_eval_error.error_name});
+                std.debug.print(": {s}", .{result.problems.getExtraString(problem.comptime_eval_error.error_name)});
             }
             std.debug.print("\n", .{});
         }
