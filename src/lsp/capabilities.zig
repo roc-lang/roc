@@ -25,6 +25,7 @@ pub const ServerCapabilities = struct {
     positionEncoding: []const u8 = "utf-16",
     textDocumentSync: ?TextDocumentSyncOptions = null,
     semanticTokensProvider: ?SemanticTokensOptions = null,
+    hoverProvider: bool = false,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -63,5 +64,6 @@ pub fn buildCapabilities() ServerCapabilities {
             },
             .full = true,
         },
+        .hoverProvider = true,
     };
 }

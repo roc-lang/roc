@@ -7,6 +7,9 @@ const reporting = @import("reporting");
 const build_options = @import("build_options");
 const Filesystem = @import("fs").Filesystem;
 const Allocator = std.mem.Allocator;
+const base = @import("base");
+const can = @import("can");
+const types = @import("types");
 
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
@@ -15,6 +18,10 @@ const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
 const FileProvider = compile.package.FileProvider;
+const ModuleEnv = can.ModuleEnv;
+const CIR = can.CIR;
+const Region = base.Region;
+const TypeWriter = types.TypeWriter;
 
 /// Flags allowing granular debugging
 pub const DebugFlags = struct {
@@ -303,4 +310,274 @@ pub const SyntaxChecker = struct {
             return null;
         }
     };
+
+    /// Range in LSP coordinates
+    pub const LspRange = struct {
+        start_line: u32,
+        start_col: u32,
+        end_line: u32,
+        end_col: u32,
+    };
+
+    /// Result of a hover query containing type information
+    pub const HoverResult = struct {
+        type_str: []u8,
+        range: ?LspRange,
+    };
+
+    /// Get type information at a specific position in a document.
+    /// Returns the type as a formatted string, or null if no type info is available.
+    pub fn getTypeAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+    ) !?HoverResult {
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
+        defer self.allocator.free(absolute_path);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var env = try self.resetBuildEnv();
+
+        var provider_state = OverrideProvider{
+            .override_path = absolute_path,
+            .override_text = override_text,
+        };
+        const provider: ?FileProvider = if (override_text != null) .{
+            .ctx = &provider_state,
+            .read = OverrideProvider.read,
+        } else null;
+        env.setFileProvider(provider);
+        defer env.setFileProvider(null);
+
+        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
+        const dir_owned = try self.allocator.dupe(u8, dir_slice);
+        defer self.allocator.free(dir_owned);
+        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
+        defer if (prev_cwd) |cwd| {
+            std.process.changeCurDir(cwd) catch {};
+            self.allocator.free(cwd);
+        };
+        std.process.changeCurDir(dir_owned) catch {};
+
+        self.logDebug(.build, "hover: building {s}", .{absolute_path});
+        env.build(absolute_path) catch |err| {
+            self.logDebug(.build, "hover: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+            return null;
+        };
+
+        // Drain reports but ignore them for hover
+        const drained = env.drainReports() catch return null;
+        defer self.freeDrained(drained);
+
+        // Get any available scheduler and find the root module
+        // Try "app" first, then fall back to iterating through all schedulers
+        const app_sched = env.schedulers.get("app") orelse blk: {
+            // Try to find any scheduler with a valid root module
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env != null) {
+                        break :blk sched;
+                    }
+                }
+            }
+            return null;
+        };
+        const root_module = app_sched.getRootModule() orelse return null;
+        const module_env = if (root_module.env) |*e| e else return null;
+
+        // Convert LSP position (0-based line/col) to byte offset
+        // LSP uses 0-based line and UTF-16 code units for character
+        const target_offset = self.positionToOffset(module_env, line, character) orelse return null;
+
+        // Find the expression at this position
+        const result = self.findTypeAtOffset(module_env, target_offset) orelse return null;
+
+        // Format the type as a string
+        var type_writer = try module_env.initTypeWriter();
+        defer type_writer.deinit();
+
+        try type_writer.write(result.type_var, .one_line);
+        const type_str = type_writer.get();
+
+        // Create markdown-formatted output
+        const markdown = try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
+
+        // Convert the region back to LSP positions
+        const range = self.regionToRange(module_env, result.region);
+
+        return HoverResult{
+            .type_str = markdown,
+            .range = range,
+        };
+    }
+
+    /// Convert LSP position (line, character) to byte offset in source
+    fn positionToOffset(self: *SyntaxChecker, module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
+        _ = self;
+        const line_starts = module_env.getLineStartsAll();
+        if (line >= line_starts.len) return null;
+
+        const line_start = line_starts[line];
+        // For simplicity, treat character as byte offset within line
+        // (proper UTF-16 handling would require more work)
+        return line_start + character;
+    }
+
+    /// Convert a Region to LSP range (line/character positions)
+    fn regionToRange(self: *SyntaxChecker, module_env: *ModuleEnv, region: Region) ?LspRange {
+        _ = self;
+        const line_starts = module_env.getLineStartsAll();
+        if (line_starts.len == 0) return null;
+
+        const start_offset = region.start.offset;
+        const end_offset = region.end.offset;
+
+        // Find line for start offset
+        var start_line: u32 = 0;
+        for (line_starts, 0..) |ls, i| {
+            if (ls > start_offset) break;
+            start_line = @intCast(i);
+        }
+
+        // Find line for end offset
+        var end_line: u32 = 0;
+        for (line_starts, 0..) |ls, i| {
+            if (ls > end_offset) break;
+            end_line = @intCast(i);
+        }
+
+        const start_col = start_offset - line_starts[start_line];
+        const end_col = end_offset - line_starts[end_line];
+
+        return .{
+            .start_line = start_line,
+            .start_col = start_col,
+            .end_line = end_line,
+            .end_col = end_col,
+        };
+    }
+
+    /// Result of finding a type at an offset
+    const TypeAtOffsetResult = struct {
+        type_var: types.Var,
+        region: Region,
+    };
+
+    /// Find the type variable for the expression at the given byte offset.
+    /// Traverses all expressions in the module to find the narrowest one containing the offset.
+    fn findTypeAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32) ?TypeAtOffsetResult {
+        var best_result: ?TypeAtOffsetResult = null;
+        var best_size: u32 = std.math.maxInt(u32);
+
+        // Iterate through all definitions in the module
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            // Check the expression
+            const expr_idx = def.expr;
+            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+            const expr_region = module_env.store.getRegionAt(expr_node_idx);
+
+            if (regionContainsOffset(expr_region, target_offset)) {
+                const size = expr_region.end.offset - expr_region.start.offset;
+                if (size < best_size) {
+                    best_size = size;
+                    best_result = .{
+                        .type_var = ModuleEnv.varFrom(expr_idx),
+                        .region = expr_region,
+                    };
+                }
+
+                // Also check nested expressions within this definition
+                if (self.findNestedTypeAtOffset(module_env, expr_idx, target_offset, &best_size)) |nested| {
+                    best_result = nested;
+                }
+            }
+
+            // Check the pattern
+            const pattern_idx = def.pattern;
+            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+            const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
+
+            if (regionContainsOffset(pattern_region, target_offset)) {
+                const size = pattern_region.end.offset - pattern_region.start.offset;
+                if (size < best_size) {
+                    best_size = size;
+                    best_result = .{
+                        .type_var = ModuleEnv.varFrom(pattern_idx),
+                        .region = pattern_region,
+                    };
+                }
+            }
+        }
+
+        return best_result;
+    }
+
+    /// Recursively find the narrowest expression containing the target offset
+    fn findNestedTypeAtOffset(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        target_offset: u32,
+        best_size: *u32,
+    ) ?TypeAtOffsetResult {
+        const expr = module_env.store.getExpr(expr_idx);
+        var result: ?TypeAtOffsetResult = null;
+
+        // Get child expressions based on the expression type
+        const child_exprs = getChildExprs(expr);
+
+        for (child_exprs) |child_idx| {
+            const child_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(child_idx));
+            const child_region = module_env.store.getRegionAt(child_node_idx);
+
+            if (regionContainsOffset(child_region, target_offset)) {
+                const size = child_region.end.offset - child_region.start.offset;
+                if (size < best_size.*) {
+                    best_size.* = size;
+                    result = .{
+                        .type_var = ModuleEnv.varFrom(child_idx),
+                        .region = child_region,
+                    };
+                }
+
+                // Recurse into this child
+                if (self.findNestedTypeAtOffset(module_env, child_idx, target_offset, best_size)) |nested| {
+                    result = nested;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// Check if a region contains the given byte offset
+    fn regionContainsOffset(region: Region, offset: u32) bool {
+        return offset >= region.start.offset and offset < region.end.offset;
+    }
+
+    /// Get child expression indices from an expression (for traversal)
+    /// This is a simplified version that returns empty for now - a full implementation
+    /// would traverse into nested expressions like function bodies, if branches, etc.
+    fn getChildExprs(expr: CIR.Expr) []const CIR.Expr.Idx {
+        _ = expr;
+        // For the initial implementation, we only look at top-level expressions
+        // A full implementation would extract child expressions from:
+        // - e_call args
+        // - e_if branches
+        // - e_when branches
+        // - e_lambda body
+        // - etc.
+        return &.{};
+    }
 };

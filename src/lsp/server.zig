@@ -22,6 +22,7 @@ const shutdown_handler_mod = @import("handlers/shutdown.zig");
 const did_open_handler_mod = @import("handlers/did_open.zig");
 const did_change_handler_mod = @import("handlers/did_change.zig");
 const semantic_tokens_handler_mod = @import("handlers/semantic_tokens.zig");
+const hover_handler_mod = @import("handlers/hover.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -37,10 +38,12 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         const InitializeHandler = initialize_handler_mod.handler(Self);
         const ShutdownHandler = shutdown_handler_mod.handler(Self);
         const SemanticTokensHandler = semantic_tokens_handler_mod.handler(Self);
+        const HoverHandler = hover_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
             .{ "textDocument/semanticTokens/full", &SemanticTokensHandler.call },
+            .{ "textDocument/hover", &HoverHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
