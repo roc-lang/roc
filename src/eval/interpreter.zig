@@ -5901,6 +5901,234 @@ pub const Interpreter = struct {
         return error.StackOverflow;
     }
 
+    /// The canonical error message for infinite while loops detected at compile time.
+    const infinite_while_loop_message = "This while loop's condition evaluated to True at compile time, " ++
+        "and the loop body has no break or return statement, " ++
+        "which would cause an infinite loop. " ++
+        "Use a mutable variable for the condition, or add a break/return.";
+
+    /// Check if an expression (typically a loop body) contains a break or return statement
+    /// at the current loop nesting level. Does NOT count break/return statements inside
+    /// nested while/for loops, since those exit the inner loop, not the outer one.
+    fn bodyHasExitStatement(self: *const Interpreter, expr_idx: can.CIR.Expr.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+
+        return switch (expr) {
+            // Block: check all statements, then the final expression
+            .e_block => |block| {
+                for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    if (self.statementHasExitStatement(stmt_idx)) {
+                        return true;
+                    }
+                }
+                return self.bodyHasExitStatement(block.final_expr);
+            },
+
+            // If expression: check all branch bodies and the final else
+            .e_if => |if_expr| {
+                for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getIfBranch(branch_idx);
+                    if (self.bodyHasExitStatement(branch.body)) {
+                        return true;
+                    }
+                }
+                return self.bodyHasExitStatement(if_expr.final_else);
+            },
+
+            // Match expression: check all branch values
+            .e_match => |match_expr| {
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getMatchBranch(branch_idx);
+                    if (self.bodyHasExitStatement(branch.value)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Return expression is an exit
+            .e_return => true,
+
+            // For other expressions, no exit statement at this level
+            else => false,
+        };
+    }
+
+    /// Check if a statement contains a break or return at the current loop nesting level.
+    fn statementHasExitStatement(self: *const Interpreter, stmt_idx: can.CIR.Statement.Idx) bool {
+        const stmt = self.env.store.getStatement(stmt_idx);
+
+        return switch (stmt) {
+            // Break and return are exit statements
+            .s_break => true,
+            .s_return => true,
+
+            // Nested while/for loops: do NOT recurse - break inside exits the inner loop
+            .s_while, .s_for => false,
+
+            // Declaration statements: check the expression
+            .s_decl => |decl| self.bodyHasExitStatement(decl.expr),
+            .s_decl_gen => |decl| self.bodyHasExitStatement(decl.expr),
+            .s_var => |var_stmt| self.bodyHasExitStatement(var_stmt.expr),
+            .s_reassign => |reassign| self.bodyHasExitStatement(reassign.expr),
+
+            // Expression statement: check the expression
+            .s_expr => |expr_stmt| self.bodyHasExitStatement(expr_stmt.expr),
+
+            // Expect and dbg: check their body/expr
+            .s_expect => |expect| self.bodyHasExitStatement(expect.body),
+            .s_dbg => |dbg| self.bodyHasExitStatement(dbg.expr),
+
+            // Other statements don't contain exit statements
+            .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => false,
+        };
+    }
+
+    /// Check if an expression involves any mutable variables (variables with names starting with '$').
+    /// This is used to determine if a while loop condition could potentially change between iterations.
+    fn conditionInvolvesMutableVariable(self: *const Interpreter, expr_idx: can.CIR.Expr.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+
+        return switch (expr) {
+            // Local lookup: check if the variable name starts with '$' (mutable variable convention)
+            .e_lookup_local => |lookup| {
+                const pattern = self.env.store.getPattern(lookup.pattern_idx);
+                if (pattern == .assign) {
+                    const ident_str = self.env.getIdent(pattern.assign.ident);
+                    if (ident_str.len > 0 and ident_str[0] == '$') {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Binary operation: check both sides
+            .e_binop => |binop| {
+                return self.conditionInvolvesMutableVariable(binop.lhs) or
+                    self.conditionInvolvesMutableVariable(binop.rhs);
+            },
+
+            // Unary operations: check the operand
+            .e_unary_minus => |unop| self.conditionInvolvesMutableVariable(unop.expr),
+            .e_unary_not => |unop| self.conditionInvolvesMutableVariable(unop.expr),
+
+            // Function call: check function and all arguments
+            .e_call => |call| {
+                if (self.conditionInvolvesMutableVariable(call.func)) {
+                    return true;
+                }
+                for (self.env.store.sliceExpr(call.args)) |arg_idx| {
+                    if (self.conditionInvolvesMutableVariable(arg_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // If expression: check condition and all branches
+            .e_if => |if_expr| {
+                for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getIfBranch(branch_idx);
+                    if (self.conditionInvolvesMutableVariable(branch.cond) or
+                        self.conditionInvolvesMutableVariable(branch.body))
+                    {
+                        return true;
+                    }
+                }
+                return self.conditionInvolvesMutableVariable(if_expr.final_else);
+            },
+
+            // Match expression: check condition and all branches
+            .e_match => |match_expr| {
+                if (self.conditionInvolvesMutableVariable(match_expr.cond)) {
+                    return true;
+                }
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getMatchBranch(branch_idx);
+                    if (self.conditionInvolvesMutableVariable(branch.value)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Block: check all statements and final expression
+            .e_block => |block| {
+                for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    if (self.statementInvolvesMutableVariable(stmt_idx)) {
+                        return true;
+                    }
+                }
+                return self.conditionInvolvesMutableVariable(block.final_expr);
+            },
+
+            // Dot access: check receiver and arguments
+            .e_dot_access => |access| {
+                if (self.conditionInvolvesMutableVariable(access.receiver)) {
+                    return true;
+                }
+                if (access.args) |args_span| {
+                    for (self.env.store.sliceExpr(args_span)) |arg_idx| {
+                        if (self.conditionInvolvesMutableVariable(arg_idx)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            },
+
+            // Literals and other expressions don't involve mutable variables
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_str,
+            .e_str_segment,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_crash,
+            .e_runtime_error,
+            => false,
+
+            // External lookups are immutable
+            .e_lookup_external, .e_lookup_required => false,
+
+            // For other expressions, be conservative and return false (don't involve mutable vars)
+            else => false,
+        };
+    }
+
+    /// Check if a statement involves any mutable variables.
+    fn statementInvolvesMutableVariable(self: *const Interpreter, stmt_idx: can.CIR.Statement.Idx) bool {
+        const stmt = self.env.store.getStatement(stmt_idx);
+
+        return switch (stmt) {
+            .s_decl => |decl| self.conditionInvolvesMutableVariable(decl.expr),
+            .s_decl_gen => |decl| self.conditionInvolvesMutableVariable(decl.expr),
+            .s_var => |var_stmt| self.conditionInvolvesMutableVariable(var_stmt.expr),
+            .s_reassign => |reassign| self.conditionInvolvesMutableVariable(reassign.expr),
+            .s_expr => |expr_stmt| self.conditionInvolvesMutableVariable(expr_stmt.expr),
+            .s_expect => |expect| self.conditionInvolvesMutableVariable(expect.body),
+            .s_dbg => |dbg| self.conditionInvolvesMutableVariable(dbg.expr),
+            .s_return => |ret| self.conditionInvolvesMutableVariable(ret.expr),
+            .s_while => |while_stmt| {
+                return self.conditionInvolvesMutableVariable(while_stmt.cond) or
+                    self.conditionInvolvesMutableVariable(while_stmt.body);
+            },
+            .s_for => |for_stmt| {
+                return self.conditionInvolvesMutableVariable(for_stmt.expr) or
+                    self.conditionInvolvesMutableVariable(for_stmt.body);
+            },
+            .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error, .s_break => false,
+        };
+    }
+
     fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
         const source_bytes = self.env.getSource(region);
@@ -18590,6 +18818,19 @@ pub const Interpreter = struct {
                 // While loop: condition has been evaluated
                 const cond_value = value_stack.pop() orelse return error.Crash;
                 const cond_is_true = self.boolValueEquals(true, cond_value, roc_ops);
+
+                // Check for infinite loop: if condition is True, doesn't involve mutable variables,
+                // and the body has no break/return, this would loop forever at compile time.
+                if (cond_is_true) {
+                    const involves_mutable = self.conditionInvolvesMutableVariable(wl.cond);
+                    if (!involves_mutable) {
+                        const has_exit = self.bodyHasExitStatement(wl.body);
+                        if (!has_exit) {
+                            self.triggerCrash(infinite_while_loop_message, false, roc_ops);
+                            return error.Crash;
+                        }
+                    }
+                }
 
                 if (!cond_is_true) {
                     // Loop complete, continue with remaining statements
