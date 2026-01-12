@@ -688,6 +688,25 @@ pub const SyntaxChecker = struct {
                     result = found;
                 }
             },
+            .e_match => |match_expr| {
+                // Check the condition (e.g., 'port' in 'match WebServer.listen!(port)')
+                if (self.findLookupAtOffset(module_env, match_expr.cond, target_offset, best_size)) |found| {
+                    result = found;
+                }
+                // Check all branches
+                const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    if (self.findLookupAtOffset(module_env, branch.value, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                    if (branch.guard) |guard| {
+                        if (self.findLookupAtOffset(module_env, guard, target_offset, best_size)) |found| {
+                            result = found;
+                        }
+                    }
+                }
+            },
             .e_call => |call| {
                 if (self.findLookupAtOffset(module_env, call.func, target_offset, best_size)) |found| {
                     result = found;
@@ -926,6 +945,25 @@ pub const SyntaxChecker = struct {
                 }
                 if (self.checkExprAndRecurse(module_env, if_expr.final_else, target_offset, best_size)) |r| {
                     result = r;
+                }
+            },
+            .e_match => |match_expr| {
+                // Check the condition
+                if (self.checkExprAndRecurse(module_env, match_expr.cond, target_offset, best_size)) |r| {
+                    result = r;
+                }
+                // Check all branches
+                const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    if (self.checkExprAndRecurse(module_env, branch.value, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                    if (branch.guard) |guard| {
+                        if (self.checkExprAndRecurse(module_env, guard, target_offset, best_size)) |r| {
+                            result = r;
+                        }
+                    }
                 }
             },
             .e_call => |call| {
