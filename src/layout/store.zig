@@ -1384,37 +1384,56 @@ pub const Store = struct {
             } else if (self.work.in_progress_vars.contains(current.var_)) {
                 // Cycle detection: this var is already being processed, indicating a recursive type.
                 //
-                // INVARIANT: Recursive types are only valid if there's a heap-allocating container
-                // (List or Box) somewhere in the recursion path. This breaks the infinite size that
-                // would otherwise result from direct recursion.
-                //
-                // We must check the ENTIRE container stack, not just the last container, because
-                // the recursive reference may be nested inside other structures. For example:
-                //   Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
-                //   parse_block : ... => Try((List(Statement), U64), Str)
-                //
-                // When processing this, the container stack might be:
-                //   Try -> tuple -> List -> Statement -> tag_union -> ForLoop -> List -> Statement
-                //
-                // When we hit the recursive Statement reference, the last container is tag_union,
-                // but there IS a List container earlier in the stack, so the recursion is valid.
-                var inside_heap_container = false;
-                for (self.work.pending_containers.slice().items(.container)) |container| {
-                    if (container == .box or container == .list) {
-                        inside_heap_container = true;
-                        break;
+                // Function types are an exception: they always have a fixed size (closure pointer)
+                // regardless of recursion and regardless of what containers are pending.
+                // This handles cases like recursive closures that capture themselves:
+                //   flatten_aux = |l, acc| { ... flatten_aux(rest, acc) ... }
+                if (current.desc.content == .structure) {
+                    const flat = current.desc.content.structure;
+                    switch (flat) {
+                        .fn_pure, .fn_effectful, .fn_unbound => {
+                            // Function types always have closure layout - no infinite size issue
+                            const empty_captures_idx = try self.getEmptyRecordLayout();
+                            layout_idx = try self.insertLayout(Layout.closure(empty_captures_idx));
+                            skip_layout_computation = true;
+                        },
+                        else => {},
                     }
                 }
 
-                if (inside_heap_container) {
-                    // Valid recursive reference - heap allocation breaks the infinite size
-                    layout_idx = try self.insertLayout(Layout.opaquePtr());
-                    skip_layout_computation = true;
-                } else {
-                    // Invalid: recursive type without heap allocation would have infinite size.
-                    // This is a type error - the user defined a directly recursive type without
-                    // wrapping it in List or Box.
-                    return LayoutError.TypeContainedMismatch;
+                if (!skip_layout_computation) {
+                    // INVARIANT: Recursive types are only valid if there's a heap-allocating container
+                    // (List or Box) somewhere in the recursion path. This breaks the infinite size that
+                    // would otherwise result from direct recursion.
+                    //
+                    // We must check the ENTIRE container stack, not just the last container, because
+                    // the recursive reference may be nested inside other structures. For example:
+                    //   Statement := [ForLoop(List(Statement)), IfStatement(List(Statement))]
+                    //   parse_block : ... => Try((List(Statement), U64), Str)
+                    //
+                    // When processing this, the container stack might be:
+                    //   Try -> tuple -> List -> Statement -> tag_union -> ForLoop -> List -> Statement
+                    //
+                    // When we hit the recursive Statement reference, the last container is tag_union,
+                    // but there IS a List container earlier in the stack, so the recursion is valid.
+                    var inside_heap_container = false;
+                    for (self.work.pending_containers.slice().items(.container)) |container| {
+                        if (container == .box or container == .list) {
+                            inside_heap_container = true;
+                            break;
+                        }
+                    }
+
+                    if (inside_heap_container) {
+                        // Valid recursive reference - heap allocation breaks the infinite size
+                        layout_idx = try self.insertLayout(Layout.opaquePtr());
+                        skip_layout_computation = true;
+                    } else {
+                        // Invalid: recursive type without heap allocation would have infinite size.
+                        // This is a type error - the user defined a directly recursive type without
+                        // wrapping it in List or Box.
+                        return LayoutError.TypeContainedMismatch;
+                    }
                 }
             } else if (current.desc.content == .structure) blk: {
                 // Early cycle detection for nominal types from other modules.

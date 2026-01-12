@@ -13509,8 +13509,17 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
-        std.debug.assert(closure_layout.tag == .closure);
+        var closure_layout = try self.getRuntimeLayout(rt_var);
+        if (closure_layout.tag != .closure) {
+            // For recursive closures, the type translation may return a flex placeholder
+            // that hasn't been resolved to a function type yet. In evalLambda, we KNOW
+            // we need a closure layout, so create one with empty captures.
+            // This handles cases like:
+            //   flatten_aux = |l, acc| { ... flatten_aux(rest, acc) ... }
+            // where flatten_aux's type involves recursive types that haven't fully resolved.
+            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            closure_layout = layout.Layout.closure(empty_captures_idx);
+        }
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
