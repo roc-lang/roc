@@ -274,6 +274,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Minimal repro for issue #8897 panic",
     },
     .{
+        .roc_file = "test/fx/issue8898.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
+    },
+    .{
         .roc_file = "test/fx/static_dispatch_platform_module.roc",
         .io_spec = "1>Result: start-middle-end",
         .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",

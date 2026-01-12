@@ -11578,13 +11578,28 @@ pub const Interpreter = struct {
                     // where vars[0] is backing and vars[1] is the element type.
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
+                    //
+                    // In polymorphic contexts (e.g., a for loop inside a polymorphic function),
+                    // the list type may still be a flex variable if it hasn't been resolved to
+                    // a concrete List(elem) type. In that case, we get the element type from
+                    // the first element's compile-time type.
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
-                    std.debug.assert(list_resolved.desc.content == .structure);
-                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
-                    const nom = list_resolved.desc.content.structure.nominal_type;
-                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
-                    const elem_rt_var = vars[1];
+                    const elem_rt_var = blk: {
+                        if (list_resolved.desc.content == .structure) {
+                            if (list_resolved.desc.content.structure == .nominal_type) {
+                                const nom = list_resolved.desc.content.structure.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                if (vars.len == 2) {
+                                    // vars[0] = backing, vars[1] = element type
+                                    break :blk vars[1];
+                                }
+                            }
+                        }
+                        // Polymorphic case: list type is flex/rigid, get element type from first element
+                        const first_elem = elems[0];
+                        const first_elem_ct_var = can.ModuleEnv.varFrom(first_elem);
+                        break :blk try self.translateTypeVar(self.env, first_elem_ct_var);
+                    };
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
