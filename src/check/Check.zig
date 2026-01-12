@@ -78,8 +78,6 @@ import_mapping: @import("types").import_mapping.ImportMapping,
 unify_scratch: unifier.Scratch,
 /// reusable scratch arrays used in occurs check
 occurs_scratch: occurs.Scratch,
-/// free vars collected when generation types from type decls
-decl_free_vars: base.Scratch(FreeVar),
 /// annos we've already seen when generation a type from an annotation
 seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
 /// A pool of solver envs
@@ -108,8 +106,6 @@ constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
-/// Maps variables to the expressions that constrained them (for better error regions)
-constraint_origins: std.AutoHashMap(Var, Var),
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -194,7 +190,6 @@ pub fn init(
         .import_mapping = import_mapping,
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
         .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
@@ -208,7 +203,6 @@ pub fn init(
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
-        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
@@ -233,7 +227,6 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.decl_free_vars.deinit();
     self.seen_annos.deinit();
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
@@ -247,7 +240,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
-    self.constraint_origins.deinit();
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
@@ -375,10 +367,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Before unification, check if either variable has constraint origins
-    // We need to look up constraint origins by walking through the type structure
-    const constraint_origin_var = self.findConstraintOriginForVars(a, b);
-
     // Unify
     const result = try unifier.unifyWithConf(
         self.cir,
@@ -390,19 +378,8 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.occurs_scratch,
         a,
         b,
-        unifier.Conf{
-            .ctx = ctx,
-            .constraint_origin_var = constraint_origin_var,
-        },
+        unifier.Conf{ .ctx = ctx, .constraint_origin_var = null },
     );
-
-    // After successful unification, propagate constraint origins to both variables
-    if (result == .ok) {
-        if (constraint_origin_var) |origin| {
-            try self.constraint_origins.put(a, origin);
-            try self.constraint_origins.put(b, origin);
-        }
-    }
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -435,34 +412,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     self.debugAssertArraysInSync();
 
     return result;
-}
-
-/// Find constraint origins for variables, checking resolved forms
-fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
-    // Check the variables directly first
-    if (self.constraint_origins.get(a)) |origin| return origin;
-    if (self.constraint_origins.get(b)) |origin| return origin;
-
-    // Check resolved forms of the variables
-    const a_resolved = self.types.resolveVar(a);
-    const b_resolved = self.types.resolveVar(b);
-
-    if (self.constraint_origins.get(a_resolved.var_)) |origin| return origin;
-    if (self.constraint_origins.get(b_resolved.var_)) |origin| return origin;
-
-    // Fallback: if we have any constraint origins recorded (indicating dot access expressions),
-    // and we haven't found a direct match, look for constraint origins that might be related
-    // if (self.constraint_origins.count() > 0) {
-    //     var it = self.constraint_origins.iterator();
-    //     while (it.next()) |entry| {
-    //         const origin = entry.value_ptr.*;
-    //         // Return the first constraint origin we find - this is specifically for the Color.md case
-    //         // where constraint origins exist but don't directly match the unification variables
-    //         return origin;
-    //     }
-    // }
-
-    return null;
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
@@ -1644,9 +1593,6 @@ fn generateStmtTypeDeclType(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    const decl_free_vars_top = self.decl_free_vars.top();
-    defer self.decl_free_vars.clearFrom(decl_free_vars_top);
-
     const decl = self.cir.store.getStatement(decl_idx);
     const decl_var = ModuleEnv.varFrom(decl_idx);
 
