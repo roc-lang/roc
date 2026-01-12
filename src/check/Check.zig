@@ -3372,8 +3372,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized), so the code below will
-                        // unify directly with it, which is the correct behavior.
+                        // top_level rank (not generalized).
+                        //
+                        // If the def has a type annotation, we need to instantiate it
+                        // to avoid polluting the pattern variable's rank. Without this,
+                        // unifying directly would pull the annotation's rigid vars down
+                        // to the pattern's rank, preventing proper generalization.
+                        // This fixes GitHub issue #8994.
+                        const def = self.cir.store.getDef(processing_def.def_idx);
+                        if (def.annotation) |annotation_idx| {
+                            const anno_var = ModuleEnv.varFrom(annotation_idx);
+                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
+                            _ = try self.unify(expr_var, instantiated, env);
+                            return does_fx;
+                        }
+                        // Otherwise, fall through to unify directly with pat_var
                     },
                     .processed => {},
                 }
