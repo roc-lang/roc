@@ -3325,3 +3325,35 @@ test "check type - range inferred" {
         ,
     );
 }
+
+test "check type - issue8934 recursive nominal type unification" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8934
+    // The bug was that the compiler would stack overflow when type-checking
+    // recursive nominal types with nested recursive calls, like:
+    //   Node(a) := [One(a), Many(List(Node(a)))]
+    //   flatten_aux(rest, flatten_aux(e, acc))
+    //
+    // The root cause was that unifyNominalType didn't do an early merge before
+    // unifying type arguments, causing infinite recursion when the nominal type
+    // referenced itself through the tag union backing type.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Node(a) := [One(a), Many(List(Node(a)))]
+        \\
+        \\flatten : List(Node(a)) -> List(a)
+        \\flatten = |input| {
+        \\  flatten_aux = |l, acc| {
+        \\    match l {
+        \\      [] => acc
+        \\      [One(e), .. as rest] => flatten_aux(rest, List.append(acc, e))
+        \\      [Many(e), .. as rest] => flatten_aux(rest, flatten_aux(e, acc))
+        \\    }
+        \\  }
+        \\  flatten_aux(input, [])
+        \\}
+    ;
+    // The key thing is that the compiler should NOT crash with stack overflow.
+    // It should successfully type-check the file.
+    try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
