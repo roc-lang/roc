@@ -586,6 +586,17 @@ pub const SyntaxChecker = struct {
                     }
                 }
             }
+
+            if (stmt_parts.expr2) |expr_idx| {
+                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_region = module_env.store.getRegionAt(expr_node_idx);
+
+                if (regionContainsOffset(expr_region, target_offset)) {
+                    if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
+                        best_expr = found;
+                    }
+                }
+            }
         }
 
         // If we found a lookup expression, resolve it to a definition
@@ -664,6 +675,11 @@ pub const SyntaxChecker = struct {
                     const stmt = module_env.store.getStatement(stmt_idx);
                     const stmt_parts = getStatementParts(stmt);
                     if (stmt_parts.expr) |stmt_expr| {
+                        if (self.findLookupAtOffset(module_env, stmt_expr, target_offset, best_size)) |found| {
+                            result = found;
+                        }
+                    }
+                    if (stmt_parts.expr2) |stmt_expr| {
                         if (self.findLookupAtOffset(module_env, stmt_expr, target_offset, best_size)) |found| {
                             result = found;
                         }
@@ -829,6 +845,27 @@ pub const SyntaxChecker = struct {
                 }
             }
 
+            if (stmt_parts.expr2) |expr_idx| {
+                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_region = module_env.store.getRegionAt(expr_node_idx);
+
+                if (regionContainsOffset(expr_region, target_offset)) {
+                    const size = expr_region.end.offset - expr_region.start.offset;
+                    if (size < best_size) {
+                        best_size = size;
+                        best_result = .{
+                            .type_var = ModuleEnv.varFrom(expr_idx),
+                            .region = expr_region,
+                        };
+                    }
+
+                    // Also check nested expressions within this statement
+                    if (self.findNestedTypeAtOffset(module_env, expr_idx, target_offset, &best_size)) |nested| {
+                        best_result = nested;
+                    }
+                }
+            }
+
             if (stmt_parts.pattern) |pattern_idx| {
                 const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
                 const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
@@ -853,28 +890,30 @@ pub const SyntaxChecker = struct {
     const StatementParts = struct {
         pattern: ?CIR.Pattern.Idx,
         expr: ?CIR.Expr.Idx,
+        /// Second expression for statements that have multiple (e.g., while has cond + body)
+        expr2: ?CIR.Expr.Idx,
     };
 
     fn getStatementParts(stmt: CIR.Statement) StatementParts {
         return switch (stmt) {
-            .s_decl => |d| .{ .pattern = d.pattern, .expr = d.expr },
-            .s_decl_gen => |d| .{ .pattern = d.pattern, .expr = d.expr },
-            .s_var => |d| .{ .pattern = d.pattern_idx, .expr = d.expr },
-            .s_reassign => |d| .{ .pattern = d.pattern_idx, .expr = d.expr },
-            .s_expr => |e| .{ .pattern = null, .expr = e.expr },
-            .s_for => |f| .{ .pattern = f.patt, .expr = f.expr },
-            .s_while => |w| .{ .pattern = null, .expr = w.cond },
-            .s_dbg => |d| .{ .pattern = null, .expr = d.expr },
-            .s_expect => |e| .{ .pattern = null, .expr = e.body },
-            .s_crash => |_| .{ .pattern = null, .expr = null },
-            .s_break => .{ .pattern = null, .expr = null },
-            .s_return => |r| .{ .pattern = null, .expr = r.expr },
-            .s_import => |_| .{ .pattern = null, .expr = null },
-            .s_alias_decl => |_| .{ .pattern = null, .expr = null },
-            .s_nominal_decl => |_| .{ .pattern = null, .expr = null },
-            .s_type_anno => |_| .{ .pattern = null, .expr = null },
-            .s_type_var_alias => |_| .{ .pattern = null, .expr = null },
-            .s_runtime_error => |_| .{ .pattern = null, .expr = null },
+            .s_decl => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
+            .s_decl_gen => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
+            .s_var => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
+            .s_reassign => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
+            .s_expr => |e| .{ .pattern = null, .expr = e.expr, .expr2 = null },
+            .s_for => |f| .{ .pattern = f.patt, .expr = f.expr, .expr2 = f.body },
+            .s_while => |w| .{ .pattern = null, .expr = w.cond, .expr2 = w.body },
+            .s_dbg => |d| .{ .pattern = null, .expr = d.expr, .expr2 = null },
+            .s_expect => |e| .{ .pattern = null, .expr = e.body, .expr2 = null },
+            .s_crash => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_break => .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_return => |r| .{ .pattern = null, .expr = r.expr, .expr2 = null },
+            .s_import => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_alias_decl => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_nominal_decl => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_type_anno => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_type_var_alias => |_| .{ .pattern = null, .expr = null, .expr2 = null },
+            .s_runtime_error => |_| .{ .pattern = null, .expr = null, .expr2 = null },
         };
     }
 
@@ -906,6 +945,12 @@ pub const SyntaxChecker = struct {
                     const stmt_parts = getStatementParts(stmt);
 
                     if (stmt_parts.expr) |stmt_expr| {
+                        if (self.checkExprAndRecurse(module_env, stmt_expr, target_offset, best_size)) |r| {
+                            result = r;
+                        }
+                    }
+
+                    if (stmt_parts.expr2) |stmt_expr| {
                         if (self.checkExprAndRecurse(module_env, stmt_expr, target_offset, best_size)) |r| {
                             result = r;
                         }
