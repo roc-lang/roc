@@ -608,50 +608,168 @@ pub const SyntaxChecker = struct {
         const expr = module_env.store.getExpr(expr_idx);
         var result: ?TypeAtOffsetResult = null;
 
-        // Get child expressions based on the expression type
-        const child_exprs = getChildExprs(expr);
+        switch (expr) {
+            .e_lambda => |lambda| {
+                // Check lambda body
+                result = self.checkExprAndRecurse(module_env, lambda.body, target_offset, best_size);
+            },
+            .e_closure => |closure| {
+                // Closure contains a reference to the lambda - check that
+                result = self.checkExprAndRecurse(module_env, closure.lambda_idx, target_offset, best_size);
+            },
+            .e_block => |block| {
+                // Check statements in the block
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt_parts = getStatementParts(stmt);
 
-        for (child_exprs) |child_idx| {
-            const child_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(child_idx));
-            const child_region = module_env.store.getRegionAt(child_node_idx);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        if (self.checkExprAndRecurse(module_env, stmt_expr, target_offset, best_size)) |r| {
+                            result = r;
+                        }
+                    }
 
-            if (regionContainsOffset(child_region, target_offset)) {
-                const size = child_region.end.offset - child_region.start.offset;
-                if (size < best_size.*) {
-                    best_size.* = size;
-                    result = .{
-                        .type_var = ModuleEnv.varFrom(child_idx),
-                        .region = child_region,
-                    };
+                    if (stmt_parts.pattern) |pattern_idx| {
+                        const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+                        const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
+                        if (regionContainsOffset(pattern_region, target_offset)) {
+                            const size = pattern_region.end.offset - pattern_region.start.offset;
+                            if (size < best_size.*) {
+                                best_size.* = size;
+                                result = .{
+                                    .type_var = ModuleEnv.varFrom(pattern_idx),
+                                    .region = pattern_region,
+                                };
+                            }
+                        }
+                    }
                 }
-
-                // Recurse into this child
-                if (self.findNestedTypeAtOffset(module_env, child_idx, target_offset, best_size)) |nested| {
-                    result = nested;
+                // Check final expression
+                if (self.checkExprAndRecurse(module_env, block.final_expr, target_offset, best_size)) |r| {
+                    result = r;
                 }
-            }
+            },
+            .e_if => |if_expr| {
+                // Check all branches and final else
+                const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    if (self.checkExprAndRecurse(module_env, branch.cond, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                    if (self.checkExprAndRecurse(module_env, branch.body, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+                if (self.checkExprAndRecurse(module_env, if_expr.final_else, target_offset, best_size)) |r| {
+                    result = r;
+                }
+            },
+            .e_call => |call| {
+                // Check function and arguments
+                if (self.checkExprAndRecurse(module_env, call.func, target_offset, best_size)) |r| {
+                    result = r;
+                }
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    if (self.checkExprAndRecurse(module_env, arg, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+            },
+            .e_list => |list| {
+                const elems = module_env.store.sliceExpr(list.elems);
+                for (elems) |elem| {
+                    if (self.checkExprAndRecurse(module_env, elem, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+            },
+            .e_record => |record| {
+                const field_indices = module_env.store.sliceRecordFields(record.fields);
+                for (field_indices) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (self.checkExprAndRecurse(module_env, field.value, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+                if (record.ext) |ext| {
+                    if (self.checkExprAndRecurse(module_env, ext, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem| {
+                    if (self.checkExprAndRecurse(module_env, elem, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+            },
+            .e_binop => |binop| {
+                if (self.checkExprAndRecurse(module_env, binop.lhs, target_offset, best_size)) |r| {
+                    result = r;
+                }
+                if (self.checkExprAndRecurse(module_env, binop.rhs, target_offset, best_size)) |r| {
+                    result = r;
+                }
+            },
+            .e_unary_minus => |unary| {
+                if (self.checkExprAndRecurse(module_env, unary.expr, target_offset, best_size)) |r| {
+                    result = r;
+                }
+            },
+            .e_unary_not => |unary| {
+                if (self.checkExprAndRecurse(module_env, unary.expr, target_offset, best_size)) |r| {
+                    result = r;
+                }
+            },
+            else => {
+                // Other expression types don't have nested expressions to traverse
+            },
         }
 
         return result;
     }
 
+    /// Helper to check if an expression contains the offset and recurse into it
+    fn checkExprAndRecurse(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        target_offset: u32,
+        best_size: *u32,
+    ) ?TypeAtOffsetResult {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const region = module_env.store.getRegionAt(node_idx);
+
+        if (regionContainsOffset(region, target_offset)) {
+            const size = region.end.offset - region.start.offset;
+            var result: ?TypeAtOffsetResult = null;
+
+            if (size < best_size.*) {
+                best_size.* = size;
+                result = .{
+                    .type_var = ModuleEnv.varFrom(expr_idx),
+                    .region = region,
+                };
+            }
+
+            // Recurse into this expression
+            if (self.findNestedTypeAtOffset(module_env, expr_idx, target_offset, best_size)) |nested| {
+                result = nested;
+            }
+
+            return result;
+        }
+
+        return null;
+    }
+
     /// Check if a region contains the given byte offset
     fn regionContainsOffset(region: Region, offset: u32) bool {
         return offset >= region.start.offset and offset < region.end.offset;
-    }
-
-    /// Get child expression indices from an expression (for traversal)
-    /// This is a simplified version that returns empty for now - a full implementation
-    /// would traverse into nested expressions like function bodies, if branches, etc.
-    fn getChildExprs(expr: CIR.Expr) []const CIR.Expr.Idx {
-        _ = expr;
-        // For the initial implementation, we only look at top-level expressions
-        // A full implementation would extract child expressions from:
-        // - e_call args
-        // - e_if branches
-        // - e_when branches
-        // - e_lambda body
-        // - etc.
-        return &.{};
     }
 };
