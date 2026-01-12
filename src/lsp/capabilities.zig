@@ -4,6 +4,7 @@
 pub const ServerCapabilities = struct {
     positionEncoding: []const u8 = "utf-16",
     textDocumentSync: ?TextDocumentSyncOptions = null,
+    hoverProvider: bool = false,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -24,5 +25,6 @@ pub fn buildCapabilities() ServerCapabilities {
             .openClose = true,
             .change = @intFromEnum(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
+        .hoverProvider = true,
     };
 }
