@@ -1001,6 +1001,29 @@ pub const SyntaxChecker = struct {
                 const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
                 for (branch_indices) |branch_idx| {
                     const branch = module_env.store.getMatchBranch(branch_idx);
+
+                    // Check branch patterns
+                    const pattern_indices = module_env.store.sliceMatchBranchPatterns(branch.patterns);
+                    for (pattern_indices) |pat_idx| {
+                        const branch_pattern = module_env.store.getMatchBranchPattern(pat_idx);
+                        const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(branch_pattern.pattern));
+                        const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
+                        if (regionContainsOffset(pattern_region, target_offset)) {
+                            const size = pattern_region.end.offset - pattern_region.start.offset;
+                            if (size < best_size.*) {
+                                best_size.* = size;
+                                result = .{
+                                    .type_var = ModuleEnv.varFrom(branch_pattern.pattern),
+                                    .region = pattern_region,
+                                };
+                            }
+                            // Also check nested patterns (e.g., Ok(id) -> check id)
+                            if (self.checkPatternAndRecurse(module_env, branch_pattern.pattern, target_offset, best_size)) |r| {
+                                result = r;
+                            }
+                        }
+                    }
+
                     if (self.checkExprAndRecurse(module_env, branch.value, target_offset, best_size)) |r| {
                         result = r;
                     }
@@ -1111,6 +1134,162 @@ pub const SyntaxChecker = struct {
         }
 
         return null;
+    }
+
+    /// Helper to check if a pattern contains the offset and recurse into nested patterns
+    fn checkPatternAndRecurse(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        pattern_idx: CIR.Pattern.Idx,
+        target_offset: u32,
+        best_size: *u32,
+    ) ?TypeAtOffsetResult {
+        _ = self;
+        const pattern = module_env.store.getPattern(pattern_idx);
+        var result: ?TypeAtOffsetResult = null;
+
+        switch (pattern) {
+            .applied_tag => |tag| {
+                // Check nested patterns in tag args (e.g., Ok(id) -> check id)
+                const args = module_env.store.slicePatterns(tag.args);
+                for (args) |arg_idx| {
+                    const arg_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(arg_idx));
+                    const arg_region = module_env.store.getRegionAt(arg_node_idx);
+                    if (regionContainsOffset(arg_region, target_offset)) {
+                        const size = arg_region.end.offset - arg_region.start.offset;
+                        if (size < best_size.*) {
+                            best_size.* = size;
+                            result = .{
+                                .type_var = ModuleEnv.varFrom(arg_idx),
+                                .region = arg_region,
+                            };
+                        }
+                    }
+                }
+            },
+            .as => |as_pat| {
+                // Check the nested pattern in an `as` pattern
+                const nested_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(as_pat.pattern));
+                const nested_region = module_env.store.getRegionAt(nested_node_idx);
+                if (regionContainsOffset(nested_region, target_offset)) {
+                    const size = nested_region.end.offset - nested_region.start.offset;
+                    if (size < best_size.*) {
+                        best_size.* = size;
+                        result = .{
+                            .type_var = ModuleEnv.varFrom(as_pat.pattern),
+                            .region = nested_region,
+                        };
+                    }
+                }
+            },
+            .record_destructure => |record| {
+                // Check each destructured field
+                const destructs = module_env.store.sliceRecordDestructs(record.destructs);
+                for (destructs) |destruct_idx| {
+                    const destruct = module_env.store.getRecordDestruct(destruct_idx);
+                    const nested_pattern_idx = destruct.kind.toPatternIdx();
+                    const nested_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(nested_pattern_idx));
+                    const nested_region = module_env.store.getRegionAt(nested_node_idx);
+                    if (regionContainsOffset(nested_region, target_offset)) {
+                        const size = nested_region.end.offset - nested_region.start.offset;
+                        if (size < best_size.*) {
+                            best_size.* = size;
+                            result = .{
+                                .type_var = ModuleEnv.varFrom(nested_pattern_idx),
+                                .region = nested_region,
+                            };
+                        }
+                    }
+                }
+            },
+            .tuple => |tuple| {
+                // Check each pattern in the tuple
+                const patterns = module_env.store.slicePatterns(tuple.patterns);
+                for (patterns) |pat_idx| {
+                    const pat_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pat_idx));
+                    const pat_region = module_env.store.getRegionAt(pat_node_idx);
+                    if (regionContainsOffset(pat_region, target_offset)) {
+                        const size = pat_region.end.offset - pat_region.start.offset;
+                        if (size < best_size.*) {
+                            best_size.* = size;
+                            result = .{
+                                .type_var = ModuleEnv.varFrom(pat_idx),
+                                .region = pat_region,
+                            };
+                        }
+                    }
+                }
+            },
+            .list => |list| {
+                // Check each pattern in the list
+                const patterns = module_env.store.slicePatterns(list.patterns);
+                for (patterns) |pat_idx| {
+                    const pat_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pat_idx));
+                    const pat_region = module_env.store.getRegionAt(pat_node_idx);
+                    if (regionContainsOffset(pat_region, target_offset)) {
+                        const size = pat_region.end.offset - pat_region.start.offset;
+                        if (size < best_size.*) {
+                            best_size.* = size;
+                            result = .{
+                                .type_var = ModuleEnv.varFrom(pat_idx),
+                                .region = pat_region,
+                            };
+                        }
+                    }
+                }
+                // Also check the rest pattern if it exists
+                if (list.rest_info) |rest| {
+                    if (rest.pattern) |rest_pat_idx| {
+                        const rest_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(rest_pat_idx));
+                        const rest_region = module_env.store.getRegionAt(rest_node_idx);
+                        if (regionContainsOffset(rest_region, target_offset)) {
+                            const size = rest_region.end.offset - rest_region.start.offset;
+                            if (size < best_size.*) {
+                                best_size.* = size;
+                                result = .{
+                                    .type_var = ModuleEnv.varFrom(rest_pat_idx),
+                                    .region = rest_region,
+                                };
+                            }
+                        }
+                    }
+                }
+            },
+            .nominal => |nom| {
+                // Check the backing pattern
+                const backing_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(nom.backing_pattern));
+                const backing_region = module_env.store.getRegionAt(backing_node_idx);
+                if (regionContainsOffset(backing_region, target_offset)) {
+                    const size = backing_region.end.offset - backing_region.start.offset;
+                    if (size < best_size.*) {
+                        best_size.* = size;
+                        result = .{
+                            .type_var = ModuleEnv.varFrom(nom.backing_pattern),
+                            .region = backing_region,
+                        };
+                    }
+                }
+            },
+            .nominal_external => |nom_ext| {
+                // Check the backing pattern
+                const backing_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(nom_ext.backing_pattern));
+                const backing_region = module_env.store.getRegionAt(backing_node_idx);
+                if (regionContainsOffset(backing_region, target_offset)) {
+                    const size = backing_region.end.offset - backing_region.start.offset;
+                    if (size < best_size.*) {
+                        best_size.* = size;
+                        result = .{
+                            .type_var = ModuleEnv.varFrom(nom_ext.backing_pattern),
+                            .region = backing_region,
+                        };
+                    }
+                }
+            },
+            // Simple patterns with no nested patterns
+            .assign, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .str_literal, .underscore, .runtime_error => {},
+        }
+
+        return result;
     }
 
     /// Check if a region contains the given byte offset
