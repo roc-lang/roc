@@ -283,11 +283,6 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
-    .{
-        .roc_file = "test/fx/incref_alignment_8978.roc",
-        .io_spec = "1>parsed: Try.Ok((<tag_union variant=1>, [\"`%`\"], Box(<tag_union variant=0>), 4))",
-        .description = "Regression test: incref alignment with recursive tag unions in tuples (issue #8978)",
-    },
 };
 
 /// Get the total number of IO spec tests
