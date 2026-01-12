@@ -1223,6 +1223,11 @@ pub fn checkPlatformRequirements(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Ensure the type store is filled to match the number of regions.
+    // This is necessary because checkPlatformRequirements may be called with a
+    // fresh Check instance that hasn't had checkFile() called on it.
+    try ensureTypeStoreIsFilled(self);
+
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
