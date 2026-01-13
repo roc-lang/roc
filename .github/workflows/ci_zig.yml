@@ -115,11 +115,6 @@ jobs:
         with:
           version: 0.15.2
           use-cache: true
-      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
-        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-25.05
-
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
@@ -277,14 +272,6 @@ jobs:
           echo "=== Files found ==="
           cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
-      - name: Test inside nix too
-        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
-        run: |
-          git clean -fdx
-          git reset --hard HEAD
-          # Don't run coverage in nix - it uses the custom kcov fork built outside nix
-          nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }}"
-
   zig-cross-compile:
     needs: check-once
     runs-on: ubuntu-24.04
@@ -318,3 +305,8 @@ jobs:
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:
     uses: ./.github/workflows/ci_cross_compile.yml
+
+  # Test building inside nix environment
+  nix-build:
+    needs: check-once
+    uses: ./.github/workflows/ci_zig_nix.yml
