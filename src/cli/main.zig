@@ -1001,24 +1001,45 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Try native target first, then fall back to any compatible target
-            const native_target = builder.RocTarget.detectNative();
-            if (validation.config.getLinkSpec(native_target, .exe)) |spec| {
-                // Native target is supported - use it
-                link_spec = spec;
-            } else if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
-                // Native target not supported, but found a compatible target
-                link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+            // Select target: if --target is provided, use that; otherwise try native then fallback
+            if (args.target) |target_str| {
+                // User explicitly specified a target
+                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .invalid_target = .{ .target_str = target_str },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.InvalidTarget;
+                };
+
+                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    link_spec = spec;
+                } else {
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        parsed_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
             } else {
-                // No compatible target found - show error with native target in message
-                const result = platform_validation.createUnsupportedTargetResult(
-                    platform_source,
-                    native_target,
-                    .exe,
-                    validation.config,
-                );
-                _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                return error.UnsupportedTarget;
+                // No --target provided: use the first compatible exe target from the platform
+                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+                } else {
+                    // No compatible exe target found
+                    const native_target = builder.RocTarget.detectNative();
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        native_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
             }
         } else |err| {
             switch (err) {
@@ -1171,7 +1192,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
 
         // Determine ABI from target (for musl detection)
-        const target_abi: ?linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else null;
+        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
