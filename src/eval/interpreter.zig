@@ -8206,6 +8206,48 @@ pub const Interpreter = struct {
         self.constant_strings_arena.deinit();
     }
 
+    /// Deinit interpreter but preserve the constant strings arena.
+    /// Use this when the interpreter's constant strings may still be referenced
+    /// by Roc values that outlive the interpreter (e.g., in render loop scenarios).
+    /// The caller is responsible for eventually freeing the arena.
+    pub fn deinitPreserveConstantStrings(self: *Interpreter) std.heap.ArenaAllocator {
+        self.empty_scope.deinit();
+        self.translate_cache.deinit();
+        self.translation_in_progress.deinit();
+        self.rigid_subst.deinit();
+        self.rigid_name_subst.deinit();
+        self.translate_rigid_subst.deinit();
+        self.flex_type_context.deinit();
+        var it = self.poly_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.args.len > 0) {
+                self.allocator.free(@constCast(entry.value_ptr.args));
+            }
+        }
+        self.poly_cache.deinit();
+        self.method_resolution_cache.deinit();
+        self.module_envs.deinit(self.allocator);
+        self.translated_module_envs.deinit(self.allocator);
+        self.module_ids.deinit(self.allocator);
+        self.import_envs.deinit(self.allocator);
+        self.var_to_layout_slot.deinit(self.allocator);
+        self.runtime_layout_store.deinit();
+        self.runtime_types.deinit();
+        self.allocator.destroy(self.runtime_types);
+        self.snapshots.deinit();
+        self.problems.deinit(self.allocator);
+        self.unify_scratch.deinit();
+        self.type_writer.deinit();
+        self.stack_memory.deinit();
+        self.bindings.deinit();
+        self.active_closures.deinit();
+        self.def_stack.deinit();
+        self.scratch_tags.deinit();
+        self.instantiate_scratch.deinit();
+        // Return the arena instead of freeing it - caller takes ownership
+        return self.constant_strings_arena;
+    }
+
     /// Get the module environment for a given origin module identifier.
     /// Returns the current module's env if the identifier matches, otherwise looks it up in the module map.
     /// Note: origin_module may be in runtime_layout_store.env's ident space (after translateTypeVar),

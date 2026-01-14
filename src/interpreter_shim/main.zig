@@ -99,8 +99,9 @@ fn wasmRemap(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize, _: usize) ?
     return null; // remap not supported
 }
 
-fn wasmFree(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
-    // Bump allocator - no-op
+fn wasmFree(_: *anyopaque, buf: []u8, alignment: std.mem.Alignment, _: usize) void {
+    const align_bytes: u32 = @intCast(alignment.toByteUnits());
+    roc_dealloc(@ptrCast(buf.ptr), align_bytes);
 }
 
 // Host-provided allocation functions (for wasm32)
@@ -182,6 +183,8 @@ var global_env_ptr: ?*ModuleEnv = null; // Primary env for entry point lookups (
 var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required resolution
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
+var global_full_imported_envs: ?[]*const ModuleEnv = null; // Full slice with builtin prepended (for interpreter)
+var global_constant_strings_arena: ?std.heap.ArenaAllocator = null; // Persists across interpreter calls for immortal strings
 var shm_mutex = PlatformMutex.init();
 
 // Cached header info (set during initialization, used for evaluation)
@@ -330,6 +333,98 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     global_app_env_ptr = setup_result.app_env;
     global_builtin_modules = builtin_modules;
 
+    // Build the full imported_envs slice (builtin + platform modules) for interpreter use
+    // This is done once and reused for all interpreter instances
+    const builtin_module_env = builtin_modules.builtin_module.env;
+    var all_imported_envs = std.ArrayList(*const can.ModuleEnv).empty;
+
+    // First add builtin module (to match 'Builtin' import)
+    all_imported_envs.append(allocator, builtin_module_env) catch {
+        roc_ops.crash("Failed to build imported envs list");
+        return error.OutOfMemory;
+    };
+
+    // Then add platform modules
+    if (global_imported_envs) |platform_envs| {
+        for (platform_envs) |penv| {
+            all_imported_envs.append(allocator, penv) catch {
+                roc_ops.crash("Failed to build imported envs list");
+                return error.OutOfMemory;
+            };
+        }
+    }
+
+    const full_imported_envs = all_imported_envs.toOwnedSlice(allocator) catch {
+        roc_ops.crash("Failed to get owned slice");
+        return error.OutOfMemory;
+    };
+    global_full_imported_envs = full_imported_envs;
+
+    // Resolve imports - map each import name to its index in imported_envs
+    // This modifies global state and only needs to happen once
+    const env_ptr = setup_result.primary_env;
+    const app_env = setup_result.app_env;
+
+    traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
+    env_ptr.imports.resolveImports(env_ptr, full_imported_envs);
+
+    // Also resolve imports for the app env if it's different from the primary env
+    if (app_env != env_ptr) {
+        traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{app_env.module_name});
+        app_env.imports.resolveImports(app_env, full_imported_envs);
+    }
+
+    // Also resolve imports for all imported module environments
+    traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
+    for (full_imported_envs) |imp_env| {
+        traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
+        @constCast(imp_env).imports.resolveImports(imp_env, full_imported_envs);
+    }
+
+    // Enable runtime inserts on all deserialized module environments
+    // This copies data from read-only embedded buffer into growable allocated memory
+    env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on platform env");
+        return error.InterpreterSetupFailed;
+    };
+    if (app_env != env_ptr) {
+        @constCast(app_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on app env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    for (full_imported_envs) |imp_env| {
+        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+
+    // Fix up module_name_idx for deserialized modules
+    // This is critical for nominal type method dispatch (e.g., is_eq)
+    if (env_ptr.module_name_idx.isNone() and env_ptr.module_name.len > 0) {
+        env_ptr.module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
+            roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
+            return error.InterpreterSetupFailed;
+        };
+    }
+    if (app_env != env_ptr) {
+        if (app_env.module_name_idx.isNone() and app_env.module_name.len > 0) {
+            @constCast(app_env).module_name_idx = @constCast(app_env).insertIdent(base.Ident.for_text(app_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+    for (full_imported_envs) |imp_env| {
+        if (imp_env.module_name_idx.isNone() and imp_env.module_name.len > 0) {
+            @constCast(imp_env).module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
+                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
+                return error.InterpreterSetupFailed;
+            };
+        }
+    }
+
     // Mark as initialized (release semantics ensure all writes above are visible)
     shared_memory_initialized.set();
 }
@@ -349,9 +444,21 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     // Get builtin modules
     const builtin_modules = &global_builtin_modules.?;
 
-    // Set up interpreter infrastructure (per-call, as it's lightweight)
+    // Create interpreter for this evaluation (global setup was done in initializeOnce)
     var interpreter = try createInterpreter(env_ptr, app_env, builtin_modules, roc_ops);
-    defer interpreter.deinit();
+    defer {
+        // Use deinitPreserveConstantStrings to avoid freeing strings that may be referenced
+        // by Roc values (like the model) that persist across interpreter calls.
+        // The arena accumulates over time - this is intentional for immortal strings.
+        const arena = interpreter.deinitPreserveConstantStrings();
+        // Store first arena globally; subsequent arenas leak but contain immortal strings
+        // that may still be referenced, so this is acceptable behavior.
+        if (global_constant_strings_arena == null) {
+            global_constant_strings_arena = arena;
+        }
+        // Note: if global_constant_strings_arena is already set, the new arena's memory
+        // will leak. This is acceptable for immortal strings in long-running apps.
+    }
 
     // Get expression info using entry_idx
     // Use the cached globals set during initialization (works for both formats)
@@ -687,7 +794,8 @@ fn setupModuleEnvFromSerialized(roc_ops: *RocOps, base_ptr: [*]align(1) u8, allo
     };
 }
 
-/// Create and initialize interpreter with heap-allocated stable objects
+/// Create interpreter instance (global setup was done in initializeOnce)
+/// This is now lightweight and safe to call per-evaluation since it doesn't modify global state.
 fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules: *const eval.BuiltinModules, roc_ops: *RocOps) ShimError!Interpreter {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -695,129 +803,26 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     const allocator = wrapped_allocator;
 
     // Use builtin types from the loaded builtin modules
-    // This provides the actual definitions of plus, minus, times, etc.
     const builtin_types = builtin_modules.asBuiltinTypes();
-
-    // Pass the builtin module's env so method lookup can find builtin method definitions
     const builtin_module_env = builtin_modules.builtin_module.env;
 
-    // Use the imported envs from platform modules (set up during setupModuleEnv)
-    // IMPORTANT: The app's imports include 'Builtin' first, then platform modules.
-    // So we need to prepend builtin_module_env to match the positional mapping.
-    var all_imported_envs = std.ArrayList(*const can.ModuleEnv).empty;
-    // Note: Don't defer deinit - we pass ownership of the slice to the interpreter
-
-    // First add builtin module (to match 'Builtin' import)
-    all_imported_envs.append(allocator, builtin_module_env) catch {
-        roc_ops.crash("Failed to build imported envs list");
+    // Create a copy of the global imported_envs slice for this interpreter instance
+    // The interpreter takes ownership and will free this on deinit
+    const global_envs = global_full_imported_envs.?;
+    const imported_envs = allocator.dupe(*const can.ModuleEnv, global_envs) catch {
+        roc_ops.crash("Failed to duplicate imported envs slice");
         return error.OutOfMemory;
     };
 
-    // Then add platform modules
-    if (global_imported_envs) |platform_envs| {
-        for (platform_envs) |penv| {
-            all_imported_envs.append(allocator, penv) catch {
-                roc_ops.crash("Failed to build imported envs list");
-                return error.OutOfMemory;
-            };
-        }
-    }
-
-    // Use toOwnedSlice to transfer ownership to caller
-    const imported_envs = all_imported_envs.toOwnedSlice(allocator) catch {
-        roc_ops.crash("Failed to get owned slice");
-        return error.OutOfMemory;
-    };
-
-    traceDbg(roc_ops, "=== Interpreter Shim Initialization ===", .{});
+    traceDbg(roc_ops, "=== Creating Interpreter ===", .{});
     traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
-    if (app_env) |a_env| {
-        traceDbg(roc_ops, "app_env=\"{s}\"", .{a_env.module_name});
-    }
-
-    // Resolve imports - map each import name to its index in imported_envs
-    traceDbg(roc_ops, "Resolving imports for primary env \"{s}\"", .{env_ptr.module_name});
-    env_ptr.imports.resolveImports(env_ptr, imported_envs);
-
-    // Also resolve imports for the app env if it's different from the primary env
-    // This is needed when the platform calls the app's main! via e_lookup_required
-    if (app_env) |a_env| {
-        if (a_env != env_ptr) {
-            traceDbg(roc_ops, "Resolving imports for app env \"{s}\"", .{a_env.module_name});
-            a_env.imports.resolveImports(a_env, imported_envs);
-        }
-    }
-
-    // Also resolve imports for all imported module environments.
-    // This is needed when module A imports module B, and the interpreter evaluates
-    // code in A that calls into B (transitive module calls).
-    // Without this, A's import of B remains unresolved, causing "unresolved import"
-    // or TypeMismatch errors when A's code tries to call B.
-    traceDbg(roc_ops, "Re-resolving imports for all imported modules", .{});
-    for (imported_envs) |imp_env| {
-        traceDbg(roc_ops, "  Re-resolving for \"{s}\"", .{imp_env.module_name});
-        @constCast(imp_env).imports.resolveImports(imp_env, imported_envs);
-    }
-
-    // Enable runtime inserts on all deserialized module environments.
-    // The interpreter needs to insert new identifiers at runtime for:
-    // - Translating module names between different ident spaces
-    // - Building qualified type names for method lookup
-    // - Runtime type introspection
-    // Deserialized interners are read-only by default, so we explicitly enable inserts here.
-    // This copies the data from the read-only embedded buffer into growable allocated memory.
-    env_ptr.common.idents.interner.enableRuntimeInserts(allocator) catch {
-        roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on platform env");
-        return error.InterpreterSetupFailed;
-    };
-    if (app_env) |a_env| {
-        @constCast(a_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on app env");
-            return error.InterpreterSetupFailed;
-        };
-    }
-    for (imported_envs) |imp_env| {
-        @constCast(imp_env).common.idents.interner.enableRuntimeInserts(allocator) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to enable runtime inserts on imported env");
-            return error.InterpreterSetupFailed;
-        };
-    }
-
-    // Fix up module_name_idx for deserialized modules.
-    // Deserialized modules have module_name_idx set to NONE because the interner
-    // was read-only during deserialization. Now that enableRuntimeInserts has been
-    // called, we can insert the module names to enable runtime method lookups.
-    // This is critical for nominal type method dispatch (e.g., is_eq).
-    if (env_ptr.module_name_idx.isNone() and env_ptr.module_name.len > 0) {
-        env_ptr.module_name_idx = env_ptr.insertIdent(base.Ident.for_text(env_ptr.module_name)) catch {
-            roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for platform env");
-            return error.InterpreterSetupFailed;
-        };
-    }
-    if (app_env) |a_env| {
-        if (a_env.module_name_idx.isNone() and a_env.module_name.len > 0) {
-            @constCast(a_env).module_name_idx = @constCast(a_env).insertIdent(base.Ident.for_text(a_env.module_name)) catch {
-                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for app env");
-                return error.InterpreterSetupFailed;
-            };
-        }
-    }
-    for (imported_envs) |imp_env| {
-        if (imp_env.module_name_idx.isNone() and imp_env.module_name.len > 0) {
-            @constCast(imp_env).module_name_idx = @constCast(imp_env).insertIdent(base.Ident.for_text(imp_env.module_name)) catch {
-                roc_ops.crash("INTERPRETER SHIM: Failed to insert module name for imported env");
-                return error.InterpreterSetupFailed;
-            };
-        }
-    }
 
     var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
 
-    // Setup for-clause type mappings from platform to app.
-    // This maps rigid variable names (like "model") to their concrete app types.
+    // Setup for-clause type mappings from platform to app
     interpreter.setupForClauseTypeMappings(env_ptr) catch {
         roc_ops.crash("INTERPRETER SHIM: Failed to setup for-clause type mappings");
         return error.InterpreterSetupFailed;
