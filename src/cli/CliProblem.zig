@@ -710,6 +710,21 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) !Report {
     try report.document.addLineBreak();
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("An app header looks like:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addCodeBlock(
+        \\app [main!] { pf: platform "..." }
+    );
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Tip: Maybe you wanted to run ");
+    try report.document.addAnnotated("roc test", .emphasized);
+    try report.document.addText(" or ");
+    try report.document.addAnnotated("roc check", .emphasized);
+    try report.document.addText("?");
 
     return report;
 }

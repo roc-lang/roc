@@ -31,6 +31,7 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
+              - '.github/workflows/ci_zig_nix.yml'
               - '.github/workflows/ci_cross_compile.yml'
               - '.github/actions/flaky-retry/action.yml'
               - 'ci/zig_lints.sh'
@@ -51,6 +52,7 @@ jobs:
               - '!build.zig'
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
+              - '!.github/workflows/ci_zig_nix.yml'
               - '!.github/workflows/ci_cross_compile.yml'
               - '!.github/actions/flaky-retry/action.yml'
               - '!ci/zig_lints.sh'
@@ -68,6 +70,7 @@ jobs:
               - '!src/**/*.md'
               - '!design/**'
               - '!examples/**'
+              - '!langref/**'
 
   call-zig-workflow:
     needs: check-changes

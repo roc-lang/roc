@@ -1,0 +1,39 @@
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+
+name: CI Zig Nix Build
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  nix-build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target_flag: ''
+          - os: ubuntu-22.04
+            target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-24.04
+            target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-24.04-arm
+            target_flag: ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-25.05
+
+      - name: Build inside nix
+        run: |
+          # Don't run coverage in nix - it uses the custom kcov fork built outside nix
+          nix develop ./src/ -c bash -c "zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}"

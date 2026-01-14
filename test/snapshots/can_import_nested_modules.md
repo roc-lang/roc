@@ -369,9 +369,9 @@ validateAuth = |creds| HttpAuth.validate(creds)
 		(patt (type "Str -> Str"))
 		(patt (type "Error -> Try(Error, Error)")))
 	(expressions
-		(expr (type "Error -> Error"))
+		(expr (type "Error -> Str"))
 		(expr (type "Str, Str -> Error"))
-		(expr (type "Error, Str -> Error"))
-		(expr (type "Str -> Error"))
-		(expr (type "Error -> Error"))))
+		(expr (type "Error, Str -> Try(Str, Error)"))
+		(expr (type "Str -> Str"))
+		(expr (type "Error -> Try(Error, Error)"))))
 ~~~

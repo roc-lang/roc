@@ -587,6 +587,8 @@ fn transformBodyWithCaptures(
         .e_frac_f64,
         .e_dec,
         .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
         .e_str_segment,
         .e_str,
         .e_lookup_external,
@@ -612,6 +614,7 @@ fn transformBodyWithCaptures(
                     .cond = new_cond,
                     .branches = match.branches,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },

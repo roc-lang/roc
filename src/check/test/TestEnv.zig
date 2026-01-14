@@ -547,6 +547,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
         self.module_env,
         self.module_env,
         &self.checker.snapshots,
+        &self.checker.problems,
         "test",
         &.{},
         &self.checker.import_mapping,
@@ -573,6 +574,7 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
         self.module_env,
         self.module_env,
         &self.checker.snapshots,
+        &self.checker.problems,
         "test",
         &.{},
         &self.checker.import_mapping,
@@ -645,7 +647,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
 }
 
 fn assertNoTypeProblems(self: *TestEnv) !void {
-    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, "test", &.{}, &self.checker.import_mapping);
+    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping);
     defer report_builder.deinit();
 
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);

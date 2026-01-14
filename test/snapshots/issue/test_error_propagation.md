@@ -102,5 +102,5 @@ NO CHANGE
 		(nominal (type "GoodAlias")
 			(ty-header (name "GoodAlias"))))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "GoodAlias"))))
 ~~~

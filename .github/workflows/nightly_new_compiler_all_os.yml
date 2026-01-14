@@ -68,7 +68,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: 'zig build roc -Doptimize=ReleaseFast'
-          error_string_contains: 'EndOfStream'
+          error_string_contains: 'EndOfStream|build.zig.zon'
           retry_count: 3
 
       - name: build file name

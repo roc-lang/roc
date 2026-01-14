@@ -15,9 +15,28 @@ match ... {
 }
 ~~~
 # EXPECTED
+TYPE MISMATCH - pattern_alternatives_mixed.md:2:10:2:11
 INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
-MISSING METHOD - pattern_alternatives_mixed.md:2:10:2:11
 # PROBLEMS
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
+**pattern_alternatives_mixed.md:2:10:2:11:**
+```roc
+	1 | 2 | 3 => "small numbers"
+```
+	        ^
+
+The type was determined to be non-numeric here:
+**pattern_alternatives_mixed.md:3:2:3:9:**
+```roc
+	"hello" | "world" => "greetings"
+```
+	^^^^^^^
+
+Other code expects this to have the type:
+
+    Str
+
 **INCOMPATIBLE MATCH PATTERNS**
 The pattern first pattern in this third`match` differs from previous ones:
 **pattern_alternatives_mixed.md:1:1:**
@@ -42,20 +61,6 @@ But all the previous patterns have this type:
     Str
 
 All patterns in an `match` must have compatible types.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**pattern_alternatives_mixed.md:2:10:2:11:**
-```roc
-	1 | 2 | 3 => "small numbers"
-```
-	        ^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig
