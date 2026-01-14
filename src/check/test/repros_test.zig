@@ -122,6 +122,29 @@ test "check - repro - issue 8919" {
     try test_env.assertNoErrors();
 }
 
+test "check - repro - issue 9010" {
+    // Closed tag unions in Try should be compatible with open tag unions.
+    // When a function returns Try(U32, [Bar(U8)]) (closed), it should be
+    // usable with ? operator in a function expecting Try(U32, [Foo(U8), ..]) (open).
+    const src =
+        \\bar : {} -> Try(U32, [Bar(U8)])
+        \\bar = |_| {
+        \\    Err(Bar(5))
+        \\}
+        \\
+        \\foo : {} -> Try(U32, [Foo(U8), ..])
+        \\foo = |_| {
+        \\    a = bar({})?
+        \\    Ok(a + 5)
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
 test "check - repro - issue 8848" {
     // Pattern matching on recursive opaque type element retrieved from List
     const src =

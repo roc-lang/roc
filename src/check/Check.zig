@@ -4619,6 +4619,40 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         try self.checkPattern(branch_ptrn.pattern, env);
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
+        // Pre-check for closed condition vs pattern mismatch
+        // This is needed because unify now allows closed+open combinations in some contexts
+        if (self.checkPatternTagsInClosedCondition(cond_var, branch_ptrn_var)) {
+            // Pattern has tags that don't exist in the closed condition type
+            // Create the error now rather than letting unify succeed incorrectly
+            const expected_snapshot = try self.snapshots.snapshotVarForError(
+                self.types,
+                &self.type_writer,
+                cond_var,
+            );
+            const actual_snapshot = try self.snapshots.snapshotVarForError(
+                self.types,
+                &self.type_writer,
+                branch_ptrn_var,
+            );
+            _ = try self.problems.appendProblem(self.cir.gpa, .{
+                .type_mismatch = .{
+                    .types = .{
+                        .expected_var = cond_var,
+                        .expected_snapshot = expected_snapshot,
+                        .actual_var = branch_ptrn_var,
+                        .actual_snapshot = actual_snapshot,
+                        .from_annotation = false,
+                        .constraint_origin_var = null,
+                    },
+                    .detail = .{ .incompatible_match_cond_pattern = .{
+                        .match_expr = expr_idx,
+                    } },
+                },
+            });
+            had_type_error = true;
+            continue;
+        }
+
         const ptrn_result = try self.unify(cond_var, branch_ptrn_var, env);
         self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
             .match_expr = expr_idx,
@@ -4643,6 +4677,42 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
+
+            // Pre-check for closed condition vs pattern mismatch
+            if (self.checkPatternTagsInClosedCondition(cond_var, branch_ptrn_var)) {
+                const expected_snapshot = try self.snapshots.snapshotVarForError(
+                    self.types,
+                    &self.type_writer,
+                    cond_var,
+                );
+                const actual_snapshot = try self.snapshots.snapshotVarForError(
+                    self.types,
+                    &self.type_writer,
+                    branch_ptrn_var,
+                );
+                _ = try self.problems.appendProblem(self.cir.gpa, .{
+                    .type_mismatch = .{
+                        .types = .{
+                            .expected_var = cond_var,
+                            .expected_snapshot = expected_snapshot,
+                            .actual_var = branch_ptrn_var,
+                            .actual_snapshot = actual_snapshot,
+                            .from_annotation = false,
+                            .constraint_origin_var = null,
+                        },
+                        .detail = .{ .incompatible_match_patterns = .{
+                            .match_expr = expr_idx,
+                            .num_branches = @intCast(match.branches.span.len),
+                            .problem_branch_index = @intCast(branch_cur_index),
+                            .num_patterns = @intCast(branch_ptrn_idxs.len),
+                            .problem_pattern_index = @intCast(cur_ptrn_index),
+                        } },
+                    },
+                });
+                had_type_error = true;
+                continue;
+            }
+
             const ptrn_result = try self.unify(cond_var, branch_ptrn_var, env);
             self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
                 .match_expr = expr_idx,
@@ -5319,6 +5389,79 @@ fn checkNominalTypeUsage(
         //                    ^^^^^^^^^^^^^^^^^^^^^^^^^
         const nominal_backing_var = self.types.getNominalBackingVar(nominal_type);
 
+        // For tag backing types with closed nominals, validate that all tags in the actual
+        // expression exist in the nominal BEFORE calling unify. This is needed because
+        // unify.zig now allows closed+open tag union combinations to succeed (for error
+        // propagation), but nominal validation requires stricter checking where the nominal
+        // is authoritative. Without this, `Color.Yellow` would unify with `Color := [Red, Green, Blue]`.
+        if (backing_type == .tag) {
+            const nominal_backing_resolved = self.types.resolveVar(nominal_backing_var);
+            const actual_backing_resolved = self.types.resolveVar(actual_backing_var);
+
+            if (nominal_backing_resolved.desc.content == .structure and
+                actual_backing_resolved.desc.content == .structure)
+            {
+                const nominal_flat = nominal_backing_resolved.desc.content.structure;
+                const actual_flat = actual_backing_resolved.desc.content.structure;
+
+                if (nominal_flat == .tag_union and actual_flat == .tag_union) {
+                    // Check if nominal is closed
+                    const nominal_ext_resolved = self.types.resolveVar(nominal_flat.tag_union.ext);
+                    const nominal_is_closed = nominal_ext_resolved.desc.content == .structure and
+                        nominal_ext_resolved.desc.content.structure == .empty_tag_union;
+
+                    if (nominal_is_closed) {
+                        // For closed nominals, every tag in actual must exist in nominal
+                        const nominal_tags = self.types.tags.sliceRange(nominal_flat.tag_union.tags);
+                        const actual_tags = self.types.tags.sliceRange(actual_flat.tag_union.tags);
+                        const nominal_tag_names = nominal_tags.items(.name);
+                        const actual_tag_names = actual_tags.items(.name);
+
+                        for (actual_tag_names) |actual_tag_name| {
+                            var found = false;
+                            for (nominal_tag_names) |nominal_tag_name| {
+                                if (actual_tag_name == nominal_tag_name) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                // Tag not found in nominal - report the error and return.
+                                // We create snapshots of both types for the error message.
+                                // Use the nominal backing var for expected since buildInvalidNominalTag
+                                // expects a tag union structure, not a nominal type.
+                                const expected_snapshot = try self.snapshots.snapshotVarForError(
+                                    self.types,
+                                    &self.type_writer,
+                                    nominal_backing_var,
+                                );
+                                const actual_snapshot = try self.snapshots.snapshotVarForError(
+                                    self.types,
+                                    &self.type_writer,
+                                    actual_backing_var,
+                                );
+                                _ = try self.problems.appendProblem(self.cir.gpa, .{
+                                    .type_mismatch = .{
+                                        .types = .{
+                                            .expected_var = nominal_backing_var,
+                                            .expected_snapshot = expected_snapshot,
+                                            .actual_var = actual_backing_var,
+                                            .actual_snapshot = actual_snapshot,
+                                            .from_annotation = false,
+                                            .constraint_origin_var = null,
+                                        },
+                                        .detail = .invalid_nominal_tag,
+                                    },
+                                });
+                                try self.unifyWith(target_var, .err, env);
+                                return .err;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Unify what the user wrote with the backing type of the nominal
         // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -5369,6 +5512,82 @@ fn checkNominalTypeUsage(
         try self.unifyWith(target_var, .err, env);
         return .err;
     }
+}
+
+/// Unwrap a variable to get its FlatType, following aliases and redirects.
+/// Returns null if the variable doesn't resolve to a structure/FlatType.
+fn unwrapToFlatType(self: *Self, var_: Var) ?FlatType {
+    var current_var = var_;
+    var guard = types_mod.debug.IterationGuard.init("unwrapToFlatType");
+
+    while (true) {
+        guard.tick();
+        const resolved = self.types.resolveVar(current_var);
+        switch (resolved.desc.content) {
+            .structure => |flat_type| return flat_type,
+            .alias => |alias| {
+                // Follow the alias to its backing type
+                current_var = self.types.getAliasBackingVar(alias);
+            },
+            .flex, .rigid, .err => return null,
+        }
+    }
+}
+
+/// For pattern matching, validate that all pattern tags exist in a closed condition type.
+/// This is needed because unify.zig now allows closed+open tag union combinations to succeed
+/// (for error propagation), but pattern matching requires stricter checking where the condition
+/// is authoritative. Without this, pattern `[Some, None]` would unify with `[Ok, Err]`.
+///
+/// Returns true if there's a tag mismatch error that should be reported.
+fn checkPatternTagsInClosedCondition(
+    self: *Self,
+    cond_var: Var,
+    pattern_var: Var,
+) bool {
+    // Unwrap aliases to get to the actual type content
+    const cond_content = self.unwrapToFlatType(cond_var) orelse return false;
+    const pattern_content = self.unwrapToFlatType(pattern_var) orelse return false;
+
+    // Both must be tag_unions
+    const cond_flat = cond_content;
+    const pattern_flat = pattern_content;
+
+    const cond_is_tag_union = cond_flat == .tag_union;
+    const pattern_is_tag_union = pattern_flat == .tag_union;
+    if (!cond_is_tag_union or !pattern_is_tag_union) {
+        return false;
+    }
+
+    // Check if condition is closed
+    const cond_ext_resolved = self.types.resolveVar(cond_flat.tag_union.ext);
+    const cond_is_closed = cond_ext_resolved.desc.content == .structure and
+        cond_ext_resolved.desc.content.structure == .empty_tag_union;
+
+    if (!cond_is_closed) {
+        return false;
+    }
+
+    // For closed conditions, every tag in pattern must exist in condition
+    const cond_tags = self.types.tags.sliceRange(cond_flat.tag_union.tags);
+    const pattern_tags = self.types.tags.sliceRange(pattern_flat.tag_union.tags);
+    const cond_tag_names = cond_tags.items(.name);
+    const pattern_tag_names = pattern_tags.items(.name);
+
+    for (pattern_tag_names) |pattern_tag_name| {
+        var found = false;
+        for (cond_tag_names) |cond_tag_name| {
+            if (pattern_tag_name == cond_tag_name) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return true; // Pattern has a tag not in closed condition
+        }
+    }
+
+    return false;
 }
 
 // validate static dispatch constraints //

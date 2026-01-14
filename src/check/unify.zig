@@ -1902,9 +1902,13 @@ const Unifier = struct {
 
         // Fast-fail cases where unification will definitely fail (before any merging)
         // This prevents corrupting type information for better error messages
-        if (tags_ext == .both_extend and (a_ext_is_closed or b_ext_is_closed)) {
-            // If we have unique tags on both sides AND either side is closed,
-            // unification cannot succeed - fail immediately
+        if (tags_ext == .both_extend and a_ext_is_closed and b_ext_is_closed) {
+            // If we have unique tags on both sides AND BOTH sides are closed,
+            // unification cannot succeed - fail immediately.
+            // However, if only one side is closed and the other is open, we can
+            // still unify: the closed side's tags get absorbed into the open side.
+            // This is important for error propagation where [Err1] (closed) should
+            // be compatible with [Err2, ..] (open), resulting in [Err1, Err2, ..].
             return error.TypeMismatch;
         }
         if (tags_ext == .a_extends_b and b_ext_is_closed) {
@@ -2014,8 +2018,19 @@ const Unifier = struct {
                 } } }) catch return Error.AllocatorError;
 
                 // Unify the sub tag_unions with exts
-                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
-                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+                // When one side is closed (empty_tag_union) and the other is open,
+                // we only need to unify the open side's extension with the closed
+                // side's unique tags. The closed side's extension (empty_tag_union)
+                // doesn't need to accommodate the open side's unique tags because
+                // the closed side is a concrete type that flows into the open side.
+                // This enables error propagation: [Err1] (closed) can flow into
+                // [Err2, ..] (open), resulting in the combined type [Err1, Err2, ..].
+                if (!a_ext_is_closed) {
+                    try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                }
+                if (!b_ext_is_closed) {
+                    try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+                }
 
                 // Unify shared tags
                 // Include all tags in the merged type - both shared and unique

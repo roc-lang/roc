@@ -1549,7 +1549,11 @@ test "check type - patterns num" {
 }
 
 test "check type - patterns int mismatch" {
-    // Test that matching a tag against incompatible tag patterns fails
+    // Test that matching a tag against incompatible tag patterns fails.
+    // Note: With error propagation support (issue 9010), the unification of
+    // closed+open tag unions now succeeds, so the error is detected during
+    // exhaustiveness checking rather than pattern matching. Both errors correctly
+    // indicate that the patterns don't match the condition type.
     const source =
         \\{
         \\  x : [Ok(I64), Err(Str)]
@@ -1561,7 +1565,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "NON-EXHAUSTIVE MATCH");
 }
 
 test "check type - patterns frac 1" {
