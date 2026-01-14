@@ -283,6 +283,16 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
+    .{
+        .roc_file = "test/fx/issue9011.roc",
+        .io_spec = "1>parse_value! called|1>finished creating combination method 1 in parse_value!|1>parse_value! called|1>Returning early from parse_value!|1>finished calling parse_value!|1>parsed: Try.Ok((<tag_union variant=1>, <tag_union variant=0>, 4))",
+        .description = "Regression test: Nominal types wrapping enum-like tag unions in tuples (issue #9011)",
+    },
+    .{
+        .roc_file = "test/fx/issue9011_minimal.roc",
+        .io_spec = "1>value: Value.CombinedValue({ combination_method: C }), index: 1",
+        .description = "Regression test: Minimal reproduction of issue #9011",
+    },
 };
 
 /// Get the total number of IO spec tests
