@@ -12936,13 +12936,23 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // F32 literals require F32-compatible layout. If we reach here with a different layout
+        // (e.g., record type from field access like `1.0.e`), the type is incompatible.
+        // Fall back to F32 layout for the literal itself - the type checker will report the actual error.
+        const is_f32_layout = layout_val.tag == .scalar and
+            layout_val.data.scalar.tag == .frac and
+            layout_val.data.scalar.data.frac == .f32;
+        if (!is_f32_layout) {
+            layout_val = layout.Layout.frac(types.Frac.Precision.f32);
+        }
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F32 type for method dispatch to work.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        const final_rt_var = if (is_flex_or_rigid or !is_f32_layout) blk: {
             const f32_content = try self.mkNumberTypeContentRuntime("F32");
             break :blk try self.runtime_types.freshFromContent(f32_content);
         } else layout_rt_var;
@@ -12966,13 +12976,23 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // F64 literals require F64-compatible layout. If we reach here with a different layout
+        // (e.g., record type from field access like `1.0.e`), the type is incompatible.
+        // Fall back to F64 layout for the literal itself - the type checker will report the actual error.
+        const is_f64_layout = layout_val.tag == .scalar and
+            layout_val.data.scalar.tag == .frac and
+            layout_val.data.scalar.data.frac == .f64;
+        if (!is_f64_layout) {
+            layout_val = layout.Layout.frac(types.Frac.Precision.f64);
+        }
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F64 type for method dispatch to work.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        const final_rt_var = if (is_flex_or_rigid or !is_f64_layout) blk: {
             const f64_content = try self.mkNumberTypeContentRuntime("F64");
             break :blk try self.runtime_types.freshFromContent(f64_content);
         } else layout_rt_var;
@@ -12996,13 +13016,23 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
+
+        // Dec literals require Dec-compatible layout. If we reach here with a different layout
+        // (e.g., record type from field access like `1E10.e`), the type is incompatible.
+        // Fall back to Dec layout for the literal itself - the type checker will report the actual error.
+        const is_dec_layout = layout_val.tag == .scalar and
+            layout_val.data.scalar.tag == .frac and
+            layout_val.data.scalar.data.frac == .dec;
+        if (!is_dec_layout) {
+            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        }
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
-        const final_rt_var = if (is_flex_or_rigid) blk: {
+        const final_rt_var = if (is_flex_or_rigid or !is_dec_layout) blk: {
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
             break :blk try self.runtime_types.freshFromContent(dec_content);
         } else layout_rt_var;
