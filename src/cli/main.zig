@@ -1747,12 +1747,13 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Module count = 1 (app) + number of platform modules + number of sibling modules
-    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling
+    // Module count = 1 (app) + number of platform modules + number of sibling modules + package modules
+    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling/package
     // imports AFTER parsing the app (to avoid parsing twice). The actual count is set later.
     const platform_module_count: u32 = @intCast(exposed_modules.items.len);
     const max_sibling_modules: u32 = 64; // Reasonable max for sibling modules
-    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules;
+    const max_package_modules: u32 = 64; // Reasonable max for package modules
+    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules + max_package_modules;
 
     // Allocate array for module env offsets (over-allocated, actual count set later)
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
@@ -2009,16 +2010,62 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
 
     // Extract platform qualifier from app header (e.g., "rr" from { rr: platform "..." })
     // This is needed to register modules with the correct qualified name for import validation
+    const parsed_file = app_parse_ast.store.getFile();
+    const app_header = app_parse_ast.store.getHeader(parsed_file.header);
     const platform_qualifier: []const u8 = blk: {
-        const parsed_file = app_parse_ast.store.getFile();
-        const header = app_parse_ast.store.getHeader(parsed_file.header);
-        if (header == .app) {
-            const platform_field = app_parse_ast.store.getRecordField(header.app.platform_idx);
+        if (app_header == .app) {
+            const platform_field = app_parse_ast.store.getRecordField(app_header.app.platform_idx);
             const key_region = app_parse_ast.tokens.resolve(platform_field.name);
             break :blk app_source[key_region.start.offset..key_region.end.offset];
         }
-        break :blk "pf"; // fallback to "pf" if not found
+        // Not an app header - report error
+        return ctx.fail(.{ .invalid_app_header = .{ .app_path = roc_file_path } });
     };
+
+    // Extract non-platform package shorthands from app header (e.g., { fx: platform "...", hlp: "./helper_pkg/main.roc" })
+    // These are packages that can be imported via qualified imports like "import hlp.Helper"
+    var package_shorthands = std.StringHashMap([]const u8).init(ctx.gpa);
+    defer {
+        var iter = package_shorthands.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
+        }
+        package_shorthands.deinit();
+    }
+
+    if (app_header == .app) {
+        const packages_coll = app_parse_ast.store.getCollection(app_header.app.packages);
+        const packages_fields = app_parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
+        for (packages_fields) |field_idx| {
+            const field = app_parse_ast.store.getRecordField(field_idx);
+            const key_region = app_parse_ast.tokens.resolve(field.name);
+            const shorthand = app_source[key_region.start.offset..key_region.end.offset];
+
+            // Skip if this is the platform field
+            if (std.mem.eql(u8, shorthand, platform_qualifier)) continue;
+
+            // Get the package path from the field value
+            if (field.value) |value_idx| {
+                const value_node = app_parse_ast.store.getExpr(value_idx);
+                switch (value_node) {
+                    .string => |str| {
+                        // Use the region to get the full string (token points only to opening quote)
+                        const str_region = app_parse_ast.tokenizedRegionToRegion(str.region);
+                        // Remove quotes from the string
+                        const raw_path = app_source[str_region.start.offset..str_region.end.offset];
+                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
+                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
+                            // Make absolute path relative to app directory
+                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            try package_shorthands.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
 
     // Add platform modules to the module envs map for canonicalization
     // Two keys are needed for each platform module:
@@ -2072,6 +2119,127 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         defer ctx.gpa.free(module_name_with_roc);
         const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
         try app_module_envs_map.put(resolved_ident, auto_type);
+    }
+
+    // Load package modules from non-platform packages declared in app header
+    // For each qualified import like "import hlp.Helper", we need to:
+    // 1. Check if the qualifier matches a package shorthand
+    // 2. Find the module file within that package
+    // 3. Compile it and register in app_module_envs_map
+    var package_env_ptrs = std.ArrayList(*ModuleEnv).empty;
+    defer package_env_ptrs.deinit(ctx.gpa);
+
+    if (package_shorthands.count() > 0) {
+        // Extract qualified imports from app AST (imports with qualifier_tok set)
+        const file_stmts = app_parse_ast.store.statementSlice(parsed_file.statements);
+        for (file_stmts) |stmt_idx| {
+            const stmt = app_parse_ast.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .import => |import_stmt| {
+                    // Only process qualified imports (e.g., "import hlp.Helper")
+                    if (import_stmt.qualifier_tok) |qual_tok| {
+                        const qualifier = app_parse_ast.resolve(qual_tok);
+                        const module_name_raw = app_parse_ast.resolve(import_stmt.module_name_tok);
+
+                        // Strip leading dot if present
+                        const module_name = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
+                            module_name_raw[1..]
+                        else
+                            module_name_raw;
+
+                        // Skip platform imports
+                        if (std.mem.eql(u8, qualifier, platform_qualifier)) continue;
+
+                        // Check if qualifier matches a package shorthand
+                        if (package_shorthands.get(qualifier)) |pkg_path| {
+                            // Determine the package directory (dirname of main.roc)
+                            const pkg_dir = std.fs.path.dirname(pkg_path) orelse ".";
+
+                            // Find the module file within the package
+                            const module_file_path = try moduleNameToFilePath(module_name, pkg_dir, ctx.gpa) orelse {
+                                // Module file not found in package
+                                std.log.warn("Package module not found: {s}.{s}", .{ qualifier, module_name });
+                                continue;
+                            };
+                            defer ctx.gpa.free(module_file_path);
+
+                            // Compile the package module
+                            const pkg_module_env = try compileModuleToSharedMemory(
+                                ctx,
+                                module_file_path,
+                                module_name,
+                                shm_allocator,
+                                &builtin_modules,
+                                package_env_ptrs.items,
+                            );
+                            try package_env_ptrs.append(ctx.gpa, pkg_module_env);
+
+                            // Register with qualified name (e.g., "hlp.Helper")
+                            const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ qualifier, module_name });
+                            defer ctx.gpa.free(qualified_name);
+                            const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
+
+                            // Check if this module exposes a type with the same name
+                            const type_ident_in_module = pkg_module_env.common.findIdent(module_name);
+                            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
+                                pkg_module_env.getExposedNodeIndexById(ident)
+                            else
+                                null;
+
+                            const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with resolved name (e.g., "Helper" without qualifier)
+                            // This is needed for expression canonicalization after import resolution
+                            const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with ".roc" suffix (e.g., "Helper.roc")
+                            // The import system resolves to this format after alias resolution
+                            const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
+                            defer ctx.gpa.free(module_name_with_roc);
+                            const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
     // Compile sibling .roc files BEFORE app canonicalization.
@@ -2170,8 +2338,15 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         actual_sibling_count = @intCast(sorted_siblings.len);
     }
 
-    // Set the actual module count now that we know how many siblings were compiled
-    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count;
+    // Store package module offsets (after sibling modules)
+    const package_count: u32 = @intCast(package_env_ptrs.items.len);
+    for (package_env_ptrs.items, 0..) |pkg_env, i| {
+        const pkg_offset_idx = platform_module_count + actual_sibling_count + @as(u32, @intCast(i));
+        module_env_offsets_ptr[pkg_offset_idx] = @intFromPtr(pkg_env) - @intFromPtr(shm.base_ptr);
+    }
+
+    // Set the actual module count now that we know how many siblings and packages were compiled
+    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count + package_count;
     header_ptr.module_count = total_module_count;
 
     var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
@@ -2237,6 +2412,10 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Add sibling modules for type checking
     for (sibling_env_ptrs.items) |senv| {
         try app_imported_envs.append(ctx.gpa, senv);
+    }
+    // Add package modules for type checking
+    for (package_env_ptrs.items) |penv| {
+        try app_imported_envs.append(ctx.gpa, penv);
     }
 
     // Resolve imports - map each import to its index in app_imported_envs
