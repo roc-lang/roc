@@ -2007,9 +2007,22 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
     }
 
+    // Extract platform qualifier from app header (e.g., "rr" from { rr: platform "..." })
+    // This is needed to register modules with the correct qualified name for import validation
+    const platform_qualifier: []const u8 = blk: {
+        const parsed_file = app_parse_ast.store.getFile();
+        const header = app_parse_ast.store.getHeader(parsed_file.header);
+        if (header == .app) {
+            const platform_field = app_parse_ast.store.getRecordField(header.app.platform_idx);
+            const key_region = app_parse_ast.tokens.resolve(platform_field.name);
+            break :blk app_source[key_region.start.offset..key_region.end.offset];
+        }
+        break :blk "pf"; // fallback to "pf" if not found
+    };
+
     // Add platform modules to the module envs map for canonicalization
     // Two keys are needed for each platform module:
-    // 1. "pf.Stdout" - used during import validation (import pf.Stdout)
+    // 1. "{qualifier}.Stdout" - used during import validation (import rr.Stdout)
     // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
     // Also set statement_idx to the actual type node index, which is needed for
     // creating e_nominal_external and e_lookup_external expressions.
@@ -2042,8 +2055,8 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .qualified_type_ident = type_qualified_ident,
         };
 
-        // Add with qualified name key (for import validation: "pf.Stdout")
-        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "pf.{s}", .{module_name});
+        // Add with qualified name key (for import validation: e.g., "rr.Stdout")
+        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ platform_qualifier, module_name });
         defer ctx.gpa.free(qualified_name);
         const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
         try app_module_envs_map.put(qualified_ident, auto_type);
@@ -2053,7 +2066,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(module_ident, auto_type);
 
         // Add with resolved module name key (for after alias resolution: "Stdout.roc")
-        // The import system resolves "pf.Stdout" to "Stdout.roc", so scopeLookupModule
+        // The import system resolves "{qualifier}.Stdout" to "Stdout.roc", so scopeLookupModule
         // returns "Stdout.roc" which is then used to look up in module_envs
         const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
         defer ctx.gpa.free(module_name_with_roc);
