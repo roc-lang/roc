@@ -309,8 +309,6 @@ jobs:
   # Check if nix-related files changed
   check-nix-changes:
     runs-on: ubuntu-24.04
-    permissions:
-      pull-requests: read
     outputs:
       nix: ${{ steps.filter.outputs.nix }}
     steps:
