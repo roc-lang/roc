@@ -229,17 +229,18 @@ pub const Store = struct {
         self.work.deinit(self.env.gpa);
     }
 
-    /// Check if a constraint range contains a from_numeral constraint.
-    /// This is used to determine if an unbound type variable represents
-    /// a numeric type (which should default to Dec) or a phantom type (which is a ZST).
-    fn hasFromNumeralConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
-        // Empty constraints can't contain from_numeral
+    /// Check if a constraint range indicates the type should be numeric.
+    /// This includes from_numeral (numeric literals), desugared_binop (arithmetic operators
+    /// like +, -, *, /), and desugared_unaryop (unary operators like negation).
+    /// (fixes issue #9020)
+    fn hasNumericConstraint(self: *const Self, constraints: StaticDispatchConstraint.SafeList.Range) bool {
         if (constraints.isEmpty()) {
             return false;
         }
         for (self.types_store.sliceStaticDispatchConstraints(constraints)) |constraint| {
-            if (constraint.origin == .from_numeral) {
-                return true;
+            switch (constraint.origin) {
+                .from_numeral, .desugared_binop, .desugared_unaryop => return true,
+                .method_call, .where_clause => {},
             }
         }
         return false;
@@ -2000,9 +2001,11 @@ pub const Store = struct {
                             continue :outer;
                         }
 
-                        // Check if this flex var has a from_numeral constraint, indicating
+                        // Check if this flex var has a numeric constraint, indicating
                         // it's an unresolved numeric type that should default to Dec.
-                        if (self.hasFromNumeralConstraint(flex.constraints)) {
+                        // This includes from_numeral (literals), desugared_binop (+, -, etc.),
+                        // and desugared_unaryop (negation). (fixes issue #9020)
+                        if (self.hasNumericConstraint(flex.constraints)) {
                             break :blk Layout.default_num();
                         }
 
@@ -2046,9 +2049,11 @@ pub const Store = struct {
                             continue :outer;
                         }
 
-                        // Check if this rigid var has a from_numeral constraint, indicating
+                        // Check if this rigid var has a numeric constraint, indicating
                         // it's an unresolved numeric type that should default to Dec.
-                        if (self.hasFromNumeralConstraint(rigid.constraints)) {
+                        // This includes from_numeral (literals), desugared_binop (+, -, etc.),
+                        // and desugared_unaryop (negation). (fixes issue #9020)
+                        if (self.hasNumericConstraint(rigid.constraints)) {
                             break :blk Layout.default_num();
                         }
 
