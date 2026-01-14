@@ -3056,6 +3056,23 @@ test "issue 8979: nested while - inner break does not save outer loop" {
     try testing.expectEqual(@as(u32, 1), summary.crashed);
 }
 
+test "issue 9005: adding undefined tag to number should not panic" {
+    // Regression test: `b = 6 + L` where L is an undefined tag should
+    // not cause a panic in foldTagUnionScalar when the tag list is empty.
+    // The comptime evaluator should gracefully handle this case.
+    const src =
+        \\b = 6 + L
+    ;
+
+    var res = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&res);
+
+    const summary = try res.evaluator.evalAll();
+
+    // Should not crash - the undefined tag should be handled gracefully
+    try testing.expectEqual(@as(u32, 0), summary.crashed);
+}
+
 // Note: List.repeat test temporarily disabled while investigating
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.

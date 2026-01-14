@@ -508,8 +508,12 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        // Tag index from the value must be valid
-        std.debug.assert(tag_index < tag_list.items.len);
+        // If tag index is out of range, can't fold (consistent with foldTagUnionTuple)
+        // This can happen when the type is not a proper tag union (e.g., error type or
+        // an undefined tag in invalid code like `b = 6 + L` where L is undefined)
+        if (tag_index >= tag_list.items.len) {
+            return;
+        }
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);
