@@ -184,7 +184,7 @@ var global_app_env_ptr: ?*ModuleEnv = null; // App env for e_lookup_required res
 var global_builtin_modules: ?eval.BuiltinModules = null;
 var global_imported_envs: ?[]*const ModuleEnv = null;
 var global_full_imported_envs: ?[]*const ModuleEnv = null; // Full slice with builtin prepended (for interpreter)
-var global_constant_strings_arena: ?std.heap.ArenaAllocator = null; // Persists across interpreter calls for immortal strings
+var global_constant_strings_arena: ?*std.heap.ArenaAllocator = null; // Persists across interpreter calls for immortal strings
 var shm_mutex = PlatformMutex.init();
 
 // Cached header info (set during initialization, used for evaluation)
@@ -425,6 +425,14 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
         }
     }
 
+    // Create the global constant strings arena once (reused by all interpreter instances)
+    const arena_ptr = allocator.create(std.heap.ArenaAllocator) catch {
+        roc_ops.crash("INTERPRETER SHIM: Failed to allocate constant strings arena");
+        return error.OutOfMemory;
+    };
+    arena_ptr.* = std.heap.ArenaAllocator.init(allocator);
+    global_constant_strings_arena = arena_ptr;
+
     // Mark as initialized (release semantics ensure all writes above are visible)
     shared_memory_initialized.set();
 }
@@ -445,20 +453,10 @@ fn evaluateFromSharedMemory(entry_idx: u32, roc_ops: *RocOps, ret_ptr: *anyopaqu
     const builtin_modules = &global_builtin_modules.?;
 
     // Create interpreter for this evaluation (global setup was done in initializeOnce)
+    // The interpreter uses the global constant_strings_arena (doesn't own it), so deinit()
+    // cleans up everything except the arena, which persists across interpreter calls.
     var interpreter = try createInterpreter(env_ptr, app_env, builtin_modules, roc_ops);
-    defer {
-        // Use deinitPreserveConstantStrings to avoid freeing strings that may be referenced
-        // by Roc values (like the model) that persist across interpreter calls.
-        // The arena accumulates over time - this is intentional for immortal strings.
-        const arena = interpreter.deinitPreserveConstantStrings();
-        // Store first arena globally; subsequent arenas leak but contain immortal strings
-        // that may still be referenced, so this is acceptable behavior.
-        if (global_constant_strings_arena == null) {
-            global_constant_strings_arena = arena;
-        }
-        // Note: if global_constant_strings_arena is already set, the new arena's memory
-        // will leak. This is acceptable for immortal strings in long-running apps.
-    }
+    defer interpreter.deinit();
 
     // Get expression info using entry_idx
     // Use the cached globals set during initialization (works for both formats)
@@ -817,7 +815,7 @@ fn createInterpreter(env_ptr: *ModuleEnv, app_env: ?*ModuleEnv, builtin_modules:
     traceDbg(roc_ops, "=== Creating Interpreter ===", .{});
     traceDbg(roc_ops, "imported_envs.len={d}, primary=\"{s}\"", .{ imported_envs.len, env_ptr.module_name });
 
-    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env) catch {
+    var interpreter = eval.Interpreter.init(allocator, env_ptr, builtin_types, builtin_module_env, imported_envs, getShimImportMapping(), app_env, global_constant_strings_arena) catch {
         roc_ops.crash("INTERPRETER SHIM: Interpreter initialization failed");
         return error.InterpreterSetupFailed;
     };
