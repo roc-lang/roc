@@ -306,7 +306,27 @@ jobs:
   roc-cross-compile:
     uses: ./.github/workflows/ci_cross_compile.yml
 
+  # Check if nix-related files changed
+  check-nix-changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: read
+    outputs:
+      nix: ${{ steps.filter.outputs.nix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            nix:
+              - 'build.zig'
+              - 'build.zig.zon'
+              - 'flake.lock'
+              - '**/*.nix'
+
   # Test building inside nix environment
   nix-build:
-    needs: check-once
+    needs: [check-once, check-nix-changes]
+    if: needs.check-nix-changes.outputs.nix == 'true'
     uses: ./.github/workflows/ci_zig_nix.yml
