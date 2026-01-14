@@ -125,7 +125,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "EndOfStream|Timeout|HttpConnectionClosing|WriteFailed"
+          error_string_contains: "build.zig.zon"
           retry_count: 3
 
       - name: Check Builtin.roc formatting (Unix)
@@ -177,7 +177,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
           retry_count: 3
 
       # 2) in release mode
@@ -185,7 +185,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|UnknownHostName"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
           retry_count: 3
 
       - name: Check for snapshot changes
@@ -306,7 +306,25 @@ jobs:
   roc-cross-compile:
     uses: ./.github/workflows/ci_cross_compile.yml
 
+  # Check if nix-related files changed
+  check-nix-changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      nix: ${{ steps.filter.outputs.nix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            nix:
+              - 'build.zig'
+              - 'build.zig.zon'
+              - 'flake.lock'
+              - '**/*.nix'
+
   # Test building inside nix environment
   nix-build:
-    needs: check-once
+    needs: [check-once, check-nix-changes]
+    if: needs.check-nix-changes.outputs.nix == 'true'
     uses: ./.github/workflows/ci_zig_nix.yml
