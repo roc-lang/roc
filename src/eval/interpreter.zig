@@ -642,6 +642,12 @@ pub const Interpreter = struct {
         self.flex_type_context.clearRetainingCapacity();
         // Increment generation so translate_cache entries from previous contexts are invalidated
         self.poly_context_generation +%= 1;
+
+        const saved_env_for_debug = self.env;
+        errdefer {
+            // Restore env on error - some code paths may change env then throw errors
+            self.env = saved_env_for_debug;
+        }
         return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
@@ -10975,6 +10981,11 @@ pub const Interpreter = struct {
                     const saved_env = self.env;
                     const saved_bindings_len = self.bindings.items.len;
                     self.env = @constCast(closure_header.source_env);
+                    // Ensure env is restored on error (e.g., DivisionByZero from callLowLevelBuiltin)
+                    errdefer {
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    }
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
