@@ -985,10 +985,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
 
-    // Use native detection for shim generation to match embedded shim library
-    const shim_target = builder.RocTarget.detectNative();
-
-    // Validate platform header and get link spec for native target
+    // Validate platform header and get link spec
     var link_spec: ?roc_target.TargetLinkSpec = null;
     var targets_config: ?roc_target.TargetsConfig = null;
     if (platform_paths.platform_source_path) |platform_source| {
@@ -1004,26 +1001,46 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Validate that the native target is supported
-            platform_validation.validateTargetSupported(validation.config, shim_target, .exe) catch |err| {
-                switch (err) {
-                    error.UnsupportedTarget => {
-                        // Create a nice formatted error report
-                        const result = platform_validation.createUnsupportedTargetResult(
-                            platform_source,
-                            shim_target,
-                            .exe,
-                            validation.config,
-                        );
-                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                        return error.UnsupportedTarget;
-                    },
-                    else => {},
-                }
-            };
+            // Select target: if --target is provided, use that; otherwise try native then fallback
+            if (args.target) |target_str| {
+                // User explicitly specified a target
+                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .invalid_target = .{ .target_str = target_str },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.InvalidTarget;
+                };
 
-            // Get the link spec for native target
-            link_spec = validation.config.getLinkSpec(shim_target, .exe);
+                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    link_spec = spec;
+                } else {
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        parsed_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            } else {
+                // No --target provided: use the first compatible exe target from the platform
+                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+                } else {
+                    // No compatible exe target found
+                    const native_target = builder.RocTarget.detectNative();
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        native_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            }
         } else |err| {
             switch (err) {
                 error.MissingTargetsSection => {
@@ -1039,9 +1056,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
     }
 
-    // All platforms must have a targets section with a link spec for the native target
+    // All platforms must have a targets section with a link spec for a compatible target
     const validated_link_spec = link_spec orelse {
-        ctx.io.stderr().print("Error: Platform does not support the native target.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n\n", .{}) catch {};
         ctx.io.stderr().print("The platform's targets section must specify files to link for\n", .{}) catch {};
         ctx.io.stderr().print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
         return error.PlatformNotSupported;
@@ -1096,8 +1113,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
 
         // Always extract to temp dir (unique per process, no race condition)
-        // For roc run, we always use the native shim (null target)
-        extractReadRocFilePathShimLibrary(ctx, shim_path, null) catch |err| {
+        // Use the selected target's shim (which may differ from native if falling back to a compatible target)
+        const selected_target = validated_link_spec.target;
+        extractReadRocFilePathShimLibrary(ctx, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
@@ -1105,7 +1123,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Pass null for serialized_module since roc run uses IPC mode
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -1174,7 +1192,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
 
         // Determine ABI from target (for musl detection)
-        const target_abi: ?linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else null;
+        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
