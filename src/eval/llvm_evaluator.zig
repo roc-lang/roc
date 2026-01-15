@@ -839,10 +839,10 @@ pub const LlvmEvaluator = struct {
         }
 
         /// Emit an empty record
-        fn emitEmptyRecord(_: *ExprContext) ExprError!LlvmBuilder.Value {
+        fn emitEmptyRecord(ctx: *ExprContext) ExprError!LlvmBuilder.Value {
             // Empty record {} is represented as unit type
-            // For LLVM, we can represent it as a zero value
-            return error.UnsupportedType;
+            // For LLVM, we represent it as i64 zero (placeholder)
+            return (ctx.builder.intConst(.i64, 0) catch return error.CompilationFailed).toValue();
         }
 
         /// Emit a record literal
