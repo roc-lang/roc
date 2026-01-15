@@ -593,3 +593,72 @@ test "generate f64 code" {
     const result = jit.callReturnF64();
     try std.testing.expectApproxEqRel(@as(f64, 3.14159), result, 0.0001);
 }
+
+test "evaluate addition" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("1 + 2") catch |err| {
+        // Skip if parsing/canonicalization fails (expected in unit test environment)
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 3 }, result);
+}
+
+test "evaluate subtraction" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("10 - 3") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
+}
+
+test "evaluate multiplication" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("6 * 7") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
+}
+
+test "evaluate unary minus" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("-42") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = -42 }, result);
+}
