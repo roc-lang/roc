@@ -159,10 +159,6 @@ pub fn renderComplete(writer: anytype, package_name: []const u8, is_tty: bool) !
     }
 }
 
-// ============================================================================
-// Testing Infrastructure
-// ============================================================================
-
 /// Minimal virtual terminal for testing ANSI output.
 /// Interprets a subset of ANSI escape codes to produce a 2D character buffer,
 /// allowing us to test what users would actually see on screen.
@@ -340,10 +336,6 @@ pub const VirtualTerminal = struct {
         return result.toOwnedSlice(allocator);
     }
 };
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 const testing = std.testing;
 
