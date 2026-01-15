@@ -495,12 +495,12 @@ pub const Payload = extern union {
 
     pub const ExprCall = extern struct {
         func: u32,
-        extra_data_idx: u32,
+        args_span2_idx: u32,
         called_via: u32,
     };
 
     pub const ExprRecord = extern struct {
-        extra_data_idx: u32,
+        fields_ext_idx: u32, // Index into span_with_node_data: (fields.start, fields.len, ext_value)
         _unused1: u32,
         _unused2: u32,
     };
@@ -518,7 +518,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprLambda = extern struct {
-        extra_data_idx: u32,
+        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
         _unused1: u32,
         _unused2: u32,
     };
@@ -542,13 +542,13 @@ pub const Payload = extern union {
     };
 
     pub const ExprIfThenElse = extern struct {
-        extra_data_idx: u32,
-        extra_data_end: u32,
-        _unused: u32,
+        branches_else_idx: u32, // Index into span_with_node_data: (branches.start, branches.len, final_else)
+        _unused1: u32,
+        _unused2: u32,
     };
 
     pub const ExprMatch = extern struct {
-        extra_data_idx: u32,
+        match_data_idx: u32, // Index into match_data: (cond, branches_start, branches_len, exhaustive, is_try_suffix)
         _unused1: u32,
         _unused2: u32,
     };
@@ -606,12 +606,12 @@ pub const Payload = extern union {
     pub const ExprHostedLambda = extern struct {
         symbol_name: u32,
         index: u32,
-        extra_data_idx: u32,
+        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
     };
 
     pub const ExprLowLevel = extern struct {
         op: u32,
-        extra_data_idx: u32,
+        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
         _unused: u32,
     };
 
@@ -700,7 +700,7 @@ pub const Payload = extern union {
     pub const ExprTypeVarDispatch = extern struct {
         type_var_alias_stmt: u32,
         method_name: u32,
-        extra_data_idx: u32,
+        args_span2_idx: u32,
     };
 
     // --- Patterns ---
@@ -881,7 +881,7 @@ pub const Payload = extern union {
     };
 
     pub const MatchBranch = extern struct {
-        extra_data_idx: u32,
+        match_branch_idx: u32, // Index into match_branch_data
         _unused1: u32,
         _unused2: u32,
     };
@@ -895,7 +895,7 @@ pub const Payload = extern union {
     pub const WhereClause = extern struct {
         var_idx: u32,
         name: u32,
-        extra_data_idx: u32,
+        args_ret_idx: u32, // Index into span_with_node_data: (args.start, args.len, ret)
     };
 
     pub const WhereMalformed = extern struct {
