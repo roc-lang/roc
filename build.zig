@@ -2909,7 +2909,7 @@ pub fn build(b: *std.Build) void {
             merge_can_coverage.step.dependOn(&run_can_snapshot_coverage.step);
 
             // Add coverage summary step for canonicalize (reads merged coverage)
-            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", 0.0);
+            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", 82.0);
             can_summary_step.step.dependOn(&merge_can_coverage.step);
 
             // Hook up coverage_step to the canonicalize summary step
