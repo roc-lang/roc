@@ -1461,17 +1461,19 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
 pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CIR.TypeHeader {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeHeader));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     std.debug.assert(node.tag == .type_header);
 
+    const p = payload.raw;
     // Unpack args from packed format (start in upper 16 bits, len in lower 16 bits)
-    const packed_args = node.data_3;
+    const packed_args = p.data_3;
     const args_start: u32 = packed_args >> 16;
     const args_len: u32 = packed_args & 0xFFFF;
 
     return CIR.TypeHeader{
-        .name = @bitCast(node.data_1),
-        .relative_name = @bitCast(node.data_2),
+        .name = @bitCast(p.data_1),
+        .relative_name = @bitCast(p.data_2),
         .args = .{ .span = .{ .start = args_start, .len = args_len } },
     };
 }
@@ -1480,9 +1482,10 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
+    const p = node.getPayload().raw;
     return .{
-        .name = @bitCast(node.data_1),
-        .ty = @enumFromInt(node.data_2),
+        .name = @bitCast(p.data_1),
+        .ty = @enumFromInt(p.data_2),
     };
 }
 
@@ -1490,15 +1493,15 @@ pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno
 pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CIR.Annotation {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annotation));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     std.debug.assert(node.tag == .annotation);
 
-    const anno: CIR.TypeAnno.Idx = @enumFromInt(node.data_1);
+    const p = payload.annotation;
+    const anno: CIR.TypeAnno.Idx = @enumFromInt(p.ident);
 
-    const where_flag = node.data_2;
-    const where_clause = if (where_flag == 1) blk: {
-        const extra_start = node.data_3;
-        const extra_data = store.extra_data.items.items[extra_start..];
+    const where_clause = if (p.has_where == 1) blk: {
+        const extra_data = store.extra_data.items.items[p.type_anno..];
 
         const where_start = extra_data[0];
         const where_len = extra_data[1];
@@ -1515,13 +1518,15 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
 pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx) CIR.ExposedItem {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(exposedItem));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     switch (node.tag) {
         .exposed_item => {
+            const p = payload.raw;
             return CIR.ExposedItem{
-                .name = @bitCast(node.data_1),
-                .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
-                .is_wildcard = node.data_3 != 0,
+                .name = @bitCast(p.data_1),
+                .alias = if (p.data_2 == 0) null else @bitCast(p.data_2),
+                .is_wildcard = p.data_3 != 0,
             };
         },
         else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
