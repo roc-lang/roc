@@ -8,10 +8,8 @@
 const std = @import("std");
 const collections = @import("collections");
 
-/// Payload storage - 3 u32s (12 bytes) interpreted via the Payload union
-payload_0: u32,
-payload_1: u32,
-payload_2: u32,
+/// Typed payload - 12 bytes accessed via semantic field names per node type.
+payload: Payload,
 tag: Tag,
 
 /// A list of nodes.
@@ -19,22 +17,17 @@ pub const List = collections.SafeMultiList(@This());
 
 /// Create a new Node with the given tag and zeroed payload.
 pub fn init(tag: Tag) @This() {
-    return .{ .tag = tag, .payload_0 = 0, .payload_1 = 0, .payload_2 = 0 };
+    return .{ .tag = tag, .payload = std.mem.zeroes(Payload) };
 }
 
-/// Get the payload as a typed extern union for type-safe access to node data.
-/// This reinterprets the payload bytes as a Payload union without copying.
+/// Get the payload for type-safe access to node data.
 pub fn getPayload(self: *const @This()) Payload {
-    return @as(*const Payload, @ptrCast(&self.payload_0)).*;
+    return self.payload;
 }
 
 /// Set the payload from a typed union value.
-/// This writes the payload data to the payload storage.
 pub fn setPayload(self: *@This(), p: Payload) void {
-    const raw = @as(*const [3]u32, @ptrCast(&p)).*;
-    self.payload_0 = raw[0];
-    self.payload_1 = raw[1];
-    self.payload_2 = raw[2];
+    self.payload = p;
 }
 
 /// Internal representation for where a node is stored
@@ -247,7 +240,7 @@ pub const Tag = enum {
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
-/// This is an extern union that overlays the data_1/data_2/data_3 fields (12 bytes = 3 × u32).
+/// This is an extern union of exactly 12 bytes (3 × u32).
 /// Each variant corresponds to a Node.Tag and provides semantic field names.
 ///
 /// IMPORTANT: This must be an extern union to ensure consistent size across debug/release builds.

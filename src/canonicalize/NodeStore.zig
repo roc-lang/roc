@@ -452,7 +452,6 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
             const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
 
-            // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
                 .e_num = .{
                     .value = .{ .bytes = @bitCast(value_as_u32s.*), .kind = val_kind },
