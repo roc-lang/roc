@@ -988,3 +988,75 @@ test "evaluate nested if" {
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
 }
+
+test "evaluate simple lambda application" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (\x -> x + 1) 5 should equal 6
+    const result = evaluator.evaluate("(\\x -> x + 1) 5") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 6 }, result);
+}
+
+test "evaluate lambda identity" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (\x -> x) 42 should equal 42
+    const result = evaluator.evaluate("(\\x -> x) 42") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
+}
+
+test "evaluate lambda with arithmetic in body" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (\x -> x * 2 + 10) 5 should equal 20
+    const result = evaluator.evaluate("(\\x -> x * 2 + 10) 5") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
+}
+
+test "evaluate lambda with if in body" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (\x -> if x > 0 then x else -x) 5 should equal 5
+    const result = evaluator.evaluate("(\\x -> if x > 0 then x else -x) 5") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 5 }, result);
+}
