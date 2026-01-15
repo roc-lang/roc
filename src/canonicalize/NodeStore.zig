@@ -1759,17 +1759,23 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             // Store the extra data start position in the node
-            node.data_1 = @intCast(extra_start);
+            node.setPayload(.{ .raw = .{ .data_1 = @intCast(extra_start), .data_2 = 0, .data_3 = 0 } });
         },
         .s_type_var_alias => |s| {
             node.tag = .statement_type_var_alias;
-            node.data_1 = @bitCast(s.alias_name);
-            node.data_2 = @bitCast(s.type_var_name);
-            node.data_3 = @intFromEnum(s.type_var_anno);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @bitCast(s.alias_name),
+                .data_2 = @bitCast(s.type_var_name),
+                .data_3 = @intFromEnum(s.type_var_anno),
+            } });
         },
         .s_runtime_error => |s| {
-            node.data_1 = @intFromEnum(s.diagnostic);
             node.tag = .malformed;
+            node.setPayload(.{ .diagnostic = .{
+                .primary = @intFromEnum(s.diagnostic),
+                .secondary = 0,
+                .tertiary = 0,
+            } });
         },
     }
 
@@ -1791,28 +1797,35 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     switch (expr) {
         .e_lookup_local => |local| {
             node.tag = .expr_var;
-            node.data_1 = @intFromEnum(local.pattern_idx);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @intFromEnum(local.pattern_idx),
+                .data_2 = 0,
+                .data_3 = 0,
+            } });
         },
         .e_lookup_external => |e| {
             // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
-            node.data_1 = @intFromEnum(e.module_idx);
-            node.data_2 = e.target_node_idx;
-            node.data_3 = @bitCast(e.ident_idx);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @intFromEnum(e.module_idx),
+                .data_2 = e.target_node_idx,
+                .data_3 = @bitCast(e.ident_idx),
+            } });
         },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
-            node.data_1 = e.requires_idx.toU32();
+            node.setPayload(.{ .raw = .{
+                .data_1 = e.requires_idx.toU32(),
+                .data_2 = 0,
+                .data_3 = 0,
+            } });
         },
         .e_num => |e| {
             node.tag = .expr_num;
 
-            node.data_1 = @intFromEnum(e.kind);
-            node.data_2 = @intFromEnum(e.value.kind);
-
             // Store i128 value in extra_data
-            const extra_data_start = store.extra_data.len();
+            const extra_data_start: u32 = @intCast(store.extra_data.len());
 
             // Store the IntLiteralValue as i128 (16 bytes = 4 u32s)
             // We always store as i128 internally
@@ -1822,33 +1835,47 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 _ = try store.extra_data.append(store.gpa, word);
             }
 
-            // Store the extra_data index in data_1
-            node.data_3 = @intCast(extra_data_start);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @intFromEnum(e.kind),
+                .data_2 = @intFromEnum(e.value.kind),
+                .data_3 = extra_data_start,
+            } });
         },
         .e_list => |e| {
             node.tag = .expr_list;
-            node.data_1 = e.elems.span.start;
-            node.data_2 = e.elems.span.len;
+            node.setPayload(.{ .expr_list = .{
+                .elems_start = e.elems.span.start,
+                .elems_len = e.elems.span.len,
+                ._unused = 0,
+            } });
         },
         .e_empty_list => |_| {
             node.tag = .expr_empty_list;
         },
         .e_tuple => |e| {
             node.tag = .expr_tuple;
-            node.data_1 = e.elems.span.start;
-            node.data_2 = e.elems.span.len;
+            node.setPayload(.{ .expr_tuple = .{
+                .elems_start = e.elems.span.start,
+                .elems_len = e.elems.span.len,
+                ._unused = 0,
+            } });
         },
         .e_frac_f32 => |e| {
             node.tag = Node.Tag.expr_frac_f32;
-            node.data_1 = @bitCast(e.value);
-            node.data_2 = @intFromBool(e.has_suffix);
+            node.setPayload(.{ .expr_frac_f32 = .{
+                .value = @bitCast(e.value),
+                .has_suffix = @intFromBool(e.has_suffix),
+                ._unused = 0,
+            } });
         },
         .e_frac_f64 => |e| {
             node.tag = .expr_frac_f64;
             const raw: [2]u32 = @bitCast(e.value);
-            node.data_1 = raw[0];
-            node.data_2 = raw[1];
-            node.data_3 = @intFromBool(e.has_suffix);
+            node.setPayload(.{ .expr_frac_f64 = .{
+                .value_lo = raw[0],
+                .value_hi = raw[1],
+                .has_suffix = @intFromBool(e.has_suffix),
+            } });
         },
         .e_dec => |e| {
             node.tag = .expr_dec;
