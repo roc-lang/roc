@@ -235,6 +235,8 @@ pub const DevEvaluator = struct {
             .e_if => |if_expr| try self.generateIfCodeWithEnv(module_env, if_expr, result_type, env),
             .e_call => |call| try self.generateCallCode(module_env, call, result_type, env),
             .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
+            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
+            .e_empty_list => try self.generateEmptyListCode(result_type),
             else => return error.UnsupportedExpression,
         };
     }
@@ -488,6 +490,78 @@ pub const DevEvaluator = struct {
     /// Generate code for a floating-point literal
     fn generateFloatCode(self: *DevEvaluator, value: f64) Error![]const u8 {
         return self.generateReturnF64Code(value);
+    }
+
+    /// Generate code for zero-argument tags (True, False, None, etc.)
+    fn generateZeroArgTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_type: ResultType) Error![]const u8 {
+        // Compare tag names using interned ident indices (not string comparison)
+        // Standard tags: True=1, False=0
+        const value: i64 = if (tag.name == module_env.idents.true_tag)
+            1
+        else if (tag.name == module_env.idents.false_tag)
+            0
+        else if (tag.name == module_env.idents.ok)
+            0
+        else if (tag.name == module_env.idents.err)
+            1
+        else
+            // For other tags, use 0 as the default discriminant
+            0;
+
+        return self.generateReturnI64Code(value, result_type);
+    }
+
+    /// Generate code for empty list []
+    fn generateEmptyListCode(self: *DevEvaluator, result_type: ResultType) Error![]const u8 {
+        // Empty list is represented as a null pointer/zero
+        return self.generateReturnI64Code(0, result_type);
+    }
+
+    /// Generate code for empty record {}
+    fn generateEmptyRecordCode(self: *DevEvaluator, result_type: ResultType) Error![]const u8 {
+        // Empty record is a unit type, represented as 0
+        return self.generateReturnI64Code(0, result_type);
+    }
+
+    /// Generate code for tuple expressions
+    fn generateTupleCode(self: *DevEvaluator, module_env: *ModuleEnv, tuple: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const elems = module_env.store.sliceExpr(tuple.elems);
+
+        // For simple single-element tuples, just return the element value
+        if (elems.len == 1) {
+            const elem_expr = module_env.store.getExpr(elems[0]);
+            return self.generateCodeForExprWithEnv(module_env, elem_expr, result_type, env);
+        }
+
+        // For multi-element tuples with all constant values, we could pack them
+        // For now, only support single-element or all-constant tuples
+        if (elems.len == 0) {
+            // Empty tuple is unit, return 0
+            return self.generateReturnI64Code(0, result_type);
+        }
+
+        // For tuples, try to evaluate all elements as constants
+        // Return the first element's value for now (simplified)
+        const first_expr = module_env.store.getExpr(elems[0]);
+        const first_val = self.tryEvalConstantI64WithEnvMap(module_env, first_expr, env) orelse
+            return error.UnsupportedExpression;
+
+        return self.generateReturnI64Code(first_val, result_type);
+    }
+
+    /// Generate code for list expressions
+    fn generateListCode(self: *DevEvaluator, module_env: *ModuleEnv, list: anytype, result_type: ResultType, _: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const elems = module_env.store.sliceExpr(list.elems);
+
+        // Empty list
+        if (elems.len == 0) {
+            return self.generateReturnI64Code(0, result_type);
+        }
+
+        // For single-element lists with constant value, we could do something simple
+        // For now, return UnsupportedExpression for non-empty lists
+        // (proper list support requires memory allocation)
+        return error.UnsupportedExpression;
     }
 
     /// Generate code that returns an i64/u64 value
