@@ -759,37 +759,99 @@ pub const LlvmEvaluator = struct {
             }
 
             // Handle lambda calls: (|x| body)(arg)
-            if (func_expr == .e_lambda) {
-                const lambda = func_expr.e_lambda;
-                const param_patterns = ctx.module_env.store.slicePatterns(lambda.args);
-                const call_args = ctx.module_env.store.sliceExpr(call.args);
+            // Also handles curried functions: (((|a| |b| |c| body)(x))(y))(z)
+            return ctx.emitLambdaCall(call.func, call.args);
+        }
 
-                // Check that we have the right number of arguments
-                if (param_patterns.len != call_args.len) {
+        /// Handle lambda calls, including curried functions.
+        /// For curried functions like (((|a| |b| |c| body)(x))(y))(z):
+        /// 1. Collect all arguments [x, y, z] from the call chain
+        /// 2. Find the base lambda and all nested lambdas
+        /// 3. Bind each parameter to its argument
+        /// 4. Evaluate the innermost body with all bindings in scope
+        fn emitLambdaCall(ctx: *ExprContext, func_idx: CIR.Expr.Idx, outer_args: CIR.Expr.Span) ExprError!LlvmBuilder.Value {
+            // Collect all arguments from the call chain (outermost first)
+            var all_args = std.ArrayListUnmanaged(CIR.Expr.Idx){};
+            defer all_args.deinit(ctx.evaluator.allocator);
+
+            // Add outer args first
+            for (ctx.module_env.store.sliceExpr(outer_args)) |arg| {
+                all_args.append(ctx.evaluator.allocator, arg) catch return error.OutOfMemory;
+            }
+
+            // Walk through nested calls and collect their arguments
+            var current_func = func_idx;
+            while (true) {
+                const expr = ctx.module_env.store.getExpr(current_func);
+                if (expr == .e_call) {
+                    const inner_call = expr.e_call;
+                    // Insert inner args at the beginning (they come first in application order)
+                    const inner_args = ctx.module_env.store.sliceExpr(inner_call.args);
+                    for (0..inner_args.len) |i| {
+                        all_args.insert(ctx.evaluator.allocator, i, inner_args[i]) catch return error.OutOfMemory;
+                    }
+                    current_func = inner_call.func;
+                } else {
+                    break;
+                }
+            }
+
+            // Now current_func should be the base lambda
+            const base_expr = ctx.module_env.store.getExpr(current_func);
+            if (base_expr != .e_lambda) {
+                return error.UnsupportedType;
+            }
+
+            // Collect all nested lambdas and their parameters
+            var all_params = std.ArrayListUnmanaged(CIR.Pattern.Idx){};
+            defer all_params.deinit(ctx.evaluator.allocator);
+
+            var current_lambda = base_expr.e_lambda;
+            var innermost_body: CIR.Expr.Idx = undefined;
+
+            while (true) {
+                // Collect params from this lambda
+                const params = ctx.module_env.store.slicePatterns(current_lambda.args);
+                for (params) |param| {
+                    all_params.append(ctx.evaluator.allocator, param) catch return error.OutOfMemory;
+                }
+
+                // Check if body is another lambda or closure
+                const body_expr = ctx.module_env.store.getExpr(current_lambda.body);
+                if (body_expr == .e_lambda) {
+                    current_lambda = body_expr.e_lambda;
+                } else if (body_expr == .e_closure) {
+                    // Closures wrap lambdas - get the inner lambda
+                    const closure = body_expr.e_closure;
+                    const inner_lambda_expr = ctx.module_env.store.getExpr(closure.lambda_idx);
+                    if (inner_lambda_expr != .e_lambda) {
+                        return error.UnsupportedType;
+                    }
+                    current_lambda = inner_lambda_expr.e_lambda;
+                } else {
+                    innermost_body = current_lambda.body;
+                    break;
+                }
+            }
+
+            // Check that we have the right number of arguments
+            if (all_args.items.len != all_params.items.len) {
+                return error.UnsupportedType;
+            }
+
+            // Bind each parameter to its argument
+            for (all_params.items, all_args.items) |param_idx, arg_idx| {
+                const pattern = ctx.module_env.store.getPattern(param_idx);
+                if (pattern != .assign) {
                     return error.UnsupportedType;
                 }
 
-                // Bind each argument to its parameter
-                for (param_patterns, call_args) |param_idx, arg_idx| {
-                    const pattern = ctx.module_env.store.getPattern(param_idx);
-                    if (pattern != .assign) {
-                        // Only simple identifier patterns supported for now
-                        return error.UnsupportedType;
-                    }
-
-                    // Evaluate the argument
-                    const arg_val = try ctx.emitExpr(arg_idx);
-
-                    // Bind the parameter to the argument value
-                    ctx.locals.put(param_idx, arg_val) catch return error.CompilationFailed;
-                }
-
-                // Evaluate the lambda body
-                return ctx.emitExpr(lambda.body);
+                const arg_val = try ctx.emitExpr(arg_idx);
+                ctx.locals.put(param_idx, arg_val) catch return error.CompilationFailed;
             }
 
-            // For other calls, return unsupported
-            return error.UnsupportedType;
+            // Evaluate the innermost body with all bindings in scope
+            return ctx.emitExpr(innermost_body);
         }
 
         /// Emit a string segment (single string literal)
