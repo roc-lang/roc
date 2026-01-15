@@ -3402,3 +3402,32 @@ test "check type - incompatible match patterns" {
     ;
     try checkTypesModule(source, .fail_first, "INCOMPATIBLE MATCH PATTERNS");
 }
+
+test "check type - function with wrong return type annotation" {
+    // Function body doesn't match return type annotation
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| x + 1
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - record access on non-record" {
+    // Trying to access a field on a non-record type
+    const source =
+        \\x : I64
+        \\x = 42
+        \\y = x.foo
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - function application on non-function" {
+    // Trying to call a non-function
+    const source =
+        \\x : I64
+        \\x = 42
+        \\y = x(1, 2)
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
