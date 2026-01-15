@@ -220,15 +220,16 @@ pub fn getNodeRegion(store: *const NodeStore, node_idx: Node.Idx) Region {
 pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.Statement {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(statement));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     switch (node.tag) {
         .statement_decl => {
+            const p = payload.statement_decl;
             return CIR.Statement{ .s_decl = .{
-                .pattern = @enumFromInt(node.data_1),
-                .expr = @enumFromInt(node.data_2),
+                .pattern = @enumFromInt(p.pattern),
+                .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -239,12 +240,12 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             } };
         },
         .statement_decl_gen => {
+            const p = payload.statement_decl;
             return CIR.Statement{ .s_decl_gen = .{
-                .pattern = @enumFromInt(node.data_1),
-                .expr = @enumFromInt(node.data_2),
+                .pattern = @enumFromInt(p.pattern),
+                .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
                     const has_anno = extra_data[0] != 0;
                     if (has_anno) {
                         break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
@@ -255,12 +256,12 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             } };
         },
         .statement_var => {
+            const p = payload.statement_var;
             return CIR.Statement{ .s_var = .{
-                .pattern_idx = @enumFromInt(node.data_1),
-                .expr = @enumFromInt(node.data_2),
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_start = node.data_3;
-                    const extra_data = store.extra_data.items.items[extra_start..];
+                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
                     if (extra_data[0] != 0) {
                         break :blk @enumFromInt(extra_data[1]);
                     } else {
@@ -269,39 +270,63 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 },
             } };
         },
-        .statement_reassign => return CIR.Statement{ .s_reassign = .{
-            .pattern_idx = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-        } },
-        .statement_crash => return CIR.Statement{ .s_crash = .{
-            .msg = @enumFromInt(node.data_1),
-        } },
-        .statement_dbg => return CIR.Statement{ .s_dbg = .{
-            .expr = @enumFromInt(node.data_1),
-        } },
-        .statement_expr => return .{ .s_expr = .{
-            .expr = @enumFromInt(node.data_1),
-        } },
-        .statement_expect => return CIR.Statement{ .s_expect = .{
-            .body = @enumFromInt(node.data_1),
-        } },
-        .statement_for => return CIR.Statement{ .s_for = .{
-            .patt = @enumFromInt(node.data_1),
-            .expr = @enumFromInt(node.data_2),
-            .body = @enumFromInt(node.data_3),
-        } },
-        .statement_while => return CIR.Statement{ .s_while = .{
-            .cond = @enumFromInt(node.data_1),
-            .body = @enumFromInt(node.data_2),
-        } },
+        .statement_reassign => {
+            const p = payload.statement_reassign;
+            return CIR.Statement{ .s_reassign = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .expr = @enumFromInt(p.expr),
+            } };
+        },
+        .statement_crash => {
+            const p = payload.statement_crash;
+            return CIR.Statement{ .s_crash = .{
+                .msg = @enumFromInt(p.msg),
+            } };
+        },
+        .statement_dbg => {
+            const p = payload.statement_single_expr;
+            return CIR.Statement{ .s_dbg = .{
+                .expr = @enumFromInt(p.expr),
+            } };
+        },
+        .statement_expr => {
+            const p = payload.statement_single_expr;
+            return .{ .s_expr = .{
+                .expr = @enumFromInt(p.expr),
+            } };
+        },
+        .statement_expect => {
+            const p = payload.statement_single_expr;
+            return CIR.Statement{ .s_expect = .{
+                .body = @enumFromInt(p.expr),
+            } };
+        },
+        .statement_for => {
+            const p = payload.statement_for;
+            return CIR.Statement{ .s_for = .{
+                .patt = @enumFromInt(p.patt),
+                .expr = @enumFromInt(p.expr),
+                .body = @enumFromInt(p.body),
+            } };
+        },
+        .statement_while => {
+            const p = payload.statement_while;
+            return CIR.Statement{ .s_while = .{
+                .cond = @enumFromInt(p.cond),
+                .body = @enumFromInt(p.body),
+            } };
+        },
         .statement_break => return CIR.Statement{ .s_break = .{} },
-        .statement_return => return CIR.Statement{ .s_return = .{
-            .expr = @enumFromInt(node.data_1),
-            .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
-        } },
+        .statement_return => {
+            const p = payload.statement_return;
+            return CIR.Statement{ .s_return = .{
+                .expr = @enumFromInt(p.expr),
+                .lambda = if (p.lambda_plus_one == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(p.lambda_plus_one - 1)),
+            } };
+        },
         .statement_import => {
-            const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.statement_import;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const alias_data = extra_data[0];
             const qualifier_data = extra_data[1];
@@ -314,7 +339,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
 
             return CIR.Statement{
                 .s_import = .{
-                    .module_name_tok = @bitCast(node.data_1),
+                    .module_name_tok = @bitCast(p.module_name_tok),
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
                     .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
@@ -322,28 +347,30 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_alias_decl => {
+            const p = payload.raw;
             return CIR.Statement{
                 .s_alias_decl = .{
-                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
-                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
+                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(p.data_1)),
+                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_2)),
                 },
             };
         },
         .statement_nominal_decl => {
+            const p = payload.raw;
             // Get is_opaque from extra_data
-            const extra_idx = node.data_3;
+            const extra_idx = p.data_3;
             const is_opaque = store.extra_data.items.items[extra_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
-                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(node.data_1)),
-                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_2)),
+                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(p.data_1)),
+                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_2)),
                     .is_opaque = is_opaque,
                 },
             };
         },
         .statement_type_anno => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.raw;
+            const extra_data = store.extra_data.items.items[p.data_1..];
 
             const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
@@ -364,17 +391,19 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_type_var_alias => {
+            const p = payload.raw;
             return CIR.Statement{
                 .s_type_var_alias = .{
-                    .alias_name = @bitCast(node.data_1),
-                    .type_var_name = @bitCast(node.data_2),
-                    .type_var_anno = @enumFromInt(node.data_3),
+                    .alias_name = @bitCast(p.data_1),
+                    .type_var_name = @bitCast(p.data_2),
+                    .type_var_anno = @enumFromInt(p.data_3),
                 },
             };
         },
         .malformed => {
+            const p = payload.diagnostic;
             return CIR.Statement{ .s_runtime_error = .{
-                .diagnostic = @enumFromInt(node.data_1),
+                .diagnostic = @enumFromInt(p.primary),
             } };
         },
         else => {

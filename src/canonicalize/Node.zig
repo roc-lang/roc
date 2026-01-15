@@ -253,7 +253,11 @@ pub const Payload = extern union {
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,
+    statement_reassign: StatementReassign,
     statement_crash: StatementCrash,
+    statement_single_expr: StatementSingleExpr,
+    statement_for: StatementFor,
+    statement_while: StatementWhile,
     statement_return: StatementReturn,
     statement_import: StatementImport,
 
@@ -322,34 +326,67 @@ pub const Payload = extern union {
 
     // --- Statements ---
 
+    /// statement_decl, statement_decl_gen: pattern + expr + extra_data for anno
     pub const StatementDecl = extern struct {
+        pattern: u32,
+        expr: u32,
         extra_data_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
     };
 
+    /// statement_var: pattern_idx + expr + extra_data for anno
     pub const StatementVar = extern struct {
-        ident: u32,
+        pattern_idx: u32,
+        expr: u32,
+        extra_data_idx: u32,
+    };
+
+    /// statement_reassign: pattern_idx + expr
+    pub const StatementReassign = extern struct {
+        pattern_idx: u32,
         expr: u32,
         _unused: u32,
     };
 
+    /// statement_crash: msg expr
     pub const StatementCrash = extern struct {
-        msg_expr: u32,
+        msg: u32,
         _unused1: u32,
         _unused2: u32,
     };
 
-    pub const StatementReturn = extern struct {
+    /// statement_dbg, statement_expr, statement_expect: single expr/body
+    pub const StatementSingleExpr = extern struct {
         expr: u32,
         _unused1: u32,
         _unused2: u32,
     };
 
+    /// statement_for: patt + expr + body
+    pub const StatementFor = extern struct {
+        patt: u32,
+        expr: u32,
+        body: u32,
+    };
+
+    /// statement_while: cond + body
+    pub const StatementWhile = extern struct {
+        cond: u32,
+        body: u32,
+        _unused: u32,
+    };
+
+    /// statement_return: expr + optional lambda
+    pub const StatementReturn = extern struct {
+        expr: u32,
+        lambda_plus_one: u32,
+        _unused: u32,
+    };
+
+    /// statement_import: module_name_tok + extra_data_idx
     pub const StatementImport = extern struct {
-        module_idx: u32,
-        qualifier: u32,
-        exposes_start: u32,
+        module_name_tok: u32,
+        extra_data_idx: u32,
+        _unused: u32,
     };
 
     // --- Expressions ---
