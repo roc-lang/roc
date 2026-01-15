@@ -1240,8 +1240,15 @@ fn replaceStrIsEmptyWithLowLevel(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
                     } }, base.Region.zero());
 
                     // Now replace the e_anno_only expression with the e_low_level_lambda
-                    // Update the expr field of the def
-                    env.store.setDefExpr(def_idx, expr_idx);
+                    // Def structure is stored in extra_data:
+                    // extra_data[0] = pattern, extra_data[1] = expr, ...
+                    // node.data_1 points to the start index in extra_data
+                    const def_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(def_idx)));
+                    const def_node = env.store.nodes.get(def_node_idx);
+                    const extra_start = def_node.data_1;
+
+                    // Update the expr field (at extra_start + 1)
+                    env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
                     // Track this replaced def index
                     try new_def_indices.append(gpa, def_idx);

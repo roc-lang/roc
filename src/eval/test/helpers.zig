@@ -668,7 +668,9 @@ fn rewriteNumericLiteralExpr(
         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
         env.store.nodes.set(node_idx, .{
             .tag = .expr_frac_f32,
-            .payload = .{ .expr_frac_f32 = .{ .value = @bitCast(f32_value), .has_suffix = 1, ._unused = 0 } },
+            .data_1 = @bitCast(f32_value),
+            .data_2 = 1, // has_suffix = true
+            .data_3 = 0,
         });
     } else if (std.mem.eql(u8, type_name, "F64")) {
         // Rewrite to e_frac_f64
@@ -678,7 +680,9 @@ fn rewriteNumericLiteralExpr(
         const high: u32 = @truncate(f64_bits >> 32);
         env.store.nodes.set(node_idx, .{
             .tag = .expr_frac_f64,
-            .payload = .{ .expr_frac_f64 = .{ .value_lo = low, .value_hi = high, .has_suffix = 1 } },
+            .data_1 = low,
+            .data_2 = high,
+            .data_3 = 1, // has_suffix = true
         });
     } else if (!num_lit_info.is_fractional) {
         // Integer type - rewrite to e_num

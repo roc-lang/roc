@@ -28,19 +28,10 @@ fn rand_idx_u16(comptime T: type) T {
     return @enumFromInt(rand.random().int(u16));
 }
 
-/// Generate a random index of type `T` constrained to 24 bits.
-/// Used for types that are packed into 24-bit fields (e.g., body in e_hosted_lambda).
-fn rand_idx_u24(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u24));
-}
-
 /// Helper to create a `DataSpan` from raw start and length positions.
-/// Constrained to fit packed span format: 20 bits start, 11 bits len.
-/// This supports up to ~1M entries and 2K items per span, which is sufficient
-/// for any realistic module. (11 bits for len because e_match uses 1 bit for is_try_suffix)
 fn rand_span() base.DataSpan {
-    const start = rand.random().int(u20);
-    const len = rand.random().int(u11);
+    const start = rand.random().int(u32);
+    const len = rand.random().int(u30); // Constrain len to fit within u30 (used by ImportRhs.num_exposes)
     return base.DataSpan{
         .start = start,
         .len = len,
@@ -151,11 +142,9 @@ test "NodeStore round trip - Statements" {
     try statements.append(gpa, CIR.Statement{
         .s_import = .{
             .module_name_tok = rand_ident_idx(),
-            // qualifier is packed into 16 bits
-            .qualifier_tok = @bitCast(rand.random().int(u32) & 0xFFFF),
+            .qualifier_tok = rand_ident_idx(),
             .alias_tok = rand_ident_idx(),
-            // exposes is packed: start (11 bits), len (5 bits)
-            .exposes = CIR.ExposedItem.Span{ .span = .{ .start = rand.random().int(u11), .len = rand.random().int(u5) } },
+            .exposes = CIR.ExposedItem.Span{ .span = rand_span() },
         },
     });
 
@@ -295,8 +284,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_match = CIR.Expr.Match{
             .cond = rand_idx(CIR.Expr.Idx),
-            // e_match branches: start (20 bits), len (10 bits), is_try_suffix (1 bit)
-            .branches = CIR.Expr.Match.Branch.Span{ .span = .{ .start = rand.random().int(u20), .len = rand.random().int(u10) } },
+            .branches = CIR.Expr.Match.Branch.Span{ .span = rand_span() },
             .exhaustive = rand_idx(TypeVar),
             .is_try_suffix = false,
         },
@@ -345,9 +333,8 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_zero_argument_tag = .{
             .closure_name = rand_ident_idx(),
-            // variant_var and ext_var are packed into 16 bits each
-            .variant_var = rand_idx_u16(TypeVar),
-            .ext_var = rand_idx_u16(TypeVar),
+            .variant_var = rand_idx(TypeVar),
+            .ext_var = rand_idx(TypeVar),
             .name = rand_ident_idx(),
         },
     });
@@ -433,9 +420,9 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{
             .symbol_name = rand_ident_idx(),
-            .index = rand.random().int(u8), // Constrained to 8 bits (packed with body)
+            .index = rand.random().int(u32),
             .args = CIR.Pattern.Span{ .span = rand_span() },
-            .body = rand_idx_u24(CIR.Expr.Idx), // Constrained to 24 bits (packed with index)
+            .body = rand_idx(CIR.Expr.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -454,8 +441,7 @@ test "NodeStore round trip - Expressions" {
         .e_type_var_dispatch = .{
             .type_var_alias_stmt = rand_idx(CIR.Statement.Idx),
             .method_name = rand_ident_idx(),
-            // args is packed: start (20 bits), len (12 bits)
-            .args = .{ .span = rand_span() },
+            .args = .{ .span = .{ .start = rand.random().int(u32), .len = rand.random().int(u32) } },
         },
     });
 
@@ -967,9 +953,8 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .apply = .{
             .name = rand_ident_idx(),
-            // external: module_idx (14 bits), target_node_idx (16 bits)
             .base = .{ .external = .{
-                .module_idx = @enumFromInt(rand.random().int(u14)),
+                .module_idx = rand_idx(CIR.Import.Idx),
                 .target_node_idx = rand.random().int(u16),
             } },
             .args = CIR.TypeAnno.Span{ .span = rand_span() },
@@ -1006,9 +991,8 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .lookup = .{
             .name = rand_ident_idx(),
-            // external: module_idx (14 bits), target_node_idx (16 bits)
             .base = .{ .external = .{
-                .module_idx = @enumFromInt(rand.random().int(u14)),
+                .module_idx = rand_idx(CIR.Import.Idx),
                 .target_node_idx = rand.random().int(u16),
             } },
         },
@@ -1131,8 +1115,7 @@ test "NodeStore round trip - Pattern" {
     try patterns.append(gpa, CIR.Pattern{
         .list = .{
             .patterns = CIR.Pattern.Span{ .span = rand_span() },
-            // rest_info is packed: rest_index (15 bits), rest_pattern (15 bits)
-            .rest_info = .{ .index = rand.random().int(u15), .pattern = @enumFromInt(rand.random().int(u15)) },
+            .rest_info = .{ .index = rand.random().int(u32), .pattern = rand_idx(CIR.Pattern.Idx) },
         },
     });
     try patterns.append(gpa, CIR.Pattern{

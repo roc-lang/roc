@@ -2,848 +2,38 @@
 //! Should always be inserted and fetched from a Node Store.
 //!
 //! The Tag represents what type of Node it is, and
-//! therefore how the payload fields should be interpreted.
+//! therefore how it's data and main_token fields should
+//! be interpreted.
 
 const std = @import("std");
 const collections = @import("collections");
 
-const Node = @This();
-
-/// The payload stores the actual data for this node (12 bytes).
-/// Access via the Payload union to get typed field names.
-payload: Payload,
-/// The tag determines how to interpret the payload.
+data_1: u32,
+data_2: u32,
+data_3: u32,
 tag: Tag,
 
-/// Access the data as a typed payload union.
-/// Use this to access named fields for specific node types.
-pub fn getPayload(self: *const Node) Payload {
-    return self.payload;
-}
-
-/// Set the data from a typed payload union.
-pub fn setPayload(self: *Node, p: Payload) void {
-    self.payload = p;
-}
-
 /// A list of nodes.
-pub const List = collections.SafeMultiList(Node);
+pub const List = collections.SafeMultiList(@This());
+
+/// Get the payload as a typed extern union for type-safe access to node data.
+/// This reinterprets data_1/data_2/data_3 as a Payload union without copying.
+pub fn getPayload(self: *const @This()) Payload {
+    return @as(*const Payload, @ptrCast(&self.data_1)).*;
+}
+
+/// Set the payload from a typed union value.
+/// This writes the payload data to data_1/data_2/data_3.
+pub fn setPayload(self: *@This(), p: Payload) void {
+    const raw = @as(*const [3]u32, @ptrCast(&p)).*;
+    self.data_1 = raw[0];
+    self.data_2 = raw[1];
+    self.data_3 = raw[2];
+}
 
 /// Internal representation for where a node is stored
 /// in the tree.
 pub const Idx = List.Idx;
-
-/// The payload is an extern union that fits in exactly 12 bytes (3 x u32).
-/// Each variant is a packed struct that encodes the data for that node type.
-/// The tag field determines which variant is active.
-pub const Payload = extern union {
-    // Generic access to raw u32 fields (for gradual migration)
-    raw: Raw,
-
-    // Statements
-    statement_decl: StatementDecl,
-    statement_var: StatementVar,
-    statement_reassign: StatementReassign,
-    statement_crash: StatementCrash,
-    statement_dbg: StatementDbg,
-    statement_expr: StatementExpr,
-    statement_expect: StatementExpect,
-    statement_for: StatementFor,
-    statement_while: StatementWhile,
-    statement_break: StatementBreak,
-    statement_return: StatementReturn,
-    statement_import: StatementImport,
-    statement_alias_decl: StatementAliasDecl,
-    statement_nominal_decl: StatementNominalDecl,
-    statement_type_anno: StatementTypeAnno,
-    statement_type_var_alias: StatementTypeVarAlias,
-
-    // Expressions
-    expr_var: ExprVar,
-    expr_tuple: ExprTuple,
-    expr_list: ExprList,
-    expr_empty_list: ExprEmpty,
-    expr_call: ExprCall,
-    expr_record: ExprRecord,
-    expr_empty_record: ExprEmpty,
-    record_field: RecordField,
-    record_destruct: PatternRecordDestruct,
-    expr_external_lookup: ExprExternalLookup,
-    expr_required_lookup: ExprRequiredLookup,
-    expr_dot_access: ExprDotAccess,
-    expr_string: ExprString,
-    expr_string_segment: ExprStringSegment,
-    expr_num: ExprNum,
-    expr_frac_f32: ExprFracF32,
-    expr_frac_f64: ExprFracF64,
-    expr_dec: ExprDec,
-    expr_dec_small: ExprDecSmall,
-    expr_typed_int: ExprTypedInt,
-    expr_typed_frac: ExprTypedFrac,
-    expr_tag: ExprTag,
-    expr_nominal: ExprNominal,
-    expr_nominal_external: ExprNominalExternal,
-    expr_zero_argument_tag: ExprZeroArgumentTag,
-    expr_closure: ExprClosure,
-    expr_lambda: ExprLambda,
-    expr_bin_op: ExprBinOp,
-    expr_unary_minus: ExprUnaryOp,
-    expr_unary_not: ExprUnaryOp,
-    expr_if_then_else: ExprIfThenElse,
-    expr_match: ExprMatch,
-    expr_dbg: ExprDbg,
-    expr_crash: ExprCrash,
-    expr_block: ExprBlock,
-    expr_ellipsis: ExprEmpty,
-    expr_anno_only: ExprAnnoOnly,
-    expr_hosted_lambda: ExprHostedLambda,
-    expr_low_level: ExprLowLevel,
-    expr_expect: ExprExpect,
-    expr_for: ExprFor,
-    expr_return: ExprReturn,
-    expr_type_var_dispatch: ExprTypeVarDispatch,
-    match_branch: MatchBranch,
-    match_branch_pattern: MatchBranchPattern,
-
-    // Type Header and Annotation
-    type_header: TypeHeader,
-    annotation: Annotation,
-
-    // Type Annotations
-    ty_apply: TyApply,
-    ty_rigid_var: TyRigidVar,
-    ty_rigid_var_lookup: TyRigidVarLookup,
-    ty_lookup: TyLookup,
-    ty_underscore: TyUnderscore,
-    ty_tag_union: TyTagUnion,
-    ty_tag: TyTag,
-    ty_tuple: TyTuple,
-    ty_record: TyRecord,
-    ty_record_field: TyRecordField,
-    ty_fn: TyFn,
-    ty_parens: TyParens,
-    ty_lookup_external: TyLookupExternal,
-    ty_malformed: TyMalformed,
-
-    // Where clauses
-    where_method: WhereMethod,
-    where_alias: WhereAlias,
-    where_malformed: WhereMalformed,
-
-    // Patterns
-    pattern_identifier: PatternIdentifier,
-    pattern_as: PatternAs,
-    pattern_applied_tag: PatternAppliedTag,
-    pattern_nominal: PatternNominal,
-    pattern_nominal_external: PatternNominalExternal,
-    pattern_record_destructure: PatternRecordDestructure,
-    pattern_list: PatternList,
-    pattern_tuple: PatternTuple,
-    pattern_num_literal: PatternNumLiteral,
-    pattern_dec_literal: PatternDecLiteral,
-    pattern_f32_literal: PatternF32Literal,
-    pattern_f64_literal: PatternF64Literal,
-    pattern_small_dec_literal: PatternSmallDecLiteral,
-    pattern_str_literal: PatternStrLiteral,
-    pattern_underscore: PatternUnderscore,
-
-    // Lambda Capture
-    lambda_capture: LambdaCapture,
-
-    // Definitions
-    def: Def,
-
-    // Exposed Items
-    exposed_item: ExposedItem,
-
-    // If branch
-    if_branch: IfBranch,
-
-    // Type var slot
-    type_var_slot: TypeVarSlot,
-
-    // Malformed (runtime error)
-    malformed: Malformed,
-
-    // Diagnostics - all share a common structure
-    diagnostic: Diagnostic,
-
-    // Raw access to the 3 u32 fields for compatibility
-    pub const Raw = extern struct {
-        data_1: u32,
-        data_2: u32,
-        data_3: u32,
-    };
-
-    // Statement payload types
-    pub const StatementDecl = extern struct {
-        pattern: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        /// 0 = no annotation, otherwise (annotation_idx + 1)
-        anno_plus_one: u32,
-    };
-
-    pub const StatementVar = extern struct {
-        pattern_idx: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        /// 0 = no annotation, otherwise (annotation_idx + 1)
-        anno_plus_one: u32,
-    };
-
-    pub const StatementReassign = extern struct {
-        pattern_idx: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        _unused: u32,
-    };
-
-    pub const StatementCrash = extern struct {
-        msg: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const StatementDbg = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const StatementExpr = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const StatementExpect = extern struct {
-        body: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const StatementFor = extern struct {
-        patt: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        body: u32, // CIR.Expr.Idx
-    };
-
-    pub const StatementWhile = extern struct {
-        cond: u32, // CIR.Expr.Idx
-        body: u32, // CIR.Expr.Idx
-        _unused: u32,
-    };
-
-    pub const StatementBreak = extern struct {
-        _unused1: u32,
-        _unused2: u32,
-        _unused3: u32,
-    };
-
-    pub const StatementReturn = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        /// 0 = no lambda, otherwise (lambda_idx + 1)
-        lambda_plus_one: u32,
-        _unused: u32,
-    };
-
-    pub const StatementImport = extern struct {
-        module_name_tok: u32, // Ident.Idx (bitcasted)
-        alias_tok: u32, // Ident.Idx (bitcasted) or 0 for None
-        packed_qualifier_and_exposes: packed struct(u32) {
-            qualifier: u16, // Ident.Idx (low 16 bits) or 0 for None
-            exposes_start: u11, // packed into remaining bits
-            exposes_len: u5, // max 31, but max used is ~20
-        },
-    };
-
-    pub const StatementAliasDecl = extern struct {
-        header: u32, // CIR.TypeHeader.Idx
-        anno: u32, // CIR.TypeAnno.Idx
-        _unused: u32,
-    };
-
-    pub const StatementNominalDecl = extern struct {
-        header: u32, // CIR.TypeHeader.Idx
-        anno: u32, // CIR.TypeAnno.Idx
-        is_opaque: u32, // 0 or 1
-    };
-
-    pub const StatementTypeAnno = extern struct {
-        anno: u32, // CIR.TypeAnno.Idx
-        name: u32, // Ident.Idx
-        /// Packed: where_start (20 bits), where_len (11 bits), has_where (1 bit)
-        packed_where: u32,
-    };
-
-    pub const StatementTypeVarAlias = extern struct {
-        alias_name: u32, // Ident.Idx
-        type_var_name: u32, // Ident.Idx
-        type_var_anno: u32, // CIR.TypeAnno.Idx
-    };
-
-    // Expression payload types
-    pub const ExprVar = extern struct {
-        pattern_idx: u32, // CIR.Pattern.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprTuple = extern struct {
-        elems_start: u32,
-        elems_len: u32,
-        _unused: u32,
-    };
-
-    pub const ExprList = extern struct {
-        elems_start: u32,
-        elems_len: u32,
-        _unused: u32,
-    };
-
-    pub const ExprEmpty = extern struct {
-        _unused1: u32,
-        _unused2: u32,
-        _unused3: u32,
-    };
-
-    pub const ExprAnnoOnly = extern struct {
-        ident: u32, // Ident.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprCall = extern struct {
-        func: u32, // CIR.Expr.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        called_via: u32, // CalledVia enum
-    };
-
-    pub const ExprRecord = extern struct {
-        /// Packed: fields_start (20 bits), fields_len (12 bits)
-        packed_fields: u32,
-        /// 0 = no ext, otherwise (ext_idx + 1)
-        ext_plus_one: u32,
-        _unused: u32,
-    };
-
-    pub const RecordField = extern struct {
-        name: u32, // Ident.Idx
-        expr: u32, // CIR.Expr.Idx
-        _unused: u32,
-    };
-
-    pub const PatternRecordDestruct = extern struct {
-        label: u32, // Ident.Idx - the field label being destructured
-        ident: u32, // Ident.Idx - the identifier binding
-        /// Packed: bit 0 = kind tag (0=Required, 1=SubPattern), bits 1-31 = pattern index
-        kind_and_pattern: u32,
-    };
-
-    pub const ExprExternalLookup = extern struct {
-        module_idx: u32, // CIR.Import.Idx
-        target_node_idx: u32,
-        ident_idx: u32, // Ident.Idx
-    };
-
-    pub const ExprRequiredLookup = extern struct {
-        requires_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprDotAccess = extern struct {
-        receiver: u32, // CIR.Expr.Idx
-        field_name: u32, // Ident.Idx
-        /// Packed (from LSB to MSB):
-        /// - bits 0-9: region_idx into diag_region_data (10 bits, max 1K)
-        /// - bit 10: has_args flag
-        /// - bits 11-26: args_start (16 bits, max 64K)
-        /// - bits 27-31: args_len (5 bits, max 31)
-        packed_region_and_args: u32,
-    };
-
-    pub const ExprString = extern struct {
-        segments_start: u32,
-        segments_len: u32,
-        _unused: u32,
-    };
-
-    pub const ExprStringSegment = extern struct {
-        segment: u32, // CIR.Expr.Idx for interpolation or string literal
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprNum = extern struct {
-        kind: u32, // CIR.NumKind
-        val_kind: u32, // CIR.IntValue.IntKind
-        value_idx: u32, // index into int_values list
-    };
-
-    pub const ExprFracF32 = extern struct {
-        value: u32, // f32 bitcast
-        has_suffix: u32,
-        _unused: u32,
-    };
-
-    pub const ExprFracF64 = extern struct {
-        value_lo: u32, // lower 32 bits of f64
-        value_hi: u32, // upper 32 bits of f64
-        has_suffix: u32,
-    };
-
-    pub const ExprDec = extern struct {
-        value_idx: u32, // index into dec_values list
-        has_suffix: u32,
-        _unused: u32,
-    };
-
-    pub const ExprDecSmall = extern struct {
-        /// numerator as i16 stored in lower 16 bits
-        numerator: u32,
-        /// denominator_power_of_ten in lower 8 bits
-        denominator_power: u32,
-        has_suffix: u32,
-    };
-
-    pub const ExprTypedInt = extern struct {
-        type_name: u32,      // Ident.Idx
-        value_kind: u32,     // CIR.IntValue.IntKind
-        value_idx: u32,      // Index into int_values list
-    };
-
-    pub const ExprTypedFrac = extern struct {
-        type_name: u32,      // Ident.Idx
-        value_kind: u32,     // CIR.IntValue.IntKind
-        value_idx: u32,      // Index into int_values list
-    };
-
-    pub const ExprTag = extern struct {
-        name: u32, // Ident.Idx
-        args_start: u32,
-        args_len: u32,
-    };
-
-    pub const ExprNominal = extern struct {
-        nominal_type_decl: u32, // CIR.Statement.Idx
-        backing_expr: u32, // CIR.Expr.Idx
-        backing_type: u32, // CIR.Expr.NominalBackingType
-    };
-
-    pub const ExprNominalExternal = extern struct {
-        module_idx: u32, // CIR.Import.Idx
-        /// Packed: target_node_idx (16 bits), backing_type (16 bits)
-        packed_target_and_type: u32,
-        backing_expr: u32, // CIR.Expr.Idx
-    };
-
-    pub const ExprZeroArgumentTag = extern struct {
-        closure_name: u32, // Ident.Idx
-        /// Packed: variant_var (16 bits), ext_var (16 bits)
-        packed_vars: u32,
-        name: u32, // Ident.Idx
-    };
-
-    pub const ExprClosure = extern struct {
-        lambda_idx: u32, // CIR.Expr.Idx
-        /// Packed: captures_start (20 bits), captures_len (12 bits)
-        packed_captures: u32,
-        tag_name: u32, // Ident.Idx
-    };
-
-    pub const ExprLambda = extern struct {
-        body: u32, // CIR.Expr.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        _unused: u32,
-    };
-
-    pub const ExprBinOp = extern struct {
-        lhs: u32, // CIR.Expr.Idx
-        rhs: u32, // CIR.Expr.Idx
-        op: u32, // BinOp enum
-    };
-
-    pub const ExprUnaryOp = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprIfThenElse = extern struct {
-        /// Packed: branches_start (20 bits), branches_len (12 bits)
-        packed_branches: u32,
-        final_else: u32, // CIR.Expr.Idx
-        _unused: u32,
-    };
-
-    pub const ExprMatch = extern struct {
-        cond: u32, // CIR.Expr.Idx
-        /// Packed: branches_start (20 bits), branches_len (10 bits), is_try_suffix (1 bit), _reserved (1 bit)
-        packed_branches: u32,
-        exhaustive: u32, // types.Var
-    };
-
-    pub const ExprDbg = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprCrash = extern struct {
-        msg: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprBlock = extern struct {
-        stmts_start: u32,
-        stmts_len: u32,
-        final_expr: u32, // CIR.Expr.Idx
-    };
-
-    pub const ExprHostedLambda = extern struct {
-        symbol_name: u32, // Ident.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        /// Packed: body (24 bits), index (8 bits)
-        packed_body_and_index: u32,
-    };
-
-    pub const ExprLowLevel = extern struct {
-        op: u32, // CIR.Expr.LowLevel
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        body: u32, // CIR.Expr.Idx
-    };
-
-    pub const ExprExpect = extern struct {
-        body: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprFor = extern struct {
-        patt: u32, // CIR.Pattern.Idx
-        expr: u32, // CIR.Expr.Idx
-        body: u32, // CIR.Expr.Idx
-    };
-
-    pub const ExprReturn = extern struct {
-        expr: u32, // CIR.Expr.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const ExprTypeVarDispatch = extern struct {
-        type_var_alias_stmt: u32, // CIR.Statement.Idx
-        method_name: u32, // Ident.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-    };
-
-    pub const MatchBranch = extern struct {
-        branch_data_idx: u32,  // Index into match_branch_data list
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const MatchBranchPattern = extern struct {
-        pattern: u32, // CIR.Pattern.Idx
-        degenerate: u32,
-        _unused: u32,
-    };
-
-    // Type Header and Annotation
-    pub const TypeHeader = extern struct {
-        name: u32, // Ident.Idx
-        relative_name: u32, // Ident.Idx
-        /// Packed: args_start (upper 16 bits), args_len (lower 16 bits)
-        packed_args: u32,
-    };
-
-    pub const Annotation = extern struct {
-        type_anno: u32, // CIR.TypeAnno.Idx
-        /// Packed: where_start (20 bits), where_len (12 bits)
-        packed_where: u32,
-        _unused: u32,
-    };
-
-    // Type Annotation payload types
-    pub const TyApply = extern struct {
-        name: u32, // Ident.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        /// Packed: tag (2 bits in high), data (30 bits in low)
-        /// - tag 0 (builtin): builtin_type in low 8 bits
-        /// - tag 1 (local): decl_idx in low 30 bits
-        /// - tag 2 (external): module_idx (low 14 bits), target_node_idx (bits 14-29)
-        packed_base: u32,
-    };
-
-    pub const TyRigidVar = extern struct {
-        name: u32, // Ident.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const TyRigidVarLookup = extern struct {
-        ref: u32, // CIR.TypeAnno.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const TyLookup = extern struct {
-        name: u32, // Ident.Idx
-        /// Packed: tag (2 bits in high), data (30 bits in low)
-        /// - tag 0 (builtin): builtin_type in low 8 bits
-        /// - tag 1 (local): decl_idx in low 30 bits
-        /// - tag 2 (external): module_idx (low 14 bits), target_node_idx (bits 14-29)
-        packed_base: u32,
-        _unused: u32,
-    };
-
-    pub const TyUnderscore = extern struct {
-        _unused1: u32,
-        _unused2: u32,
-        _unused3: u32,
-    };
-
-    pub const TyTagUnion = extern struct {
-        /// Packed: tags_start (20 bits), tags_len (12 bits)
-        packed_tags: u32,
-        /// 0 = no ext, 1 = open, 2+ = (ext_idx + 2)
-        ext_kind: u32,
-        _unused: u32,
-    };
-
-    pub const TyTag = extern struct {
-        name: u32, // Ident.Idx
-        /// Packed: args_start (20 bits), args_len (12 bits)
-        packed_args: u32,
-        _unused: u32,
-    };
-
-    pub const TyTuple = extern struct {
-        /// Packed: elems_start (20 bits), elems_len (12 bits)
-        packed_elems: u32,
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const TyRecord = extern struct {
-        /// Packed: fields_start (20 bits), fields_len (12 bits)
-        packed_fields: u32,
-        /// 0 = no ext, otherwise (ext_idx + 1)
-        ext_plus_one: u32,
-        _unused: u32,
-    };
-
-    pub const TyRecordField = extern struct {
-        name: u32, // Ident.Idx
-        anno: u32, // CIR.TypeAnno.Idx
-        /// 0 = required, 1 = optional
-        optional: u32,
-    };
-
-    pub const TyFn = extern struct {
-        /// Packed: args_start (20 bits), args_len (11 bits), effectful (1 bit)
-        packed_args: u32,
-        ret: u32, // CIR.TypeAnno.Idx
-        _unused: u32,
-    };
-
-    pub const TyParens = extern struct {
-        inner: u32, // CIR.TypeAnno.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const TyLookupExternal = extern struct {
-        module_idx: u32, // CIR.Import.Idx
-        target_node_idx: u32,
-        ident_idx: u32, // Ident.Idx
-    };
-
-    pub const TyMalformed = extern struct {
-        diagnostic: u32, // CIR.Diagnostic.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    // Where clause payload types
-    pub const WhereMethod = extern struct {
-        var_: u32, // CIR.TypeAnno.Idx
-        method_name: u32, // Ident.Idx
-        method_data_idx: u32, // Index into where_method_data list
-    };
-
-    pub const WhereAlias = extern struct {
-        var_: u32, // CIR.TypeAnno.Idx
-        alias_name: u32, // Ident.Idx
-        _unused: u32,
-    };
-
-    pub const WhereMalformed = extern struct {
-        diagnostic: u32, // CIR.Diagnostic.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    // Pattern payload types
-    pub const PatternIdentifier = extern struct {
-        ident: u32, // Ident.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const PatternAs = extern struct {
-        ident: u32, // Ident.Idx
-        pattern: u32, // CIR.Pattern.Idx
-        _unused: u32,
-    };
-
-    pub const PatternAppliedTag = extern struct {
-        args_start: u32,
-        args_len: u32,
-        name: u32, // Ident.Idx
-    };
-
-    pub const PatternNominal = extern struct {
-        nominal_type_decl: u32, // CIR.Statement.Idx
-        backing_pattern: u32, // CIR.Pattern.Idx
-        backing_type: u32, // CIR.Expr.NominalBackingType
-    };
-
-    pub const PatternNominalExternal = extern struct {
-        module_idx: u32, // CIR.Import.Idx
-        /// Packed: target_node_idx (16 bits), backing_type (16 bits)
-        packed_target_and_type: u32,
-        backing_pattern: u32, // CIR.Pattern.Idx
-    };
-
-    pub const PatternRecordDestructure = extern struct {
-        destructs_start: u32,
-        destructs_len: u32,
-        _unused: u32,
-    };
-
-    pub const PatternList = extern struct {
-        /// Packed: patterns_start (20 bits), patterns_len (12 bits)
-        packed_patterns: u32,
-        /// Packed: rest_info encoding
-        rest_info: u32,
-        _unused: u32,
-    };
-
-    pub const PatternTuple = extern struct {
-        patterns_start: u32,
-        patterns_len: u32,
-        _unused: u32,
-    };
-
-    pub const PatternNumLiteral = extern struct {
-        kind: u32, // CIR.NumKind
-        val_kind: u32, // CIR.IntValue.IntKind
-        value_idx: u32, // index into int_values list
-    };
-
-    pub const PatternDecLiteral = extern struct {
-        value_idx: u32, // index into dec_values list
-        has_suffix: u32, // 0 or 1
-        _unused: u32,
-    };
-
-    pub const PatternF32Literal = extern struct {
-        value: u32, // f32 bitcast
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const PatternF64Literal = extern struct {
-        value_lo: u32, // lower 32 bits of f64
-        value_hi: u32, // upper 32 bits of f64
-        _unused: u32,
-    };
-
-    pub const PatternSmallDecLiteral = extern struct {
-        numerator: u32,
-        denominator_power: u32,
-        has_suffix: u32,
-    };
-
-    pub const PatternStrLiteral = extern struct {
-        literal: u32, // CIR.StrLiteral.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    pub const PatternUnderscore = extern struct {
-        _unused1: u32,
-        _unused2: u32,
-        _unused3: u32,
-    };
-
-    // Lambda Capture
-    pub const LambdaCapture = extern struct {
-        name: u32, // Ident.Idx
-        scope_depth: u32,
-        pattern_idx: u32, // CIR.Pattern.Idx
-    };
-
-    // Definition
-    pub const Def = extern struct {
-        def_data_idx: u32,   // Index into def_data list
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    // Exposed Item
-    pub const ExposedItem = extern struct {
-        name: u32, // Ident.Idx
-        alias: u32, // Ident.Idx or 0 if no alias
-        is_wildcard: u32,
-    };
-
-    // If Branch
-    pub const IfBranch = extern struct {
-        cond: u32, // CIR.Expr.Idx
-        body: u32, // CIR.Expr.Idx
-        _unused: u32,
-    };
-
-    // Type var slot
-    pub const TypeVarSlot = extern struct {
-        parent_node_idx: u32, // Node.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    // Malformed (runtime error)
-    pub const Malformed = extern struct {
-        diagnostic: u32, // CIR.Diagnostic.Idx
-        _unused1: u32,
-        _unused2: u32,
-    };
-
-    // Diagnostic - all diagnostic nodes share this structure
-    pub const Diagnostic = extern struct {
-        data_1: u32,
-        data_2: u32,
-        data_3: u32,
-    };
-};
-
-// Compile-time size verification
-comptime {
-    // Verify Payload is exactly 12 bytes (3 x u32)
-    std.debug.assert(@sizeOf(Payload) == 12);
-    // Verify Node is exactly 16 bytes (Payload 12 bytes + tag 4 bytes)
-    std.debug.assert(@sizeOf(Node) == 16);
-    // Verify correct field offsets
-    std.debug.assert(@offsetOf(Node, "payload") == 0);
-    std.debug.assert(@offsetOf(Node, "tag") == 12);
-}
 
 /// This is the tag associated with a raw Node in the list
 pub const Tag = enum {
@@ -1048,4 +238,405 @@ pub const Tag = enum {
     diag_break_outside_loop,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+};
+
+/// Typed payload union for accessing node data in a type-safe manner.
+/// This is an extern union that overlays the data_1/data_2/data_3 fields (12 bytes = 3 × u32).
+/// Each variant corresponds to a Node.Tag and provides semantic field names.
+///
+/// IMPORTANT: This must be an extern union to ensure consistent size across debug/release builds.
+/// All variants must be exactly 12 bytes (3 × u32).
+pub const Payload = extern union {
+    /// Raw access to data fields (for backward compatibility during migration)
+    raw: Raw,
+
+    // === Statement payloads ===
+    statement_decl: StatementDecl,
+    statement_var: StatementVar,
+    statement_crash: StatementCrash,
+    statement_return: StatementReturn,
+    statement_import: StatementImport,
+
+    // === Expression payloads ===
+    expr_var: ExprVar,
+    expr_tuple: ExprTuple,
+    expr_list: ExprList,
+    expr_call: ExprCall,
+    expr_record: ExprRecord,
+    expr_tag: ExprTag,
+    expr_closure: ExprClosure,
+    expr_lambda: ExprLambda,
+    expr_bin_op: ExprBinOp,
+    expr_unary: ExprUnary,
+    expr_block: ExprBlock,
+    expr_if_then_else: ExprIfThenElse,
+    expr_match: ExprMatch,
+    expr_frac_f32: ExprFracF32,
+    expr_frac_f64: ExprFracF64,
+    expr_int: ExprInt,
+    expr_num: ExprNum,
+    expr_dec: ExprDec,
+    expr_string: ExprString,
+    expr_dot_access: ExprDotAccess,
+    expr_field_access: ExprFieldAccess,
+    expr_hosted_lambda: ExprHostedLambda,
+    expr_low_level: ExprLowLevel,
+
+    // === Pattern payloads ===
+    pattern_identifier: PatternIdentifier,
+    pattern_as: PatternAs,
+    pattern_applied_tag: PatternAppliedTag,
+    pattern_record_destructure: PatternRecordDestructure,
+    pattern_list: PatternList,
+    pattern_tuple: PatternTuple,
+    pattern_num_literal: PatternNumLiteral,
+
+    // === Type annotation payloads ===
+    ty_apply: TyApply,
+    ty_tag_union: TyTagUnion,
+    ty_tag: TyTag,
+    ty_tuple: TyTuple,
+    ty_record: TyRecord,
+    ty_fn: TyFn,
+    ty_lookup: TyLookup,
+
+    // === Other payloads ===
+    record_field: RecordField,
+    record_destruct: RecordDestruct,
+    match_branch: MatchBranch,
+    where_clause: WhereClause,
+    def: Def,
+    lambda_capture: LambdaCapture,
+    annotation: Annotation,
+    diagnostic: Diagnostic,
+
+    // ============================================================
+    // Payload struct definitions - all must be exactly 12 bytes
+    // ============================================================
+
+    pub const Raw = extern struct {
+        data_1: u32,
+        data_2: u32,
+        data_3: u32,
+    };
+
+    // --- Statements ---
+
+    pub const StatementDecl = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const StatementVar = extern struct {
+        ident: u32,
+        expr: u32,
+        _unused: u32,
+    };
+
+    pub const StatementCrash = extern struct {
+        msg_expr: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const StatementReturn = extern struct {
+        expr: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const StatementImport = extern struct {
+        module_idx: u32,
+        qualifier: u32,
+        exposes_start: u32,
+    };
+
+    // --- Expressions ---
+
+    pub const ExprVar = extern struct {
+        ident: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprTuple = extern struct {
+        elems_start: u32,
+        elems_len: u32,
+        _unused: u32,
+    };
+
+    pub const ExprList = extern struct {
+        elems_start: u32,
+        elems_len: u32,
+        _unused: u32,
+    };
+
+    pub const ExprCall = extern struct {
+        func: u32,
+        extra_data_idx: u32,
+        called_via: u32,
+    };
+
+    pub const ExprRecord = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprTag = extern struct {
+        name: u32,
+        args_start: u32,
+        args_len: u32,
+    };
+
+    pub const ExprClosure = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprLambda = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprBinOp = extern struct {
+        op: u32,
+        lhs: u32,
+        rhs: u32,
+    };
+
+    pub const ExprUnary = extern struct {
+        expr: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprBlock = extern struct {
+        stmts_start: u32,
+        stmts_len: u32,
+        final_expr: u32,
+    };
+
+    pub const ExprIfThenElse = extern struct {
+        extra_data_idx: u32,
+        extra_data_end: u32,
+        _unused: u32,
+    };
+
+    pub const ExprMatch = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprFracF32 = extern struct {
+        value: u32,
+        has_suffix: u32,
+        _unused: u32,
+    };
+
+    pub const ExprFracF64 = extern struct {
+        value_lo: u32,
+        value_hi: u32,
+        has_suffix: u32,
+    };
+
+    pub const ExprInt = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprNum = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprDec = extern struct {
+        extra_data_idx: u32,
+        has_suffix: u32,
+        _unused: u32,
+    };
+
+    pub const ExprString = extern struct {
+        segments_start: u32,
+        segments_len: u32,
+        _unused: u32,
+    };
+
+    pub const ExprDotAccess = extern struct {
+        receiver: u32,
+        field_name: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const ExprFieldAccess = extern struct {
+        receiver: u32,
+        field_name: u32,
+        _unused: u32,
+    };
+
+    pub const ExprHostedLambda = extern struct {
+        symbol_name: u32,
+        index: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const ExprLowLevel = extern struct {
+        op: u32,
+        extra_data_idx: u32,
+        _unused: u32,
+    };
+
+    // --- Patterns ---
+
+    pub const PatternIdentifier = extern struct {
+        ident: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const PatternAs = extern struct {
+        ident: u32,
+        pattern: u32,
+        _unused: u32,
+    };
+
+    pub const PatternAppliedTag = extern struct {
+        args_start: u32,
+        args_len: u32,
+        name: u32,
+    };
+
+    pub const PatternRecordDestructure = extern struct {
+        destructs_start: u32,
+        destructs_len: u32,
+        _unused: u32,
+    };
+
+    pub const PatternList = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const PatternTuple = extern struct {
+        patterns_start: u32,
+        patterns_len: u32,
+        _unused: u32,
+    };
+
+    pub const PatternNumLiteral = extern struct {
+        kind: u32,
+        value_kind: u32,
+        extra_data_idx: u32,
+    };
+
+    // --- Type annotations ---
+
+    pub const TyApply = extern struct {
+        name: u32,
+        extra_data_idx: u32,
+        _unused: u32,
+    };
+
+    pub const TyTagUnion = extern struct {
+        tags_start: u32,
+        tags_len: u32,
+        ext_plus_one: u32,
+    };
+
+    pub const TyTag = extern struct {
+        name: u32,
+        args_start: u32,
+        args_len: u32,
+    };
+
+    pub const TyTuple = extern struct {
+        elems_start: u32,
+        elems_len: u32,
+        _unused: u32,
+    };
+
+    pub const TyRecord = extern struct {
+        fields_start: u32,
+        fields_len: u32,
+        ext_plus_one: u32,
+    };
+
+    pub const TyFn = extern struct {
+        args_start: u32,
+        args_len: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const TyLookup = extern struct {
+        name: u32,
+        base: u32,
+        _unused: u32,
+    };
+
+    // --- Other ---
+
+    pub const RecordField = extern struct {
+        name: u32,
+        expr: u32,
+        _unused: u32,
+    };
+
+    pub const RecordDestruct = extern struct {
+        label: u32,
+        ident: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const MatchBranch = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const WhereClause = extern struct {
+        var_idx: u32,
+        name: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const Def = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const LambdaCapture = extern struct {
+        name: u32,
+        scope_depth: u32,
+        pattern_idx: u32,
+    };
+
+    pub const Annotation = extern struct {
+        ident: u32,
+        type_anno: u32,
+        has_where: u32,
+    };
+
+    /// Diagnostic payload - used for all diagnostic node types.
+    /// Fields are interpreted based on the specific diagnostic tag.
+    pub const Diagnostic = extern struct {
+        /// Primary value (ident, feature ID, count, etc.)
+        primary: u32,
+        /// Secondary value (ident, region start, etc.)
+        secondary: u32,
+        /// Tertiary value (region end, extra data index, etc.)
+        tertiary: u32,
+    };
+
+    // Compile-time size verification
+    comptime {
+        std.debug.assert(@sizeOf(Payload) == 12);
+    }
 };

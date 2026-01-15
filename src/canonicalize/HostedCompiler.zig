@@ -117,8 +117,13 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             }
 
             // Now replace the e_anno_only expression with the e_hosted_lambda
-            // Update the def's expr field using the proper API
-            env.store.setDefExpr(def_idx, expr_idx);
+            // We need to modify the def's expr field in extra_data (NOT data_2!)
+            // The expr is stored in extra_data[extra_start + 1]
+            // (reuse def_node_idx from above)
+            const def_node = env.store.nodes.get(def_node_idx);
+            const extra_start = def_node.data_1;
+
+            env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
 
             // Track this modified def index
             try modified_def_indices.append(gpa, def_idx);
@@ -201,16 +206,16 @@ pub fn collectAndSortHostedFunctions(env: *ModuleEnv) !std.ArrayList(HostedFunct
 /// Assign indices to e_hosted_lambda expressions based on sorted order
 pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionInfo) !void {
     for (sorted_fns, 0..) |fn_info, index| {
-         // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
-         const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
-         var expr_node = env.store.nodes.get(expr_node_idx);
+        // Get the expression node (Expr.Idx and Node.Idx have same underlying representation)
+        const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
+        var expr_node = env.store.nodes.get(expr_node_idx);
 
-         // Update hosted lambda index in the payload
-         var payload = expr_node.getPayload().expr_hosted_lambda;
-         // Clear top 8 bits (index) and set new index
-         payload.packed_body_and_index = (payload.packed_body_and_index & 0xFFFFFF) | ((@as(u32, @intCast(index)) & 0xFF) << 24);
-         expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+        // For e_hosted_lambda nodes:
+        // data_1 = symbol_name (Ident.Idx via @bitCast)
+        // data_2 = index (u32) <- We set this here
+        // data_3 = extra_data pointer (for args and body)
+        expr_node.data_2 = @intCast(index);
 
-         env.store.nodes.set(expr_node_idx, expr_node);
-     }
+        env.store.nodes.set(expr_node_idx, expr_node);
+    }
 }

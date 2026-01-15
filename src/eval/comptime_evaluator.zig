@@ -435,7 +435,9 @@ pub const ComptimeEvaluator = struct {
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
                         self.env.store.nodes.set(node_idx, .{
                             .tag = .expr_frac_f32,
-                            .payload = .{ .expr_frac_f32 = .{ .value = @bitCast(f32_value), .has_suffix = 1, ._unused = 0 } },
+                            .data_1 = @bitCast(f32_value),
+                            .data_2 = 1, // has_suffix = true (explicitly typed)
+                            .data_3 = 0,
                         });
                     },
                     .f64 => {
@@ -447,7 +449,9 @@ pub const ComptimeEvaluator = struct {
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
                         self.env.store.nodes.set(node_idx, .{
                             .tag = .expr_frac_f64,
-                            .payload = .{ .expr_frac_f64 = .{ .value_lo = low, .value_hi = high, .has_suffix = 1 } },
+                            .data_1 = low,
+                            .data_2 = high,
+                            .data_3 = 1, // has_suffix = true (explicitly typed)
                         });
                     },
                 }
@@ -1038,20 +1042,20 @@ pub const ComptimeEvaluator = struct {
                 try arg_indices.append(arg_expr_idx);
             }
 
-            // Create the span for args in scratch buffer
-             const scratch_start = self.env.store.scratchExprTop();
-             for (arg_indices.items) |arg_idx| {
-                 try self.env.store.addScratchExpr(arg_idx);
-             }
+            // Create the span for args in extra_data
+            const extra_data_start = self.env.store.extra_data.len();
+            for (arg_indices.items) |arg_idx| {
+                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+            }
 
-             // Create and return the tag expression
-             const tag_expr = CIR.Expr{
-                 .e_tag = .{
-                     .name = tag_info.name,
-                     .args = .{ .span = .{ .start = scratch_start, .len = @intCast(arg_indices.items.len) } },
-                 },
-             };
-             return try self.env.addExpr(tag_expr, region);
+            // Create and return the tag expression
+            const tag_expr = CIR.Expr{
+                .e_tag = .{
+                    .name = tag_info.name,
+                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                },
+            };
+            return try self.env.addExpr(tag_expr, region);
         }
     }
 
@@ -1135,16 +1139,16 @@ pub const ComptimeEvaluator = struct {
             }
 
             // Create the tag expression with arguments
-            // First, create the span for args in scratch buffer
-            const scratch_start = self.env.store.scratchExprTop();
+            // First, create the span for args in extra_data
+            const extra_data_start = self.env.store.extra_data.len();
             for (arg_indices.items) |arg_idx| {
-                try self.env.store.addScratchExpr(arg_idx);
+                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = scratch_start, .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1192,15 +1196,15 @@ pub const ComptimeEvaluator = struct {
             try elem_indices.append(elem_expr_idx);
         }
 
-        // Create span in scratch buffer for tuple elements
-        const scratch_start = self.env.store.scratchExprTop();
+        // Create span in extra_data for tuple elements
+        const extra_data_start = self.env.store.extra_data.len();
         for (elem_indices.items) |elem_idx| {
-            try self.env.store.addScratchExpr(elem_idx);
+            _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
             .e_tuple = .{
-                .elems = .{ .span = .{ .start = scratch_start, .len = @intCast(elem_indices.items.len) } },
+                .elems = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(elem_indices.items.len) } },
             },
         };
         return try self.env.addExpr(tuple_expr, region);
@@ -1484,7 +1488,9 @@ pub const ComptimeEvaluator = struct {
                 const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
                 self.env.store.nodes.set(node_idx, .{
                     .tag = .expr_frac_f32,
-                    .payload = .{ .expr_frac_f32 = .{ .value = @bitCast(f32_value), .has_suffix = 1, ._unused = 0 } },
+                    .data_1 = @bitCast(f32_value),
+                    .data_2 = 1, // has_suffix = true to mark as explicitly typed
+                    .data_3 = 0,
                 });
             },
             .f64 => {
@@ -1495,7 +1501,9 @@ pub const ComptimeEvaluator = struct {
                 const high: u32 = @truncate(f64_bits >> 32);
                 self.env.store.nodes.set(node_idx, .{
                     .tag = .expr_frac_f64,
-                    .payload = .{ .expr_frac_f64 = .{ .value_lo = low, .value_hi = high, .has_suffix = 1 } },
+                    .data_1 = low,
+                    .data_2 = high,
+                    .data_3 = 1, // has_suffix = true to mark as explicitly typed
                 });
             },
             .dec => {

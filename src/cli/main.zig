@@ -1907,10 +1907,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            // Update hosted lambda index in the payload
-                            var payload = expr_node.getPayload().expr_hosted_lambda;
-                            payload.packed_body_and_index = (payload.packed_body_and_index & 0xFFFFFF) | ((@as(u32, @intCast(idx)) & 0xFF) << 24);
-                            expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                            expr_node.data_2 = @intCast(idx);
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
@@ -3551,10 +3548,7 @@ fn compileAndSerializeModulesForEmbedding(
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            // Update hosted lambda index in the payload
-                            var payload = expr_node.getPayload().expr_hosted_lambda;
-                            payload.packed_body_and_index = (payload.packed_body_and_index & 0xFFFFFF) | ((@as(u32, @intCast(idx)) & 0xFF) << 24);
-                            expr_node.setPayload(.{ .expr_hosted_lambda = payload });
+                            expr_node.data_2 = @intCast(idx);
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
