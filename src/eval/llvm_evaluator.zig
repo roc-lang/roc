@@ -150,10 +150,15 @@ pub const LlvmEvaluator = struct {
         bitcode: []const u32,
         output_layout: layout.Idx,
         is_list: bool,
+        is_record: bool,
+        record_field_names: ?[]const u8, // Comma-separated field names for record output
         allocator: Allocator,
 
         pub fn deinit(self: *BitcodeResult) void {
             self.allocator.free(self.bitcode);
+            if (self.record_field_names) |names| {
+                self.allocator.free(names);
+            }
         }
     };
 
@@ -172,14 +177,19 @@ pub const LlvmEvaluator = struct {
         }) catch return error.OutOfMemory;
         defer builder.deinit();
 
-        // Check for list expressions - they need special handling
+        // Check for list and record expressions - they need special handling
         const top_expr = module_env.store.getExpr(expr_idx);
         const is_list_expr = (top_expr == .e_empty_list or top_expr == .e_list);
+        const is_record_expr = (top_expr == .e_record or top_expr == .e_empty_record);
+
+        // Record result detection is complex when records are inside lambda bodies
+        // For now, only handle direct record expressions
+        const is_record_result = false;
 
         // Determine the output layout for JIT execution
         // We need to look at the original expression to get signedness,
         // since LLVM types don't distinguish signed from unsigned
-        const output_layout: layout.Idx = if (is_list_expr) .i64 else self.getExprOutputLayout(module_env, expr_idx);
+        const output_layout: layout.Idx = if (is_list_expr or is_record_expr or is_record_result) .i64 else self.getExprOutputLayout(module_env, expr_idx);
 
         // Determine the value type based on output layout
         const value_type: LlvmBuilder.Type = switch (output_layout) {
@@ -237,8 +247,14 @@ pub const LlvmEvaluator = struct {
         const out_ptr = wip.arg(0);
 
         // Special handling for list output - write RocList struct directly
+        var record_field_names: ?[]const u8 = null;
         if (is_list_expr) {
             try ctx.emitListToPtr(top_expr, out_ptr);
+        } else if (is_record_expr or is_record_result) {
+            // Handle record output - emit field values to output buffer
+            const record_expr = if (is_record_result) @as(CIR.Expr, undefined) else top_expr;
+            _ = record_expr;
+            record_field_names = try ctx.emitRecordToPtr(top_expr, out_ptr, self.allocator);
         } else if (output_layout == .str) {
             // Special handling for string output - write RocStr struct directly
             const expr = module_env.store.getExpr(expr_idx);
@@ -301,6 +317,8 @@ pub const LlvmEvaluator = struct {
             .bitcode = bitcode,
             .output_layout = output_layout,
             .is_list = is_list_expr,
+            .is_record = is_record_expr or is_record_result,
+            .record_field_names = record_field_names,
             .allocator = self.allocator,
         };
     }
@@ -996,6 +1014,55 @@ pub const LlvmEvaluator = struct {
             }
         }
 
+        /// Emit a record to output pointer
+        /// Returns comma-separated field names for formatting
+        fn emitRecordToPtr(ctx: *ExprContext, expr: CIR.Expr, out_ptr: LlvmBuilder.Value, allocator: Allocator) !?[]const u8 {
+            switch (expr) {
+                .e_empty_record => {
+                    // Empty record: just return empty field names
+                    return allocator.dupe(u8, "") catch return error.OutOfMemory;
+                },
+                .e_record => |record| {
+                    const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
+                    if (field_indices.len == 0) {
+                        return allocator.dupe(u8, "") catch return error.OutOfMemory;
+                    }
+
+                    // Collect field names and evaluate values
+                    var names_list = std.ArrayListUnmanaged(u8){};
+                    defer names_list.deinit(allocator);
+
+                    var offset: usize = 0;
+                    for (field_indices, 0..) |field_idx, i| {
+                        const field = ctx.module_env.store.getRecordField(field_idx);
+                        const field_name = ctx.module_env.getIdentText(field.name);
+
+                        // Add field name to list (comma-separated)
+                        if (i > 0) {
+                            names_list.append(allocator, ',') catch return error.OutOfMemory;
+                        }
+                        names_list.appendSlice(allocator, field_name) catch return error.OutOfMemory;
+
+                        // Evaluate the field value
+                        const field_value = try ctx.emitExpr(field.value);
+
+                        // Store field value at offset (assume i64 for now)
+                        const idx_const = ctx.builder.intConst(.i64, @as(i128, @intCast(offset))) catch return error.CompilationFailed;
+                        const field_ptr = ctx.wip.gep(.inbounds, .i8, out_ptr, &.{idx_const.toValue()}, "") catch return error.CompilationFailed;
+
+                        // Extend to i64 and store
+                        const extended = ctx.wip.conv(.signed, field_value, .i64, "") catch return error.CompilationFailed;
+                        _ = ctx.wip.store(.normal, extended, field_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
+
+                        offset += 8; // Each field is 8 bytes (i64)
+                    }
+
+                    return allocator.dupe(u8, names_list.items) catch return error.OutOfMemory;
+                },
+                else => return error.UnsupportedType,
+            }
+        }
+
         /// Emit a list literal
         fn emitList(_: *ExprContext, _: anytype) ExprError!LlvmBuilder.Value {
             // List literals require RocList struct handling
@@ -1270,6 +1337,16 @@ pub const LlvmEvaluator = struct {
 
         // Step 4: Generate bitcode
         return self.generateBitcode(&module_env, final_expr_idx);
+    }
+
+    /// Try to resolve what expression a call will return (unused for now)
+    /// Used to detect if a lambda call returns a record
+    fn resolveCallResultExpr(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) ?CIR.Expr {
+        _ = self;
+        _ = module_env;
+        _ = expr;
+        // Disabled - record result detection is complex when records are inside lambda bodies
+        return null;
     }
 
     /// Get the output layout for JIT execution from a CIR expression index

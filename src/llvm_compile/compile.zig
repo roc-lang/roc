@@ -208,6 +208,8 @@ pub fn compileAndExecute(
     bitcode: []const u32,
     output_layout: LayoutIdx,
     is_list: bool,
+    is_record: bool,
+    record_field_names: ?[]const u8,
 ) Error![]const u8 {
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
@@ -427,6 +429,56 @@ pub fn compileAndExecute(
             // Non-empty list - not yet supported
             return allocator.dupe(u8, "[<list elements>]") catch return error.OutOfMemory;
         }
+    }
+
+    // Handle record output specially
+    if (is_record) {
+        const field_names = record_field_names orelse "";
+        if (field_names.len == 0) {
+            return allocator.dupe(u8, "{}") catch return error.OutOfMemory;
+        }
+
+        // Count fields
+        var field_count: usize = 1;
+        for (field_names) |c| {
+            if (c == ',') field_count += 1;
+        }
+
+        // Allocate buffer for field values (8 bytes per field)
+        const buffer_size = field_count * 8;
+        var result_buffer: [64]u8 = undefined; // Max 8 fields
+        if (buffer_size > result_buffer.len) {
+            return allocator.dupe(u8, "{ <too many fields> }") catch return error.OutOfMemory;
+        }
+
+        // Call the function
+        const EvalFn = *const fn ([*]u8) callconv(.c) void;
+        const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+        eval_fn(&result_buffer);
+
+        // Format output: { a: 10, b: 20, c: 30 }
+        var output = std.ArrayListUnmanaged(u8){};
+        output.appendSlice(allocator, "{ ") catch return error.OutOfMemory;
+
+        var name_iter = std.mem.splitScalar(u8, field_names, ',');
+        var field_idx: usize = 0;
+        while (name_iter.next()) |name| : (field_idx += 1) {
+            if (field_idx > 0) {
+                output.appendSlice(allocator, ", ") catch return error.OutOfMemory;
+            }
+            output.appendSlice(allocator, name) catch return error.OutOfMemory;
+            output.appendSlice(allocator, ": ") catch return error.OutOfMemory;
+
+            // Read the i64 value at this offset
+            const offset = field_idx * 8;
+            const value = std.mem.readInt(i64, result_buffer[offset..][0..8], .little);
+            const value_str = std.fmt.allocPrint(allocator, "{d}", .{value}) catch return error.OutOfMemory;
+            defer allocator.free(value_str);
+            output.appendSlice(allocator, value_str) catch return error.OutOfMemory;
+        }
+
+        output.appendSlice(allocator, " }") catch return error.OutOfMemory;
+        return output.toOwnedSlice(allocator) catch return error.OutOfMemory;
     }
 
     switch (output_layout) {
