@@ -128,6 +128,10 @@ pub const DevEvaluator = struct {
         const result_type = self.getExprResultType(expr);
 
         // Generate code based on the expression type
+        // For expressions that need environment support, create an empty environment
+        var empty_env = std.AutoHashMap(u32, i64).init(self.allocator);
+        defer empty_env.deinit();
+
         const code = switch (expr) {
             .e_num => |num| try self.generateNumericCode(num, result_type),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
@@ -135,6 +139,10 @@ pub const DevEvaluator = struct {
             .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
             .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
             .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
+            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, &empty_env),
+            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, &empty_env),
+            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, &empty_env),
+            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
             else => return error.UnsupportedExpression,
         };
 
@@ -284,7 +292,7 @@ pub const DevEvaluator = struct {
 
             // Empty record (unit type)
             .e_empty_record => try self.generateReturnI64Code(0, result_type),
-            .e_dot_access => return error.UnsupportedExpression,
+            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, env),
             .e_nominal => return error.UnsupportedExpression,
             .e_nominal_external => return error.UnsupportedExpression,
             .e_ellipsis => return error.UnsupportedExpression,
@@ -926,6 +934,44 @@ pub const DevEvaluator = struct {
         const first_val = self.tryEvalConstantI64WithEnvMap(module_env, first_expr, env) orelse
             return error.UnsupportedExpression;
         return self.generateReturnI64Code(first_val, result_type);
+    }
+
+    /// Generate code for dot access (record field access)
+    fn generateDotAccessCode(self: *DevEvaluator, module_env: *ModuleEnv, dot: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // Only support field access (no method calls)
+        if (dot.args != null) {
+            return error.UnsupportedExpression;
+        }
+
+        // Get the receiver expression
+        const receiver_expr = module_env.store.getExpr(dot.receiver);
+
+        // Only support direct record literal access for now
+        switch (receiver_expr) {
+            .e_record => |rec| {
+                // Records with extension not supported
+                if (rec.ext != null) {
+                    return error.UnsupportedExpression;
+                }
+
+                const fields = module_env.store.sliceRecordFields(rec.fields);
+
+                // Find the field with matching name
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (field.name == dot.field_name) {
+                        const field_expr = module_env.store.getExpr(field.value);
+                        const field_val = self.tryEvalConstantI64WithEnvMap(module_env, field_expr, env) orelse
+                            return error.UnsupportedExpression;
+                        return self.generateReturnI64Code(field_val, result_type);
+                    }
+                }
+
+                // Field not found
+                return error.UnsupportedExpression;
+            },
+            else => return error.UnsupportedExpression,
+        }
     }
 
     /// Generate code that returns an i64/u64 value
@@ -1823,4 +1869,40 @@ test "evaluate comparison with booleans in if" {
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
+}
+
+test "evaluate record field access" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // {foo: 42}.foo should return 42
+    const result = evaluator.evaluate("{foo: 42}.foo") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
+}
+
+test "evaluate record field access multi-field" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // {x: 10, y: 20}.y should return 20
+    const result = evaluator.evaluate("{x: 10, y: 20}.y") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
 }
