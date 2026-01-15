@@ -3357,3 +3357,48 @@ test "check type - issue8934 recursive nominal type unification" {
     // It should successfully type-check the file.
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
 }
+
+// Additional type error tests for coverage //
+
+test "check type - too many arguments to function" {
+    // Calling a function with too many arguments
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| x + 1
+        \\
+        \\result = f(1, 2, 3)
+    ;
+    try checkTypesModule(source, .fail, "TOO MANY ARGUMENTS");
+}
+
+test "check type - list with incompatible elements gives type mismatch" {
+    // List elements with incompatible types result in TYPE MISMATCH
+    const source =
+        \\[1, "hello"]
+    ;
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - if condition must be Bool" {
+    // If condition must be Bool, non-Bool gives INVALID IF CONDITION
+    const source =
+        \\x : I64
+        \\x = 42
+        \\y = if x { "yes" } else { "no" }
+    ;
+    try checkTypesModule(source, .fail_first, "INVALID IF CONDITION");
+}
+
+test "check type - incompatible match patterns" {
+    // Match patterns with incompatible types
+    const source =
+        \\x : [A, B]
+        \\x = A
+        \\
+        \\result = match x {
+        \\    A => 1
+        \\    "hello" => 2
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "INCOMPATIBLE MATCH PATTERNS");
+}
