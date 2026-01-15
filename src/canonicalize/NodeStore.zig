@@ -1016,12 +1016,13 @@ pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr
 pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     std.debug.assert(node.tag == .match_branch);
 
     // Retrieve when branch data from extra_data
-    const extra_start = node.data_1;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    const p = payload.match_branch;
+    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
     const patterns: CIR.Expr.Match.BranchPattern.Span = .{ .span = .{ .start = extra_data[0], .len = extra_data[1] } };
     const value_idx: CIR.Expr.Idx = @enumFromInt(extra_data[2]);
@@ -1040,12 +1041,14 @@ pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx
 pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match.BranchPattern.Idx) CIR.Expr.Match.BranchPattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(branch_pat));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     std.debug.assert(node.tag == .match_branch_pattern);
 
+    const p = payload.raw;
     return CIR.Expr.Match.BranchPattern{
-        .pattern = @enumFromInt(node.data_1),
-        .degenerate = node.data_2 != 0,
+        .pattern = @enumFromInt(p.data_1),
+        .degenerate = p.data_2 != 0,
     };
 }
 
@@ -1060,14 +1063,15 @@ pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Spa
 pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx) CIR.WhereClause {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(whereClause));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     switch (node.tag) {
         .where_method => {
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
-            const method_name = @as(Ident.Idx, @bitCast(node.data_2));
+            const p = payload.where_clause;
+            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
+            const method_name = @as(Ident.Idx, @bitCast(p.name));
 
-            const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -1081,8 +1085,9 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         .where_alias => {
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
-            const alias_name = @as(Ident.Idx, @bitCast(node.data_2));
+            const p = payload.raw;
+            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_1));
+            const alias_name = @as(Ident.Idx, @bitCast(p.data_2));
 
             return CIR.WhereClause{ .w_alias = .{
                 .var_ = var_,
@@ -1090,7 +1095,8 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         .where_malformed => {
-            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(node.data_1));
+            const p = payload.diagnostic;
+            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(p.primary));
 
             return CIR.WhereClause{ .w_malformed = .{
                 .diagnostic = diagnostic,
