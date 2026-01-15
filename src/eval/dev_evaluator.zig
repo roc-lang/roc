@@ -662,6 +662,16 @@ pub const DevEvaluator = struct {
                 }
                 return null;
             },
+            .e_nominal => |nom| {
+                // Nominal types wrap a backing expression - evaluate it
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.tryEvalConstantI64WithEnvMap(module_env, backing_expr, env);
+            },
+            .e_nominal_external => |nom| {
+                // External nominal types also wrap a backing expression
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.tryEvalConstantI64WithEnvMap(module_env, backing_expr, env);
+            },
             else => null,
         };
     }
@@ -739,6 +749,16 @@ pub const DevEvaluator = struct {
                     }
                 }
                 return null;
+            },
+            .e_nominal => |nom| {
+                // Nominal types wrap a backing expression - evaluate it
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.tryEvalConstantI64WithEnv(module_env, backing_expr);
+            },
+            .e_nominal_external => |nom| {
+                // External nominal types also wrap a backing expression
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.tryEvalConstantI64WithEnv(module_env, backing_expr);
             },
             else => null,
         };
