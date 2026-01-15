@@ -1145,72 +1145,71 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         return CIR.Pattern{ .underscore = {} };
     }
 
+    const payload = node.getPayload();
+
     switch (node.tag) {
-        .pattern_identifier => return CIR.Pattern{
-            .assign = .{
-                .ident = @bitCast(node.data_1),
-            },
+        .pattern_identifier => {
+            const p = payload.pattern_identifier;
+            return CIR.Pattern{
+                .assign = .{
+                    .ident = @bitCast(p.ident),
+                },
+            };
         },
-        .pattern_as => return CIR.Pattern{
-            .as = .{
-                .ident = @bitCast(node.data_1),
-                .pattern = @enumFromInt(node.data_2),
-            },
+        .pattern_as => {
+            const p = payload.pattern_as;
+            return CIR.Pattern{
+                .as = .{
+                    .ident = @bitCast(p.ident),
+                    .pattern = @enumFromInt(p.pattern),
+                },
+            };
         },
         .pattern_applied_tag => {
-            const arguments_start = node.data_1;
-            const arguments_len = node.data_2;
-            const tag_name = @as(Ident.Idx, @bitCast(node.data_3));
+            const p = payload.pattern_applied_tag;
             return CIR.Pattern{
                 .applied_tag = .{
-                    .args = DataSpan.init(arguments_start, arguments_len).as(CIR.Pattern.Span),
-                    .name = tag_name,
+                    .args = DataSpan.init(p.args_start, p.args_len).as(CIR.Pattern.Span),
+                    .name = @bitCast(p.name),
                 },
             };
         },
         .pattern_nominal => {
-            const nominal_type_decl: CIR.Statement.Idx = @enumFromInt(node.data_1);
-            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(node.data_2);
-            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(node.data_3);
+            const p = payload.raw;
             return CIR.Pattern{
                 .nominal = .{
-                    .nominal_type_decl = nominal_type_decl,
-                    .backing_pattern = backing_pattern,
-                    .backing_type = backing_type,
+                    .nominal_type_decl = @enumFromInt(p.data_1),
+                    .backing_pattern = @enumFromInt(p.data_2),
+                    .backing_type = @enumFromInt(p.data_3),
                 },
             };
         },
         .pattern_nominal_external => {
-            const module_idx: CIR.Import.Idx = @enumFromInt(node.data_1);
-            const target_node_idx: u16 = @intCast(node.data_2);
-
-            const extra_data_idx = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_data_idx..][0..2];
+            const p = payload.raw;
+            const extra_data = store.extra_data.items.items[p.data_3..][0..2];
             const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
             return CIR.Pattern{
                 .nominal_external = .{
-                    .module_idx = module_idx,
-                    .target_node_idx = target_node_idx,
+                    .module_idx = @enumFromInt(p.data_1),
+                    .target_node_idx = @intCast(p.data_2),
                     .backing_pattern = backing_pattern,
                     .backing_type = backing_type,
                 },
             };
         },
         .pattern_record_destructure => {
-            const destructs_start = node.data_1;
-            const destructs_len = node.data_2;
-
+            const p = payload.pattern_record_destructure;
             return CIR.Pattern{
                 .record_destructure = .{
-                    .destructs = DataSpan.init(destructs_start, destructs_len).as(CIR.Pattern.RecordDestruct.Span),
+                    .destructs = DataSpan.init(p.destructs_start, p.destructs_len).as(CIR.Pattern.RecordDestruct.Span),
                 },
             };
         },
         .pattern_list => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.pattern_list;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const patterns_start = extra_data[0];
             const patterns_len = extra_data[1];
@@ -1237,61 +1236,59 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                 },
             };
         },
-        .pattern_tuple => return CIR.Pattern{
-            .tuple = .{
-                .patterns = DataSpan.init(node.data_1, node.data_2).as(CIR.Pattern.Span),
-            },
+        .pattern_tuple => {
+            const p = payload.pattern_tuple;
+            return CIR.Pattern{
+                .tuple = .{
+                    .patterns = DataSpan.init(p.patterns_start, p.patterns_len).as(CIR.Pattern.Span),
+                },
+            };
         },
         .pattern_num_literal => {
-            const kind: CIR.NumKind = @enumFromInt(node.data_1);
-
-            const val_kind: CIR.IntValue.IntKind = @enumFromInt(node.data_2);
-
-            const extra_data_idx = node.data_3;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const p = payload.pattern_num_literal;
+            const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
                 .num_literal = .{
-                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = val_kind },
-                    .kind = kind,
+                    .value = .{ .bytes = @bitCast(value_as_i128), .kind = @enumFromInt(p.value_kind) },
+                    .kind = @enumFromInt(p.kind),
                 },
             };
         },
-        .pattern_f32_literal => return CIR.Pattern{
-            .frac_f32_literal = .{ .value = @bitCast(node.data_1) },
+        .pattern_f32_literal => {
+            const p = payload.raw;
+            return CIR.Pattern{
+                .frac_f32_literal = .{ .value = @bitCast(p.data_1) },
+            };
         },
         .pattern_f64_literal => {
-            const lower: u32 = node.data_1;
-            const upper: u32 = node.data_2;
-            const raw: u64 = (@as(u64, upper) << 32) | @as(u64, lower);
+            const p = payload.raw;
+            const raw: u64 = (@as(u64, p.data_2) << 32) | @as(u64, p.data_1);
 
             return CIR.Pattern{
                 .frac_f64_literal = .{ .value = @bitCast(raw) },
             };
         },
         .pattern_dec_literal => {
-            const extra_data_idx = node.data_1;
-            const value_as_u32s = store.extra_data.items.items[extra_data_idx..][0..4];
+            const p = payload.raw;
+            const value_as_u32s = store.extra_data.items.items[p.data_1..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
-
-            const has_suffix = node.data_2 != 0;
 
             return CIR.Pattern{
                 .dec_literal = .{
                     .value = RocDec{ .num = value_as_i128 },
-                    .has_suffix = has_suffix,
+                    .has_suffix = p.data_2 != 0,
                 },
             };
         },
         .pattern_small_dec_literal => {
+            const p = payload.raw;
             // Unpack small dec data from data_1 and data_3
             // data_1: numerator (i16) stored as u32
             // data_3: denominator_power_of_ten (u8) in lower 8 bits
-            const numerator: i16 = @intCast(@as(i32, @bitCast(node.data_1)));
-            const denominator_power_of_ten: u8 = @intCast(node.data_2 & 0xFF);
-
-            const has_suffix = node.data_3 != 0;
+            const numerator: i16 = @intCast(@as(i32, @bitCast(p.data_1)));
+            const denominator_power_of_ten: u8 = @intCast(p.data_2 & 0xFF);
 
             return CIR.Pattern{
                 .small_dec_literal = .{
@@ -1299,18 +1296,22 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                         .numerator = numerator,
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
-                    .has_suffix = has_suffix,
+                    .has_suffix = p.data_3 != 0,
                 },
             };
         },
-        .pattern_str_literal => return CIR.Pattern{ .str_literal = .{
-            .literal = @enumFromInt(node.data_1),
-        } },
+        .pattern_str_literal => {
+            const p = payload.raw;
+            return CIR.Pattern{ .str_literal = .{
+                .literal = @enumFromInt(p.data_1),
+            } };
+        },
 
         .pattern_underscore => return CIR.Pattern{ .underscore = {} },
         .malformed => {
+            const p = payload.diagnostic;
             return CIR.Pattern{ .runtime_error = .{
-                .diagnostic = @enumFromInt(node.data_1),
+                .diagnostic = @enumFromInt(p.primary),
             } };
         },
         else => {
