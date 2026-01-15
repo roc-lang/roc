@@ -332,6 +332,7 @@ pub const Payload = extern union {
     ty_fn: TyFn,
     ty_lookup: TyLookup,
     ty_rigid_var: TyRigidVar,
+    ty_rigid_var_lookup: TyRigidVarLookup,
     ty_parens: TyParens,
     ty_malformed: TyMalformed,
 
@@ -844,6 +845,13 @@ pub const Payload = extern union {
 
     pub const TyRigidVar = extern struct {
         name: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// ty_rigid_var_lookup: lookup reference to a rigid type variable
+    pub const TyRigidVarLookup = extern struct {
+        ref: u32,
         _unused1: u32,
         _unused2: u32,
     };

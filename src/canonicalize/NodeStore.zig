@@ -1351,15 +1351,15 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             } };
         },
         .ty_rigid_var => {
-            const p = payload.raw;
+            const p = payload.ty_rigid_var;
             return CIR.TypeAnno{ .rigid_var = .{
-                .name = @bitCast(p.data_1),
+                .name = @bitCast(p.name),
             } };
         },
         .ty_rigid_var_lookup => {
-            const p = payload.raw;
+            const p = payload.ty_rigid_var_lookup;
             return CIR.TypeAnno{ .rigid_var_lookup = .{
-                .ref = @enumFromInt(p.data_1),
+                .ref = @enumFromInt(p.ref),
             } };
         },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
@@ -1429,9 +1429,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             } };
         },
         .ty_parens => {
-            const p = payload.raw;
+            const p = payload.ty_parens;
             return CIR.TypeAnno{ .parens = .{
-                .anno = @enumFromInt(p.data_1),
+                .anno = @enumFromInt(p.anno),
             } };
         },
         .ty_malformed => {
@@ -1460,15 +1460,15 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
     std.debug.assert(node.tag == .type_header);
 
-    const p = payload.raw;
+    const p = payload.type_header;
     // Unpack args from packed format (start in upper 16 bits, len in lower 16 bits)
-    const packed_args = p.data_3;
+    const packed_args = p.packed_args;
     const args_start: u32 = packed_args >> 16;
     const args_len: u32 = packed_args & 0xFFFF;
 
     return CIR.TypeHeader{
-        .name = @bitCast(p.data_1),
-        .relative_name = @bitCast(p.data_2),
+        .name = @bitCast(p.name),
+        .relative_name = @bitCast(p.relative_name),
         .args = .{ .span = .{ .start = args_start, .len = args_len } },
     };
 }
@@ -1477,10 +1477,10 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
-    const p = node.getPayload().raw;
+    const p = node.getPayload().ty_record_field;
     return .{
-        .name = @bitCast(p.data_1),
-        .ty = @enumFromInt(p.data_2),
+        .name = @bitCast(p.name),
+        .ty = @enumFromInt(p.ty),
     };
 }
 
@@ -1517,11 +1517,11 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 
     switch (node.tag) {
         .exposed_item => {
-            const p = payload.raw;
+            const p = payload.exposed_item;
             return CIR.ExposedItem{
-                .name = @bitCast(p.data_1),
-                .alias = if (p.data_2 == 0) null else @bitCast(p.data_2),
-                .is_wildcard = p.data_3 != 0,
+                .name = @bitCast(p.name),
+                .alias = if (p.alias == 0) null else @bitCast(p.alias),
+                .is_wildcard = p.is_wildcard != 0,
             };
         },
         else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
