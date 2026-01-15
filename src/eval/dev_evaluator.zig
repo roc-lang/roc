@@ -330,8 +330,14 @@ pub const DevEvaluator = struct {
 
             // Lookups
             .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
-            .e_lookup_external => return error.UnsupportedExpression, // External lookups need module resolution
-            .e_lookup_required => return error.UnsupportedExpression, // Required lookups need platform context
+            .e_lookup_external => {
+                self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
+                return error.Crash;
+            },
+            .e_lookup_required => {
+                self.setCrashMessage("Dev evaluator: required value lookup not yet supported") catch return error.OutOfMemory;
+                return error.Crash;
+            },
 
             // Tags
             .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
@@ -389,10 +395,20 @@ pub const DevEvaluator = struct {
                 self.setCrashMessage("This value has no implementation. It is only a type annotation for now.") catch return error.OutOfMemory;
                 return error.Crash;
             },
-            .e_type_var_dispatch => return error.UnsupportedExpression,
+            .e_type_var_dispatch => {
+                self.setCrashMessage("Dev evaluator: type variable dispatch not yet supported") catch return error.OutOfMemory;
+                return error.Crash;
+            },
             .e_for => try self.generateReturnI64Code(0, result_type), // For loops always return {} (empty record)
-            .e_hosted_lambda => return error.UnsupportedExpression,
-            .e_low_level_lambda => return error.UnsupportedExpression,
+            .e_hosted_lambda => {
+                self.setCrashMessage("Dev evaluator: hosted (platform) functions not yet supported") catch return error.OutOfMemory;
+                return error.Crash;
+            },
+            .e_low_level_lambda => {
+                // Standalone low-level lambda (not being called) - this creates a closure for a builtin
+                self.setCrashMessage("Dev evaluator: low-level lambda closure not yet supported") catch return error.OutOfMemory;
+                return error.Crash;
+            },
         };
     }
 
