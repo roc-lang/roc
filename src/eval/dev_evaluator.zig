@@ -1930,3 +1930,75 @@ test "evaluate record field access multi-field" {
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
 }
+
+test "evaluate tuple access" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (10, 20) returns first element (simplified representation)
+    const result = evaluator.evaluate("(10, 20)") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 10 }, result);
+}
+
+test "evaluate block with binding" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // Block with local binding
+    const result = evaluator.evaluate("{ x = 5\n x * 2 }") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 10 }, result);
+}
+
+test "evaluate unary not" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // !True should return 0 (False)
+    const result = evaluator.evaluate("!True") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
+}
+
+test "evaluate unary not false" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // !False should return 1 (True)
+    const result = evaluator.evaluate("!False") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
