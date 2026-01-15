@@ -52,6 +52,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/sexpr_output_test.zig"));
     std.testing.refAllDecls(@import("test/string_interpolation_test.zig"));
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
+    std.testing.refAllDecls(@import("test/can_error_test.zig"));
 
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));

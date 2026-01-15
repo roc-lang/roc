@@ -5,11 +5,6 @@
 
 const std = @import("std");
 const testing = std.testing;
-const base = @import("base");
-const parse = @import("parse");
-const CIR = @import("../CIR.zig");
-const Can = @import("../Can.zig");
-const ModuleEnv = @import("../ModuleEnv.zig");
 const TestEnv = @import("TestEnv.zig").TestEnv;
 
 test "simple string interpolation with variable" {
