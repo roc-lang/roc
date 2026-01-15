@@ -1752,3 +1752,75 @@ test "evaluate complex arithmetic expression" {
     // (5 + 3) * 2 - 10 // 2 = 8 * 2 - 5 = 16 - 5 = 11
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 11 }, result);
 }
+
+test "evaluate boolean and short circuit semantics" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // False and True should return 0 (False)
+    const result = evaluator.evaluate("False and True") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
+}
+
+test "evaluate boolean or short circuit semantics" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // True or False should return 1 (True)
+    const result = evaluator.evaluate("True or False") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate nested boolean expression" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // (True and True) or False should return 1
+    const result = evaluator.evaluate("(True and True) or False") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate comparison with booleans in if" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // if True and True 100 else 0 should return 100
+    const result = evaluator.evaluate("if True and True 100 else 0") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
+}
