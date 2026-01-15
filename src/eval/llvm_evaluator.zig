@@ -770,7 +770,7 @@ pub const LlvmEvaluator = struct {
         /// Used for top-level string expressions
         fn emitStringToPtr(ctx: *ExprContext, expr: CIR.Expr, out_ptr: LlvmBuilder.Value) !void {
             // Get the string content
-            const str_content = switch (expr) {
+            const str_content: []const u8 = switch (expr) {
                 .e_str_segment => |seg| ctx.module_env.getString(seg.literal),
                 .e_str => |str_expr| blk: {
                     // For now, only handle single-segment strings
@@ -779,6 +779,24 @@ pub const LlvmEvaluator = struct {
                     const seg_expr = ctx.module_env.store.getExpr(segments[0]);
                     if (seg_expr != .e_str_segment) return error.UnsupportedType;
                     break :blk ctx.module_env.getString(seg_expr.e_str_segment.literal);
+                },
+                .e_dot_access => |dot| blk: {
+                    // Handle record field access that returns a string
+                    const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
+                    if (receiver_expr != .e_record) return error.UnsupportedType;
+                    const record = receiver_expr.e_record;
+                    const field_name = ctx.module_env.getIdentText(dot.field_name);
+                    const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
+                    for (field_indices) |field_idx| {
+                        const field = ctx.module_env.store.getRecordField(field_idx);
+                        const this_field_name = ctx.module_env.getIdentText(field.name);
+                        if (std.mem.eql(u8, this_field_name, field_name)) {
+                            // Found the field - get its string content
+                            const field_expr = ctx.module_env.store.getExpr(field.value);
+                            break :blk ctx.getStringContent(field_expr) orelse return error.UnsupportedType;
+                        }
+                    }
+                    return error.UnsupportedType;
                 },
                 else => return error.UnsupportedType,
             };
@@ -903,7 +921,24 @@ pub const LlvmEvaluator = struct {
                 return try ctx.emitExpr(dot.receiver);
             }
 
-            // Record field access requires knowing the record layout
+            // Try record field access - if the receiver is a record literal
+            const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
+            if (receiver_expr == .e_record) {
+                const record = receiver_expr.e_record;
+                const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
+                for (field_indices) |field_idx| {
+                    const field = ctx.module_env.store.getRecordField(field_idx);
+                    const this_field_name = ctx.module_env.getIdentText(field.name);
+                    if (std.mem.eql(u8, this_field_name, field_name)) {
+                        // Found the field - emit its value
+                        return ctx.emitExpr(field.value);
+                    }
+                }
+                // Field not found in record - this would be a type error
+                return error.UnsupportedType;
+            }
+
+            // Record field access on non-literal requires runtime evaluation
             return error.UnsupportedType;
         }
 
@@ -1185,6 +1220,19 @@ pub const LlvmEvaluator = struct {
                 if (std.mem.eql(u8, field_name, "F32")) return .f32;
                 if (std.mem.eql(u8, field_name, "F64")) return .f64;
                 if (std.mem.eql(u8, field_name, "Dec")) return .dec;
+                // Try record field access - get layout from the field value
+                const receiver_expr = module_env.store.getExpr(dot.receiver);
+                if (receiver_expr == .e_record) {
+                    const record = receiver_expr.e_record;
+                    const field_indices = module_env.store.sliceRecordFields(record.fields);
+                    for (field_indices) |field_idx| {
+                        const field = module_env.store.getRecordField(field_idx);
+                        const this_field_name = module_env.getIdentText(field.name);
+                        if (std.mem.eql(u8, this_field_name, field_name)) {
+                            return self.getExprOutputLayout(module_env, field.value);
+                        }
+                    }
+                }
                 return .i64; // Default for record field access
             },
             .e_nominal_external => |nominal| {
