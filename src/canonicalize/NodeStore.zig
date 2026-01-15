@@ -36,6 +36,8 @@ span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span 
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
+closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
+zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A pair of u32 values representing a span (start index and length).
@@ -71,6 +73,24 @@ pub const MatchBranchData = extern struct {
     value: u32,
     guard: u32, // 0 if no guard, otherwise node index
     redundant: u32,
+};
+
+/// Closure expression data.
+/// Stores lambda index, captures span, and tag name.
+pub const ClosureData = extern struct {
+    lambda_idx: u32,
+    captures_start: u32,
+    captures_len: u32,
+    tag_name: u32,
+};
+
+/// Zero-argument tag expression data.
+/// Stores closure name, variant var, ext var, and tag name.
+pub const ZeroArgTagData = extern struct {
+    closure_name: u32,
+    variant_var: u32,
+    ext_var: u32,
+    name: u32,
 };
 
 const Scratch = struct {
@@ -153,6 +173,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
         .match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8),
         .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8),
+        .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
+        .zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -167,6 +189,8 @@ pub fn deinit(store: *NodeStore) void {
     store.span_with_node_data.deinit(store.gpa);
     store.match_data.deinit(store.gpa);
     store.match_branch_data.deinit(store.gpa);
+    store.closure_data.deinit(store.gpa);
+    store.zero_arg_tag_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -183,6 +207,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.span_with_node_data.relocate(offset);
     store.match_data.relocate(offset);
     store.match_branch_data.relocate(offset);
+    store.closure_data.relocate(offset);
+    store.zero_arg_tag_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -663,19 +689,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_closure => {
             const p = payload.expr_closure;
-            // Retrieve closure data from extra_data
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-
-            const lambda_idx = extra_data[0];
-            const capture_start = extra_data[1];
-            const capture_len = extra_data[2];
-            const tag_name: base.Ident.Idx = @bitCast(extra_data[3]);
+            // Retrieve closure data from closure_data list
+            const cd = store.closure_data.items.items[p.closure_data_idx];
 
             return CIR.Expr{
                 .e_closure = .{
-                    .lambda_idx = @enumFromInt(lambda_idx),
-                    .captures = .{ .span = .{ .start = capture_start, .len = capture_len } },
-                    .tag_name = tag_name,
+                    .lambda_idx = @enumFromInt(cd.lambda_idx),
+                    .captures = .{ .span = .{ .start = cd.captures_start, .len = cd.captures_len } },
+                    .tag_name = @bitCast(cd.tag_name),
                 },
             };
         },
@@ -735,19 +756,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_zero_argument_tag => {
             const p = payload.expr_zero_argument_tag;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-
-            const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
-            const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
-            const ext_var = @as(types.Var, @enumFromInt(extra_data[2]));
-            const name = @as(Ident.Idx, @bitCast(extra_data[3]));
+            // Retrieve zero-arg tag data from zero_arg_tag_data list
+            const zat = store.zero_arg_tag_data.items.items[p.zero_arg_tag_idx];
 
             return CIR.Expr{
                 .e_zero_argument_tag = .{
-                    .closure_name = closure_name,
-                    .variant_var = variant_var,
-                    .ext_var = ext_var,
-                    .name = name,
+                    .closure_name = @bitCast(zat.closure_name),
+                    .variant_var = @enumFromInt(zat.variant_var),
+                    .ext_var = @enumFromInt(zat.ext_var),
+                    .name = @bitCast(zat.name),
                 },
             };
         },
@@ -933,15 +950,17 @@ pub fn replaceExprWithZeroArgumentTag(
 ) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    const extra_data_start = store.extra_data.len();
-    _ = try store.extra_data.append(store.gpa, @bitCast(closure_name));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(variant_var));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
-    _ = try store.extra_data.append(store.gpa, @bitCast(name));
+    const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
+    _ = try store.zero_arg_tag_data.append(store.gpa, .{
+        .closure_name = @bitCast(closure_name),
+        .variant_var = @intFromEnum(variant_var),
+        .ext_var = @intFromEnum(ext_var),
+        .name = @bitCast(name),
+    });
 
     var node = Node.init(.expr_zero_argument_tag);
     node.setPayload(.{ .expr_zero_argument_tag = .{
-        .extra_data_idx = @intCast(extra_data_start),
+        .zero_arg_tag_idx = zero_arg_tag_idx,
         ._unused1 = 0,
         ._unused2 = 0,
     } });
@@ -2109,28 +2128,32 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_zero_argument_tag => |e| {
             node.tag = .expr_zero_argument_tag;
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.closure_name));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.variant_var));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.ext_var));
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.name));
+            const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
+            _ = try store.zero_arg_tag_data.append(store.gpa, .{
+                .closure_name = @bitCast(e.closure_name),
+                .variant_var = @intFromEnum(e.variant_var),
+                .ext_var = @intFromEnum(e.ext_var),
+                .name = @bitCast(e.name),
+            });
 
             node.setPayload(.{ .expr_zero_argument_tag = .{
-                .extra_data_idx = extra_data_start,
+                .zero_arg_tag_idx = zero_arg_tag_idx,
                 ._unused1 = 0,
                 ._unused2 = 0,
             } });
         },
         .e_closure => |e| {
             node.tag = .expr_closure;
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.lambda_idx));
-            _ = try store.extra_data.append(store.gpa, e.captures.span.start);
-            _ = try store.extra_data.append(store.gpa, e.captures.span.len);
-            _ = try store.extra_data.append(store.gpa, @bitCast(e.tag_name));
+            const closure_data_idx: u32 = @intCast(store.closure_data.len());
+            _ = try store.closure_data.append(store.gpa, .{
+                .lambda_idx = @intFromEnum(e.lambda_idx),
+                .captures_start = e.captures.span.start,
+                .captures_len = e.captures.span.len,
+                .tag_name = @bitCast(e.tag_name),
+            });
 
             node.setPayload(.{ .expr_closure = .{
-                .extra_data_idx = extra_data_start,
+                .closure_data_idx = closure_data_idx,
                 ._unused1 = 0,
                 ._unused2 = 0,
             } });
@@ -4056,6 +4079,8 @@ pub const Serialized = extern struct {
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
+    closure_data: collections.SafeList(ClosureData).Serialized,
+    zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4081,6 +4106,10 @@ pub const Serialized = extern struct {
         try self.match_data.serialize(&store.match_data, allocator, writer);
         // Serialize match_branch_data
         try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
+        // Serialize closure_data
+        try self.closure_data.serialize(&store.closure_data, allocator, writer);
+        // Serialize zero_arg_tag_data
+        try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4091,7 +4120,9 @@ pub const Serialized = extern struct {
         // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
-        // Deserialize in reverse order: match_branch_data, match_data, span_with_node_data, span2_data, int128_values, extra_data, regions, then nodes
+        // Deserialize in reverse order (last to first)
+        const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
+        const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
         const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
         const deserialized_match_data = self.match_data.deserialize(base_addr).*;
         const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
@@ -4114,6 +4145,8 @@ pub const Serialized = extern struct {
             .span_with_node_data = deserialized_span_with_node_data,
             .match_data = deserialized_match_data,
             .match_branch_data = deserialized_match_branch_data,
+            .closure_data = deserialized_closure_data,
+            .zero_arg_tag_data = deserialized_zero_arg_tag_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

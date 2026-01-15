@@ -512,7 +512,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprClosure = extern struct {
-        extra_data_idx: u32,
+        closure_data_idx: u32, // Index into closure_data
         _unused1: u32,
         _unused2: u32,
     };
@@ -616,7 +616,7 @@ pub const Payload = extern union {
     };
 
     pub const ExprZeroArgumentTag = extern struct {
-        extra_data_idx: u32,
+        zero_arg_tag_idx: u32, // Index into zero_arg_tag_data
         _unused1: u32,
         _unused2: u32,
     };
