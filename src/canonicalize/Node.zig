@@ -300,6 +300,11 @@ pub const Payload = extern union {
     expr_string_segment: ExprStringSegment,
     expr_nominal: ExprNominal,
     expr_nominal_external: ExprNominalExternal,
+    expr_crash: ExprCrash,
+    expr_dbg: ExprDbg,
+    expr_anno_only: ExprAnnoOnly,
+    expr_return: ExprReturn,
+    expr_type_var_dispatch: ExprTypeVarDispatch,
 
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -662,6 +667,41 @@ pub const Payload = extern union {
     pub const ExprNominalExternal = extern struct {
         module_idx: u32,
         target_node_idx: u32,
+        extra_data_idx: u32,
+    };
+
+    /// expr_crash: crash expression with message
+    pub const ExprCrash = extern struct {
+        msg: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_dbg: debug expression
+    pub const ExprDbg = extern struct {
+        expr: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_anno_only: annotation-only expression
+    pub const ExprAnnoOnly = extern struct {
+        ident: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_return: return expression
+    pub const ExprReturn = extern struct {
+        expr: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_type_var_dispatch: type variable method dispatch
+    pub const ExprTypeVarDispatch = extern struct {
+        type_var_alias_stmt: u32,
+        method_name: u32,
         extra_data_idx: u32,
     };
 

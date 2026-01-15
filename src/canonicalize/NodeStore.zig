@@ -705,8 +705,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_zero_argument_tag => {
-            const p = payload.raw;
-            const extra_data = store.extra_data.items.items[p.data_1..];
+            const p = payload.expr_zero_argument_tag;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -723,15 +723,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_crash => {
-            const p = payload.raw;
+            const p = payload.expr_crash;
             return CIR.Expr{ .e_crash = .{
-                .msg = @enumFromInt(p.data_1),
+                .msg = @enumFromInt(p.msg),
             } };
         },
         .expr_dbg => {
-            const p = payload.raw;
+            const p = payload.expr_dbg;
             return CIR.Expr{ .e_dbg = .{
-                .expr = @enumFromInt(p.data_1),
+                .expr = @enumFromInt(p.expr),
             } };
         },
         .expr_unary_minus => {
@@ -762,23 +762,23 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_anno_only => {
-            const p = payload.raw;
+            const p = payload.expr_anno_only;
             return CIR.Expr{ .e_anno_only = .{
-                .ident = @bitCast(p.data_1),
+                .ident = @bitCast(p.ident),
             } };
         },
         .expr_return => {
-            const p = payload.raw;
+            const p = payload.expr_return;
             return CIR.Expr{ .e_return = .{
-                .expr = @enumFromInt(p.data_1),
+                .expr = @enumFromInt(p.expr),
             } };
         },
         .expr_type_var_dispatch => {
-            const p = payload.raw;
+            const p = payload.expr_type_var_dispatch;
             // Retrieve type var dispatch data from node and extra_data
-            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.data_1);
-            const method_name: base.Ident.Idx = @bitCast(p.data_2);
-            const extra_data = store.extra_data.items.items[p.data_3..];
+            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.type_var_alias_stmt);
+            const method_name: base.Ident.Idx = @bitCast(p.method_name);
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -2009,18 +2009,18 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_crash => |c| {
             node.tag = .expr_crash;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(c.msg),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_crash = .{
+                .msg = @intFromEnum(c.msg),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_dbg => |d| {
             node.tag = .expr_dbg;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(d.expr),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_dbg = .{
+                .expr = @intFromEnum(d.expr),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_ellipsis => |_| {
@@ -2028,33 +2028,31 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_anno_only => |anno| {
             node.tag = .expr_anno_only;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(anno.ident),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_anno_only = .{
+                .ident = @bitCast(anno.ident),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_return => |ret| {
             node.tag = .expr_return;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(ret.expr),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_return = .{
+                .expr = @intFromEnum(ret.expr),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_type_var_dispatch => |tvd| {
             node.tag = .expr_type_var_dispatch;
-            // data_1 = type_var_alias_stmt (Statement.Idx)
-            // data_2 = method_name (Ident.Idx)
             // extra_data: args span start, args span len
             const extra_data_start: u32 = @intCast(store.extra_data.len());
             _ = try store.extra_data.append(store.gpa, tvd.args.span.start);
             _ = try store.extra_data.append(store.gpa, tvd.args.span.len);
 
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(tvd.type_var_alias_stmt),
-                .data_2 = @bitCast(tvd.method_name),
-                .data_3 = extra_data_start,
+            node.setPayload(.{ .expr_type_var_dispatch = .{
+                .type_var_alias_stmt = @intFromEnum(tvd.type_var_alias_stmt),
+                .method_name = @bitCast(tvd.method_name),
+                .extra_data_idx = extra_data_start,
             } });
         },
         .e_hosted_lambda => |hosted| {
