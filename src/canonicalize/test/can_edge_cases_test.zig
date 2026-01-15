@@ -54,6 +54,8 @@ test "module with where clause on declaration" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    // This canonicalizes successfully (where clauses are handled)
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with nested type in opaque" {
@@ -69,6 +71,7 @@ test "module with nested type in opaque" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with associated function" {
@@ -86,6 +89,7 @@ test "module with associated function" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with type declaration and annotation" {
@@ -100,6 +104,7 @@ test "module with type declaration and annotation" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with opaque type unwrap" {
@@ -114,6 +119,7 @@ test "module with opaque type unwrap" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with deeply nested scopes" {
@@ -140,6 +146,7 @@ test "module with deeply nested scopes" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with complex pattern matching" {
@@ -156,6 +163,7 @@ test "module with complex pattern matching" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with effectful function annotation" {
@@ -168,6 +176,7 @@ test "module with effectful function annotation" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with multiple type parameters" {
@@ -181,6 +190,7 @@ test "module with multiple type parameters" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with recursive type reference" {
@@ -192,6 +202,7 @@ test "module with recursive type reference" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with anonymous lambda in declaration" {
@@ -203,6 +214,7 @@ test "module with anonymous lambda in declaration" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with record pattern in lambda" {
@@ -214,6 +226,7 @@ test "module with record pattern in lambda" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with tuple type" {
@@ -226,6 +239,7 @@ test "module with tuple type" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with extensible record" {
@@ -238,6 +252,7 @@ test "module with extensible record" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "module with annotation only declaration" {
@@ -249,6 +264,7 @@ test "module with annotation only declaration" {
 
     const result = try parseAndCanonicalizeModule(source);
     defer cleanupModule(result.env, result.can, result.ast);
+    _ = try result.can.canonicalizeFile();
 }
 
 test "expression with very long identifier" {

@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-// Build configuration for the Roc compiler
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const roc_target = @import("src/target/mod.zig");
@@ -2793,10 +2792,19 @@ pub fn build(b: *std.Build) void {
             run_parse_coverage.step.dependOn(&mkdir_step.step);
             run_parse_coverage.step.dependOn(&install_parse_test.step);
 
+            // Coverage thresholds - minimum required coverage percentage for each module
+            const parser_min_coverage: f64 = 28.0;
+            const canonicalize_min_coverage: f64 = 82.0;
+
+            // kcov exclusion patterns for canonicalize coverage
+            const can_exclude_patterns = .{
+                "--include-pattern=/src/canonicalize/",
+                "--exclude-pattern=ModuleEnv.zig",
+                "--exclude-line=SExpr",
+            };
+
             // Add coverage summary step that parses kcov JSON output
-            // Note: Coverage threshold lowered to 28.0% to match what's achievable with current tests
-            // The threshold can be gradually increased as more tests are added
-            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser", "Parser", "src/parse", 28.0);
+            const summary_step = CoverageSummaryStep.create(b, "kcov-output/parser", "Parser", "src/parse", parser_min_coverage);
             summary_step.step.dependOn(&run_parse_coverage.step);
 
             // Cross-compile for Windows to verify comptime branches compile
@@ -2846,9 +2854,7 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov on canonicalize unit tests
             const run_can_unit_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
-            run_can_unit_coverage.addArg("--include-pattern=/src/canonicalize/");
-            run_can_unit_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
-            run_can_unit_coverage.addArg("--exclude-line=SExpr");
+            run_can_unit_coverage.addArgs(&can_exclude_patterns);
             run_can_unit_coverage.addArgs(&.{
                 "kcov-output/can-unit",
                 "zig-out/bin/can_unit_coverage",
@@ -2886,9 +2892,7 @@ pub fn build(b: *std.Build) void {
 
             // Run kcov on snapshot tests for canonicalize coverage
             const run_can_snapshot_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
-            run_can_snapshot_coverage.addArg("--include-pattern=/src/canonicalize/");
-            run_can_snapshot_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
-            run_can_snapshot_coverage.addArg("--exclude-line=SExpr");
+            run_can_snapshot_coverage.addArgs(&can_exclude_patterns);
             run_can_snapshot_coverage.addArgs(&.{
                 "kcov-output/can-snapshot",
                 "zig-out/bin/can_snapshot_coverage",
@@ -2909,7 +2913,7 @@ pub fn build(b: *std.Build) void {
             merge_can_coverage.step.dependOn(&run_can_snapshot_coverage.step);
 
             // Add coverage summary step for canonicalize (reads merged coverage)
-            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", 82.0);
+            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", canonicalize_min_coverage);
             can_summary_step.step.dependOn(&merge_can_coverage.step);
 
             // Hook up coverage_step to the canonicalize summary step
