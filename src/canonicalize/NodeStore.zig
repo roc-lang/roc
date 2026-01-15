@@ -1172,25 +1172,25 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_nominal => {
-            const p = payload.raw;
+            const p = payload.pattern_nominal;
             return CIR.Pattern{
                 .nominal = .{
-                    .nominal_type_decl = @enumFromInt(p.data_1),
-                    .backing_pattern = @enumFromInt(p.data_2),
-                    .backing_type = @enumFromInt(p.data_3),
+                    .nominal_type_decl = @enumFromInt(p.nominal_type_decl),
+                    .backing_pattern = @enumFromInt(p.backing_pattern),
+                    .backing_type = @enumFromInt(p.backing_type),
                 },
             };
         },
         .pattern_nominal_external => {
-            const p = payload.raw;
-            const extra_data = store.extra_data.items.items[p.data_3..][0..2];
+            const p = payload.pattern_nominal_external;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..][0..2];
             const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
             return CIR.Pattern{
                 .nominal_external = .{
-                    .module_idx = @enumFromInt(p.data_1),
-                    .target_node_idx = @intCast(p.data_2),
+                    .module_idx = @enumFromInt(p.module_idx),
+                    .target_node_idx = @intCast(p.target_node_idx),
                     .backing_pattern = backing_pattern,
                     .backing_type = backing_type,
                 },
@@ -1254,38 +1254,36 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             };
         },
         .pattern_f32_literal => {
-            const p = payload.raw;
+            const p = payload.pattern_frac_f32;
             return CIR.Pattern{
-                .frac_f32_literal = .{ .value = @bitCast(p.data_1) },
+                .frac_f32_literal = .{ .value = @bitCast(p.value) },
             };
         },
         .pattern_f64_literal => {
-            const p = payload.raw;
-            const raw: u64 = (@as(u64, p.data_2) << 32) | @as(u64, p.data_1);
+            const p = payload.pattern_frac_f64;
+            const raw: u64 = (@as(u64, p.value_hi) << 32) | @as(u64, p.value_lo);
 
             return CIR.Pattern{
                 .frac_f64_literal = .{ .value = @bitCast(raw) },
             };
         },
         .pattern_dec_literal => {
-            const p = payload.raw;
-            const value_as_u32s = store.extra_data.items.items[p.data_1..][0..4];
+            const p = payload.pattern_dec_literal;
+            const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
 
             return CIR.Pattern{
                 .dec_literal = .{
                     .value = RocDec{ .num = value_as_i128 },
-                    .has_suffix = p.data_2 != 0,
+                    .has_suffix = p.has_suffix != 0,
                 },
             };
         },
         .pattern_small_dec_literal => {
-            const p = payload.raw;
-            // Unpack small dec data from data_1 and data_3
-            // data_1: numerator (i16) stored as u32
-            // data_3: denominator_power_of_ten (u8) in lower 8 bits
-            const numerator: i16 = @intCast(@as(i32, @bitCast(p.data_1)));
-            const denominator_power_of_ten: u8 = @intCast(p.data_2 & 0xFF);
+            const p = payload.pattern_small_dec_literal;
+            // Unpack small dec data
+            const numerator: i16 = @intCast(@as(i32, @bitCast(p.numerator)));
+            const denominator_power_of_ten: u8 = @intCast(p.denominator_power & 0xFF);
 
             return CIR.Pattern{
                 .small_dec_literal = .{
@@ -1293,14 +1291,14 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                         .numerator = numerator,
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
-                    .has_suffix = p.data_3 != 0,
+                    .has_suffix = p.has_suffix != 0,
                 },
             };
         },
         .pattern_str_literal => {
-            const p = payload.raw;
+            const p = payload.pattern_str_literal;
             return CIR.Pattern{ .str_literal = .{
-                .literal = @enumFromInt(p.data_1),
+                .literal = @enumFromInt(p.literal),
             } };
         },
 
