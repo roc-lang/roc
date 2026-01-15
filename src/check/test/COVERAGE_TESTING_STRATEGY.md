@@ -205,16 +205,35 @@ test "buildNumberDoesNotFitReport generates correct report" {
 
 This approach bypasses the need to trigger error conditions through the type checker and directly tests the report generation logic.
 
+## Important Finding: Unreachable Code in problem.zig
+
+Upon investigation, the following report builders in problem.zig are **currently unreachable**:
+- `buildNumberDoesNotFitReport` (~35 lines)
+- `buildNegativeUnsignedIntReport` (~40 lines)
+- `buildInvalidNumericLiteralReport` (~65 lines)
+
+**Why they're unreachable:**
+The error types `NumberDoesNotFit` and `NegativeUnsignedInt` are defined in unify.zig's error set but are **never actually returned**. Number validation happens during comptime evaluation (in `validateDeferredNumericLiterals`), which creates `comptime_eval_error` problems instead of the specific number validation problems.
+
+**Implications:**
+- ~140 lines in problem.zig cannot be covered because they're dead code
+- This accounts for ~7.6% of problem.zig (140/1839 lines)
+- The report builders exist for future use when number validation is moved to type checking
+
+**Recommendation:**
+Either:
+1. Accept that this code is infrastructure for future features and won't be covered
+2. Move number validation from comptime to type checking to use these report builders
+3. Remove the dead code until the feature is actually implemented
+
 ## Summary
 
 The main coverage gaps are in error paths that require:
-1. **Comptime evaluation** (number validation, comptime errors)
+1. **Dead code** (~140 lines in problem.zig for number validation - unreachable)
 2. **Platform modules** (platform requirement errors)
-3. **Unimplemented features** (extension type errors)
+3. **Unimplemented features** (extension type errors returning "unimplemented")
 
-The most practical approaches are:
-1. Direct unit testing of report builder functions
-2. Extending TestEnv with comptime evaluation support
-3. Adding platform module test fixtures
-
-Some error types (the "unimplemented" ones) will remain uncovered until their report builders are implemented.
+The theoretical maximum coverage for problem.zig is approximately 60% due to:
+- Dead number validation code (~7.6%)
+- Platform requirement code (not easily testable)
+- Unimplemented error placeholders
