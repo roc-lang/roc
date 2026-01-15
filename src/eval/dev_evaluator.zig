@@ -167,6 +167,9 @@ pub const DevEvaluator = struct {
             // Blocks
             .e_block => |block| try self.generateBlockCode(module_env, block, result_type, &empty_env),
 
+            // For loops (always return {} / empty record)
+            .e_for => try self.generateReturnI64Code(0, result_type),
+
             else => return error.UnsupportedExpression,
         };
 
@@ -322,7 +325,7 @@ pub const DevEvaluator = struct {
             .e_ellipsis => return error.UnsupportedExpression,
             .e_anno_only => return error.UnsupportedExpression,
             .e_type_var_dispatch => return error.UnsupportedExpression,
-            .e_for => return error.UnsupportedExpression,
+            .e_for => try self.generateReturnI64Code(0, result_type), // For loops always return {} (empty record)
             .e_hosted_lambda => return error.UnsupportedExpression,
             .e_low_level_lambda => return error.UnsupportedExpression,
         };
@@ -390,6 +393,123 @@ pub const DevEvaluator = struct {
                     else => return error.UnsupportedExpression,
                 }
             },
+            .e_low_level_lambda => |low_level| {
+                // Low-level builtin operations
+                return self.generateLowLevelCallCode(module_env, low_level, call.args, result_type, env);
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Generate code for low-level builtin operations
+    fn generateLowLevelCallCode(
+        self: *DevEvaluator,
+        module_env: *ModuleEnv,
+        low_level: anytype,
+        args_span: CIR.Expr.Span,
+        result_type: ResultType,
+        env: *std.AutoHashMap(u32, i64),
+    ) Error![]const u8 {
+        const arg_indices = module_env.store.sliceExpr(args_span);
+
+        switch (low_level.op) {
+            // Boolean operations
+            .bool_is_eq => {
+                if (arg_indices.len != 2) return error.UnsupportedExpression;
+                const lhs_expr = module_env.store.getExpr(arg_indices[0]);
+                const rhs_expr = module_env.store.getExpr(arg_indices[1]);
+                const lhs_val = self.tryEvalConstantI64WithEnvMap(module_env, lhs_expr, env) orelse
+                    return error.UnsupportedExpression;
+                const rhs_val = self.tryEvalConstantI64WithEnvMap(module_env, rhs_expr, env) orelse
+                    return error.UnsupportedExpression;
+                const result: i64 = if (lhs_val == rhs_val) 1 else 0;
+                return self.generateReturnI64Code(result, result_type);
+            },
+
+            // String operations - return UnsupportedExpression for now
+            // These need actual string handling which requires more infrastructure
+            .str_is_empty,
+            .str_is_eq,
+            .str_concat,
+            .str_contains,
+            .str_trim,
+            .str_trim_start,
+            .str_trim_end,
+            .str_caseless_ascii_equals,
+            .str_with_ascii_lowercased,
+            .str_with_ascii_uppercased,
+            .str_starts_with,
+            .str_ends_with,
+            .str_repeat,
+            .str_with_prefix,
+            .str_drop_prefix,
+            .str_drop_suffix,
+            .str_count_utf8_bytes,
+            .str_with_capacity,
+            .str_reserve,
+            .str_release_excess_capacity,
+            .str_to_utf8,
+            .str_from_utf8_lossy,
+            .str_from_utf8,
+            .str_split_on,
+            .str_join_with,
+            .str_inspekt,
+            => return error.UnsupportedExpression,
+
+            // Numeric to_str operations - return UnsupportedExpression for now
+            .u8_to_str,
+            .i8_to_str,
+            .u16_to_str,
+            .i16_to_str,
+            .u32_to_str,
+            .i32_to_str,
+            .u64_to_str,
+            .i64_to_str,
+            .u128_to_str,
+            .i128_to_str,
+            .dec_to_str,
+            .f32_to_str,
+            .f64_to_str,
+            => return error.UnsupportedExpression,
+
+            // List operations
+            .list_len => {
+                // For constant empty list, return 0
+                if (arg_indices.len != 1) return error.UnsupportedExpression;
+                const list_expr = module_env.store.getExpr(arg_indices[0]);
+                switch (list_expr) {
+                    .e_empty_list => return self.generateReturnI64Code(0, result_type),
+                    .e_list => |list| {
+                        const elements = module_env.store.sliceExpr(list.elems);
+                        return self.generateReturnI64Code(@intCast(elements.len), result_type);
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
+            .list_is_empty => {
+                if (arg_indices.len != 1) return error.UnsupportedExpression;
+                const list_expr = module_env.store.getExpr(arg_indices[0]);
+                switch (list_expr) {
+                    .e_empty_list => return self.generateReturnI64Code(1, result_type),
+                    .e_list => |list| {
+                        const elements = module_env.store.sliceExpr(list.elems);
+                        const result: i64 = if (elements.len == 0) 1 else 0;
+                        return self.generateReturnI64Code(result, result_type);
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
+            .list_get_unsafe,
+            .list_append_unsafe,
+            .list_concat,
+            .list_with_capacity,
+            .list_sort_with,
+            .list_drop_at,
+            .list_sublist,
+            .list_append,
+            => return error.UnsupportedExpression,
+
+            // Other operations not yet implemented
             else => return error.UnsupportedExpression,
         }
     }
