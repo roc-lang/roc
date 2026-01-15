@@ -1671,12 +1671,14 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_return => |s| {
             node.tag = .statement_return;
-            node.setPayload(.{ .statement_return = .{
-                .expr = @intFromEnum(s.expr),
-                // Store lambda using 0 for null and idx+1 for valid indices
-                .lambda_plus_one = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0,
-                ._unused = 0,
-            } });
+            node.setPayload(.{
+                .statement_return = .{
+                    .expr = @intFromEnum(s.expr),
+                    // Store lambda using 0 for null and idx+1 for valid indices
+                    .lambda_plus_one = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0,
+                    ._unused = 0,
+                },
+            });
         },
         .s_import => |s| {
             node.tag = .statement_import;
