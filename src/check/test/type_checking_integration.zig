@@ -3431,3 +3431,46 @@ test "check type - function application on non-function" {
     ;
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
+
+test "check type - tuple element type mismatch" {
+    // Tuple with wrong element types
+    const source =
+        \\x : (I64, Str)
+        \\x = (42, 123)
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - record field type mismatch" {
+    // Record with wrong field type
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: 42, age: 30 }
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - tag union wrong payload type" {
+    // Tag with wrong payload type
+    const source =
+        \\x : [Foo(Str), Bar(I64)]
+        \\x = Foo(42)
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - binary operation missing method" {
+    // Adding string to number - Str doesn't have plus method
+    const source =
+        \\result = "hello" + 42
+    ;
+    try checkTypesModule(source, .fail_first, "MISSING METHOD");
+}
+
+test "check type - comparison operation type mismatch" {
+    // Comparing incompatible types
+    const source =
+        \\result = "hello" < 42
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
