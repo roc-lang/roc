@@ -285,6 +285,9 @@ pub const Payload = extern union {
     expr_field_access: ExprFieldAccess,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
+    expr_zero_argument_tag: ExprZeroArgumentTag,
+    expr_for: ExprFor,
+    expr_expect: ExprExpect,
 
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -294,6 +297,14 @@ pub const Payload = extern union {
     pattern_list: PatternList,
     pattern_tuple: PatternTuple,
     pattern_num_literal: PatternNumLiteral,
+    pattern_nominal: PatternNominal,
+    pattern_nominal_external: PatternNominalExternal,
+    pattern_small_dec_literal: PatternSmallDecLiteral,
+    pattern_dec_literal: PatternDecLiteral,
+    pattern_str_literal: PatternStrLiteral,
+    pattern_frac_f32: PatternFracF32,
+    pattern_frac_f64: PatternFracF64,
+    pattern_malformed: PatternMalformed,
 
     // === Type annotation payloads ===
     ty_apply: TyApply,
@@ -303,16 +314,25 @@ pub const Payload = extern union {
     ty_record: TyRecord,
     ty_fn: TyFn,
     ty_lookup: TyLookup,
+    ty_rigid_var: TyRigidVar,
+    ty_parens: TyParens,
+    ty_malformed: TyMalformed,
 
     // === Other payloads ===
     record_field: RecordField,
     record_destruct: RecordDestruct,
     match_branch: MatchBranch,
+    match_branch_pattern: MatchBranchPattern,
     where_clause: WhereClause,
+    where_malformed: WhereMalformed,
     def: Def,
     lambda_capture: LambdaCapture,
     annotation: Annotation,
     diagnostic: Diagnostic,
+    type_header: TypeHeader,
+    ty_record_field: TyRecordField,
+    exposed_item: ExposedItem,
+    if_branch: IfBranch,
 
     // ============================================================
     // Payload struct definitions - all must be exactly 12 bytes
@@ -529,6 +549,24 @@ pub const Payload = extern union {
         _unused: u32,
     };
 
+    pub const ExprZeroArgumentTag = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const ExprFor = extern struct {
+        patt: u32,
+        expr: u32,
+        body: u32,
+    };
+
+    pub const ExprExpect = extern struct {
+        body: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
     // --- Patterns ---
 
     pub const PatternIdentifier = extern struct {
@@ -573,12 +611,60 @@ pub const Payload = extern union {
         extra_data_idx: u32,
     };
 
+    pub const PatternNominal = extern struct {
+        nominal_type_decl: u32,
+        backing_pattern: u32,
+        backing_type: u32,
+    };
+
+    pub const PatternNominalExternal = extern struct {
+        module_idx: u32,
+        target_node_idx: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const PatternSmallDecLiteral = extern struct {
+        numerator: u32,
+        denominator_power: u32,
+        has_suffix: u32,
+    };
+
+    pub const PatternDecLiteral = extern struct {
+        extra_data_idx: u32,
+        has_suffix: u32,
+        _unused: u32,
+    };
+
+    pub const PatternStrLiteral = extern struct {
+        literal: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const PatternFracF32 = extern struct {
+        value: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const PatternFracF64 = extern struct {
+        value_lo: u32,
+        value_hi: u32,
+        _unused: u32,
+    };
+
+    pub const PatternMalformed = extern struct {
+        diagnostic: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
     // --- Type annotations ---
 
     pub const TyApply = extern struct {
         name: u32,
+        args_start: u32,
         extra_data_idx: u32,
-        _unused: u32,
     };
 
     pub const TyTagUnion = extern struct {
@@ -614,7 +700,25 @@ pub const Payload = extern union {
     pub const TyLookup = extern struct {
         name: u32,
         base: u32,
-        _unused: u32,
+        extra_data_idx: u32,
+    };
+
+    pub const TyRigidVar = extern struct {
+        name: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const TyParens = extern struct {
+        anno: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const TyMalformed = extern struct {
+        diagnostic: u32,
+        _unused1: u32,
+        _unused2: u32,
     };
 
     // --- Other ---
@@ -637,10 +741,22 @@ pub const Payload = extern union {
         _unused2: u32,
     };
 
+    pub const MatchBranchPattern = extern struct {
+        pattern: u32,
+        degenerate: u32,
+        _unused: u32,
+    };
+
     pub const WhereClause = extern struct {
         var_idx: u32,
         name: u32,
         extra_data_idx: u32,
+    };
+
+    pub const WhereMalformed = extern struct {
+        diagnostic: u32,
+        _unused1: u32,
+        _unused2: u32,
     };
 
     pub const Def = extern struct {
@@ -656,9 +772,9 @@ pub const Payload = extern union {
     };
 
     pub const Annotation = extern struct {
-        ident: u32,
-        type_anno: u32,
+        anno: u32,
         has_where: u32,
+        extra_data_idx: u32,
     };
 
     /// Diagnostic payload - used for all diagnostic node types.
@@ -670,6 +786,30 @@ pub const Payload = extern union {
         secondary: u32,
         /// Tertiary value (region end, extra data index, etc.)
         tertiary: u32,
+    };
+
+    pub const TypeHeader = extern struct {
+        name: u32,
+        relative_name: u32,
+        packed_args: u32,
+    };
+
+    pub const TyRecordField = extern struct {
+        name: u32,
+        ty: u32,
+        _unused: u32,
+    };
+
+    pub const ExposedItem = extern struct {
+        name: u32,
+        alias: u32,
+        is_wildcard: u32,
+    };
+
+    pub const IfBranch = extern struct {
+        cond: u32,
+        body: u32,
+        _unused: u32,
     };
 
     // Compile-time size verification
