@@ -347,30 +347,29 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_alias_decl => {
-            const p = payload.raw;
+            const p = payload.statement_alias_decl;
             return CIR.Statement{
                 .s_alias_decl = .{
-                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(p.data_1)),
-                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_2)),
+                    .header = @enumFromInt(p.header),
+                    .anno = @enumFromInt(p.anno),
                 },
             };
         },
         .statement_nominal_decl => {
-            const p = payload.raw;
+            const p = payload.statement_nominal_decl;
             // Get is_opaque from extra_data
-            const extra_idx = p.data_3;
-            const is_opaque = store.extra_data.items.items[extra_idx] != 0;
+            const is_opaque = store.extra_data.items.items[p.extra_data_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
-                    .header = @as(CIR.TypeHeader.Idx, @enumFromInt(p.data_1)),
-                    .anno = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_2)),
+                    .header = @enumFromInt(p.header),
+                    .anno = @enumFromInt(p.anno),
                     .is_opaque = is_opaque,
                 },
             };
         },
         .statement_type_anno => {
-            const p = payload.raw;
-            const extra_data = store.extra_data.items.items[p.data_1..];
+            const p = payload.statement_type_anno;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
             const name: Ident.Idx = @bitCast(extra_data[1]);
@@ -391,12 +390,12 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             };
         },
         .statement_type_var_alias => {
-            const p = payload.raw;
+            const p = payload.statement_type_var_alias;
             return CIR.Statement{
                 .s_type_var_alias = .{
-                    .alias_name = @bitCast(p.data_1),
-                    .type_var_name = @bitCast(p.data_2),
-                    .type_var_anno = @enumFromInt(p.data_3),
+                    .alias_name = @bitCast(p.alias_name),
+                    .type_var_name = @bitCast(p.type_var_name),
+                    .type_var_anno = @enumFromInt(p.type_var_anno),
                 },
             };
         },
@@ -1719,10 +1718,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(s.header),
-                .data_2 = @intFromEnum(s.anno),
-                .data_3 = 0,
+            node.setPayload(.{ .statement_alias_decl = .{
+                .header = @intFromEnum(s.header),
+                .anno = @intFromEnum(s.anno),
+                ._unused = 0,
             } });
         },
         .s_nominal_decl => |s| {
@@ -1730,10 +1729,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             // Store is_opaque in extra_data
             const extra_idx: u32 = @intCast(store.extra_data.len());
             _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(s.header),
-                .data_2 = @intFromEnum(s.anno),
-                .data_3 = extra_idx,
+            node.setPayload(.{ .statement_nominal_decl = .{
+                .header = @intFromEnum(s.header),
+                .anno = @intFromEnum(s.anno),
+                .extra_data_idx = extra_idx,
             } });
         },
         .s_type_anno => |s| {
@@ -1759,14 +1758,18 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             // Store the extra data start position in the node
-            node.setPayload(.{ .raw = .{ .data_1 = @intCast(extra_start), .data_2 = 0, .data_3 = 0 } });
+            node.setPayload(.{ .statement_type_anno = .{
+                .extra_data_idx = @intCast(extra_start),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
         .s_type_var_alias => |s| {
             node.tag = .statement_type_var_alias;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(s.alias_name),
-                .data_2 = @bitCast(s.type_var_name),
-                .data_3 = @intFromEnum(s.type_var_anno),
+            node.setPayload(.{ .statement_type_var_alias = .{
+                .alias_name = @bitCast(s.alias_name),
+                .type_var_name = @bitCast(s.type_var_name),
+                .type_var_anno = @intFromEnum(s.type_var_anno),
             } });
         },
         .s_runtime_error => |s| {

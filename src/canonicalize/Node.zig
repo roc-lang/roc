@@ -260,6 +260,10 @@ pub const Payload = extern union {
     statement_while: StatementWhile,
     statement_return: StatementReturn,
     statement_import: StatementImport,
+    statement_alias_decl: StatementAliasDecl,
+    statement_nominal_decl: StatementNominalDecl,
+    statement_type_anno: StatementTypeAnno,
+    statement_type_var_alias: StatementTypeVarAlias,
 
     // === Expression payloads ===
     expr_var: ExprVar,
@@ -407,6 +411,34 @@ pub const Payload = extern union {
         module_name_tok: u32,
         extra_data_idx: u32,
         _unused: u32,
+    };
+
+    /// statement_alias_decl: header + anno
+    pub const StatementAliasDecl = extern struct {
+        header: u32,
+        anno: u32,
+        _unused: u32,
+    };
+
+    /// statement_nominal_decl: header + anno + extra_data_idx
+    pub const StatementNominalDecl = extern struct {
+        header: u32,
+        anno: u32,
+        extra_data_idx: u32,
+    };
+
+    /// statement_type_anno: extra_data_idx contains all fields
+    pub const StatementTypeAnno = extern struct {
+        extra_data_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// statement_type_var_alias: alias_name + type_var_name + type_var_anno
+    pub const StatementTypeVarAlias = extern struct {
+        alias_name: u32,
+        type_var_name: u32,
+        type_var_anno: u32,
     };
 
     // --- Expressions ---
