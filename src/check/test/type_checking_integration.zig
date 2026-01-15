@@ -3656,3 +3656,666 @@ test "check type - pure function assigned to effectful" {
     // Pure functions CAN be assigned to effectful annotations (it's safe)
     try checkTypesModule(source, .{ .pass = .last_def }, "I64 => Str");
 }
+
+// Additional error path tests for coverage //
+
+test "check type - function with block body" {
+    // A function returning a string literal
+    const source =
+        \\f : {} -> Str
+        \\f = |_x| "result"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Str");
+}
+
+test "check type - type alias arity mismatch - too few args" {
+    // Type alias with wrong number of type arguments (too few)
+    const source =
+        \\MyPair(a, b) : { first: a, second: b }
+        \\
+        \\x : MyPair(I64)
+        \\x = { first: 1, second: 2 }
+    ;
+    try checkTypesModule(source, .fail_first, "TOO FEW ARGS");
+}
+
+test "check type - type alias arity mismatch - too many args" {
+    // Type alias with wrong number of type arguments (too many)
+    const source =
+        \\MyBox(a) : { value: a }
+        \\
+        \\x : MyBox(I64, Str, Bool)
+        \\x = { value: 1 }
+    ;
+    try checkTypesModule(source, .fail_first, "TOO MANY ARGS");
+}
+
+test "check type - incompatible list elements specific" {
+    // List with incompatible element types - triggers INCOMPATIBLE LIST ELEMENTS
+    const source =
+        \\x : List(I64)
+        \\x = [1, 2, "three"]
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - method call on wrong type" {
+    // Calling a method that doesn't exist on the type
+    const source =
+        \\x : I64
+        \\x = 42
+        \\result = x.nonexistent_method()
+    ;
+    try checkTypesModule(source, .fail_first, "MISSING METHOD");
+}
+
+test "check type - nominal type with wrong tag" {
+    // Using wrong tag for a nominal type
+    const source =
+        \\MyType := [A(I64), B(Str)]
+        \\
+        \\x : MyType
+        \\x = C(42)
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - function returns wrong type" {
+    // Function returns a type incompatible with annotation
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| x * 2
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - nested function type mismatch" {
+    // Higher order function with wrong inner type
+    const source =
+        \\f : (I64 -> I64) -> I64
+        \\f = |g| g(42)
+        \\
+        \\result = f(|x| "wrong")
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - complex type error" {
+    // Complex type mismatch scenario
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| x + 1
+        \\
+        \\result : Str
+        \\result = f(42)
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - number overflow U8" {
+    // Number assigned to U8 - within range, should pass
+    const source =
+        \\x : U8
+        \\x = 255
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "U8");
+}
+
+test "check type - negative number type" {
+    // Negative number with type annotation gets I64 type
+    const source =
+        \\x : I64
+        \\x = -1
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - incompatible list elements" {
+    // List with different types causes type mismatch
+    const source =
+        \\x = [1, 2, "three"]
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - invalid bool binop and" {
+    // Using and with non-bool types causes type mismatch
+    const source =
+        \\x = 1 and 2
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - invalid bool binop or" {
+    // Using or with non-bool types causes type mismatch
+    const source =
+        \\x = 1 or 2
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - match pattern type mismatch" {
+    // Pattern doesn't match condition type
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    "string" => "matched"
+        \\    _ => "other"
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "check type - function wrong number of arguments" {
+    // Calling function with wrong number of args
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| x + 1
+        \\
+        \\result = f(1, 2, 3)
+    ;
+    try checkTypesModule(source, .fail_first, "TOO MANY ARGUMENTS");
+}
+
+test "check type - function too few arguments" {
+    // Calling function with too few args
+    const source =
+        \\f : I64, I64 -> I64
+        \\f = |x, y| x + y
+        \\
+        \\result = f(1)
+    ;
+    try checkTypesModule(source, .fail_first, "TOO FEW ARGUMENTS");
+}
+
+test "check type - record missing field" {
+    // Record missing a required field
+    const source =
+        \\Person : { name: Str, age: I64 }
+        \\
+        \\p : Person
+        \\p = { name: "Alice" }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - record extra field" {
+    // Record with extra field
+    const source =
+        \\Person : { name: Str }
+        \\
+        \\p : Person
+        \\p = { name: "Alice", age: 30 }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - tag union wrong tag" {
+    // Using wrong tag for tag union
+    const source =
+        \\Result : [Ok(I64), Err(Str)]
+        \\
+        \\x : Result
+        \\x = Maybe(42)
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - list of records" {
+    // List containing records
+    const source =
+        \\x : List({ value: I64 })
+        \\x = [{ value: 1 }, { value: 2 }]
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List({ value: I64 })");
+}
+
+test "check type - recursive function type" {
+    // A recursive function
+    const source =
+        \\fact : I64 -> I64
+        \\fact = |n| if n == 0 { 1 } else { n * fact(n - 1) }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 -> I64");
+}
+
+test "check type - tuple type mismatch" {
+    // Tuple with wrong element type
+    const source =
+        \\x : (I64, Str)
+        \\x = (1, 2)
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - tuple arity mismatch" {
+    // Tuple with wrong number of elements
+    const source =
+        \\x : (I64, Str, Bool)
+        \\x = (1, "hi")
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - match branches incompatible types" {
+    // Match branches return different types
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    1 => "one"
+        \\    _ => 0
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - if branches incompatible types" {
+    // If branches return different types
+    const source =
+        \\x = if Bool.true { "yes" } else { 0 }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - invalid if condition type" {
+    // If condition is not a Bool
+    const source =
+        \\x = if 42 { "yes" } else { "no" }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - higher order function" {
+    // Higher order function
+    const source =
+        \\apply : (I64 -> I64), I64 -> I64
+        \\apply = |f, x| f(x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "(I64 -> I64), I64 -> I64");
+}
+
+test "check type - nested record values" {
+    // Nested record values
+    const source =
+        \\x : { inner: { value: I64 } }
+        \\x = { inner: { value: 42 } }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ inner: { value: I64 } }");
+}
+
+// Additional tests for coverage of uncovered error paths //
+
+test "check type - redundant numeric match pattern" {
+    // Redundant pattern in match expression with numbers
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    1 => "one"
+        \\    2 => "two"
+        \\    1 => "duplicate"
+        \\    _ => "other"
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "REDUNDANT PATTERN");
+}
+
+test "check type - tag union match" {
+    // Match on tag union - should pass
+    const source =
+        \\x : [A, B, C]
+        \\x = A
+        \\
+        \\result = match x {
+        \\    A => "a"
+        \\    B => "b"
+        \\    C => "c"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - tuple with nested mismatch" {
+    // Nested type mismatch in tuple
+    const source =
+        \\x : (I64, (Str, Bool))
+        \\x = (1, ("hi", 42))
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - function returns record mismatch" {
+    // Function body returns wrong record type
+    const source =
+        \\f : {} -> { name: Str }
+        \\f = |_x| { age: 42 }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - record multiple field type mismatch" {
+    // Multiple record fields have wrong types
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: 42, age: "hello" }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - empty list type inference" {
+    // Empty list with type annotation
+    const source =
+        \\x : List(I64)
+        \\x = []
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(I64)");
+}
+
+test "check type - multiple argument function" {
+    // Function with multiple arguments
+    const source =
+        \\add : I64, I64, I64 -> I64
+        \\add = |a, b, c| a + b + c
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64, I64, I64 -> I64");
+}
+
+test "check type - record with many fields" {
+    // Record with many fields
+    const source =
+        \\x : { name: Str, age: I64, count: I64 }
+        \\x = { name: "Alice", age: 30, count: 5 }
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ age: I64, count: I64, name: Str }");
+}
+
+test "check type - match on numeric literal" {
+    // Match on numeric values
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    0 => "zero"
+        \\    1 => "one"
+        \\    _ => "other"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - nested function calls" {
+    // Nested function calls
+    const source =
+        \\inc : I64 -> I64
+        \\inc = |x| x + 1
+        \\
+        \\dbl : I64 -> I64
+        \\dbl = |x| x * 2
+        \\
+        \\result = dbl(inc(5))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - function composition" {
+    // Function that takes and returns a function
+    const source =
+        \\compose : (I64 -> I64), (I64 -> I64) -> (I64 -> I64)
+        \\compose = |f, g| |x| f(g(x))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "(I64 -> I64), (I64 -> I64) -> (I64 -> I64)");
+}
+
+test "check type - empty record" {
+    // Empty record type
+    const source =
+        \\x : {}
+        \\x = {}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{}");
+}
+
+test "check type - comparison operators" {
+    // Comparison returns Bool
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = x > 3
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - bool operations valid" {
+    // Boolean operations with comparison
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = (x > 3) and (x < 10)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - string operations" {
+    // String concatenation
+    const source =
+        \\x : Str
+        \\x = "hello"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - list map operation" {
+    // List with map
+    const source =
+        \\nums : List(I64)
+        \\nums = [1, 2, 3]
+        \\
+        \\f : I64 -> I64
+        \\f = |x| x * 2
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 -> I64");
+}
+
+// Additional tests for improved error path coverage //
+
+test "check type - string interpolation" {
+    // String with interpolation
+    const source =
+        \\name : Str
+        \\name = "world"
+        \\
+        \\greeting = "Hello, $(name)!"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - float literal F32" {
+    // F32 float literal
+    const source =
+        \\x : F32
+        \\x = 3.14
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "F32");
+}
+
+test "check type - float literal F64" {
+    // F64 float literal
+    const source =
+        \\x : F64
+        \\x = 3.14159
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "F64");
+}
+
+test "check type - tuple pass through function" {
+    // Tuple passed through a function
+    const source =
+        \\identity : (I64, Str) -> (I64, Str)
+        \\identity = |t| t
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "(I64, Str) -> (I64, Str)");
+}
+
+test "check type - record field access" {
+    // Record field access
+    const source =
+        \\rec : { name: Str, age: I64 }
+        \\rec = { name: "Alice", age: 30 }
+        \\
+        \\n = rec.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - list singleton" {
+    // Single element list
+    const source =
+        \\x : List(I64)
+        \\x = [42]
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(I64)");
+}
+
+test "check type - deeply nested tuples" {
+    // Deeply nested tuple
+    const source =
+        \\x : ((I64, I64), (I64, I64))
+        \\x = ((1, 2), (3, 4))
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "((I64, I64), (I64, I64))");
+}
+
+test "check type - arithmetic expressions" {
+    // Arithmetic with multiple operators
+    const source =
+        \\x : I64
+        \\x = 1 + 2 * 3 - 4
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - division" {
+    // Division operation
+    const source =
+        \\x : I64
+        \\x = 10 // 3
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - modulo" {
+    // Modulo operation
+    const source =
+        \\x : I64
+        \\x = 10 % 3
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - unary negation" {
+    // Unary negation
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\y = -x
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - multiple bindings" {
+    // Multiple bindings in sequence
+    const source =
+        \\a : I64
+        \\a = 1
+        \\
+        \\b : I64
+        \\b = 2
+        \\
+        \\c = a + b
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+test "check type - function with record param" {
+    // Function that takes a record
+    const source =
+        \\getName : { name: Str } -> Str
+        \\getName = |rec| rec.name
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ name: Str } -> Str");
+}
+
+test "check type - function returning tuple" {
+    // Function returning tuple
+    const source =
+        \\pair : I64 -> (I64, I64)
+        \\pair = |x| (x, x)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 -> (I64, I64)");
+}
+
+test "check type - match with wildcard" {
+    // Match with wildcard pattern
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    _ => "any"
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - equality comparison" {
+    // Equality comparison
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = x == 5
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - inequality comparison" {
+    // Inequality comparison
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = x != 3
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - less than or equal" {
+    // Less than or equal comparison
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = x <= 10
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
+
+test "check type - greater than or equal" {
+    // Greater than or equal comparison
+    const source =
+        \\x : I64
+        \\x = 5
+        \\
+        \\result = x >= 0
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Bool");
+}
