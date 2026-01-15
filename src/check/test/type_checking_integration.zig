@@ -3474,3 +3474,67 @@ test "check type - comparison operation type mismatch" {
     ;
     try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
+
+test "check type - lambda parameter type mismatch" {
+    // Lambda body doesn't match return type in annotation
+    const source =
+        \\f : (I64, I64) -> Str
+        \\f = |x, y| x + y
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - lambda applied to wrong argument type" {
+    // Lambda argument types don't match
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| x + 1
+        \\result = f("hello")
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - nested record type mismatch" {
+    // Nested record with wrong inner type
+    const source =
+        \\x : { outer: { inner: Str } }
+        \\x = { outer: { inner: 42 } }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - list of records type mismatch" {
+    // List containing records with wrong field types
+    const source =
+        \\x : List({ name: Str })
+        \\x = [{ name: 42 }]
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - match branch return type mismatch" {
+    // Match branches return different types
+    const source =
+        \\x : [A, B]
+        \\x = A
+        \\
+        \\result = match x {
+        \\    A => 42
+        \\    B => "hello"
+        \\}
+    ;
+    // Results in TYPE MISMATCH because 42 and "hello" don't unify
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - if branch type mismatch" {
+    // If branches return different types
+    const source =
+        \\x : Bool
+        \\x = Bool.true
+        \\
+        \\result = if x { 42 } else { "hello" }
+    ;
+    // Results in TYPE MISMATCH because 42 and "hello" don't unify
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
