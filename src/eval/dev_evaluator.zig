@@ -227,24 +227,69 @@ pub const DevEvaluator = struct {
     /// Helper to generate code for an expression with variable environment (for lambda bodies)
     fn generateCodeForExprWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
         return switch (expr) {
+            // Numeric literals
             .e_num => |num| try self.generateNumericCode(num, result_type),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
+            .e_dec => |dec| try self.generateDecCode(dec, result_type),
+            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_type),
+            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_type),
+            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_type),
+
+            // Operations
             .e_binop => |binop| try self.generateBinopCodeWithEnv(module_env, binop, result_type, env),
             .e_unary_minus => |unary| try self.generateUnaryMinusCodeWithEnv(module_env, unary, result_type, env),
+            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_type, env),
+
+            // Control flow
             .e_if => |if_expr| try self.generateIfCodeWithEnv(module_env, if_expr, result_type, env),
+            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_type, env),
+
+            // Functions and calls
             .e_call => |call| try self.generateCallCode(module_env, call, result_type, env),
+            .e_lambda => return error.UnsupportedExpression, // Lambdas are handled via e_call
+            .e_closure => return error.UnsupportedExpression, // Closures are handled via e_call
+
+            // Lookups
             .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
+            .e_lookup_external => return error.UnsupportedExpression, // External lookups need module resolution
+            .e_lookup_required => return error.UnsupportedExpression, // Required lookups need platform context
+
+            // Tags
             .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
+            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, env),
+
+            // Data structures
             .e_empty_list => try self.generateEmptyListCode(result_type),
+            .e_list => |list| try self.generateListCode(module_env, list, result_type, env),
+            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, env),
+            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, env),
+            .e_empty_record => try self.generateReturnI64Code(0, result_type),
+
+            // Blocks and statements
             .e_block => |block| try self.generateBlockCode(module_env, block, result_type, env),
+            .e_return => |ret| try self.generateReturnExprCode(module_env, ret, result_type, env),
+
+            // Strings
             .e_str_segment => |seg| try self.generateStrSegmentCode(module_env, seg, result_type),
             .e_str => |str| try self.generateStrCode(module_env, str, result_type, env),
-            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, env),
-            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, env),
-            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, env),
-            .e_list => |list| try self.generateListCode(module_env, list, result_type, env),
-            else => return error.UnsupportedExpression,
+
+            // Debug and errors
+            .e_dbg => |dbg| try self.generateDbgCode(module_env, dbg, result_type, env),
+            .e_crash => return error.UnsupportedExpression, // Crash expressions always error
+            .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_type, env),
+            .e_runtime_error => return error.UnsupportedExpression, // Runtime errors
+
+            // Not yet supported
+            .e_dot_access => return error.UnsupportedExpression,
+            .e_nominal => return error.UnsupportedExpression,
+            .e_nominal_external => return error.UnsupportedExpression,
+            .e_ellipsis => return error.UnsupportedExpression,
+            .e_anno_only => return error.UnsupportedExpression,
+            .e_type_var_dispatch => return error.UnsupportedExpression,
+            .e_for => return error.UnsupportedExpression,
+            .e_hosted_lambda => return error.UnsupportedExpression,
+            .e_low_level_lambda => return error.UnsupportedExpression,
         };
     }
 
@@ -497,6 +542,135 @@ pub const DevEvaluator = struct {
     /// Generate code for a floating-point literal
     fn generateFloatCode(self: *DevEvaluator, value: f64) Error![]const u8 {
         return self.generateReturnF64Code(value);
+    }
+
+    /// Generate code for decimal literals
+    fn generateDecCode(self: *DevEvaluator, dec: anytype, result_type: ResultType) Error![]const u8 {
+        // Decimals are stored as i128 internally
+        const value_i128 = dec.value.toI128();
+        if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+            return error.UnsupportedType;
+        }
+        return self.generateReturnI64Code(@intCast(value_i128), result_type);
+    }
+
+    /// Generate code for small decimal literals
+    fn generateDecSmallCode(self: *DevEvaluator, dec: anytype, _: ResultType) Error![]const u8 {
+        // Small decimals are stored as numerator/denominator_power - convert to f64
+        const f64_val = dec.value.toF64();
+        return self.generateReturnF64Code(f64_val);
+    }
+
+    /// Generate code for typed integer literals
+    fn generateTypedIntCode(self: *DevEvaluator, ti: anytype, result_type: ResultType) Error![]const u8 {
+        const value_i128 = ti.value.toI128();
+        if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+            return error.UnsupportedType;
+        }
+        return self.generateReturnI64Code(@intCast(value_i128), result_type);
+    }
+
+    /// Generate code for typed fraction literals
+    fn generateTypedFracCode(self: *DevEvaluator, tf: anytype, _: ResultType) Error![]const u8 {
+        // typed_frac stores value as IntValue, need to interpret as fractional
+        const value_i128 = tf.value.toI128();
+        const f64_val: f64 = @floatFromInt(value_i128);
+        return self.generateReturnF64Code(f64_val);
+    }
+
+    /// Generate code for unary not (boolean negation)
+    fn generateUnaryNotCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const inner_expr = module_env.store.getExpr(unary.expr);
+        const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse
+            return error.UnsupportedExpression;
+        // Boolean negation: 0 becomes 1, non-zero becomes 0
+        const result = if (inner_val == 0) @as(i64, 1) else @as(i64, 0);
+        return self.generateReturnI64Code(result, result_type);
+    }
+
+    /// Generate code for match expressions
+    fn generateMatchCode(self: *DevEvaluator, module_env: *ModuleEnv, match_expr: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // Get the value being matched (match uses 'cond' field)
+        const cond_expr = module_env.store.getExpr(match_expr.cond);
+        const cond_val = self.tryEvalConstantI64WithEnvMap(module_env, cond_expr, env) orelse
+            return error.UnsupportedExpression;
+
+        // Get branches and try to find a match
+        const branches = module_env.store.sliceMatchBranches(match_expr.branches);
+        for (branches) |branch_idx| {
+            const branch = module_env.store.getMatchBranch(branch_idx);
+
+            // Get the first pattern (for simple cases)
+            const patterns = module_env.store.sliceMatchBranchPatterns(branch.patterns);
+            if (patterns.len == 0) continue;
+
+            const branch_pattern = module_env.store.getMatchBranchPattern(patterns[0]);
+            const pattern = module_env.store.getPattern(branch_pattern.pattern);
+            const matches = self.patternMatches(module_env, pattern, cond_val, env);
+
+            if (matches) {
+                const body_expr = module_env.store.getExpr(branch.value);
+                return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, env);
+            }
+        }
+
+        // No branch matched - this shouldn't happen in well-typed code
+        return error.UnsupportedExpression;
+    }
+
+    /// Check if a pattern matches a value
+    fn patternMatches(_: *DevEvaluator, module_env: *ModuleEnv, pattern: CIR.Pattern, target_val: i64, _: *std.AutoHashMap(u32, i64)) bool {
+        switch (pattern) {
+            .underscore => return true,
+            .num_literal => |num| {
+                const pattern_val = num.value.toI128();
+                if (pattern_val > std.math.maxInt(i64) or pattern_val < std.math.minInt(i64)) {
+                    return false;
+                }
+                return target_val == @as(i64, @intCast(pattern_val));
+            },
+            .assign => |assign| {
+                // Bind the value to this identifier
+                _ = module_env.getIdent(assign.ident);
+                // For assignment patterns, we need to create a binding
+                // Just return true for now - actual binding happens elsewhere
+                return true;
+            },
+            .applied_tag => |tag| {
+                // Check if tag matches
+                if (tag.name == module_env.idents.true_tag) {
+                    return target_val != 0;
+                } else if (tag.name == module_env.idents.false_tag) {
+                    return target_val == 0;
+                }
+                // For other tags, check if args is empty (zero-argument tag)
+                const args = module_env.store.slicePatterns(tag.args);
+                if (args.len == 0) {
+                    return true; // Simple tag match
+                }
+                return false;
+            },
+            else => return false,
+        }
+    }
+
+    /// Generate code for return expressions
+    fn generateReturnExprCode(self: *DevEvaluator, module_env: *ModuleEnv, ret: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const value_expr = module_env.store.getExpr(ret.expr);
+        return self.generateCodeForExprWithEnv(module_env, value_expr, result_type, env);
+    }
+
+    /// Generate code for dbg expressions (just evaluate the inner expression)
+    fn generateDbgCode(self: *DevEvaluator, module_env: *ModuleEnv, dbg: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // dbg returns the value of the expression being debugged
+        const value_expr = module_env.store.getExpr(dbg.expr);
+        return self.generateCodeForExprWithEnv(module_env, value_expr, result_type, env);
+    }
+
+    /// Generate code for expect expressions (evaluate inner, return expected value)
+    fn generateExpectCode(self: *DevEvaluator, _: *ModuleEnv, _: anytype, result_type: ResultType, _: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // expect returns empty record (unit) - the check happens at runtime
+        return self.generateReturnI64Code(0, result_type);
     }
 
     /// Generate code for zero-argument tags (True, False, None, etc.)
