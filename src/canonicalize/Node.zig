@@ -350,11 +350,7 @@ pub const Payload = extern union {
     if_branch: IfBranch,
     type_var_slot: TypeVarSlot,
 
-    // ============================================================
     // Payload struct definitions - all must be exactly 12 bytes
-    // ============================================================
-
-    // --- Statements ---
 
     /// statement_decl, statement_decl_gen: pattern + expr + extra_data for anno
     pub const StatementDecl = extern struct {
