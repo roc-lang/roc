@@ -1579,9 +1579,11 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             node.tag = .statement_decl;
-            node.data_1 = @intFromEnum(s.pattern);
-            node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            node.setPayload(.{ .statement_decl = .{
+                .pattern = @intFromEnum(s.pattern),
+                .expr = @intFromEnum(s.expr),
+                .extra_data_idx = extra_data_start,
+            } });
         },
         .s_decl_gen => |s| {
             const extra_data_start: u32 = @intCast(store.extra_data.len());
@@ -1593,9 +1595,11 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             node.tag = .statement_decl_gen;
-            node.data_1 = @intFromEnum(s.pattern);
-            node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            node.setPayload(.{ .statement_decl = .{
+                .pattern = @intFromEnum(s.pattern),
+                .expr = @intFromEnum(s.expr),
+                .extra_data_idx = extra_data_start,
+            } });
         },
         .s_var => |s| {
             const extra_data_start: u32 = @intCast(store.extra_data.len());
@@ -1607,57 +1611,85 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             }
 
             node.tag = .statement_var;
-            node.data_1 = @intFromEnum(s.pattern_idx);
-            node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = extra_data_start;
+            node.setPayload(.{ .statement_var = .{
+                .pattern_idx = @intFromEnum(s.pattern_idx),
+                .expr = @intFromEnum(s.expr),
+                .extra_data_idx = extra_data_start,
+            } });
         },
         .s_reassign => |s| {
             node.tag = .statement_reassign;
-            node.data_1 = @intFromEnum(s.pattern_idx);
-            node.data_2 = @intFromEnum(s.expr);
+            node.setPayload(.{ .statement_reassign = .{
+                .pattern_idx = @intFromEnum(s.pattern_idx),
+                .expr = @intFromEnum(s.expr),
+                ._unused = 0,
+            } });
         },
         .s_crash => |s| {
             node.tag = .statement_crash;
-            node.data_1 = @intFromEnum(s.msg);
+            node.setPayload(.{ .statement_crash = .{
+                .msg = @intFromEnum(s.msg),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
         .s_dbg => |s| {
             node.tag = .statement_dbg;
-            node.data_1 = @intFromEnum(s.expr);
+            node.setPayload(.{ .statement_single_expr = .{
+                .expr = @intFromEnum(s.expr),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
         .s_expr => |s| {
             node.tag = .statement_expr;
-            node.data_1 = @intFromEnum(s.expr);
+            node.setPayload(.{ .statement_single_expr = .{
+                .expr = @intFromEnum(s.expr),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
         .s_expect => |s| {
             node.tag = .statement_expect;
-            node.data_1 = @intFromEnum(s.body);
+            node.setPayload(.{ .statement_single_expr = .{
+                .expr = @intFromEnum(s.body),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
         .s_for => |s| {
             node.tag = .statement_for;
-            node.data_1 = @intFromEnum(s.patt);
-            node.data_2 = @intFromEnum(s.expr);
-            node.data_3 = @intFromEnum(s.body);
+            node.setPayload(.{ .statement_for = .{
+                .patt = @intFromEnum(s.patt),
+                .expr = @intFromEnum(s.expr),
+                .body = @intFromEnum(s.body),
+            } });
         },
         .s_while => |s| {
             node.tag = .statement_while;
-            node.data_1 = @intFromEnum(s.cond);
-            node.data_2 = @intFromEnum(s.body);
+            node.setPayload(.{ .statement_while = .{
+                .cond = @intFromEnum(s.cond),
+                .body = @intFromEnum(s.body),
+                ._unused = 0,
+            } });
         },
         .s_break => |_| {
             node.tag = .statement_break;
         },
         .s_return => |s| {
             node.tag = .statement_return;
-            node.data_1 = @intFromEnum(s.expr);
-            // Store lambda as data_2, using 0 for null and idx+1 for valid indices
-            node.data_2 = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0;
+            node.setPayload(.{ .statement_return = .{
+                .expr = @intFromEnum(s.expr),
+                // Store lambda using 0 for null and idx+1 for valid indices
+                .lambda_plus_one = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0,
+                ._unused = 0,
+            } });
         },
         .s_import => |s| {
             node.tag = .statement_import;
-            node.data_1 = @bitCast(s.module_name_tok);
 
             // Store optional fields in extra_data
-            const extra_start = store.extra_data.len();
+            const extra_start: u32 = @intCast(store.extra_data.len());
 
             // Store alias_tok (nullable)
             const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
@@ -1679,23 +1711,30 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
             _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
 
-            node.data_2 = @intCast(extra_start); // Point to extra_data
-            node.data_3 = 0; // SPARE
-
+            node.setPayload(.{ .statement_import = .{
+                .module_name_tok = @bitCast(s.module_name_tok),
+                .extra_data_idx = extra_start,
+                ._unused = 0,
+            } });
         },
         .s_alias_decl => |s| {
             node.tag = .statement_alias_decl;
-            node.data_1 = @intFromEnum(s.header);
-            node.data_2 = @intFromEnum(s.anno);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @intFromEnum(s.header),
+                .data_2 = @intFromEnum(s.anno),
+                .data_3 = 0,
+            } });
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-            node.data_1 = @intFromEnum(s.header);
-            node.data_2 = @intFromEnum(s.anno);
             // Store is_opaque in extra_data
-            const extra_idx = store.extra_data.len();
+            const extra_idx: u32 = @intCast(store.extra_data.len());
             _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
-            node.data_3 = @intCast(extra_idx);
+            node.setPayload(.{ .raw = .{
+                .data_1 = @intFromEnum(s.header),
+                .data_2 = @intFromEnum(s.anno),
+                .data_3 = extra_idx,
+            } });
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
