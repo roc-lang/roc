@@ -623,9 +623,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_closure => {
+            const p = payload.expr_closure;
             // Retrieve closure data from extra_data
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const lambda_idx = extra_data[0];
             const capture_start = extra_data[1];
@@ -641,9 +641,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_lambda => {
+            const p = payload.expr_lambda;
             // Retrieve lambda data from extra_data
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -657,10 +657,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_block => {
+            const p = payload.expr_block;
             return CIR.Expr{
                 .e_block = .{
-                    .stmts = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                    .final_expr = @enumFromInt(node.data_3),
+                    .stmts = .{ .span = .{ .start = p.stmts_start, .len = p.stmts_len } },
+                    .final_expr = @enumFromInt(p.final_expr),
                 },
             };
         },
@@ -671,8 +672,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_empty_list = .{} };
         },
         .expr_record => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.expr_record;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const fields_start = extra_data[0];
             const fields_len = extra_data[1];
@@ -688,8 +689,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_match => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.expr_match;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const cond = @as(CIR.Expr.Idx, @enumFromInt(extra_data[0]));
             const branches_start = extra_data[1];
@@ -707,8 +708,8 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_zero_argument_tag => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.raw;
+            const extra_data = store.extra_data.items.items[p.data_1..];
 
             const closure_name = @as(Ident.Idx, @bitCast(extra_data[0]));
             const variant_var = @as(types.Var, @enumFromInt(extra_data[1]));
@@ -725,23 +726,27 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_crash => {
+            const p = payload.raw;
             return CIR.Expr{ .e_crash = .{
-                .msg = @enumFromInt(node.data_1),
+                .msg = @enumFromInt(p.data_1),
             } };
         },
         .expr_dbg => {
+            const p = payload.raw;
             return CIR.Expr{ .e_dbg = .{
-                .expr = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(p.data_1),
             } };
         },
         .expr_unary_minus => {
+            const p = payload.expr_unary;
             return CIR.Expr{ .e_unary_minus = .{
-                .expr = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(p.expr),
             } };
         },
         .expr_unary_not => {
+            const p = payload.expr_unary;
             return CIR.Expr{ .e_unary_not = .{
-                .expr = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(p.expr),
             } };
         },
         .expr_static_dispatch,
@@ -760,13 +765,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_anno_only => {
+            const p = payload.raw;
             return CIR.Expr{ .e_anno_only = .{
-                .ident = @bitCast(node.data_1),
+                .ident = @bitCast(p.data_1),
             } };
         },
         .expr_return => {
+            const p = payload.raw;
             return CIR.Expr{ .e_return = .{
-                .expr = @enumFromInt(node.data_1),
+                .expr = @enumFromInt(p.data_1),
             } };
         },
         .expr_type_var_dispatch => {
