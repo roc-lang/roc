@@ -2839,30 +2839,78 @@ pub fn build(b: *std.Build) void {
             const install_can_test = b.addInstallArtifact(can_unit_test, .{});
             build_cov_tests.dependOn(&install_can_test.step);
 
-            // Create output directory for canonicalize coverage
-            const mkdir_can_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/canonicalize" });
+            // Create output directories for canonicalize coverage
+            const mkdir_can_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/canonicalize", "kcov-output/can-unit", "kcov-output/can-snapshot" });
             mkdir_can_step.setCwd(b.path("."));
             mkdir_can_step.step.dependOn(&summary_step.step); // Run after parser coverage
 
             // Run kcov on canonicalize unit tests
-            const run_can_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
-            run_can_coverage.addArg("--include-pattern=/src/canonicalize/");
-            // Exclude ModuleEnv.zig from coverage (it's mostly boilerplate)
-            run_can_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
-            // Exclude S-expression output functions (debug/testing output, not core logic)
-            run_can_coverage.addArg("--exclude-line=SExpr");
-            run_can_coverage.addArgs(&.{
-                "kcov-output/canonicalize",
+            const run_can_unit_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_can_unit_coverage.addArg("--include-pattern=/src/canonicalize/");
+            run_can_unit_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
+            run_can_unit_coverage.addArg("--exclude-line=SExpr");
+            run_can_unit_coverage.addArgs(&.{
+                "kcov-output/can-unit",
                 "zig-out/bin/can_unit_coverage",
             });
-            run_can_coverage.setCwd(b.path("."));
-            run_can_coverage.step.dependOn(&mkdir_can_step.step);
-            run_can_coverage.step.dependOn(&install_can_test.step);
+            run_can_unit_coverage.setCwd(b.path("."));
+            run_can_unit_coverage.step.dependOn(&mkdir_can_step.step);
+            run_can_unit_coverage.step.dependOn(&install_can_test.step);
 
-            // Add coverage summary step for canonicalize
-            // Start with 0% threshold to see what we have, then increase
+            // Create snapshot tests for canonicalize coverage
+            // Snapshot tests exercise the full compilation pipeline including canonicalization
+            const can_snapshot_test = b.addTest(.{
+                .name = "can_snapshot_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/snapshot_tool/main.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                    .link_libc = true,
+                }),
+            });
+            roc_modules.addAll(can_snapshot_test);
+            can_snapshot_test.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            can_snapshot_test.step.dependOn(&write_compiled_builtins.step);
+
+            // Add LLVM support for snapshot tests
+            can_snapshot_test.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+            can_snapshot_test.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+            try addStaticLlvmOptionsToModule(can_snapshot_test.root_module);
+            can_snapshot_test.root_module.addAnonymousImport("llvm_compile", .{
+                .root_source_file = b.path("src/llvm_compile/mod.zig"),
+            });
+
+            // Install snapshot test binary
+            const install_can_snapshot_test = b.addInstallArtifact(can_snapshot_test, .{});
+            build_cov_tests.dependOn(&install_can_snapshot_test.step);
+
+            // Run kcov on snapshot tests for canonicalize coverage
+            const run_can_snapshot_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_can_snapshot_coverage.addArg("--include-pattern=/src/canonicalize/");
+            run_can_snapshot_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
+            run_can_snapshot_coverage.addArg("--exclude-line=SExpr");
+            run_can_snapshot_coverage.addArgs(&.{
+                "kcov-output/can-snapshot",
+                "zig-out/bin/can_snapshot_coverage",
+            });
+            run_can_snapshot_coverage.setCwd(b.path("."));
+            run_can_snapshot_coverage.step.dependOn(&run_can_unit_coverage.step);
+            run_can_snapshot_coverage.step.dependOn(&install_can_snapshot_test.step);
+
+            // Merge canonicalize coverage from unit tests and snapshot tests
+            const merge_can_coverage = b.addSystemCommand(&.{
+                "zig-out/bin/kcov",
+                "--merge",
+                "kcov-output/canonicalize",
+                "kcov-output/can-unit",
+                "kcov-output/can-snapshot",
+            });
+            merge_can_coverage.setCwd(b.path("."));
+            merge_can_coverage.step.dependOn(&run_can_snapshot_coverage.step);
+
+            // Add coverage summary step for canonicalize (reads merged coverage)
             const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", 0.0);
-            can_summary_step.step.dependOn(&run_can_coverage.step);
+            can_summary_step.step.dependOn(&merge_can_coverage.step);
 
             // Hook up coverage_step to the canonicalize summary step
             coverage_step.dependOn(&can_summary_step.step);
