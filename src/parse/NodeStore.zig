@@ -138,30 +138,41 @@ pub fn emptyScratch(store: *NodeStore) void {
     store.scratch_requires_entries.clearFrom(0);
 }
 
+const StderrWriter = std.io.GenericWriter(std.fs.File, std.fs.File.WriteError, struct {
+    fn write(file: std.fs.File, bytes: []const u8) std.fs.File.WriteError!usize {
+        return file.write(bytes);
+    }
+}.write);
+
 /// Prints debug information about all nodes and scratch buffers in the store.
-/// Note: This debug function is excluded from coverage via --exclude-line=std.debug.print
 pub fn debug(store: *NodeStore) void {
     if (comptime builtin.target.os.tag != .freestanding) {
-        std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
-        std.debug.print("Nodes:\n", .{});
-        var nodes_iter = store.nodes.iterIndices();
-        while (nodes_iter.next()) |idx| {
-            std.debug.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
-        }
-        std.debug.print("Extra Data: {any}\n", .{store.extra_data.items});
-        std.debug.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
-        std.debug.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
-        std.debug.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
-        std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
-        std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
-        std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
-        std.debug.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
-        std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
-        std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
-        std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
-        std.debug.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
-        std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
+        const stderr_writer: StderrWriter = .{ .context = std.fs.File.stderr() };
+        store.debugTo(stderr_writer.any()) catch {};
     }
+}
+
+/// Writes debug information about all nodes and scratch buffers to the given writer.
+pub fn debugTo(store: *NodeStore, writer: std.io.AnyWriter) !void {
+    try writer.print("\n==> IR.NodeStore DEBUG <==\n", .{});
+    try writer.print("Nodes:\n", .{});
+    var nodes_iter = store.nodes.iterIndices();
+    while (nodes_iter.next()) |idx| {
+        try writer.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
+    }
+    try writer.print("Extra Data: {any}\n", .{store.extra_data.items});
+    try writer.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
+    try writer.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
+    try writer.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
+    try writer.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
+    try writer.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
+    try writer.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
+    try writer.print("Scratch match branches: {any}\n", .{store.scratch_match_branches.items});
+    try writer.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
+    try writer.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
+    try writer.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
+    try writer.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
+    try writer.print("==> IR.NodeStore DEBUG <==\n\n", .{});
 }
 
 // ------------------------------------------------------------------------
@@ -1001,8 +1012,14 @@ pub fn addTypeAnno(store: *NodeStore, anno: AST.TypeAnno) std.mem.Allocator.Erro
                 .ext_kind = ext_kind,
                 .tags_len = @as(u30, @intCast(tu.tags.span.len)),
             };
-            if (tu.ext == .named) {
-                try store.extra_data.append(store.gpa, @intFromEnum(tu.ext.named));
+            switch (tu.ext) {
+                .named => |named_idx| {
+                    try store.extra_data.append(store.gpa, @intFromEnum(named_idx));
+                },
+                .open => |double_dot_tok| {
+                    try store.extra_data.append(store.gpa, double_dot_tok);
+                },
+                .closed => {},
             }
 
             node.data.lhs = data_start;
@@ -1969,7 +1986,7 @@ pub fn getTypeAnno(store: *const NodeStore, ty_anno_idx: AST.TypeAnno.Idx) AST.T
             // ext_kind: 0 = closed, 1 = anonymous open, 2 = named open
             const ext: AST.TypeAnno.TagUnionExt = switch (rhs.ext_kind) {
                 0 => .closed,
-                1 => .open,
+                1 => .{ .open = store.extra_data.items[extra_data_pos] },
                 2 => .{ .named = @enumFromInt(store.extra_data.items[extra_data_pos]) },
                 3 => unreachable,
             };

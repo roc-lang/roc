@@ -341,5 +341,5 @@ olor = |color| {
 		(alias (type "LocalStatus")
 			(ty-header (name "LocalStatus"))))
 	(expressions
-		(expr (type "Error -> Error"))))
+		(expr (type "_arg -> tus"))))
 ~~~

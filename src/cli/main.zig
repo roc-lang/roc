@@ -286,15 +286,21 @@ const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
 
+/// Counts of errors and warnings from type checking.
+const ProblemCounts = struct {
+    error_count: usize,
+    warning_count: usize,
+};
+
 /// Render type checking problems as diagnostic reports to stderr.
-/// Returns the count of errors (fatal/runtime_error severity).
+/// Returns counts of errors and warnings.
 /// This is shared between rocCheck and rocRun to ensure consistent error reporting.
 fn renderTypeProblems(
     ctx: *CliContext,
     checker: *Check,
     module_env: *ModuleEnv,
     filename: []const u8,
-) usize {
+) ProblemCounts {
     const stderr = ctx.io.stderr();
 
     var rb = ReportBuilder.init(
@@ -302,6 +308,7 @@ fn renderTypeProblems(
         module_env,
         module_env,
         &checker.snapshots,
+        &checker.problems,
         filename,
         &.{},
         &checker.import_mapping,
@@ -356,18 +363,53 @@ fn renderTypeProblems(
     // Flush stderr to ensure all error output is visible
     ctx.io.flush();
 
-    return error_count;
+    return ProblemCounts{
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
 }
 
-/// Size for shared memory allocator (just virtual address space to reserve)
+/// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
 ///
-/// We pick a large number because we can't resize this without messing up the
-/// child process. It's just virtual address space though, not physical memory.
-/// On 32-bit targets, we use 512MB since 2TB won't fit in the address space.
-const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) >= 8)
-    512 * 1024 * 1024 // 512MB for 64-bit targets (reduced from 2TB for Windows compatibility)
+/// We need a large size because SharedMemoryAllocator is a bump allocator that
+/// cannot free memory. During type checking, the types Store grows significantly
+/// and every array growth allocates new memory without freeing old, causing
+/// memory fragmentation. With a 25KB source file, type checking can use ~2GB
+/// of shared memory due to this fragmentation.
+///
+/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// without consuming physical memory:
+/// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
+///   it until pages are actually touched.
+/// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
+///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
+///
+/// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
+const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets
 else
-    256 * 1024 * 1024; // 256MB for 32-bit targets
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+
+/// Fallback size for systems with overcommit disabled. On Linux with
+/// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
+/// though the memory wouldn't actually be used. We fall back to 4GB which
+/// should work on most systems while still being large enough for typical use.
+const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
+    256 * 1024 * 1024 // 256MB for 32-bit targets (same as primary)
+else
+    4 * 1024 * 1024 * 1024; // 4GB for 64-bit targets
+
+/// Try to create shared memory, falling back to a smaller size if the system
+/// has overcommit disabled and rejects the initial allocation.
+fn createSharedMemoryWithFallback(page_size: usize) !SharedMemoryAllocator {
+    // Try the preferred size first
+    if (SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size)) |shm| {
+        return shm;
+    } else |_| {}
+
+    // Fall back to smaller size for systems with overcommit disabled
+    return SharedMemoryAllocator.create(SHARED_MEMORY_FALLBACK_SIZE, page_size);
+}
 
 /// Cross-platform hardlink creation
 fn createHardlink(ctx: *CliContext, source: []const u8, dest: []const u8) !void {
@@ -599,8 +641,16 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(allocs.arena);
 
-    mainArgs(&allocs, args) catch {
-        // Error messages have already been printed by the individual functions.
+    mainArgs(&allocs, args) catch |err| {
+        // Handle OutOfMemory specially - it may not have been printed
+        switch (err) {
+            error.OutOfMemory => {
+                // Use std.debug.print to stderr since we don't have access to ctx.io here
+                // TODO: if virtual address allocation fails at 4gb, fall back on doing `roc build` followed by manually running the executable
+                std.debug.print("The Roc compiler ran out of memory trying to preallocate virtual address space for compiling and running this program. Try using `roc build` to build the executable separately, then run it manually.\n", .{});
+            },
+            else => {}, // Other errors should already have printed messages
+        }
         // Exit cleanly without showing a stack trace to the user.
         if (tracy.enable) {
             tracy.waitForShutdown() catch {};
@@ -711,7 +761,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .unbundle => |unbundle_args| rocUnbundle(&ctx, unbundle_args),
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
-        .repl => rocRepl(&ctx),
+        .repl => |repl_args| rocRepl(&ctx, repl_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
@@ -935,10 +985,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
 
-    // Use native detection for shim generation to match embedded shim library
-    const shim_target = builder.RocTarget.detectNative();
-
-    // Validate platform header and get link spec for native target
+    // Validate platform header and get link spec
     var link_spec: ?roc_target.TargetLinkSpec = null;
     var targets_config: ?roc_target.TargetsConfig = null;
     if (platform_paths.platform_source_path) |platform_source| {
@@ -954,26 +1001,46 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Validate that the native target is supported
-            platform_validation.validateTargetSupported(validation.config, shim_target, .exe) catch |err| {
-                switch (err) {
-                    error.UnsupportedTarget => {
-                        // Create a nice formatted error report
-                        const result = platform_validation.createUnsupportedTargetResult(
-                            platform_source,
-                            shim_target,
-                            .exe,
-                            validation.config,
-                        );
-                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                        return error.UnsupportedTarget;
-                    },
-                    else => {},
-                }
-            };
+            // Select target: if --target is provided, use that; otherwise try native then fallback
+            if (args.target) |target_str| {
+                // User explicitly specified a target
+                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .invalid_target = .{ .target_str = target_str },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.InvalidTarget;
+                };
 
-            // Get the link spec for native target
-            link_spec = validation.config.getLinkSpec(shim_target, .exe);
+                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    link_spec = spec;
+                } else {
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        parsed_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            } else {
+                // No --target provided: use the first compatible exe target from the platform
+                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+                } else {
+                    // No compatible exe target found
+                    const native_target = builder.RocTarget.detectNative();
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        native_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            }
         } else |err| {
             switch (err) {
                 error.MissingTargetsSection => {
@@ -989,9 +1056,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
     }
 
-    // All platforms must have a targets section with a link spec for the native target
+    // All platforms must have a targets section with a link spec for a compatible target
     const validated_link_spec = link_spec orelse {
-        ctx.io.stderr().print("Error: Platform does not support the native target.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n\n", .{}) catch {};
         ctx.io.stderr().print("The platform's targets section must specify files to link for\n", .{}) catch {};
         ctx.io.stderr().print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
         return error.PlatformNotSupported;
@@ -1046,8 +1113,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
 
         // Always extract to temp dir (unique per process, no race condition)
-        // For roc run, we always use the native shim (null target)
-        extractReadRocFilePathShimLibrary(ctx, shim_path, null) catch |err| {
+        // Use the selected target's shim (which may differ from native if falling back to a compatible target)
+        const selected_target = validated_link_spec.target;
+        extractReadRocFilePathShimLibrary(ctx, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
@@ -1055,7 +1123,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Pass null for serialized_module since roc run uses IPC mode
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -1124,11 +1192,16 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
 
         // Determine ABI from target (for musl detection)
-        const target_abi: ?linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else null;
+        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
         const empty_files: []const []const u8 = &.{};
+
+        // Build full path to platform files directory for sysroot lookup
+        const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
+            return error.OutOfMemory;
+        };
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
@@ -1139,6 +1212,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
+            .platform_files_dir = platform_files_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -1199,6 +1273,12 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         try runWithPosixFdInheritance(ctx, exe_path, shm_handle, args.app_args);
     }
     std.log.debug("Interpreter execution completed", .{});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (shm_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Append an argument to a command line buffer with proper Windows quoting.
@@ -1525,11 +1605,12 @@ pub const SharedMemoryHandle = struct {
 };
 
 /// Result of setting up shared memory with type checking information.
-/// Contains both the shared memory handle for the compiled modules and
-/// a count of type errors encountered during compilation.
+/// Contains the shared memory handle for the compiled modules and
+/// counts of errors and warnings encountered during compilation.
 pub const SharedMemoryResult = struct {
     handle: SharedMemoryHandle,
     error_count: usize,
+    warning_count: usize,
 };
 
 /// Write data to shared memory for inter-process communication.
@@ -1591,9 +1672,10 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 /// ending up in shared memory because all allocations were done into shared memory.
 /// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
 pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try SharedMemoryAllocator.create(SHARED_MEMORY_SIZE, page_size);
+    var shm = try createSharedMemoryWithFallback(page_size);
     // Don't defer deinit here - we need to keep the shared memory alive
 
     const shm_allocator = shm.allocator();
@@ -1665,12 +1747,13 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Module count = 1 (app) + number of platform modules + number of sibling modules
-    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling
+    // Module count = 1 (app) + number of platform modules + number of sibling modules + package modules
+    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling/package
     // imports AFTER parsing the app (to avoid parsing twice). The actual count is set later.
     const platform_module_count: u32 = @intCast(exposed_modules.items.len);
     const max_sibling_modules: u32 = 64; // Reasonable max for sibling modules
-    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules;
+    const max_package_modules: u32 = 64; // Reasonable max for package modules
+    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules + max_package_modules;
 
     // Allocate array for module env offsets (over-allocated, actual count set later)
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
@@ -1873,6 +1956,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     try app_env.common.calcLineStarts(shm_allocator);
 
     var error_count: usize = 0;
+    var warning_count: usize = 0;
 
     var app_parse_ast = try parse.parse(&app_env.common, ctx.gpa);
     defer app_parse_ast.deinit(ctx.gpa);
@@ -1899,6 +1983,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                     .size = shm.getUsedSize(),
                 },
                 .error_count = error_count,
+                .warning_count = warning_count,
             };
         }
     }
@@ -1923,9 +2008,68 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
     }
 
+    // Extract platform qualifier from app header (e.g., "rr" from { rr: platform "..." })
+    // This is needed to register modules with the correct qualified name for import validation
+    const parsed_file = app_parse_ast.store.getFile();
+    const app_header = app_parse_ast.store.getHeader(parsed_file.header);
+    const platform_qualifier: []const u8 = blk: {
+        if (app_header == .app) {
+            const platform_field = app_parse_ast.store.getRecordField(app_header.app.platform_idx);
+            const key_region = app_parse_ast.tokens.resolve(platform_field.name);
+            break :blk app_source[key_region.start.offset..key_region.end.offset];
+        }
+        // Not an app header - report error
+        return ctx.fail(.{ .invalid_app_header = .{ .app_path = roc_file_path } });
+    };
+
+    // Extract non-platform package shorthands from app header (e.g., { fx: platform "...", hlp: "./helper_pkg/main.roc" })
+    // These are packages that can be imported via qualified imports like "import hlp.Helper"
+    var package_shorthands = std.StringHashMap([]const u8).init(ctx.gpa);
+    defer {
+        var iter = package_shorthands.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
+        }
+        package_shorthands.deinit();
+    }
+
+    if (app_header == .app) {
+        const packages_coll = app_parse_ast.store.getCollection(app_header.app.packages);
+        const packages_fields = app_parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
+        for (packages_fields) |field_idx| {
+            const field = app_parse_ast.store.getRecordField(field_idx);
+            const key_region = app_parse_ast.tokens.resolve(field.name);
+            const shorthand = app_source[key_region.start.offset..key_region.end.offset];
+
+            // Skip if this is the platform field
+            if (std.mem.eql(u8, shorthand, platform_qualifier)) continue;
+
+            // Get the package path from the field value
+            if (field.value) |value_idx| {
+                const value_node = app_parse_ast.store.getExpr(value_idx);
+                switch (value_node) {
+                    .string => |str| {
+                        // Use the region to get the full string (token points only to opening quote)
+                        const str_region = app_parse_ast.tokenizedRegionToRegion(str.region);
+                        // Remove quotes from the string
+                        const raw_path = app_source[str_region.start.offset..str_region.end.offset];
+                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
+                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
+                            // Make absolute path relative to app directory
+                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            try package_shorthands.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
+
     // Add platform modules to the module envs map for canonicalization
     // Two keys are needed for each platform module:
-    // 1. "pf.Stdout" - used during import validation (import pf.Stdout)
+    // 1. "{qualifier}.Stdout" - used during import validation (import rr.Stdout)
     // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
     // Also set statement_idx to the actual type node index, which is needed for
     // creating e_nominal_external and e_lookup_external expressions.
@@ -1958,8 +2102,8 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .qualified_type_ident = type_qualified_ident,
         };
 
-        // Add with qualified name key (for import validation: "pf.Stdout")
-        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "pf.{s}", .{module_name});
+        // Add with qualified name key (for import validation: e.g., "rr.Stdout")
+        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ platform_qualifier, module_name });
         defer ctx.gpa.free(qualified_name);
         const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
         try app_module_envs_map.put(qualified_ident, auto_type);
@@ -1969,12 +2113,133 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(module_ident, auto_type);
 
         // Add with resolved module name key (for after alias resolution: "Stdout.roc")
-        // The import system resolves "pf.Stdout" to "Stdout.roc", so scopeLookupModule
+        // The import system resolves "{qualifier}.Stdout" to "Stdout.roc", so scopeLookupModule
         // returns "Stdout.roc" which is then used to look up in module_envs
         const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
         defer ctx.gpa.free(module_name_with_roc);
         const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
         try app_module_envs_map.put(resolved_ident, auto_type);
+    }
+
+    // Load package modules from non-platform packages declared in app header
+    // For each qualified import like "import hlp.Helper", we need to:
+    // 1. Check if the qualifier matches a package shorthand
+    // 2. Find the module file within that package
+    // 3. Compile it and register in app_module_envs_map
+    var package_env_ptrs = std.ArrayList(*ModuleEnv).empty;
+    defer package_env_ptrs.deinit(ctx.gpa);
+
+    if (package_shorthands.count() > 0) {
+        // Extract qualified imports from app AST (imports with qualifier_tok set)
+        const file_stmts = app_parse_ast.store.statementSlice(parsed_file.statements);
+        for (file_stmts) |stmt_idx| {
+            const stmt = app_parse_ast.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .import => |import_stmt| {
+                    // Only process qualified imports (e.g., "import hlp.Helper")
+                    if (import_stmt.qualifier_tok) |qual_tok| {
+                        const qualifier = app_parse_ast.resolve(qual_tok);
+                        const module_name_raw = app_parse_ast.resolve(import_stmt.module_name_tok);
+
+                        // Strip leading dot if present
+                        const module_name = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
+                            module_name_raw[1..]
+                        else
+                            module_name_raw;
+
+                        // Skip platform imports
+                        if (std.mem.eql(u8, qualifier, platform_qualifier)) continue;
+
+                        // Check if qualifier matches a package shorthand
+                        if (package_shorthands.get(qualifier)) |pkg_path| {
+                            // Determine the package directory (dirname of main.roc)
+                            const pkg_dir = std.fs.path.dirname(pkg_path) orelse ".";
+
+                            // Find the module file within the package
+                            const module_file_path = try moduleNameToFilePath(module_name, pkg_dir, ctx.gpa) orelse {
+                                // Module file not found in package
+                                std.log.warn("Package module not found: {s}.{s}", .{ qualifier, module_name });
+                                continue;
+                            };
+                            defer ctx.gpa.free(module_file_path);
+
+                            // Compile the package module
+                            const pkg_module_env = try compileModuleToSharedMemory(
+                                ctx,
+                                module_file_path,
+                                module_name,
+                                shm_allocator,
+                                &builtin_modules,
+                                package_env_ptrs.items,
+                            );
+                            try package_env_ptrs.append(ctx.gpa, pkg_module_env);
+
+                            // Register with qualified name (e.g., "hlp.Helper")
+                            const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ qualifier, module_name });
+                            defer ctx.gpa.free(qualified_name);
+                            const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
+
+                            // Check if this module exposes a type with the same name
+                            const type_ident_in_module = pkg_module_env.common.findIdent(module_name);
+                            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
+                                pkg_module_env.getExposedNodeIndexById(ident)
+                            else
+                                null;
+
+                            const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with resolved name (e.g., "Helper" without qualifier)
+                            // This is needed for expression canonicalization after import resolution
+                            const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with ".roc" suffix (e.g., "Helper.roc")
+                            // The import system resolves to this format after alias resolution
+                            const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
+                            defer ctx.gpa.free(module_name_with_roc);
+                            const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
     // Compile sibling .roc files BEFORE app canonicalization.
@@ -2073,8 +2338,15 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         actual_sibling_count = @intCast(sorted_siblings.len);
     }
 
-    // Set the actual module count now that we know how many siblings were compiled
-    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count;
+    // Store package module offsets (after sibling modules)
+    const package_count: u32 = @intCast(package_env_ptrs.items.len);
+    for (package_env_ptrs.items, 0..) |pkg_env, i| {
+        const pkg_offset_idx = platform_module_count + actual_sibling_count + @as(u32, @intCast(i));
+        module_env_offsets_ptr[pkg_offset_idx] = @intFromPtr(pkg_env) - @intFromPtr(shm.base_ptr);
+    }
+
+    // Set the actual module count now that we know how many siblings and packages were compiled
+    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count + package_count;
     header_ptr.module_count = total_module_count;
 
     var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
@@ -2141,11 +2413,19 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     for (sibling_env_ptrs.items) |senv| {
         try app_imported_envs.append(ctx.gpa, senv);
     }
+    // Add package modules for type checking
+    for (package_env_ptrs.items) |penv| {
+        try app_imported_envs.append(ctx.gpa, penv);
+    }
 
     // Resolve imports - map each import to its index in app_imported_envs
     app_env.imports.resolveImports(&app_env, app_imported_envs.items);
 
-    var app_checker = try Check.init(shm_allocator, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations
+    // (scratch arrays, hashmaps, etc). SharedMemoryAllocator is a bump allocator
+    // that never frees, which causes OOM on large files.
+    var app_checker = try Check.init(ctx.gpa, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
     defer app_checker.deinit();
 
     try app_checker.checkFile();
@@ -2166,17 +2446,19 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             const all_aliases = penv.for_clause_aliases.items.items;
             const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
             for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - must exist in app since it's required
+                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
+                // the mapping can be created even if canonicalization hasn't added it yet.
+                // The app will provide the actual type alias definition which will be checked later.
                 const alias_name_text = penv.getIdent(alias.alias_name);
-                if (app_env.common.findIdent(alias_name_text)) |app_ident| {
-                    try platform_to_app_idents.put(alias.alias_name, app_ident);
-                }
+                const alias_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
+                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
+
                 // Add rigid name (e.g., "model") - insert it into app's ident store since
                 // the rigid name is a platform concept that gets copied during type processing.
                 // Using insert (not find) ensures the app's ident store has this name for later lookups.
                 const rigid_name_text = penv.getIdent(alias.rigid_name);
-                const app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, app_ident);
+                const rigid_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
             }
         }
 
@@ -2186,10 +2468,11 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Render all type problems (errors and warnings) exactly as roc check would
     // Count errors so the caller can decide whether to proceed with execution
     // Skip rendering in test mode to avoid polluting test output
-    error_count += if (!builtin.is_test)
-        renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path)
-    else
-        0;
+    if (!builtin.is_test) {
+        const problem_counts = renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path);
+        error_count += problem_counts.error_count;
+        warning_count += problem_counts.warning_count;
+    }
 
     app_env_ptr.* = app_env;
 
@@ -2202,6 +2485,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .size = shm.getUsedSize(),
         },
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -2706,7 +2990,9 @@ fn compileModuleToSharedMemory(
     // Resolve imports - map each import to its index in imported_envs
     env.imports.resolveImports(&env, imported_envs);
 
-    var checker = try Check.init(shm_allocator, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
+    // Use ctx.gpa for the checker's working memory, not shm_allocator.
+    // The checker needs a real allocator that can free temporary allocations.
+    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
     defer checker.deinit();
 
     try checker.checkFile();
@@ -2727,6 +3013,8 @@ const CompiledModule = struct {
     is_app: bool,
     /// Number of errors found during compilation (from parsing, canonicalization, type checking)
     error_count: usize,
+    /// Number of warnings found during compilation
+    warning_count: usize,
 };
 
 /// Result of compiling and serializing modules for embedding.
@@ -2737,6 +3025,8 @@ const SerializedModulesResult = struct {
     entry_def_indices: []const u32,
     /// Number of compilation errors encountered
     error_count: usize,
+    /// Number of compilation warnings encountered
+    warning_count: usize,
 };
 
 /// Compile a single module to a ModuleEnv using a regular allocator.
@@ -2959,6 +3249,7 @@ fn compileModuleForSerialization(
         &env,
         &env,
         &checker.snapshots,
+        &checker.problems,
         file_path,
         &.{},
         &checker.import_mapping,
@@ -2996,6 +3287,7 @@ fn compileModuleForSerialization(
         .is_platform_main = false,
         .is_app = false,
         .error_count = error_count,
+        .warning_count = warning_count,
     };
 }
 
@@ -3006,8 +3298,9 @@ fn compileAndSerializeModulesForEmbedding(
     roc_file_path: []const u8,
     allow_errors: bool,
 ) !SerializedModulesResult {
-    // Track total errors across all modules
+    // Track total errors and warnings across all modules
     var total_error_count: usize = 0;
+    var total_warning_count: usize = 0;
 
     // Load builtin modules
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
@@ -3118,6 +3411,7 @@ fn compileAndSerializeModulesForEmbedding(
             sorted_modules[0..i], // Pass type module names for previously compiled siblings
         );
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         compiled_modules.appendAssumeCapacity(compiled);
         // Store pointer to the env we just appended (safe because we pre-allocated)
         sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
@@ -3146,6 +3440,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_platform_main = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         primary_env_index = @intCast(compiled_modules.items.len);
         try compiled_modules.append(compiled);
     }
@@ -3172,6 +3467,7 @@ fn compileAndSerializeModulesForEmbedding(
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
+        total_warning_count += compiled.warning_count;
         app_env_index = @intCast(compiled_modules.items.len);
         if (!has_platform) {
             primary_env_index = app_env_index;
@@ -3376,6 +3672,7 @@ fn compileAndSerializeModulesForEmbedding(
         .bytes = buffer,
         .entry_def_indices = entry_def_indices,
         .error_count = total_error_count,
+        .warning_count = total_warning_count,
     };
 }
 
@@ -4510,6 +4807,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+
+    // Build full path to platform files directory for sysroot lookup
+    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
+
     const link_config = linker_mod.LinkConfig{
         .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
         .object_files = object_files.items,
@@ -4522,6 +4823,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .target_arch = target.toCpuArch(),
         .wasm_initial_memory = args.wasm_memory orelse linker_mod.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker_mod.DEFAULT_WASM_STACK_SIZE,
+        .platform_files_dir = platform_files_dir,
     };
 
     // Dump linker inputs to temp directory if requested
@@ -4541,6 +4843,12 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         try std.fmt.allocPrint(ctx.arena, "./{s}", .{final_output_path});
 
     try ctx.io.stdout().print("Successfully built {s}\n", .{display_path});
+
+    // Exit with code 2 if there were warnings (but no errors)
+    if (compile_result.warning_count > 0) {
+        ctx.io.flush();
+        std.process.exit(2);
+    }
 }
 
 /// Dump linker inputs to a temp directory for debugging linking issues.
@@ -4832,6 +5140,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             &env,
             &env,
             &checker.snapshots,
+            &checker.problems,
             args.path,
             &.{},
             &checker.import_mapping,
@@ -4913,7 +5222,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(ctx: *CliContext) !void {
+fn rocRepl(ctx: *CliContext, _: cli_args.ReplArgs) !void {
     return cli_repl.run(ctx);
 }
 
@@ -5404,7 +5713,13 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
 
             // Flush before exit
             ctx.io.flush();
-            return error.CheckFailed;
+
+            // Exit with code 1 for errors, code 2 for warnings only
+            if (check_result.error_count > 0) {
+                return error.CheckFailed;
+            } else {
+                std.process.exit(2);
+            }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};

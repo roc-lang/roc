@@ -22,17 +22,18 @@ const unbundle = @import("unbundle");
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
-const Mode = @import("compile_package.zig").Mode;
+const compile_package = @import("compile_package.zig");
+const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
-const PackageEnv = @import("compile_package.zig").PackageEnv;
-const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
-const ImportResolver = @import("compile_package.zig").ImportResolver;
-const ScheduleHook = @import("compile_package.zig").ScheduleHook;
+const PackageEnv = compile_package.PackageEnv;
+const ModuleTimingInfo = compile_package.TimingInfo;
+const ImportResolver = compile_package.ImportResolver;
+const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = @import("compile_package.zig").FileProvider;
+const FileProvider = compile_package.FileProvider;
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -592,30 +593,41 @@ pub const BuildEnv = struct {
     /// This is called after all modules are compiled and type-checked.
     fn checkPlatformRequirements(self: *BuildEnv) !void {
         // Find the app and platform packages
-        var app_pkg: ?[]const u8 = null;
-        var platform_pkg: ?[]const u8 = null;
+        var app_pkg_info: ?Package = null;
+        var platform_pkg_info: ?Package = null;
+        var app_pkg_name: ?[]const u8 = null;
+        var platform_pkg_name: ?[]const u8 = null;
 
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.kind == .app) {
-                app_pkg = entry.key_ptr.*;
+                app_pkg_info = pkg;
+                app_pkg_name = entry.key_ptr.*;
             } else if (pkg.kind == .platform) {
-                platform_pkg = entry.key_ptr.*;
+                platform_pkg_info = pkg;
+                platform_pkg_name = entry.key_ptr.*;
             }
         }
 
         // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg orelse return;
-        const platform_name = platform_pkg orelse return;
+        const app_name = app_pkg_name orelse return;
+        const platform_name = platform_pkg_name orelse return;
+        const platform_pkg = platform_pkg_info orelse return;
 
         // Get the schedulers for both packages
         const app_sched = self.schedulers.get(app_name) orelse return;
         const platform_sched = self.schedulers.get(platform_name) orelse return;
 
-        // Get the root module envs for both packages
+        // Get the app's root module env
         const app_root_env = app_sched.getRootEnv() orelse return;
-        const platform_root_env = platform_sched.getRootEnv() orelse return;
+
+        // Get the platform's root module by finding the module that matches the root file
+        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
+        // root file if other modules (like exposed imports) were scheduled first.
+        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
+        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse return;
+        const platform_root_env = if (platform_module_state.env) |*env| env else return;
 
         // If the platform has no requires_types, nothing to check
         if (platform_root_env.requires_types.items.items.len == 0) {
@@ -665,6 +677,25 @@ pub const BuildEnv = struct {
             if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);
             }
+
+            // Also add for-clause type alias names (Model, model) to the translation map
+            const all_aliases = platform_root_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
+                // the mapping can be created even if canonicalization hasn't added it yet.
+                // The app will provide the actual type alias definition which will be checked later.
+                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
+                const alias_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
+                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
+
+                // Add rigid name (e.g., "model") - insert it into app's ident store since
+                // the rigid name is a platform concept that gets copied during type processing.
+                // Using insert (not find) ensures the app's ident store has this name for later lookups.
+                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
+                const rigid_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
+            }
         }
 
         // Check platform requirements against app exports
@@ -679,6 +710,7 @@ pub const BuildEnv = struct {
                 app_root_env,
                 app_root_env,
                 &checker.snapshots,
+                &checker.problems,
                 app_root_module.path,
                 &.{},
                 &checker.import_mapping,

@@ -413,7 +413,9 @@ test "NodeStore round trip - Expressions" {
         .e_ellipsis = .{},
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_anno_only = .{},
+        .e_anno_only = .{
+            .ident = rand_ident_idx(),
+        },
     });
     try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{
@@ -899,6 +901,14 @@ test "NodeStore round trip - Diagnostics" {
             .other_name = rand_ident_idx(),
             .region = rand_region(),
             .other_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .deprecated_number_suffix = .{
+            .suffix = rand_idx(StringLiteral.Idx),
+            .suggested = rand_idx(StringLiteral.Idx),
+            .region = rand_region(),
         },
     });
 

@@ -136,7 +136,7 @@ pub const io_spec_tests = [_]TestSpec{
     // Lookup tests
     .{
         .roc_file = "test/fx/numeric_lookup_test.roc",
-        .io_spec = "1>done",
+        .io_spec = "1>done: 42",
         .description = "Numeric lookup",
     },
     .{
@@ -262,6 +262,26 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/issue8866.roc",
         .io_spec = "1>Done: 2",
         .description = "Regression test: List.append with opaque type containing Str (issue #8866)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Multiple expects with polymorphic function panic (issue #8897)",
+    },
+    .{
+        .roc_file = "test/fx/issue8897_min.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Minimal repro for issue #8897 panic",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_platform_module.roc",
+        .io_spec = "1>Result: start-middle-end",
+        .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
+    },
+    .{
+        .roc_file = "test/fx/static_dispatch_effect_bug.roc",
+        .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
+        .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
 };
 

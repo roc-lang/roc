@@ -942,10 +942,18 @@ const Unifier = struct {
                             return;
                         }
 
-                        // Check if the nominal's backing is also an empty record
-                        if (b_backing_resolved.desc.content == .structure and
-                            b_backing_resolved.desc.content.structure == .empty_record)
-                        {
+                        // Check if the nominal's backing is also an empty record (or record with 0 fields)
+                        const backing_is_empty = blk: {
+                            if (b_backing_resolved.desc.content != .structure) break :blk false;
+                            const backing_flat = b_backing_resolved.desc.content.structure;
+                            if (backing_flat == .empty_record) break :blk true;
+                            if (backing_flat == .record) {
+                                const fields = self.types_store.getRecordFieldsSlice(backing_flat.record.fields);
+                                if (fields.len == 0) break :blk true;
+                            }
+                            break :blk false;
+                        };
+                        if (backing_is_empty) {
                             // Both are empty, unify with the nominal
                             self.merge(vars, vars.b.desc.content);
                         } else {
@@ -1042,9 +1050,7 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Merge BEFORE recursing into children to enable cycle detection.
-        // If we encounter these same vars again during recursion, checkVarsEquiv
-        // will see they're now equivalent and skip, preventing infinite recursion.
+        // Early merge so self-referential types don't infinitely recurse
         self.merge(vars, vars.b.desc.content);
 
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
@@ -1086,6 +1092,14 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
+        // Early merge so self-referential types don't infinitely recurse.
+        // This is critical for recursive nominal types like:
+        //   Node(a) := [One(a), Many(List(Node(a)))]
+        // Without early merge, unifying the type arguments can trigger
+        // unification of the backing types, which recursively unifies
+        // the nominal type with itself, creating infinite recursion.
+        self.merge(vars, vars.b.desc.content);
+
         // Unify each pair of arguments using iterators
         const a_slice = self.types_store.sliceNominalArgs(a_type);
         const b_slice = self.types_store.sliceNominalArgs(b_type);
@@ -1094,8 +1108,6 @@ const Unifier = struct {
         }
 
         // Note that we *do not* unify backing variable
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     fn unifyTagUnionWithNominal(
@@ -1855,15 +1867,7 @@ const Unifier = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        // Merge BEFORE recursing into tag arguments to enable cycle detection.
-        // If we encounter these same vars again during recursion (e.g., in a
-        // self-referential tag union like [A a] where a is the tag union),
-        // checkVarsEquiv will see they're now equivalent and skip.
-        // We'll update the merged content at the end with the final tag union.
-        self.merge(vars, vars.b.desc.content);
-
-        // First, unwrap all fields for tag unions, erroring if we encounter an
-        // invalid record ext var
+        // Unwrap all fields for tag unions, erroring on invalid ext var
         const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
@@ -2265,8 +2269,15 @@ const Unifier = struct {
         const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
 
         // Unify shared constraints
+        // IMPORTANT: We must use index-based iteration here, not slice-based.
+        // The unifyStaticDispatchConstraint call can recursively call back into
+        // unifyStaticDispatchConstraints, which appends to the same scratch buffer.
+        // If that append causes reallocation, a cached slice would be invalidated.
         if (partitioned.in_both.len() > 0) {
-            for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
+            const in_both_start: usize = @intFromEnum(partitioned.in_both.start);
+            for (0..partitioned.in_both.len()) |i| {
+                // Re-fetch on each iteration since the backing array may have moved
+                const two_constraints = self.scratch.in_both_static_dispatch_constraints.items.items[in_both_start + i];
                 // TODO: Catch type mismatch and throw a custom error message?
                 try self.unifyStaticDispatchConstraint(two_constraints.a, two_constraints.b);
             }

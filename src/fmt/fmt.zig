@@ -1004,59 +1004,7 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.token);
             },
             .field_access => |fa| {
-                // Special case: when left side is a local_dispatch with zero-arg apply,
-                // we must preserve ONE set of parens to prevent the output from being
-                // re-parsed with a different structure. E.g., `0->b().c()` should NOT
-                // become `0->b.c()` because the parser would interpret `b.c` as a
-                // qualified identifier instead of a field access chain. (See issue #8851)
-                //
-                // For nested applies like `0->b()().c()`, we strip all but one layer,
-                // outputting `0->b().c()` which is then stable on subsequent passes.
-                const left_expr = fmt.ast.store.getExpr(fa.left);
-                if (left_expr == .local_dispatch) {
-                    const ld = left_expr.local_dispatch;
-                    const ld_right_initial = fmt.ast.store.getExpr(ld.right);
-                    if (ld_right_initial == .apply) {
-                        const apply_initial = ld_right_initial.apply;
-                        if (fmt.ast.store.exprSlice(apply_initial.args).len == 0) {
-                            // Strip nested zero-arg applies to find the innermost function
-                            var innermost_fn = apply_initial.@"fn";
-                            var inner_expr = fmt.ast.store.getExpr(innermost_fn);
-                            while (inner_expr == .apply) {
-                                const inner_apply = inner_expr.apply;
-                                if (fmt.ast.store.exprSlice(inner_apply.args).len == 0) {
-                                    innermost_fn = inner_apply.@"fn";
-                                    inner_expr = fmt.ast.store.getExpr(innermost_fn);
-                                } else {
-                                    break;
-                                }
-                            }
-
-                            // Format the local_dispatch preserving one set of parens
-                            const ld_multiline = fmt.nodeWillBeMultiline(AST.Expr.Idx, fa.left);
-                            _ = try fmt.formatExpr(ld.left);
-                            if (ld_multiline and try fmt.flushCommentsBefore(ld.operator)) {
-                                fmt.curr_indent += 1;
-                                try fmt.pushIndent();
-                            }
-                            try fmt.pushAll("->");
-                            if (ld_multiline and try fmt.flushCommentsAfter(ld.operator)) {
-                                try fmt.pushIndent();
-                            }
-                            // Output the innermost function followed by () to preserve one
-                            // set of parens (prevents `b` from being parsed with following `.`
-                            // as a qualified identifier)
-                            _ = try fmt.formatExprInner(innermost_fn, .no_indent_on_access);
-                            try fmt.pushAll("()");
-                        } else {
-                            _ = try fmt.formatExpr(fa.left);
-                        }
-                    } else {
-                        _ = try fmt.formatExpr(fa.left);
-                    }
-                } else {
-                    _ = try fmt.formatExpr(fa.left);
-                }
+                _ = try fmt.formatExpr(fa.left);
                 const right_region = fmt.nodeRegion(@intFromEnum(fa.right));
                 if (multiline and try fmt.flushCommentsBefore(right_region.start)) {
                     fmt.curr_indent += 1;
@@ -1077,17 +1025,17 @@ const Formatter = struct {
                 if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
                     try fmt.pushIndent();
                 }
-                // For arrow syntax, omit empty parens: `foo->bar()` becomes `foo->bar`
+                // Always format with parens after `->` for consistency and idempotence.
+                // Without parens, `0->b.c` would parse `b.c` as a qualified identifier,
+                // but `0->b().c` unambiguously parses as field access on `0->b()`.
+                // (See issue #8851)
                 const right_expr = fmt.ast.store.getExpr(ld.right);
-                if (right_expr == .apply) {
-                    const apply = right_expr.apply;
-                    if (fmt.ast.store.exprSlice(apply.args).len == 0) {
-                        // Zero-arg apply: just format the function, not the empty parens
-                        _ = try fmt.formatExprInner(apply.@"fn", .no_indent_on_access);
-                    } else {
-                        _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
-                    }
+                if (right_expr == .ident) {
+                    // Plain identifier: add () after it
+                    _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+                    try fmt.pushAll("()");
                 } else {
+                    // Already has parens (apply) or other expr: format normally
                     _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
                 }
             },
@@ -1096,6 +1044,16 @@ const Formatter = struct {
             },
             .frac => |f| {
                 try fmt.pushTokenText(f.token);
+            },
+            .typed_int => |ti| {
+                try fmt.pushTokenText(ti.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(ti.type_token);
+            },
+            .typed_frac => |tf| {
+                try fmt.pushTokenText(tf.token);
+                try fmt.push('.');
+                try fmt.pushTokenText(tf.type_token);
             },
             .list => |l| {
                 try fmt.formatCollection(region, .square, AST.Expr.Idx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
@@ -1615,6 +1573,121 @@ const Formatter = struct {
         return region;
     }
 
+    /// Format a targets section in a platform header
+    fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) !void {
+        const targets = fmt.ast.store.getTargetsSection(targets_idx);
+        const start_indent = fmt.curr_indent;
+
+        try fmt.pushAll("targets: {");
+
+        var has_content = false;
+
+        // Format files: field if present
+        if (targets.files_path) |files_token| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("files: ");
+            try fmt.push('"');
+            try fmt.pushTokenText(files_token);
+            try fmt.push('"');
+            try fmt.push(',');
+        }
+
+        // Format exe: field if present
+        if (targets.exe) |exe_idx| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("exe: ");
+            try fmt.formatTargetLinkType(exe_idx, start_indent + 1);
+            try fmt.push(',');
+        }
+
+        // Format static_lib: field if present
+        if (targets.static_lib) |static_lib_idx| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("static_lib: ");
+            try fmt.formatTargetLinkType(static_lib_idx, start_indent + 1);
+            try fmt.push(',');
+        }
+
+        if (has_content) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    /// Format a target link type (exe, static_lib, shared_lib) section
+    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) !void {
+        const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
+        const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
+
+        try fmt.push('{');
+
+        for (entries, 0..) |entry_idx, i| {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.formatTargetEntry(entry_idx);
+            if (i < entries.len - 1 or entries.len > 0) {
+                try fmt.push(',');
+            }
+        }
+
+        if (entries.len > 0) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    /// Format a single target entry: x64linux: ["host.o", app]
+    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) !void {
+        const entry = fmt.ast.store.getTargetEntry(entry_idx);
+        const files = fmt.ast.store.targetFileSlice(entry.files);
+
+        // Format target name (e.g., x64linux)
+        try fmt.pushTokenText(entry.target);
+        try fmt.pushAll(": [");
+
+        // Format file list
+        for (files, 0..) |file_idx, i| {
+            try fmt.formatTargetFile(file_idx);
+            if (i < files.len - 1) {
+                try fmt.pushAll(", ");
+            }
+        }
+
+        try fmt.push(']');
+    }
+
+    /// Format a single target file entry
+    fn formatTargetFile(fmt: *Formatter, file_idx: AST.TargetFile.Idx) !void {
+        const file = fmt.ast.store.getTargetFile(file_idx);
+        switch (file) {
+            .string_literal => |token| {
+                try fmt.push('"');
+                try fmt.pushTokenText(token);
+                try fmt.push('"');
+            },
+            .special_ident => |token| {
+                try fmt.pushTokenText(token);
+            },
+            .malformed => {
+                // Don't format malformed target files - they'll be reported as errors
+            },
+        }
+    }
+
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) !void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
@@ -1909,6 +1982,15 @@ const Formatter = struct {
                     fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
                     Formatter.formatRecordField,
                 );
+
+                // Format targets section if present
+                if (p.targets) |targets_idx| {
+                    _ = try fmt.flushCommentsBefore(provides.region.end);
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                    try fmt.formatTargetsSection(targets_idx);
+                }
             },
             .type_module => {},
             .default_app => {},
@@ -2145,12 +2227,14 @@ const Formatter = struct {
                     }
                     // Handle open tag unions - always format as just ".." (silently drop any named extension)
                     if (is_open) {
-                        // If there was a named extension, use its region for comment flushing
-                        const open_region = if (t.ext == .named) fmt.nodeRegion(@intFromEnum(t.ext.named)) else null;
+                        // Get the token position for flushing comments before the ..
+                        const double_dot_token: Token.Idx = switch (t.ext) {
+                            .named => |named_idx| fmt.nodeRegion(@intFromEnum(named_idx)).start,
+                            .open => |tok| tok,
+                            .closed => unreachable, // is_open is true
+                        };
                         if (tag_multiline) {
-                            if (open_region) |oreg| {
-                                _ = try fmt.flushCommentsBefore(oreg.start);
-                            }
+                            _ = try fmt.flushCommentsBefore(double_dot_token);
                             try fmt.ensureNewline();
                             try fmt.pushIndent();
                         }
@@ -2686,4 +2770,82 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.written()});
     }
     return try result.toOwnedSlice();
+}
+
+// Issue #8851: Formatter idempotence tests for local dispatch with field access
+// These test cases verify that formatting is stable (idempotent) - formatting twice
+// produces the same output as formatting once.
+
+test "issue 8851: local dispatch with space before field access is idempotent" {
+    // a=0->b .c() should format stably (not progressively strip parens)
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c()\n", result);
+}
+
+test "issue 8851: local dispatch with chained zero-arg applies is idempotent" {
+    // a = 0->b()().c() should format stably - must preserve ALL levels of function application
+    const result = try moduleFmtsStable(std.testing.allocator, "a = 0->b()().c()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()().c()\n", result);
+}
+
+test "issue 8851: multiline local dispatch with field access is idempotent" {
+    // Multiline case from issue comment 1
+    const result = try moduleFmtsStable(std.testing.allocator,
+        \\a=0->b
+        \\      .c()
+    , false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b()\n\t.c()\n", result);
+}
+
+test "issue 8851: tuple dispatch with chained zero-arg applies is idempotent" {
+    // ()->b()()() from issue comment 2
+    const result = try moduleFmtsStable(std.testing.allocator, "a=()->b()()()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = ()->b()()()\n", result);
+}
+
+test "issue 8851: chained field access after local dispatch is idempotent" {
+    // 0->b .c .d() - multiple field accesses
+    const result = try moduleFmtsStable(std.testing.allocator, "a=0->b .c .d()", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("a = 0->b().c.d()\n", result);
+}
+
+test "issue 8894: typed integer literal formats correctly" {
+    // Typed integer literals like 0.F or 123.U64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 0.F", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 0.F\n", result);
+}
+
+test "issue 8894: typed frac literal formats correctly" {
+    // Typed frac literals like 3.14.F64 should format without panicking
+    const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
+    defer std.testing.allocator.free(result);
+    try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
+
+test "issue 8989: platform header targets section is preserved" {
+    // Platform header with targets section should preserve the targets after formatting
+    const input =
+        \\platform "test-platform"
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides {}
+        \\    targets: {
+        \\        files: "build/",
+        \\        exe: {
+        \\            x64linux: ["host.o", app],
+        \\            arm64linux: ["host.o", app],
+        \\        },
+        \\    }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    // The targets section must be preserved in the output
+    try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
 }
