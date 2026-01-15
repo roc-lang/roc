@@ -247,9 +247,6 @@ pub const Tag = enum {
 /// IMPORTANT: This must be an extern union to ensure consistent size across debug/release builds.
 /// All variants must be exactly 12 bytes (3 × u32).
 pub const Payload = extern union {
-    /// Raw access to data fields (for backward compatibility during migration)
-    raw: Raw,
-
     // === Statement payloads ===
     statement_decl: StatementDecl,
     statement_var: StatementVar,
@@ -356,12 +353,6 @@ pub const Payload = extern union {
     // ============================================================
     // Payload struct definitions - all must be exactly 12 bytes
     // ============================================================
-
-    pub const Raw = extern struct {
-        data_1: u32,
-        data_2: u32,
-        data_3: u32,
-    };
 
     // --- Statements ---
 
