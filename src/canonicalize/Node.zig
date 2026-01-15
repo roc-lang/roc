@@ -9,27 +9,21 @@ const collections = @import("collections");
 
 const Node = @This();
 
-/// Legacy field access - maps to payload.raw.data_1
-/// TODO: Remove once all code is migrated to use payload union fields
-data_1: u32,
-/// Legacy field access - maps to payload.raw.data_2
-data_2: u32,
-/// Legacy field access - maps to payload.raw.data_3
-data_3: u32,
+/// The payload stores the actual data for this node (12 bytes).
+/// Access via the Payload union to get typed field names.
+payload: Payload,
+/// The tag determines how to interpret the payload.
 tag: Tag,
 
 /// Access the data as a typed payload union.
 /// Use this to access named fields for specific node types.
 pub fn getPayload(self: *const Node) Payload {
-    return @as(*const Payload, @ptrCast(&self.data_1)).*;
+    return self.payload;
 }
 
 /// Set the data from a typed payload union.
 pub fn setPayload(self: *Node, p: Payload) void {
-    const raw = @as(*const [3]u32, @ptrCast(&p)).*;
-    self.data_1 = raw[0];
-    self.data_2 = raw[1];
-    self.data_3 = raw[2];
+    self.payload = p;
 }
 
 /// A list of nodes.
@@ -118,6 +112,7 @@ pub const Payload = extern union {
     // Type Annotations
     ty_apply: TyApply,
     ty_rigid_var: TyRigidVar,
+    ty_rigid_var_lookup: TyRigidVarLookup,
     ty_lookup: TyLookup,
     ty_underscore: TyUnderscore,
     ty_tag_union: TyTagUnion,
@@ -556,9 +551,9 @@ pub const Payload = extern union {
     // Type Header and Annotation
     pub const TypeHeader = extern struct {
         name: u32, // Ident.Idx
-        /// Packed: type_vars_start (20 bits), type_vars_len (12 bits)
-        packed_type_vars: u32,
-        _unused: u32,
+        relative_name: u32, // Ident.Idx
+        /// Packed: args_start (upper 16 bits), args_len (lower 16 bits)
+        packed_args: u32,
     };
 
     pub const Annotation = extern struct {
@@ -582,6 +577,12 @@ pub const Payload = extern union {
 
     pub const TyRigidVar = extern struct {
         name: u32, // Ident.Idx
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    pub const TyRigidVarLookup = extern struct {
+        ref: u32, // CIR.TypeAnno.Idx
         _unused1: u32,
         _unused2: u32,
     };
@@ -807,9 +808,9 @@ pub const Payload = extern union {
 
     // Type var slot
     pub const TypeVarSlot = extern struct {
+        parent_node_idx: u32, // Node.Idx
         _unused1: u32,
         _unused2: u32,
-        _unused3: u32,
     };
 
     // Malformed (runtime error)
@@ -831,13 +832,10 @@ pub const Payload = extern union {
 comptime {
     // Verify Payload is exactly 12 bytes (3 x u32)
     std.debug.assert(@sizeOf(Payload) == 12);
-    // Verify Node is exactly 16 bytes (3 x u32 data + tag)
-    // The data_1, data_2, data_3 fields are laid out identically to Payload
+    // Verify Node is exactly 16 bytes (Payload 12 bytes + tag 4 bytes)
     std.debug.assert(@sizeOf(Node) == 16);
-    // Verify we can safely reinterpret the data fields as a Payload
-    std.debug.assert(@offsetOf(Node, "data_1") == 0);
-    std.debug.assert(@offsetOf(Node, "data_2") == 4);
-    std.debug.assert(@offsetOf(Node, "data_3") == 8);
+    // Verify correct field offsets
+    std.debug.assert(@offsetOf(Node, "payload") == 0);
     std.debug.assert(@offsetOf(Node, "tag") == 12);
 }
 

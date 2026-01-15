@@ -942,9 +942,7 @@ pub fn replaceExprWithTuple(
 
     store.nodes.set(node_idx, .{
         .tag = .expr_tuple,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = @intCast(elem_indices.len),
-        .data_3 = 0,
+        .payload = .{ .expr_tuple = .{ .elems_start = @intCast(extra_data_start), .elems_len = @intCast(elem_indices.len), ._unused = 0 } },
     });
 }
 
@@ -967,12 +965,7 @@ pub fn replaceExprWithTag(
         _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
     }
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_tag,
-        .data_1 = @bitCast(name),
-        .data_2 = @intCast(extra_data_start),
-        .data_3 = @intCast(arg_indices.len),
-    });
+    store.nodes.set(node_idx, .{ .tag = .expr_tag, .payload = .{ .expr_tag = .{ .name = @bitCast(name), .args_start = @intCast(extra_data_start), .args_len = @intCast(arg_indices.len) } } });
 }
 
 /// Get the more-specific expr index. Used to make error messages nicer.
@@ -1021,9 +1014,10 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
     std.debug.assert(node.tag == .match_branch_pattern);
 
+    const p = node.getPayload().match_branch_pattern;
     return CIR.Expr.Match.BranchPattern{
-        .pattern = @enumFromInt(node.data_1),
-        .degenerate = node.data_2 != 0,
+        .pattern = @enumFromInt(p.pattern),
+        .degenerate = p.degenerate != 0,
     };
 }
 
@@ -1052,19 +1046,16 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         .where_alias => {
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(node.data_1));
-            const alias_name = @as(Ident.Idx, @bitCast(node.data_2));
-
+            const p = node.getPayload().where_alias;
             return CIR.WhereClause{ .w_alias = .{
-                .var_ = var_,
-                .alias_name = alias_name,
+                .var_ = @enumFromInt(p.var_),
+                .alias_name = @bitCast(p.alias_name),
             } };
         },
         .where_malformed => {
-            const diagnostic = @as(CIR.Diagnostic.Idx, @enumFromInt(node.data_1));
-
+            const p = node.getPayload().where_malformed;
             return CIR.WhereClause{ .w_malformed = .{
-                .diagnostic = diagnostic,
+                .diagnostic = @enumFromInt(p.diagnostic),
             } };
         },
         else => {
@@ -1288,9 +1279,9 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             } };
         },
         .ty_rigid_var_lookup => {
-            const p = payload.raw;
+            const p = payload.ty_rigid_var_lookup;
             return CIR.TypeAnno{ .rigid_var_lookup = .{
-                .ref = @enumFromInt(p.data_1),
+                .ref = @enumFromInt(p.ref),
             } };
         },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
@@ -1385,14 +1376,14 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 
     std.debug.assert(node.tag == .type_header);
 
+    const p = node.getPayload().type_header;
     // Unpack args from packed format (start in upper 16 bits, len in lower 16 bits)
-    const packed_args = node.data_3;
-    const args_start: u32 = packed_args >> 16;
-    const args_len: u32 = packed_args & 0xFFFF;
+    const args_start: u32 = p.packed_args >> 16;
+    const args_len: u32 = p.packed_args & 0xFFFF;
 
     return CIR.TypeHeader{
-        .name = @bitCast(node.data_1),
-        .relative_name = @bitCast(node.data_2),
+        .name = @bitCast(p.name),
+        .relative_name = @bitCast(p.relative_name),
         .args = .{ .span = .{ .start = args_start, .len = args_len } },
     };
 }
@@ -1401,9 +1392,10 @@ pub fn getTypeHeader(store: *const NodeStore, typeHeader: CIR.TypeHeader.Idx) CI
 pub fn getAnnoRecordField(store: *const NodeStore, annoRecordField: CIR.TypeAnno.RecordField.Idx) CIR.TypeAnno.RecordField {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(annoRecordField));
     const node = store.nodes.get(node_idx);
+    const p = node.getPayload().ty_record_field;
     return .{
-        .name = @bitCast(node.data_1),
-        .ty = @enumFromInt(node.data_2),
+        .name = @bitCast(p.name),
+        .ty = @enumFromInt(p.anno),
     };
 }
 
@@ -1439,10 +1431,11 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
 
     switch (node.tag) {
         .exposed_item => {
+            const p = node.getPayload().exposed_item;
             return CIR.ExposedItem{
-                .name = @bitCast(node.data_1),
-                .alias = if (node.data_2 == 0) null else @bitCast(node.data_2),
-                .is_wildcard = node.data_3 != 0,
+                .name = @bitCast(p.name),
+                .alias = if (p.alias == 0) null else @bitCast(p.alias),
+                .is_wildcard = p.is_wildcard != 0,
             };
         },
         else => std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)}),
@@ -1477,12 +1470,8 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
 ///
 /// See `setStatementNode` to see why this exists
 fn makeStatementNode(_: *NodeStore, statement: CIR.Statement) Allocator.Error!Node {
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = undefined,
-    };
+    var node: Node = undefined;
+    node.payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } };
 
     switch (statement) {
         .s_decl => |s| {
@@ -1648,12 +1637,8 @@ fn makeStatementNode(_: *NodeStore, statement: CIR.Statement) Allocator.Error!No
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator.Error!CIR.Expr.Idx {
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = undefined, // set below in switch
-    };
+    var node: Node = undefined;
+    node.payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } };
 
     switch (expr) {
         .e_lookup_local => |local| {
@@ -2075,10 +2060,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) Allocator.Error!CIR.RecordField.Idx {
     const node = Node{
-        .data_1 = @bitCast(recordField.name),
-        .data_2 = @intFromEnum(recordField.value),
-        .data_3 = 0,
         .tag = .record_field,
+        .payload = .{ .record_field = .{ .name = @bitCast(recordField.name), .expr = @intFromEnum(recordField.value), ._unused = 0 } },
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2104,9 +2087,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
     const kind_and_pattern = kind_tag | (pattern_idx << 1);
 
     const node = Node{
-        .data_1 = 0, // Will be set by setPayload
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
         .tag = .record_destruct,
     };
 
@@ -2129,9 +2110,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Region) Allocator.Error!CIR.Expr.Capture.Idx {
     const node = Node{
         .tag = .lambda_capture,
-        .data_1 = @bitCast(capture.name),
-        .data_2 = capture.scope_depth,
-        .data_3 = @intFromEnum(capture.pattern_idx),
+        .payload = .{ .lambda_capture = .{ .name = @bitCast(capture.name), .scope_depth = capture.scope_depth, .pattern_idx = @intFromEnum(capture.pattern_idx) } },
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2157,12 +2136,8 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
     
     _ = try store.match_branch_data.append(store.gpa, branch_data);
 
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = .match_branch,
-    };
+    var node = Node{ .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } }, .tag = .match_branch,
+     };
     
     node.setPayload(.{ .match_branch = .{
         .branch_data_idx = branch_data_idx,
@@ -2181,10 +2156,8 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 /// corresponding function in `ModuleEnv`.
 pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
     const node = Node{
-        .data_1 = @intFromEnum(branchPattern.pattern),
-        .data_2 = @as(u32, @intFromBool(branchPattern.degenerate)),
-        .data_3 = 0,
         .tag = .match_branch_pattern,
+        .payload = .{ .match_branch_pattern = .{ .pattern = @intFromEnum(branchPattern.pattern), .degenerate = @intFromBool(branchPattern.degenerate), ._unused = 0 } },
     };
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -2197,9 +2170,7 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
 /// corresponding function in `ModuleEnv`.
 pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) Allocator.Error!CIR.WhereClause.Idx {
     var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
         .tag = undefined,
     };
 
@@ -2226,14 +2197,19 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         },
         .w_alias => |mod_alias| {
             node.tag = .where_alias;
-
-            node.data_1 = @intFromEnum(mod_alias.var_);
-            node.data_2 = @bitCast(mod_alias.alias_name);
+            node.setPayload(.{ .where_alias = .{
+                .var_ = @intFromEnum(mod_alias.var_),
+                .alias_name = @bitCast(mod_alias.alias_name),
+                ._unused = 0,
+            } });
         },
         .w_malformed => |malformed| {
             node.tag = .where_malformed;
-
-            node.data_1 = @intFromEnum(malformed.diagnostic);
+            node.setPayload(.{ .where_malformed = .{
+                .diagnostic = @intFromEnum(malformed.diagnostic),
+                ._unused1 = 0,
+                ._unused2 = 0,
+            } });
         },
     }
 
@@ -2248,9 +2224,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 /// corresponding function in `ModuleEnv`.
 pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) Allocator.Error!CIR.Pattern.Idx {
     var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
         .tag = undefined,
     };
 
@@ -2424,9 +2398,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) Allocator.Error!CIR.TypeAnno.Idx {
     var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
         .tag = undefined, // set below in switch
     };
 
@@ -2457,10 +2429,10 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.tag = .ty_rigid_var;
         },
         .rigid_var_lookup => |tv| {
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(tv.ref),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .ty_rigid_var_lookup = .{
+                .ref = @intFromEnum(tv.ref),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
             node.tag = .ty_rigid_var_lookup;
         },
@@ -2559,16 +2531,14 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base.Region) Allocator.Error!CIR.TypeHeader.Idx {
-    // Pack args.start and args.len into one u32 (16 bits each) to free up data_3 for relative_name
+    // Pack args.start and args.len into one u32 (16 bits each)
     std.debug.assert(typeHeader.args.span.start <= std.math.maxInt(u16));
     std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
     const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
 
     const node = Node{
-        .data_1 = @bitCast(typeHeader.name),
-        .data_2 = @bitCast(typeHeader.relative_name),
-        .data_3 = packed_args,
         .tag = .type_header,
+        .payload = .{ .type_header = .{ .name = @bitCast(typeHeader.name), .relative_name = @bitCast(typeHeader.relative_name), .packed_args = packed_args } },
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2582,10 +2552,8 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) Allocator.Error!CIR.TypeAnno.RecordField.Idx {
     const node = Node{
-        .data_1 = @bitCast(annoRecordField.name),
-        .data_2 = @intFromEnum(annoRecordField.ty),
-        .data_3 = 0,
         .tag = .ty_record_field,
+        .payload = .{ .ty_record_field = .{ .name = @bitCast(annoRecordField.name), .anno = @intFromEnum(annoRecordField.ty), .optional = 0 } },
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2598,12 +2566,8 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = .annotation,
-    };
+    var node = Node{ .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } }, .tag = .annotation,
+     };
 
     const packed_where = if (annotation.where) |where_clause|
         (@as(u32, where_clause.span.start) << 12 | @as(u32, where_clause.span.len)) + OPTIONAL_VALUE_OFFSET
@@ -2627,10 +2591,8 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 /// corresponding function in `ModuleEnv`.
 pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) Allocator.Error!CIR.ExposedItem.Idx {
     const node = Node{
-        .data_1 = @bitCast(exposedItem.name),
-        .data_2 = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
-        .data_3 = @intFromBool(exposedItem.is_wildcard),
         .tag = .exposed_item,
+        .payload = .{ .exposed_item = .{ .name = @bitCast(exposedItem.name), .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0, .is_wildcard = @intFromBool(exposedItem.is_wildcard) } },
     };
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2658,12 +2620,8 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
     
     _ = try store.def_data.append(store.gpa, def_data);
 
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = .def,
-    };
+    var node = Node{ .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } }, .tag = .def,
+     };
     
     node.setPayload(.{ .def = .{
         .def_data_idx = def_data_idx,
@@ -2721,19 +2679,21 @@ pub fn getCapture(store: *const NodeStore, capture_idx: CIR.Expr.Capture.Idx) CI
 
     std.debug.assert(node.tag == .lambda_capture);
 
+    const p = node.getPayload().lambda_capture;
     return CIR.Expr.Capture{
-        .name = @bitCast(node.data_1),
-        .scope_depth = node.data_2,
-        .pattern_idx = @enumFromInt(node.data_3),
+        .name = @bitCast(p.name),
+        .scope_depth = p.scope_depth,
+        .pattern_idx = @enumFromInt(p.pattern_idx),
     };
 }
 
 /// Retrieves a record field from the store.
 pub fn getRecordField(store: *const NodeStore, idx: CIR.RecordField.Idx) CIR.RecordField {
     const node = store.nodes.get(@enumFromInt(@intFromEnum(idx)));
+    const p = node.getPayload().record_field;
     return CIR.RecordField{
-        .name = @bitCast(node.data_1),
-        .value = @enumFromInt(node.data_2),
+        .name = @bitCast(p.name),
+        .value = @enumFromInt(p.expr),
     };
 }
 
@@ -2771,9 +2731,10 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
 
     std.debug.assert(node.tag == .if_branch);
 
+    const p = node.getPayload().if_branch;
     return CIR.Expr.IfBranch{
-        .cond = @enumFromInt(node.data_1),
-        .body = @enumFromInt(node.data_2),
+        .cond = @enumFromInt(p.cond),
+        .body = @enumFromInt(p.body),
     };
 }
 
@@ -3092,10 +3053,8 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.
 /// corresponding function in `ModuleEnv`.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
     const node = Node{
-        .data_1 = @intFromEnum(if_branch.cond),
-        .data_2 = @intFromEnum(if_branch.body),
-        .data_3 = 0,
         .tag = .if_branch,
+        .payload = .{ .if_branch = .{ .cond = @intFromEnum(if_branch.cond), .body = @intFromEnum(if_branch.body), ._unused = 0 } },
     };
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -3146,9 +3105,7 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 /// corresponding function in `ModuleEnv`.
 pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
     var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
         .tag = undefined, // set below in switch
     };
     var region = base.Region.zero();
@@ -3157,7 +3114,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .not_implemented => |r| {
             node.tag = .diag_not_implemented;
             region = r.region;
-            node.data_1 = @intFromEnum(r.feature);
+            node.payload.diagnostic.data_1 = @intFromEnum(r.feature);
         },
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
@@ -3170,12 +3127,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .redundant_exposed => |r| {
             node.tag = .diag_redundant_exposed;
@@ -3189,21 +3146,21 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .self_referential_definition => |r| {
             node.tag = .diag_self_referential_definition;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
-            node.data_1 = @intFromEnum(r.stmt);
+            node.payload.diagnostic.data_1 = @intFromEnum(r.stmt);
             region = r.region;
         },
         .expr_not_canonicalized => |r| {
@@ -3261,22 +3218,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
-            node.data_1 = @bitCast(r.module_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.module_name);
         },
         .default_app_missing_main => |r| {
             node.tag = .diag_default_app_missing_main;
             region = r.region;
-            node.data_1 = @bitCast(r.module_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.module_name);
         },
         .default_app_wrong_arity => |r| {
             node.tag = .diag_default_app_wrong_arity;
             region = r.region;
-            node.data_1 = r.arity;
+            node.payload.diagnostic.data_1 = r.arity;
         },
         .cannot_import_default_app => |r| {
             node.tag = .diag_cannot_import_default_app;
             region = r.region;
-            node.data_1 = @bitCast(r.module_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.module_name);
         },
         .execution_requires_app_or_default_app => |r| {
             node.tag = .diag_execution_requires_app_or_default_app;
@@ -3285,8 +3242,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .type_name_case_mismatch => |r| {
             node.tag = .diag_type_name_case_mismatch;
             region = r.region;
-            node.data_1 = @bitCast(r.module_name);
-            node.data_2 = @bitCast(r.type_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.module_name);
+            node.payload.diagnostic.data_2 = @bitCast(r.type_name);
         },
         .module_header_deprecated => |r| {
             node.tag = .diag_module_header_deprecated;
@@ -3295,14 +3252,14 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .redundant_expose_main_type => |r| {
             node.tag = .diag_redundant_expose_main_type;
             region = r.region;
-            node.data_1 = @bitCast(r.type_name);
-            node.data_2 = @bitCast(r.module_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.type_name);
+            node.payload.diagnostic.data_2 = @bitCast(r.module_name);
         },
         .invalid_main_type_rename_in_exposing => |r| {
             node.tag = .diag_invalid_main_type_rename_in_exposing;
             region = r.region;
-            node.data_1 = @bitCast(r.type_name);
-            node.data_2 = @bitCast(r.alias);
+            node.payload.diagnostic.data_1 = @bitCast(r.type_name);
+            node.payload.diagnostic.data_2 = @bitCast(r.alias);
         },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
@@ -3311,38 +3268,38 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset;
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_2 = r.original_region.start.offset;
+            node.payload.diagnostic.data_3 = r.original_region.end.offset;
         },
         .type_redeclared => |r| {
             node.tag = .diag_type_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset;
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = r.original_region.start.offset;
+            node.payload.diagnostic.data_3 = r.original_region.end.offset;
         },
         .undeclared_type => |r| {
             node.tag = .diag_undeclared_type;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
         },
         .type_alias_but_needed_nominal => |r| {
             node.tag = .diag_type_alias_but_needed_nominal;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
         },
         .undeclared_type_var => |r| {
             node.tag = .diag_undeclared_type_var;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
         },
         .type_alias_redeclared => |r| {
             node.tag = .diag_type_alias_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset;
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = r.original_region.start.offset;
+            node.payload.diagnostic.data_3 = r.original_region.end.offset;
         },
         .tuple_elem_not_canonicalized => |r| {
             node.tag = .diag_tuple_elem_not_canonicalized;
@@ -3351,54 +3308,54 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .module_not_found => |r| {
             node.tag = .diag_module_not_found;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.module_name));
         },
         .value_not_exposed => |r| {
             node.tag = .diag_value_not_exposed;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
-            node.data_2 = @as(u32, @bitCast(r.value_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.module_name));
+            node.payload.diagnostic.data_2 = @as(u32, @bitCast(r.value_name));
         },
         .type_not_exposed => |r| {
             node.tag = .diag_type_not_exposed;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
-            node.data_2 = @as(u32, @bitCast(r.type_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.module_name));
+            node.payload.diagnostic.data_2 = @as(u32, @bitCast(r.type_name));
         },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
-            node.data_2 = @as(u32, @bitCast(r.type_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.module_name));
+            node.payload.diagnostic.data_2 = @as(u32, @bitCast(r.type_name));
         },
         .module_not_imported => |r| {
             node.tag = .diag_module_not_imported;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.module_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.module_name));
         },
         .nested_type_not_found => |r| {
             node.tag = .diag_nested_type_not_found;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.parent_name));
-            node.data_2 = @as(u32, @bitCast(r.nested_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.parent_name));
+            node.payload.diagnostic.data_2 = @as(u32, @bitCast(r.nested_name));
         },
         .nested_value_not_found => |r| {
             node.tag = .diag_nested_value_not_found;
             region = r.region;
-            node.data_1 = @as(u32, @bitCast(r.parent_name));
-            node.data_2 = @as(u32, @bitCast(r.nested_name));
+            node.payload.diagnostic.data_1 = @as(u32, @bitCast(r.parent_name));
+            node.payload.diagnostic.data_2 = @as(u32, @bitCast(r.nested_name));
         },
         .too_many_exports => |r| {
             node.tag = .diag_too_many_exports;
             region = r.region;
-            node.data_1 = r.count;
+            node.payload.diagnostic.data_1 = r.count;
         },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
             region = r.redeclared_region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset;
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = r.original_region.start.offset;
+            node.payload.diagnostic.data_3 = r.original_region.end.offset;
         },
         .type_shadowed_warning => |r| {
             node.tag = .diag_type_shadowed_warning;
@@ -3423,19 +3380,19 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .used_underscore_variable => |r| {
             node.tag = .diag_used_underscore_variable;
             region = r.region;
-            node.data_1 = @bitCast(r.ident);
+            node.payload.diagnostic.data_1 = @bitCast(r.ident);
         },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
             region = r.duplicate_region;
-            node.data_1 = @bitCast(r.field_name);
-            node.data_2 = r.original_region.start.offset;
-            node.data_3 = r.original_region.end.offset;
+            node.payload.diagnostic.data_1 = @bitCast(r.field_name);
+            node.payload.diagnostic.data_2 = r.original_region.start.offset;
+            node.payload.diagnostic.data_3 = r.original_region.end.offset;
         },
         .crash_expects_string => |r| {
             node.tag = .diag_crash_expects_string;
@@ -3448,25 +3405,25 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .unused_type_var_name => |r| {
             node.tag = .diag_unused_type_var_name;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = @bitCast(r.suggested_name);
         },
         .type_var_marked_unused => |r| {
             node.tag = .diag_type_var_marked_unused;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = @bitCast(r.suggested_name);
         },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
-            node.data_1 = @bitCast(r.name);
-            node.data_2 = @bitCast(r.suggested_name);
+            node.payload.diagnostic.data_1 = @bitCast(r.name);
+            node.payload.diagnostic.data_2 = @bitCast(r.suggested_name);
         },
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
-            node.data_1 = if (r.is_alias) 1 else 0;
+            node.payload.diagnostic.data_1 = if (r.is_alias) 1 else 0;
         },
         .break_outside_loop => |r| {
             node.tag = .diag_break_outside_loop;
@@ -3485,8 +3442,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .deprecated_number_suffix => |r| {
             node.tag = .diag_deprecated_number_suffix;
             region = r.region;
-            node.data_1 = @intFromEnum(r.suffix);
-            node.data_2 = @intFromEnum(r.suggested);
+            node.payload.diagnostic.data_1 = @intFromEnum(r.suffix);
+            node.payload.diagnostic.data_2 = @intFromEnum(r.suggested);
         },
     }
 
@@ -3517,10 +3474,8 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
 /// corresponding function in `ModuleEnv`.
 pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
     const malformed_node = Node{
-        .data_1 = @intFromEnum(diagnostic_idx),
-        .data_2 = 0,
-        .data_3 = 0,
         .tag = .malformed,
+        .payload = .{ .malformed = .{ .diagnostic = @intFromEnum(diagnostic_idx), ._unused1 = 0, ._unused2 = 0 } },
     };
     const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
     _ = try store.regions.append(store.gpa, region);
@@ -3538,7 +3493,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
 
     switch (node.tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
-            .feature = @enumFromInt(node.data_1),
+            .feature = @enumFromInt(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
@@ -3548,11 +3503,11 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_exposed => {
@@ -3567,19 +3522,19 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
-            .stmt = @enumFromInt(node.data_1),
+            .stmt = @enumFromInt(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
@@ -3616,71 +3571,71 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => return CIR.Diagnostic{ .shadowing_warning = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
             .original_region = .{
-                .start = .{ .offset = node.data_2 },
-                .end = .{ .offset = node.data_3 },
+                .start = .{ .offset = node.payload.diagnostic.data_2 },
+                .end = .{ .offset = node.payload.diagnostic.data_3 },
             },
         } },
         .diag_type_redeclared => return CIR.Diagnostic{ .type_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
-                .start = .{ .offset = node.data_2 },
-                .end = .{ .offset = node.data_3 },
+                .start = .{ .offset = node.payload.diagnostic.data_2 },
+                .end = .{ .offset = node.payload.diagnostic.data_3 },
             },
         } },
         .diag_undeclared_type => return CIR.Diagnostic{ .undeclared_type = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_but_needed_nominal => return CIR.Diagnostic{ .type_alias_but_needed_nominal = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_tuple_elem_not_canonicalized => return CIR.Diagnostic{ .tuple_elem_not_canonicalized = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_not_found => return CIR.Diagnostic{ .module_not_found = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .module_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_value_not_exposed => return CIR.Diagnostic{ .value_not_exposed = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .value_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .module_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
+            .value_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_not_exposed => return CIR.Diagnostic{ .type_not_exposed = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .module_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
+            .type_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_from_missing_module => return CIR.Diagnostic{ .type_from_missing_module = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .type_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .module_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
+            .type_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_not_imported => return CIR.Diagnostic{ .module_not_imported = .{
-            .module_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
+            .module_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_nested_type_not_found => return CIR.Diagnostic{ .nested_type_not_found = .{
-            .parent_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .nested_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .parent_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
+            .nested_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_nested_value_not_found => return CIR.Diagnostic{ .nested_value_not_found = .{
-            .parent_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
-            .nested_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .parent_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_1)),
+            .nested_name = @as(base.Ident.Idx, @bitCast(node.payload.diagnostic.data_2)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{
-            .count = node.data_1,
+            .count = node.payload.diagnostic.data_1,
             .region = store.getRegionAt(node_idx),
         } },
         .diag_undeclared_type_var => return CIR.Diagnostic{ .undeclared_type_var = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
@@ -3693,56 +3648,56 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_module_missing_matching_type => return CIR.Diagnostic{ .type_module_missing_matching_type = .{
-            .module_name = @bitCast(node.data_1),
+            .module_name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_default_app_missing_main => return CIR.Diagnostic{ .default_app_missing_main = .{
-            .module_name = @bitCast(node.data_1),
+            .module_name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_default_app_wrong_arity => return CIR.Diagnostic{ .default_app_wrong_arity = .{
-            .arity = node.data_1,
+            .arity = node.payload.diagnostic.data_1,
             .region = store.getRegionAt(node_idx),
         } },
         .diag_cannot_import_default_app => return CIR.Diagnostic{ .cannot_import_default_app = .{
-            .module_name = @bitCast(node.data_1),
+            .module_name = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_name_case_mismatch => return CIR.Diagnostic{ .type_name_case_mismatch = .{
-            .module_name = @bitCast(node.data_1),
-            .type_name = @bitCast(node.data_2),
+            .module_name = @bitCast(node.payload.diagnostic.data_1),
+            .type_name = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_redundant_expose_main_type => return CIR.Diagnostic{ .redundant_expose_main_type = .{
-            .type_name = @bitCast(node.data_1),
-            .module_name = @bitCast(node.data_2),
+            .type_name = @bitCast(node.payload.diagnostic.data_1),
+            .module_name = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_main_type_rename_in_exposing => return CIR.Diagnostic{ .invalid_main_type_rename_in_exposing = .{
-            .type_name = @bitCast(node.data_1),
-            .alias = @bitCast(node.data_2),
+            .type_name = @bitCast(node.payload.diagnostic.data_1),
+            .alias = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_alias_redeclared => return CIR.Diagnostic{ .type_alias_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
-                .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3) },
+                .start = .{ .offset = @intCast(node.payload.diagnostic.data_2) },
+                .end = .{ .offset = @intCast(node.payload.diagnostic.data_3) },
             },
         } },
         .diag_nominal_type_redeclared => return CIR.Diagnostic{ .nominal_type_redeclared = .{
-            .name = @bitCast(node.data_1),
+            .name = @bitCast(node.payload.diagnostic.data_1),
             .redeclared_region = store.getRegionAt(node_idx),
             .original_region = .{
-                .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3) },
+                .start = .{ .offset = @intCast(node.payload.diagnostic.data_2) },
+                .end = .{ .offset = @intCast(node.payload.diagnostic.data_3) },
             },
         } },
         .diag_type_shadowed_warning => {
@@ -3768,19 +3723,19 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
-            .ident = @bitCast(node.data_1),
+            .ident = @bitCast(node.payload.diagnostic.data_1),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_duplicate_record_field => return CIR.Diagnostic{ .duplicate_record_field = .{
-            .field_name = @bitCast(node.data_1),
+            .field_name = @bitCast(node.payload.diagnostic.data_1),
             .duplicate_region = store.getRegionAt(node_idx),
             .original_region = .{
-                .start = .{ .offset = @intCast(node.data_2) },
-                .end = .{ .offset = @intCast(node.data_3) },
+                .start = .{ .offset = @intCast(node.payload.diagnostic.data_2) },
+                .end = .{ .offset = @intCast(node.payload.diagnostic.data_3) },
             },
         } },
         .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
@@ -3790,22 +3745,22 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .region = store.getRegionAt(node_idx),
         } },
         .diag_unused_type_var_name => return CIR.Diagnostic{ .unused_type_var_name = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = @bitCast(node.payload.diagnostic.data_1),
+            .suggested_name = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_var_marked_unused => return CIR.Diagnostic{ .type_var_marked_unused = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = @bitCast(node.payload.diagnostic.data_1),
+            .suggested_name = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_type_var_starting_with_dollar => return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
-            .name = @bitCast(node.data_1),
-            .suggested_name = @bitCast(node.data_2),
+            .name = @bitCast(node.payload.diagnostic.data_1),
+            .suggested_name = @bitCast(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
-            .is_alias = node.data_1 != 0,
+            .is_alias = node.payload.diagnostic.data_1 != 0,
             .region = store.getRegionAt(node_idx),
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
@@ -3823,8 +3778,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             } };
         },
         .diag_deprecated_number_suffix => return CIR.Diagnostic{ .deprecated_number_suffix = .{
-            .suffix = @enumFromInt(node.data_1),
-            .suggested = @enumFromInt(node.data_2),
+            .suffix = @enumFromInt(node.payload.diagnostic.data_1),
+            .suggested = @enumFromInt(node.payload.diagnostic.data_2),
             .region = store.getRegionAt(node_idx),
         } },
         else => {
@@ -3854,9 +3809,7 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx 
 pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
     const nid = try store.nodes.append(store.gpa, .{
         .tag = .type_var_slot,
-        .data_1 = @intFromEnum(parent_node_idx),
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .type_var_slot = .{ .parent_node_idx = @intFromEnum(parent_node_idx), ._unused1 = 0, ._unused2 = 0 } },
     });
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
@@ -3872,9 +3825,7 @@ pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_no
     while (store.nodes.items.len <= idx) {
         store.nodes.items.appendAssumeCapacity(.{
             .tag = .type_var_slot,
-            .data_1 = @intFromEnum(parent_node_idx),
-            .data_2 = 0,
-            .data_3 = 0,
+            .payload = .{ .type_var_slot = .{ .parent_node_idx = @intFromEnum(parent_node_idx), ._unused1 = 0, ._unused2 = 0 } },
         });
         _ = try store.regions.append(store.gpa, region);
     }
@@ -4047,9 +3998,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     // Add a simple expression node
     const node1 = Node{
         .tag = .expr_int,
-        .data_1 = 0, // extra_data index
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
     };
     const node1_idx = try original.nodes.append(gpa, node1);
 
@@ -4101,7 +4050,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
     const retrieved_node = deserialized.nodes.get(node1_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
-    try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
+    try testing.expectEqual(@as(u32, 0), retrieved_node.payload.diagnostic.data_1);
 
     // Verify extra_data
     try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
@@ -4128,27 +4077,21 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Add expression variable node
     const var_node = Node{
         .tag = .expr_var,
-        .data_1 = 5, // pattern_idx
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .expr_var = .{ .pattern_idx = 5, ._unused1 = 0, ._unused2 = 0 } },
     };
     const var_node_idx = try original.nodes.append(gpa, var_node);
 
     // Add expression list node
     const list_node = Node{
         .tag = .expr_list,
-        .data_1 = 10, // elems start
-        .data_2 = 3, // elems len
-        .data_3 = 0,
+        .payload = .{ .expr_list = .{ .elems_start = 10, .elems_len = 3, ._unused = 0 } },
     };
     const list_node_idx = try original.nodes.append(gpa, list_node);
 
     // Add float node with extra data
     const float_node = Node{
         .tag = .expr_frac_f64,
-        .data_1 = 0, // extra_data index
-        .data_2 = 0,
-        .data_3 = 0,
+        .payload = .{ .diagnostic = .{ .data_1 = 0, .data_2 = 0, .data_3 = 0 } },
     };
     const float_node_idx = try original.nodes.append(gpa, float_node);
 
@@ -4203,13 +4146,13 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify var node using captured index
     const retrieved_var = deserialized.nodes.get(var_node_idx);
     try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
-    try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
+    try testing.expectEqual(@as(u32, 5), retrieved_var.payload.expr_var.pattern_idx);
 
     // Verify list node using captured index
     const retrieved_list = deserialized.nodes.get(list_node_idx);
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
-    try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
-    try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
+    try testing.expectEqual(@as(u32, 10), retrieved_list.payload.expr_list.elems_start);
+    try testing.expectEqual(@as(u32, 3), retrieved_list.payload.expr_list.elems_len);
 
     // Verify float node and extra data using captured index
     const retrieved_float = deserialized.nodes.get(float_node_idx);
