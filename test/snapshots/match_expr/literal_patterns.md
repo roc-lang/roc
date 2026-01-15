@@ -13,38 +13,41 @@ match Answer {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - literal_patterns.md:2:15:2:16
-MISSING METHOD - literal_patterns.md:4:17:4:18
+TYPE MISMATCH - literal_patterns.md:2:15:2:16
+TYPE MISMATCH - literal_patterns.md:4:17:4:18
 MISSING METHOD - literal_patterns.md:5:5:5:7
-MISSING METHOD - literal_patterns.md:5:11:5:12
+TYPE MISMATCH - literal_patterns.md:5:11:5:12
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **literal_patterns.md:2:15:2:16:**
 ```roc
     Answer => 1
 ```
               ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**literal_patterns.md:3:13:3:20:**
+```roc
+    Zero => "hello"
+```
+            ^^^^^^^
+
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **literal_patterns.md:4:17:4:18:**
 ```roc
     Greeting => 3
 ```
                 ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **MISSING METHOD**
 This **from_numeral** method is being called on a value whose type doesn't have that method:
@@ -58,19 +61,17 @@ The value's type, which does not have a method named **from_numeral**, is:
 
     [Answer, Zero, Greeting, .._others]
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **literal_patterns.md:5:11:5:12:**
 ```roc
     10 => 4
 ```
           ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 # TOKENS
 ~~~zig

@@ -410,7 +410,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -768,7 +768,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -843,7 +843,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -1761,6 +1761,296 @@ test "early return: ? in first argument of multi-arg call" {
     , 0, .no_trace);
 }
 
+test "Decoder: create ok result - check result is Ok" {
+    // Test that we can create a decode result and it is an Ok
+    try runExpectBool(
+        \\{
+        \\    result = { result: Ok(42i64), rest: [] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "Decoder: create ok result - extract value" {
+    // Test that we can extract the value from a decode result
+    try runExpectI64(
+        \\{
+        \\    result = { result: Ok(42i64), rest: [] }
+        \\    match result.result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "Decoder: create err result" {
+    // Test that we can create an error decode result
+    try runExpectBool(
+        \\{
+        \\    result = { result: Err(TooShort), rest: [1u8, 2u8, 3u8] }
+        \\    match result.result {
+        \\        Ok(_) => Bool.True
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , false, .no_trace);
+}
+
+test "decode: I32.decode with simple format" {
+    // Test I32.decode with a format that provides decode_i32
+    try runExpectI64(
+        \\{
+        \\    # Define a format type with decode_i32 method
+        \\    MyFormat := {}.{
+        \\        decode_i32 : MyFormat, List(U8) -> (Try(I32, [Err]), List(U8))
+        \\        decode_i32 = |_fmt, src| (Ok(42i32), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 42, .no_trace);
+}
+
+test "decode: I64.decode with simple format" {
+    // Test I64.decode with a simple format that returns a constant
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i64 : MyFormat, List(U8) -> (Try(I64, [Err]), List(U8))
+        \\        decode_i64 = |_fmt, src| (Ok(99i64), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I64.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 99, .no_trace);
+}
+
+test "decode: U8.decode success" {
+    // Test U8.decode with simple constant format
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(255u8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => -1i64
+        \\    }
+        \\}
+    , 255, .no_trace);
+}
+
+test "decode: U8.decode error" {
+    // Test U8.decode returns error - use I64 result to avoid complex match
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Err(Empty), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([], fmt)
+        \\    match result {
+        \\        Ok(_) => 0i64
+        \\        Err(_) => 1i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
+test "decode: Bool.decode true" {
+    // Test Bool.decode returns true
+    try runExpectBool(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\        decode_bool = |_fmt, src| (Ok(Bool.True), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Bool.decode([], fmt)
+        \\    match result {
+        \\        Ok(b) => b
+        \\        Err(_) => Bool.False
+        \\    }
+        \\}
+    , true, .no_trace);
+}
+
+test "decode: Bool.decode false" {
+    // Test Bool.decode returns false
+    try runExpectBool(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_bool : MyFormat, List(U8) -> (Try(Bool, [Empty]), List(U8))
+        \\        decode_bool = |_fmt, src| (Ok(Bool.False), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Bool.decode([], fmt)
+        \\    match result {
+        \\        Ok(b) => b
+        \\        Err(_) => Bool.True  # Return True on error to distinguish
+        \\    }
+        \\}
+    , false, .no_trace);
+}
+
+test "decode: Str.decode success" {
+    // Test Str.decode with constant
+    try runExpectStr(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_str : MyFormat, List(U8) -> (Try(Str, [BadUtf8]), List(U8))
+        \\        decode_str = |_fmt, src| (Ok("hi"), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = Str.decode([], fmt)
+        \\    match result {
+        \\        Ok(s) => s
+        \\        Err(_) => "error"
+        \\    }
+        \\}
+    , "hi", .no_trace);
+}
+
+test "decode: rest returned from decode" {
+    // Verify that decode returns the rest bytes
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u8 : MyFormat, List(U8) -> (Try(U8, [Empty]), List(U8))
+        \\        decode_u8 = |_fmt, src| (Ok(1u8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U8.decode([5u8], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 1, .no_trace);
+}
+
+test "decode: U16.decode" {
+    // Test U16.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u16 : MyFormat, List(U8) -> (Try(U16, [Err]), List(U8))
+        \\        decode_u16 = |_fmt, src| (Ok(1000u16), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U16.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 1000, .no_trace);
+}
+
+test "decode: U32.decode" {
+    // Test U32.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u32 : MyFormat, List(U8) -> (Try(U32, [Err]), List(U8))
+        \\        decode_u32 = |_fmt, src| (Ok(100000u32), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U32.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 100000, .no_trace);
+}
+
+test "decode: U64.decode" {
+    // Test U64.decode
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_u64 : MyFormat, List(U8) -> (Try(U64, [Err]), List(U8))
+        \\        decode_u64 = |_fmt, src| (Ok(9223372036854775807u64), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = U64.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64_wrap()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , 9223372036854775807, .no_trace);
+}
+
+test "decode: I8.decode negative" {
+    // Test I8.decode with negative value
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i8 : MyFormat, List(U8) -> (Try(I8, [Err]), List(U8))
+        \\        decode_i8 = |_fmt, src| (Ok(-42i8), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I8.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , -42, .no_trace);
+}
+
+test "decode: I16.decode negative" {
+    // Test I16.decode with negative value
+    try runExpectI64(
+        \\{
+        \\    MyFormat := {}.{
+        \\        decode_i16 : MyFormat, List(U8) -> (Try(I16, [Err]), List(U8))
+        \\        decode_i16 = |_fmt, src| (Ok(-1000i16), src)
+        \\    }
+        \\    fmt : MyFormat
+        \\    fmt = {}
+        \\    (result, _rest) = I16.decode([], fmt)
+        \\    match result {
+        \\        Ok(n) => n.to_i64()
+        \\        Err(_) => 0i64
+        \\    }
+        \\}
+    , -1000, .no_trace);
+}
+
+// TODO: Test with multiple decode methods in same format has issues
+// test "decode: chained format with different types" { ... }
+
 test "issue 8783: List.fold with match on tag union elements from pattern match" {
     // Regression test: List.fold with a callback that matches on elements extracted from pattern matching
     // would fail with TypeMismatch in match_branches continuation.
@@ -1814,27 +2104,264 @@ test "static dispatch: List.sum uses item.plus and item.default" {
     , 15, .no_trace);
 }
 
-// TODO: Enable this test once cross-module type variable dispatch is fixed.
-// The issue is that the flex_type_context mapping needs to properly connect
-// the parameter's type variable to the type alias's type variable.
-// test "encode: Str.encode with local format type" {
-//     // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
-//     // where Fmt is a local type defined in the test.
-//     // This exercises the flex_type_context propagation in type_var_dispatch_invoke.
-//     try runExpectListI64(
-//         \\{
-//         \\    # Define a local format type that converts strings to UTF-8
-//         \\    Utf8Format := {}.{
-//         \\        encode_str : Utf8Format, Str -> List(U8)
-//         \\        encode_str = |_fmt, s| Str.to_utf8(s)
-//         \\    }
-//         \\
-//         \\    fmt : Utf8Format
-//         \\    fmt = {}
-//         \\
-//         \\    # The result is List(U8) but we cast it to List(I64) for the test helper
-//         \\    bytes = Str.encode("hi", fmt)
-//         \\    List.map(bytes, |b| U8.to_i64(b))
-//         \\}
-//     , &[_]i64{ 104, 105 }, .no_trace);
-// }
+test "issue 8814: List.get with numeric literal on function parameter - regression" {
+    // Regression test for GitHub issue #8814: interpreter crash when calling
+    // list.get(0) on a list passed as a function parameter.
+    //
+    // The bug occurred because when collecting arguments for a static dispatch
+    // method call, the expected type for the numeric literal 0 wasn't being
+    // set from the method's signature (U64). This caused the interpreter to
+    // fail when trying to evaluate the numeric literal without a concrete type.
+    //
+    // The fix: extract expected parameter types from the method's function
+    // signature and use them when evaluating arguments. This allows numeric
+    // literals to correctly infer their concrete types (like U64 for List.get).
+    try runExpectStr(
+        \\{
+        \\    process = |args| {
+        \\        match args.get(0) {
+        \\            Ok(x) => x
+        \\            Err(_) => "error"
+        \\        }
+        \\    }
+        \\    process(["hello", "world"])
+        \\}
+    , "hello", .no_trace);
+}
+
+test "encode: Str.encode with local format type" {
+    // Test cross-module dispatch: Str.encode (in Builtin) calls Fmt.encode_str
+    // where Fmt is a local type defined in the test.
+    try runExpectListI64(
+        \\{
+        \\    Utf8Format := {}.{
+        \\        encode_str : Utf8Format, Str -> List(U8)
+        \\        encode_str = |_fmt, s| Str.to_utf8(s)
+        \\    }
+        \\    fmt = Utf8Format
+        \\    bytes = Str.encode("hi", fmt)
+        \\    List.map(bytes, |b| U8.to_i64(b))
+        \\}
+    , &[_]i64{ 104, 105 }, .no_trace);
+}
+
+test "issue 8831: self-referential value definition should produce error, not crash" {
+    // Regression test for GitHub issue #8831
+    // A self-referential value definition like `a = a` should produce a
+    // compile-time error (ident_not_in_scope) instead of crashing at runtime
+    // with "e_lookup_local: definition not found in current scope".
+    //
+    // The fix is to detect during canonicalization that the RHS of a definition
+    // refers to a variable that is being defined in the current definition and
+    // hasn't been introduced to the scope yet.
+    try runExpectError(
+        \\{
+        \\    a = a
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "issue 8831: nested self-reference in list should also error" {
+    // Additional test for issue #8831
+    // Even nested self-references like `a = [a]` should error during canonicalization.
+    // In Roc, shadowing is not allowed, so `a = [a]` cannot reference an outer `a`.
+    // Only lambdas are allowed to self-reference (for recursive function calls).
+    try runExpectError(
+        \\{
+        \\    a = [a]
+        \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "recursive function with record - stack memory restoration (issue #8813)" {
+    // Test that recursive closure calls don't leak stack memory.
+    // If stack memory is not properly restored after closure returns,
+    // deeply recursive functions will exhaust the interpreter's stack.
+    // The record allocation forces stack allocation on each call.
+    try runExpectI64(
+        \\{
+        \\    f = |n|
+        \\        if n <= 0
+        \\            0
+        \\        else
+        \\            { a: n, b: n * 2, c: n * 3, d: n * 4 }.a + f(n - 1)
+        \\    f(1000)
+        \\}
+    , 500500, .no_trace);
+}
+
+test "issue 8872: polymorphic tag union payload layout in match expressions" {
+    // Regression test for GitHub issue #8872: when using a polymorphic function
+    // that transforms Err(a) to Err(b) via a lambda, the Str payload was being
+    // corrupted because the layout was computed from a flex var (defaulting to
+    // Dec = 16 bytes) instead of the actual Str type (24 bytes).
+    //
+    // The bug manifested when:
+    // 1. A polymorphic function takes a lambda that returns type `b`
+    // 2. The function wraps the lambda result in Err(b)
+    // 3. The match expression extracts the Err payload
+    // 4. The extracted value is corrupted due to wrong layout
+    try runExpectStr(
+        \\{
+        \\    transform_err : [Ok({}), Err(a)], (a -> b) -> [Ok({}), Err(b)]
+        \\    transform_err = |try_val, transform| match try_val {
+        \\        Err(a) => Err(transform(a))
+        \\        Ok(ok) => Ok(ok)
+        \\    }
+        \\
+        \\    err : [Ok({}), Err(I32)]
+        \\    err = Err(42i32)
+        \\
+        \\    result = transform_err(err, |_e| "hello")
+        \\    match result {
+        \\        Ok(_) => "got ok"
+        \\        Err(msg) => msg
+        \\    }
+        \\}
+    , "hello", .no_trace);
+}
+
+test "issue 8899: closure decref index out of bounds in for loop" {
+    // Regression test for GitHub issue #8899: panic "index out of bounds: index 131, len 73"
+    // when running roc test on code with closures and for loops.
+    // The bug was in decrefLayoutPtr which read captures_layout_idx from raw memory
+    // instead of using the layout parameter.
+    //
+    // The original code was a compress function that removes consecutive duplicates.
+    // The issue manifested when closures were created inside the for loop (match branches)
+    // and List operations like List.last and List.append were used.
+    try runExpectI64(
+        \\{
+        \\    sum_with_last = |l| {
+        \\        var $total = 0i64
+        \\        var $acc = [0i64]
+        \\        for e in l {
+        \\            $acc = List.append($acc, e)
+        \\            $total = match List.last($acc) { Ok(last) => $total + last, Err(_) => $total }
+        \\        }
+        \\        $total
+        \\    }
+        \\    sum_with_last([10i64, 20i64, 30i64])
+        \\}
+    , 60, .no_trace);
+}
+
+test "issue 8892: nominal type wrapping tag union with match expression" {
+    // Regression test for GitHub issue #8892: when evaluating a tag expression
+    // inside a function where the expected type is a nominal type wrapping a tag union,
+    // the interpreter would crash with "e_tag: unexpected layout type: box".
+    //
+    // The bug was in e_tag evaluation: it was using getRuntimeLayout(rt_var) where
+    // rt_var was the nominal type (which has a box layout), instead of using the
+    // unwrapped backing type's layout (which is the actual tag union layout).
+    //
+    // The fix: use getRuntimeLayout(resolved.var_) to get the backing type's layout.
+    try runExpectSuccess(
+        \\{
+        \\    parse_value = || {
+        \\        combination_method = match ModuloToken {
+        \\            ModuloToken => Modulo
+        \\        }
+        \\        combination_method
+        \\    }
+        \\    parse_value()
+        \\}
+    , .no_trace);
+}
+
+test "issue 8927: early return in method argument leaks memory" {
+    // Regression test for GitHub issue #8927: memory leak when using ? operator
+    // inside a for loop that accumulates to a mutable variable via method call.
+    //
+    // When ? triggers early return during method argument evaluation (like
+    // list.append(x?)), the receiver value and method function on the value
+    // stack were not being decreffed, causing a memory leak.
+    //
+    // The fix adds cleanup handlers for dot_access_resolve, dot_access_collect_args,
+    // and type_var_dispatch_collect_args in the early_return section.
+    //
+    // This test uses test_allocator which detects memory leaks.
+    try runExpectI64(
+        \\{
+        \\    fold_try = |tries| {
+        \\        var $ok_list = [""]
+        \\        $ok_list = []
+        \\        for a_try in tries {
+        \\            $ok_list = $ok_list.append(a_try?)
+        \\        }
+        \\        Ok($ok_list)
+        \\    }
+        \\
+        \\    tries = [Ok("a"), Ok("b"), Err(Oops), Ok("d")]
+        \\
+        \\    match fold_try(tries) {
+        \\        Ok(list) => List.len(list)
+        \\        Err(_) => 0
+        \\    }
+        \\}
+    , 0, .no_trace);
+}
+
+test "issue 8946: closure capturing for-loop element with == comparison" {
+    // Regression test for GitHub issue #8946: NotNumeric crash when closures
+    // capture for-loop elements and use them in == comparisons.
+    //
+    // The bug was in layout computation for flex/rigid type variables inside
+    // list containers: when the variable had is_eq constraint (from ==) but
+    // not from_numeral constraint, it was getting opaquePtr() layout instead
+    // of a numeric layout (Dec).
+    //
+    // The fix ensures flex/rigid vars with any constraints default to Dec layout.
+    try runExpectI64(
+        \\{
+        \\    my_any = |lst, pred| {
+        \\        for e in lst {
+        \\            if pred(e) { return True }
+        \\        }
+        \\        False
+        \\    }
+        \\    check = |list| {
+        \\        var $built = []
+        \\        for item in list {
+        \\            _x = my_any($built, |x| x == item)
+        \\            $built = $built.append(item)
+        \\        }
+        \\        $built.len()
+        \\    }
+        \\    check([1, 2])
+        \\}
+    , 2, .no_trace);
+}
+
+test "issue 8978: incref alignment with recursive tag unions in tuples" {
+    // Regression test for GitHub issue #8978: incref alignment check failed
+    // when a recursive tag union using pointer tagging was stored in a tuple.
+    //
+    // Recursive tag unions (types that contain themselves, like linked lists
+    // or expression trees) use pointer tagging to store the tag discriminant
+    // in the low bits of the pointer. When incref is called on such a pointer,
+    // it needs to strip the tag bits before accessing the refcount at ptr - 8.
+    //
+    // The bug was that increfDataPtrC had an alignment check that would fail
+    // on tagged pointers because they aren't aligned to @alignOf(usize).
+    //
+    // The fix: remove the alignment check since the tag bits are stripped
+    // before accessing the refcount anyway.
+    //
+    // This test uses a recursive tag pattern (Element containing children
+    // that can also be Element) inside a tuple, which triggers the incref
+    // alignment issue when the tuple is returned from a function.
+    try runExpectI64(
+        \\{
+        \\    make_result = || {
+        \\        elem = Element("div", [Text("hello"), Element("span", [Text("world")])])
+        \\        children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\        (children, 42i64)
+        \\    }
+        \\    (_, n) = make_result()
+        \\    n
+        \\}
+    , 42, .no_trace);
+}

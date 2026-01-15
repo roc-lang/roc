@@ -228,10 +228,12 @@ pub const Store = struct {
 
     /// Create a new variable with the provided desc
     /// Used in tests
+    /// TODO: Can we remove this function? It hardcodes rank, which is fine for
+    /// test but we can never use this in actual typechecking
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
         defer trace.end();
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost, .mark = Mark.none });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -641,6 +643,17 @@ pub const Store = struct {
         std.debug.assert(nominal.vars.nonempty.count > 0);
         const slice = self.vars.sliceRange(nominal.vars.nonempty);
         return slice[1..];
+    }
+
+    /// Get the arg vars range for this nominal type.
+    /// Returns a range (start index + count) which can be stored safely.
+    /// Unlike sliceNominalArgs, this returns indices that remain valid even if
+    /// the underlying storage is reallocated.
+    pub fn getNominalArgsRange(nominal: NominalType) VarSafeList.Range {
+        std.debug.assert(nominal.vars.nonempty.count > 0);
+        var span = nominal.vars.nonempty;
+        span.dropFirstElem();
+        return span;
     }
 
     /// Get the an iterator arg vars for this nominal type
@@ -1568,7 +1581,7 @@ test "DescStore.Serialized roundtrip" {
     };
     const desc2 = Descriptor{
         .content = Content{ .structure = .empty_record },
-        .rank = Rank.top_level,
+        .rank = Rank.outermost,
         .mark = Mark.visited,
     };
 

@@ -97,7 +97,8 @@ fn parseCheckAndEvalModule(src: []const u8) !struct {
     try checker.checkFile();
 
     const problems = try gpa.create(check.problem.Store);
-    problems.* = .{};
+    errdefer gpa.destroy(problems);
+    problems.* = try check.problem.Store.init(gpa);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     const evaluator = try ComptimeEvaluator.init(gpa, module_env, imported_envs, problems, builtin_types, builtin_module.env, &checker.import_mapping);
@@ -3088,4 +3089,21 @@ test "issue 8765: Box.unbox with record containing numeric literal" {
     const result = try evalModuleAndGetString(src, 2, test_allocator);
     defer test_allocator.free(result);
     try testing.expectEqualStrings("1", result);
+}
+
+// Issue #8555: method call syntax `list.first()` showed garbage decimal values
+// when extracting U8 from Ok result. The fix: use call site return type
+// instead of method's internal return type.
+test "issue 8555: method call syntax list.first() with match on Result" {
+    const src =
+        \\list : List(U8)
+        \\list = [8u8, 7u8]
+        \\val = match list.first() {
+        \\    Err(_) => 0u8
+        \\    Ok(first) => first
+        \\}
+    ;
+
+    const val = try evalModuleAndGetInt(src, 1);
+    try testing.expectEqual(@as(i128, 8), val);
 }

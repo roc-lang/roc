@@ -159,12 +159,6 @@ pub const ComptimeEvaluator = struct {
     expect: CrashContext, // Reuse CrashContext for expect failures
     roc_ops: ?RocOps,
     problems: *ProblemStore,
-    /// Track crash messages we've allocated so we can free them
-    crash_messages: std.array_list.Managed([]const u8),
-    /// Track expect failure messages we've allocated so we can free them
-    expect_messages: std.array_list.Managed([]const u8),
-    /// Track error names we've allocated so we can free them
-    error_names: std.array_list.Managed([]const u8),
     /// Track expressions that failed numeric literal validation (to skip evaluation)
     failed_literal_exprs: std.AutoHashMap(CIR.Expr.Idx, void),
     /// Flag to indicate if evaluation has been halted due to a crash
@@ -185,7 +179,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -195,9 +189,6 @@ pub const ComptimeEvaluator = struct {
             .expect = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
-            .crash_messages = std.array_list.Managed([]const u8).init(allocator),
-            .expect_messages = std.array_list.Managed([]const u8).init(allocator),
-            .error_names = std.array_list.Managed([]const u8).init(allocator),
             .failed_literal_exprs = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
             .halted = false,
             .current_expr_region = null,
@@ -207,23 +198,6 @@ pub const ComptimeEvaluator = struct {
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
-        // Free all crash messages we allocated
-        for (self.crash_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
-        self.crash_messages.deinit();
-
-        // Free all expect failure messages we allocated
-        for (self.expect_messages.items) |msg| {
-            self.allocator.free(msg);
-        }
-        self.expect_messages.deinit();
-
-        // Free all error names we allocated
-        for (self.error_names.items) |name| {
-            self.allocator.free(name);
-        }
-        self.error_names.deinit();
         self.failed_literal_exprs.deinit();
 
         // Free all Roc runtime allocations at once
@@ -660,10 +634,11 @@ pub const ComptimeEvaluator = struct {
         const tag_union_layout = stack_value.layout.data.tag_union;
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
-        // Read the discriminant
+        // Read the discriminant using dynamic offset calculation
         const base_ptr = stack_value.ptr orelse return;
+        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
         const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+        const tag_index: usize = disc_ptr[disc_offset];
 
         // Get the runtime type variable from the StackValue
         const rt_var = stack_value.rt_var;
@@ -1090,8 +1065,9 @@ pub const ComptimeEvaluator = struct {
         const tag_union_data = self.interpreter.runtime_layout_store.getTagUnionData(tag_union_layout.idx);
 
         const base_ptr = stack_value.ptr orelse return error.NotImplemented;
+        const disc_offset = self.interpreter.runtime_layout_store.getTagUnionDiscriminantOffset(tag_union_layout.idx);
         const disc_ptr: [*]const u8 = @ptrCast(base_ptr);
-        const tag_index: usize = disc_ptr[tag_union_data.discriminant_offset];
+        const tag_index: usize = disc_ptr[disc_offset];
 
         const rt_var = stack_value.rt_var;
 
@@ -1241,12 +1217,10 @@ pub const ComptimeEvaluator = struct {
         region: base.Region,
         problem_type: enum { crash, expect_failed, error_eval },
     ) !void {
-        // Allocate and track the message
-        const owned_message = try self.allocator.dupe(u8, message);
-
+        // Put error str into problems store
+        const owned_message = try self.problems.putExtraString(message);
         switch (problem_type) {
             .crash => {
-                try self.crash_messages.append(owned_message);
                 const problem = Problem{
                     .comptime_crash = .{
                         .message = owned_message,
@@ -1256,7 +1230,6 @@ pub const ComptimeEvaluator = struct {
                 _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .expect_failed => {
-                try self.expect_messages.append(owned_message);
                 const problem = Problem{
                     .comptime_expect_failed = .{
                         .message = owned_message,
@@ -1266,7 +1239,6 @@ pub const ComptimeEvaluator = struct {
                 _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .error_eval => {
-                try self.error_names.append(owned_message);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = owned_message,
@@ -1323,12 +1295,9 @@ pub const ComptimeEvaluator = struct {
                     else => {
                         // Non-nominal types (e.g., records, tuples, functions) don't have from_numeral
                         // This is a type error - numeric literal can't be used as this type
-                        const error_msg = try std.fmt.allocPrint(
-                            self.allocator,
+                        const error_msg = try self.problems.putExtraString(
                             "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
-                            .{},
                         );
-                        try self.error_names.append(error_msg);
                         const problem = Problem{
                             .comptime_eval_error = .{
                                 .error_name = error_msg,
@@ -1336,6 +1305,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
                     },
                 },
@@ -1344,12 +1315,9 @@ pub const ComptimeEvaluator = struct {
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
                     // If rigid/alias, it doesn't support from_numeral
                     if (content != .flex) {
-                        const error_msg = try std.fmt.allocPrint(
-                            self.allocator,
+                        const error_msg = try self.problems.putExtraString(
                             "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
-                            .{},
                         );
-                        try self.error_names.append(error_msg);
                         const problem = Problem{
                             .comptime_eval_error = .{
                                 .error_name = error_msg,
@@ -1357,6 +1325,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                     }
                     continue;
                 },
@@ -1398,12 +1368,10 @@ pub const ComptimeEvaluator = struct {
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "Type {s} does not have a from_numeral method",
                     .{short_type_name},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1423,12 +1391,10 @@ pub const ComptimeEvaluator = struct {
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "Type {s} does not have an accessible from_numeral method",
                     .{short_type_name},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1655,12 +1621,10 @@ pub const ComptimeEvaluator = struct {
 
         // Evaluate the from_numeral function to get a closure
         const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "Failed to evaluate from_numeral function: {s}",
                 .{@errorName(err)},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1674,12 +1638,10 @@ pub const ComptimeEvaluator = struct {
 
         // Check if func_value is a closure
         if (func_value.layout.tag != .closure) {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "from_numeral is not a function",
                 .{},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1695,12 +1657,10 @@ pub const ComptimeEvaluator = struct {
         // Get the parameters
         const params = origin_env.store.slicePatterns(closure_header.params);
         if (params.len != 1) {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "from_numeral has wrong number of parameters (expected 1, got {d})",
                 .{params.len},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1751,12 +1711,10 @@ pub const ComptimeEvaluator = struct {
             result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 // Include crash message if available for better debugging
                 const crash_msg = self.crash.crashMessage() orelse "no crash message";
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "from_numeral builtin failed: {s} ({s})",
                     .{ @errorName(err), crash_msg },
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1782,12 +1740,10 @@ pub const ComptimeEvaluator = struct {
 
             // Call the function body
             result = self.interpreter.eval(closure_header.body_idx, roc_ops) catch |err| {
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "from_numeral evaluation failed: {s}",
                     .{@errorName(err)},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1911,10 +1867,9 @@ pub const ComptimeEvaluator = struct {
         // (happens when payload area is too small for RocStr)
         if (self.interpreter.last_error_message) |msg| {
             // Copy the message to our allocator
-            const error_msg = try self.allocator.dupe(u8, msg);
+            const error_msg = try self.problems.putExtraString(msg);
             // Free the original message from the interpreter's allocator
             self.interpreter.allocator.free(msg);
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1934,12 +1889,10 @@ pub const ComptimeEvaluator = struct {
                 // "Err" < "Ok" alphabetically, so Err = 0, Ok = 1
                 if (tag_value == 0) {
                     // Err with no payload - generic error
-                    const error_msg = try std.fmt.allocPrint(
-                        self.allocator,
+                    const error_msg = try self.problems.putFmtExtraString(
                         "Numeric literal validation failed",
                         .{},
                     );
-                    try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
@@ -1964,8 +1917,7 @@ pub const ComptimeEvaluator = struct {
                 const tag_value = tag_field.asI128();
                 if (tag_value == 0) {
                     // This is an Err - try to extract InvalidNumeral(Str) message
-                    const error_msg = try self.extractInvalidNumeralMessage(accessor, region);
-                    try self.error_names.append(error_msg);
+                    const error_msg = try self.problems.putExtraString(try self.extractInvalidNumeralMessage(accessor, region));
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
@@ -1997,12 +1949,10 @@ pub const ComptimeEvaluator = struct {
                 if (tag_value == 0) {
                     // This is an Err - the detailed message should have been in last_error_message
                     // If we get here, something went wrong but we know it's an error
-                    const error_msg = try std.fmt.allocPrint(
-                        self.allocator,
+                    const error_msg = try self.problems.putFmtExtraString(
                         "Numeric literal validation failed",
                         .{},
                     );
-                    try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
