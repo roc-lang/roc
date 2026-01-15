@@ -3595,3 +3595,64 @@ test "check type - polymorphic function with concrete usage" {
     ;
     try checkTypesModule(source, .{ .pass = .last_def }, "I64");
 }
+
+// Try/Result type tests
+
+test "check type - Ok constructor" {
+    // Ok constructor creates a Try type
+    const source =
+        \\result : Try(I64, Str)
+        \\result = Ok(42)
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(I64, Str)");
+}
+
+test "check type - Err constructor" {
+    // Err constructor creates a Try type
+    const source =
+        \\result : Try(I64, Str)
+        \\result = Err("oops")
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Try(I64, Str)");
+}
+
+// Record update syntax tests
+
+test "check type - record with extra field error" {
+    // Record with more fields than expected
+    const source =
+        \\x : { name: Str }
+        \\x = { name: "Alice", extra: 42 }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+test "check type - record with missing field error" {
+    // Record with fewer fields than expected
+    const source =
+        \\x : { name: Str, age: I64 }
+        \\x = { name: "Alice" }
+    ;
+    try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
+}
+
+// Effectful function tests
+
+test "check type - effectful function annotation" {
+    // Effectful function type
+    const source =
+        \\f : I64 => Str
+        \\f = |_x| "result"
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 => Str");
+}
+
+test "check type - pure function assigned to effectful" {
+    // Pure function assigned to effectful annotation
+    const source =
+        \\f : I64 => Str
+        \\f = |_x| "pure"
+    ;
+    // Pure functions CAN be assigned to effectful annotations (it's safe)
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64 => Str");
+}
