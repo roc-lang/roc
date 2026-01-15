@@ -831,3 +831,321 @@ test "condition invert" {
     try std.testing.expectEqual(Condition.greater_or_equal, Condition.less.invert());
     try std.testing.expectEqual(Condition.less, Condition.greater_or_equal.invert());
 }
+
+// ============================================================================
+// Comprehensive Instruction Encoding Tests
+// Ported from the Rust dev backend test suite to verify byte-level correctness
+// ============================================================================
+
+const ALL_GENERAL_REGS = [_]GeneralReg{
+    .RAX, .RCX, .RDX, .RBX, .RSP, .RBP, .RSI, .RDI,
+    .R8,  .R9,  .R10, .R11, .R12, .R13, .R14, .R15,
+};
+
+const SAFE_GENERAL_REGS = [_]GeneralReg{
+    .RAX, .RCX, .RDX, .RBX, .RSI, .RDI,
+    .R8,  .R9,  .R10, .R11, .R12, .R13, .R14, .R15,
+};
+
+const ALL_FLOAT_REGS = [_]FloatReg{
+    .XMM0,  .XMM1,  .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
+    .XMM8,  .XMM9,  .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
+};
+
+test "mov reg64, reg64 - all register combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (ALL_GENERAL_REGS) |dst| {
+        for (ALL_GENERAL_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.movRegReg(.w64, dst, src);
+            try std.testing.expect(emit.buf.items.len >= 2);
+        }
+    }
+}
+
+test "add reg64, reg64 - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (SAFE_GENERAL_REGS) |dst| {
+        for (SAFE_GENERAL_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.addRegReg(.w64, dst, src);
+            const opcode_idx: usize = if (emit.buf.items[0] >= 0x40 and emit.buf.items[0] <= 0x4F) 1 else 0;
+            try std.testing.expectEqual(@as(u8, 0x01), emit.buf.items[opcode_idx]);
+        }
+    }
+}
+
+test "sub reg64, reg64 - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (SAFE_GENERAL_REGS) |dst| {
+        for (SAFE_GENERAL_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.subRegReg(.w64, dst, src);
+            const opcode_idx: usize = if (emit.buf.items[0] >= 0x40 and emit.buf.items[0] <= 0x4F) 1 else 0;
+            try std.testing.expectEqual(@as(u8, 0x29), emit.buf.items[opcode_idx]);
+        }
+    }
+}
+
+test "imul reg64, reg64 - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (SAFE_GENERAL_REGS) |dst| {
+        for (SAFE_GENERAL_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.imulRegReg(.w64, dst, src);
+            var found_0f = false;
+            for (emit.buf.items, 0..) |byte, i| {
+                if (byte == 0x0F and i + 1 < emit.buf.items.len) {
+                    try std.testing.expectEqual(@as(u8, 0xAF), emit.buf.items[i + 1]);
+                    found_0f = true;
+                    break;
+                }
+            }
+            try std.testing.expect(found_0f);
+        }
+    }
+}
+
+test "cmp reg64, reg64 - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (SAFE_GENERAL_REGS) |a| {
+        for (SAFE_GENERAL_REGS) |b| {
+            emit.buf.clearRetainingCapacity();
+            try emit.cmpRegReg(.w64, a, b);
+            const opcode_idx: usize = if (emit.buf.items[0] >= 0x40 and emit.buf.items[0] <= 0x4F) 1 else 0;
+            try std.testing.expectEqual(@as(u8, 0x39), emit.buf.items[opcode_idx]);
+        }
+    }
+}
+
+test "movabs reg64, imm64 - all registers" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    const test_imm: i64 = 0x123456789ABCDEF0;
+    for (ALL_GENERAL_REGS) |reg| {
+        emit.buf.clearRetainingCapacity();
+        try emit.movRegImm64(reg, test_imm);
+        try std.testing.expectEqual(@as(usize, 10), emit.buf.items.len);
+    }
+}
+
+test "push/pop - all registers" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (ALL_GENERAL_REGS) |reg| {
+        emit.buf.clearRetainingCapacity();
+        try emit.pushReg(reg);
+        if (reg.requiresRex()) {
+            try std.testing.expect(emit.buf.items.len == 2);
+        } else {
+            try std.testing.expect(emit.buf.items.len == 1);
+        }
+    }
+
+    for (ALL_GENERAL_REGS) |reg| {
+        emit.buf.clearRetainingCapacity();
+        try emit.popReg(reg);
+        if (reg.requiresRex()) {
+            try std.testing.expect(emit.buf.items.len == 2);
+        } else {
+            try std.testing.expect(emit.buf.items.len == 1);
+        }
+    }
+}
+
+test "jcc rel8 - all conditions" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    const conditions = [_]Condition{
+        .overflow,         .not_overflow,     .below,            .above_or_equal,
+        .equal,            .not_equal,        .below_or_equal,   .above,
+        .sign,             .not_sign,         .parity_even,      .parity_odd,
+        .less,             .greater_or_equal, .less_or_equal,    .greater,
+    };
+
+    for (conditions, 0..) |cond, i| {
+        emit.buf.clearRetainingCapacity();
+        try emit.jccRel8(cond, 0x10);
+        try std.testing.expectEqual(@as(u8, 0x70 + @as(u8, @intCast(i))), emit.buf.items[0]);
+        try std.testing.expectEqual(@as(u8, 0x10), emit.buf.items[1]);
+    }
+}
+
+test "jcc rel32 - all conditions" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    const conditions = [_]Condition{
+        .overflow,         .not_overflow,     .below,            .above_or_equal,
+        .equal,            .not_equal,        .below_or_equal,   .above,
+        .sign,             .not_sign,         .parity_even,      .parity_odd,
+        .less,             .greater_or_equal, .less_or_equal,    .greater,
+    };
+
+    for (conditions, 0..) |cond, i| {
+        emit.buf.clearRetainingCapacity();
+        try emit.jccRel32(cond, 0x12345678);
+        try std.testing.expectEqual(@as(u8, 0x0F), emit.buf.items[0]);
+        try std.testing.expectEqual(@as(u8, 0x80 + @as(u8, @intCast(i))), emit.buf.items[1]);
+    }
+}
+
+test "movsd xmm, xmm - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (ALL_FLOAT_REGS) |dst| {
+        for (ALL_FLOAT_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.movsdRegReg(dst, src);
+            try std.testing.expectEqual(@as(u8, 0xF2), emit.buf.items[0]);
+        }
+    }
+}
+
+test "addsd xmm, xmm - all combinations" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    for (ALL_FLOAT_REGS) |dst| {
+        for (ALL_FLOAT_REGS) |src| {
+            emit.buf.clearRetainingCapacity();
+            try emit.addsdRegReg(dst, src);
+            try std.testing.expectEqual(@as(u8, 0xF2), emit.buf.items[0]);
+        }
+    }
+}
+
+test "subsd/mulsd/divsd xmm, xmm encoding" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.subsdRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x0F, 0x5C, 0xC1 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.mulsdRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x0F, 0x59, 0xC1 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.divsdRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x0F, 0x5E, 0xC1 }, emit.buf.items);
+}
+
+test "bitwise ops - and/or/xor" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.andRegReg(.w64, .RAX, .RBX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x21, 0xD8 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.orRegReg(.w64, .RAX, .RBX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x09, 0xD8 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.xorRegReg(.w64, .RAX, .RBX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0x31, 0xD8 }, emit.buf.items);
+}
+
+test "shift ops - shl/shr/sar" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.shlRegImm8(.w64, .RAX, 1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xD1, 0xE0 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.shlRegImm8(.w64, .RAX, 4);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xC1, 0xE0, 0x04 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.shrRegImm8(.w64, .RAX, 4);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xC1, 0xE8, 0x04 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.sarRegImm8(.w64, .RAX, 4);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xC1, 0xF8, 0x04 }, emit.buf.items);
+}
+
+test "neg and not" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.negReg(.w64, .RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xF7, 0xD8 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.notReg(.w64, .RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x48, 0xF7, 0xD0 }, emit.buf.items);
+}
+
+test "xor zeroing idiom" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.xorRegReg(.w32, .RAX, .RAX);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x31, 0xC0 }, emit.buf.items);
+}
+
+test "extended registers require REX" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    const extended_regs = [_]GeneralReg{ .R8, .R9, .R10, .R11, .R12, .R13, .R14, .R15 };
+    for (extended_regs) |reg| {
+        emit.buf.clearRetainingCapacity();
+        try emit.movRegReg(.w64, reg, .RAX);
+        try std.testing.expect(emit.buf.items[0] >= 0x40 and emit.buf.items[0] <= 0x4F);
+    }
+}
+
+test "float conversion ops" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.cvtss2sdRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF3, 0x0F, 0x5A, 0xC1 }, emit.buf.items);
+
+    emit.buf.clearRetainingCapacity();
+    try emit.cvtsd2ssRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0xF2, 0x0F, 0x5A, 0xC1 }, emit.buf.items);
+}
+
+test "ucomisd comparison" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.ucomisdRegReg(.XMM0, .XMM1);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x2E, 0xC1 }, emit.buf.items);
+}
+
+test "xorpd zeroing" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.xorpdRegReg(.XMM0, .XMM0);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x66, 0x0F, 0x57, 0xC0 }, emit.buf.items);
+}
+
+test "function prologue sequence" {
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    try emit.pushReg(.RBP);
+    try emit.movRegReg(.w64, .RBP, .RSP);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x55, 0x48, 0x89, 0xE5 }, emit.buf.items);
+}

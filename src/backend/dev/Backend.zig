@@ -91,8 +91,13 @@ pub fn generateObjectFile(
 
                 // Add relocations for this symbol
                 for (relocations) |rel| {
-                    if (rel.symbol_name != null and std.mem.eql(u8, rel.symbol_name.?, sym.name)) {
-                        try elf.addTextRelocation(rel.offset, sym_idx, rel.addend);
+                    const rel_name = switch (rel) {
+                        .linked_function => |f| f.name,
+                        .linked_data => |d| d.name,
+                        else => continue,
+                    };
+                    if (std.mem.eql(u8, rel_name, sym.name)) {
+                        try elf.addTextRelocation(rel.getOffset(), sym_idx, 0);
                     }
                 }
             }
@@ -119,8 +124,13 @@ pub fn generateObjectFile(
 
                 // Add relocations for this symbol
                 for (relocations) |rel| {
-                    if (rel.symbol_name != null and std.mem.eql(u8, rel.symbol_name.?, sym.name)) {
-                        try macho.addTextRelocation(@intCast(rel.offset), sym_idx, sym.is_external);
+                    const rel_name = switch (rel) {
+                        .linked_function => |f| f.name,
+                        .linked_data => |d| d.name,
+                        else => continue,
+                    };
+                    if (std.mem.eql(u8, rel_name, sym.name)) {
+                        try macho.addTextRelocation(@intCast(rel.getOffset()), sym_idx, sym.is_external);
                     }
                 }
             }
@@ -128,8 +138,38 @@ pub fn generateObjectFile(
             try macho.write(output);
         },
         .windows => {
-            // COFF support not yet implemented
-            return error.UnsupportedPlatform;
+            var coff_writer = try object.CoffWriter.init(allocator, switch (arch) {
+                .x86_64 => .x86_64,
+                .aarch64 => .aarch64,
+            });
+            defer coff_writer.deinit();
+
+            try coff_writer.setCode(code);
+
+            // Add symbols
+            for (symbols) |sym| {
+                const sym_idx = try coff_writer.addSymbol(.{
+                    .name = sym.name,
+                    .section = if (sym.is_external) .undef else .text,
+                    .offset = @intCast(sym.offset),
+                    .is_global = sym.is_global,
+                    .is_function = sym.is_function,
+                });
+
+                // Add relocations for this symbol
+                for (relocations) |rel| {
+                    const rel_name = switch (rel) {
+                        .linked_function => |f| f.name,
+                        .linked_data => |d| d.name,
+                        else => continue,
+                    };
+                    if (std.mem.eql(u8, rel_name, sym.name)) {
+                        try coff_writer.addTextRelocation(@intCast(rel.getOffset()), sym_idx);
+                    }
+                }
+            }
+
+            try coff_writer.write(output);
         },
     }
 }
@@ -247,4 +287,74 @@ test "generate aarch64 linux object" {
 
     // Verify ELF magic
     try std.testing.expectEqualSlices(u8, "\x7fELF", output.items[0..4]);
+}
+
+test "generate x86_64 windows object" {
+    const allocator = std.testing.allocator;
+
+    // Simple x86_64 code: ret
+    const code = &[_]u8{0xC3};
+
+    const symbols = &[_]Symbol{
+        .{
+            .name = "test_func",
+            .offset = 0,
+            .size = 1,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+        },
+    };
+
+    var output: std.ArrayList(u8) = .{};
+    defer output.deinit(allocator);
+
+    try generateObjectFile(
+        allocator,
+        .x86_64,
+        .windows,
+        code,
+        symbols,
+        &.{},
+        &output,
+    );
+
+    // Verify COFF machine type (x86_64 = 0x8664)
+    const machine = std.mem.readInt(u16, output.items[0..2], .little);
+    try std.testing.expectEqual(@as(u16, 0x8664), machine);
+}
+
+test "generate aarch64 windows object" {
+    const allocator = std.testing.allocator;
+
+    // Simple aarch64 code: ret
+    const code = &[_]u8{ 0xC0, 0x03, 0x5F, 0xD6 };
+
+    const symbols = &[_]Symbol{
+        .{
+            .name = "test_func",
+            .offset = 0,
+            .size = 4,
+            .is_global = true,
+            .is_function = true,
+            .is_external = false,
+        },
+    };
+
+    var output: std.ArrayList(u8) = .{};
+    defer output.deinit(allocator);
+
+    try generateObjectFile(
+        allocator,
+        .aarch64,
+        .windows,
+        code,
+        symbols,
+        &.{},
+        &output,
+    );
+
+    // Verify COFF machine type (ARM64 = 0xAA64)
+    const machine = std.mem.readInt(u16, output.items[0..2], .little);
+    try std.testing.expectEqual(@as(u16, 0xAA64), machine);
 }

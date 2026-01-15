@@ -17,6 +17,8 @@ pub const object = @import("object/mod.zig");
 pub const Relocation = @import("Relocation.zig").Relocation;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
+pub const jit = @import("jit.zig");
+pub const JitCode = jit.JitCode;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
@@ -43,12 +45,12 @@ pub fn DevBackend(
         storage: Storage(GeneralReg, FloatReg),
 
         /// Layout store for type information
-        layout_store: *layout.store.Store,
+        layout_store: *layout.Store,
 
         pub fn init(
             allocator: std.mem.Allocator,
             target: base.target.Target,
-            layout_store: *layout.store.Store,
+            layout_store: *layout.Store,
         ) !Self {
             return Self{
                 .allocator = allocator,
@@ -127,7 +129,7 @@ pub fn Storage(
         pub fn init(allocator: std.mem.Allocator) Self {
             return Self{
                 .allocator = allocator,
-                .symbol_storage = .{},
+                .symbol_storage = std.AutoHashMap(u32, Location).init(allocator),
                 .general_free = .{},
                 .float_free = .{},
                 .stack_size = 0,
@@ -135,7 +137,7 @@ pub fn Storage(
         }
 
         pub fn deinit(self: *Self) void {
-            self.symbol_storage.deinit(self.allocator);
+            self.symbol_storage.deinit();
             self.general_free.deinit(self.allocator);
             self.float_free.deinit(self.allocator);
         }
@@ -152,7 +154,7 @@ pub fn Storage(
         pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
             const reg = self.general_free.popOrNull() orelse
                 @panic("No free general registers - spilling not implemented");
-            try self.symbol_storage.put(self.allocator, symbol, .{ .general_reg = reg });
+            try self.symbol_storage.put(symbol, .{ .general_reg = reg });
             return reg;
         }
 
@@ -161,7 +163,7 @@ pub fn Storage(
         pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
             const reg = self.float_free.popOrNull() orelse
                 @panic("No free float registers - spilling not implemented");
-            try self.symbol_storage.put(self.allocator, symbol, .{ .float_reg = reg });
+            try self.symbol_storage.put(symbol, .{ .float_reg = reg });
             return reg;
         }
 

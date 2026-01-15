@@ -21,6 +21,20 @@ pub const SystemVCodeGen = struct {
     const Self = @This();
     const CC = SystemV;
 
+    /// Number of general-purpose registers
+    const NUM_GENERAL_REGS = 16;
+    /// Number of float registers
+    const NUM_FLOAT_REGS = 16;
+
+    /// Bitmask of callee-saved general registers available for allocation
+    /// RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
+    const CALLEE_SAVED_GENERAL_MASK: u32 =
+        (1 << @intFromEnum(GeneralReg.RBX)) |
+        (1 << @intFromEnum(GeneralReg.R12)) |
+        (1 << @intFromEnum(GeneralReg.R13)) |
+        (1 << @intFromEnum(GeneralReg.R14)) |
+        (1 << @intFromEnum(GeneralReg.R15));
+
     emit: Emit,
     allocator: Allocator,
     stack_offset: i32,
@@ -30,23 +44,33 @@ pub const SystemVCodeGen = struct {
     free_float: u32,
     callee_saved_used: u16, // Bitmask of callee-saved regs we used
 
+    /// Remaining callee-saved registers available (used after caller-saved exhausted)
+    callee_saved_available: u32,
+
+    /// Reverse mapping: register index -> local that owns it (null if free)
+    general_owners: [NUM_GENERAL_REGS]?u32,
+    float_owners: [NUM_FLOAT_REGS]?u32,
+
     pub fn init(allocator: Allocator) Self {
         return Self{
             .emit = Emit.init(allocator),
             .allocator = allocator,
             .stack_offset = 0,
             .relocations = .{},
-            .locals = .{},
+            .locals = std.AutoHashMap(u32, GenericCodeGen.ValueLoc).init(allocator),
             .free_general = CC.CALLER_SAVED_GENERAL_MASK,
             .free_float = CC.CALLER_SAVED_FLOAT_MASK,
             .callee_saved_used = 0,
+            .callee_saved_available = CALLEE_SAVED_GENERAL_MASK,
+            .general_owners = [_]?u32{null} ** NUM_GENERAL_REGS,
+            .float_owners = [_]?u32{null} ** NUM_FLOAT_REGS,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.emit.deinit();
         self.relocations.deinit(self.allocator);
-        self.locals.deinit(self.allocator);
+        self.locals.deinit();
     }
 
     pub fn reset(self: *Self) void {
@@ -57,6 +81,9 @@ pub const SystemVCodeGen = struct {
         self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
         self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
         self.callee_saved_used = 0;
+        self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
+        self.general_owners = [_]?u32{null} ** NUM_GENERAL_REGS;
+        self.float_owners = [_]?u32{null} ** NUM_FLOAT_REGS;
     }
 
     /// Get the generated code
@@ -69,17 +96,130 @@ pub const SystemVCodeGen = struct {
         return self.emit.buf.items.len;
     }
 
-    // Register allocation
+    // Register allocation with spilling support
 
+    /// Allocate a general-purpose register for a local variable.
+    /// This will try caller-saved registers first, then callee-saved,
+    /// and finally spill an existing register if all are in use.
+    pub fn allocGeneralFor(self: *Self, local: u32) !GeneralReg {
+        // 1. Try caller-saved registers first (preferred - no save/restore needed)
+        if (self.allocFromGeneralMask(&self.free_general)) |reg| {
+            self.general_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // 2. Try callee-saved registers (will need save/restore in prologue/epilogue)
+        if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
+            self.callee_saved_used |= @as(u16, 1) << @intCast(@intFromEnum(reg));
+            self.general_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // 3. All registers in use - must spill one
+        return self.spillAndAllocGeneral(local);
+    }
+
+    /// Allocate a general-purpose register without associating it with a local.
+    /// Returns null if no registers available. Use allocGeneralFor for spill support.
     pub fn allocGeneral(self: *Self) ?GeneralReg {
-        if (self.free_general == 0) return null;
-        const bit: u5 = @intCast(@ctz(self.free_general));
-        self.free_general &= ~(@as(u32, 1) << bit);
+        // Try caller-saved first
+        if (self.allocFromGeneralMask(&self.free_general)) |reg| {
+            return reg;
+        }
+        // Try callee-saved
+        if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
+            self.callee_saved_used |= @as(u16, 1) << @intCast(@intFromEnum(reg));
+            return reg;
+        }
+        return null;
+    }
+
+    fn allocFromGeneralMask(_: *Self, mask: *u32) ?GeneralReg {
+        if (mask.* == 0) return null;
+        const bit: u5 = @intCast(@ctz(mask.*));
+        mask.* &= ~(@as(u32, 1) << bit);
         return @enumFromInt(bit);
     }
 
+    /// Free a general-purpose register, making it available for allocation.
     pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-        self.free_general |= @as(u32, 1) << @intFromEnum(reg);
+        const idx = @intFromEnum(reg);
+        // Clear ownership
+        self.general_owners[idx] = null;
+        // Return to appropriate pool
+        if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
+            self.callee_saved_available |= @as(u32, 1) << idx;
+        } else {
+            self.free_general |= @as(u32, 1) << idx;
+        }
+    }
+
+    /// Spill a register to make room and allocate it for the given local.
+    fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
+        // Find a register to spill - prefer lowest-numbered for consistency
+        // Skip RSP and RBP as they're special
+        var victim: ?GeneralReg = null;
+        for (0..NUM_GENERAL_REGS) |i| {
+            const reg: GeneralReg = @enumFromInt(i);
+            // Skip stack/frame pointers
+            if (reg == .RSP or reg == .RBP) continue;
+            // Skip registers we don't own (they're free)
+            if (self.general_owners[i] != null) {
+                victim = reg;
+                break;
+            }
+        }
+
+        const reg = victim orelse return error.NoRegisterToSpill;
+        const owner = self.general_owners[@intFromEnum(reg)].?;
+
+        // Allocate stack slot for the spilled value
+        const slot = self.allocStack(8);
+
+        // Emit store instruction
+        try self.emitStoreStack(.w64, slot, reg);
+
+        // Update the owner's location to stack
+        try self.locals.put( owner, .{ .stack = slot });
+
+        // Clear old ownership, set new ownership
+        self.general_owners[@intFromEnum(reg)] = local;
+
+        return reg;
+    }
+
+    /// Reload a spilled value back into a register.
+    /// Returns the register it was loaded into.
+    pub fn reloadLocal(self: *Self, local: u32) !GeneralReg {
+        // Check if it's already in a register
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .general_reg => |r| return @enumFromInt(r),
+                .stack => |slot| {
+                    // Allocate a register (might cause another spill)
+                    const reg = try self.allocGeneralFor(local);
+                    // Load from stack
+                    try self.emitLoadStack(.w64, reg, slot);
+                    // Update location
+                    try self.locals.put( local, .{ .general_reg = @intFromEnum(reg) });
+                    return reg;
+                },
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Allocate a floating-point register for a local variable.
+    pub fn allocFloatFor(self: *Self, local: u32) !FloatReg {
+        // Float registers: try caller-saved first (all XMM are caller-saved in System V)
+        if (self.allocFromFloatMask(&self.free_float)) |reg| {
+            self.float_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // All registers in use - must spill one
+        return self.spillAndAllocFloat(local);
     }
 
     pub fn allocFloat(self: *Self) ?FloatReg {
@@ -89,8 +229,86 @@ pub const SystemVCodeGen = struct {
         return @enumFromInt(bit);
     }
 
+    fn allocFromFloatMask(_: *Self, mask: *u32) ?FloatReg {
+        if (mask.* == 0) return null;
+        const bit: u5 = @intCast(@ctz(mask.*));
+        mask.* &= ~(@as(u32, 1) << bit);
+        return @enumFromInt(bit);
+    }
+
     pub fn freeFloat(self: *Self, reg: FloatReg) void {
-        self.free_float |= @as(u32, 1) << @intFromEnum(reg);
+        const idx = @intFromEnum(reg);
+        self.float_owners[idx] = null;
+        self.free_float |= @as(u32, 1) << idx;
+    }
+
+    fn spillAndAllocFloat(self: *Self, local: u32) !FloatReg {
+        // Find a float register to spill
+        var victim: ?FloatReg = null;
+        for (0..NUM_FLOAT_REGS) |i| {
+            if (self.float_owners[i] != null) {
+                victim = @enumFromInt(i);
+                break;
+            }
+        }
+
+        const reg = victim orelse return error.NoRegisterToSpill;
+        const owner = self.float_owners[@intFromEnum(reg)].?;
+
+        // Allocate stack slot (8 bytes for f64)
+        const slot = self.allocStack(8);
+
+        // Emit store instruction
+        try self.emitStoreStackF64(slot, reg);
+
+        // Update the owner's location to stack
+        try self.locals.put( owner, .{ .stack = slot });
+
+        // Update ownership
+        self.float_owners[@intFromEnum(reg)] = local;
+
+        return reg;
+    }
+
+    /// Reload a spilled float value back into a register.
+    pub fn reloadFloatLocal(self: *Self, local: u32) !FloatReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .float_reg => |r| return @enumFromInt(r),
+                .stack => |slot| {
+                    const reg = try self.allocFloatFor(local);
+                    try self.emitLoadStackF64(reg, slot);
+                    try self.locals.put( local, .{ .float_reg = @intFromEnum(reg) });
+                    return reg;
+                },
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Get the register holding a local, reloading if necessary.
+    pub fn getLocalReg(self: *Self, local: u32) !GeneralReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .general_reg => |r| return @enumFromInt(r),
+                .stack => return self.reloadLocal(local),
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Get the float register holding a local, reloading if necessary.
+    pub fn getLocalFloatReg(self: *Self, local: u32) !FloatReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .float_reg => |r| return @enumFromInt(r),
+                .stack => return self.reloadFloatLocal(local),
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
     }
 
     // Stack management
@@ -108,16 +326,38 @@ pub const SystemVCodeGen = struct {
 
     // Function prologue/epilogue
 
+    /// Callee-saved registers in the order they should be saved/restored
+    const CALLEE_SAVED_ORDER = [_]GeneralReg{ .RBX, .R12, .R13, .R14, .R15 };
+
     /// Emit function prologue (called at start of function)
+    /// Note: Call this AFTER register allocation is complete to know which
+    /// callee-saved registers need to be preserved.
     pub fn emitPrologue(self: *Self) !void {
         // push rbp
         try self.emit.pushReg(.RBP);
         // mov rbp, rsp
         try self.emit.movRegReg(.w64, .RBP, .RSP);
+
+        // Push any callee-saved registers we used
+        for (CALLEE_SAVED_ORDER) |reg| {
+            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(reg)))) != 0) {
+                try self.emit.pushReg(reg);
+            }
+        }
     }
 
     /// Emit function epilogue and return
     pub fn emitEpilogue(self: *Self) !void {
+        // Pop callee-saved registers in reverse order
+        var i: usize = CALLEE_SAVED_ORDER.len;
+        while (i > 0) {
+            i -= 1;
+            const reg = CALLEE_SAVED_ORDER[i];
+            if ((self.callee_saved_used & (@as(u16, 1) << @intCast(@intFromEnum(reg)))) != 0) {
+                try self.emit.popReg(reg);
+            }
+        }
+
         // mov rsp, rbp (restore stack pointer)
         try self.emit.movRegReg(.w64, .RSP, .RBP);
         // pop rbp
@@ -291,12 +531,13 @@ test "prologue and epilogue" {
     try cg.emitEpilogue();
 
     const code = cg.getCode();
-    // push rbp: 55
-    // mov rbp, rsp: 48 89 E5
-    // mov rsp, rbp: 48 89 EC
-    // pop rbp: 5D
-    // ret: C3
-    try std.testing.expectEqual(@as(usize, 10), code.len);
+    // push rbp: 55 (1 byte)
+    // mov rbp, rsp: 48 89 E5 (3 bytes)
+    // mov rsp, rbp: 48 89 EC (3 bytes)
+    // pop rbp: 5D (1 byte)
+    // ret: C3 (1 byte)
+    // Total: 9 bytes
+    try std.testing.expectEqual(@as(usize, 9), code.len);
     try std.testing.expectEqual(@as(u8, 0x55), code[0]); // push rbp
     try std.testing.expectEqual(@as(u8, 0xC3), code[code.len - 1]); // ret
 }
@@ -331,4 +572,156 @@ test "float operations" {
     try cg.emitDivF64(.XMM9, .XMM10, .XMM11);
 
     try std.testing.expect(cg.getCode().len > 0);
+}
+
+test "allocate caller-saved registers first" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Allocate several registers for locals
+    const reg1 = try cg.allocGeneralFor(0);
+    const reg2 = try cg.allocGeneralFor(1);
+    const reg3 = try cg.allocGeneralFor(2);
+
+    // All should be caller-saved (callee_saved_used should be 0)
+    try std.testing.expectEqual(@as(u16, 0), cg.callee_saved_used);
+
+    // Registers should be different
+    try std.testing.expect(reg1 != reg2);
+    try std.testing.expect(reg2 != reg3);
+    try std.testing.expect(reg1 != reg3);
+}
+
+test "use callee-saved registers when caller-saved exhausted" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Allocate all caller-saved registers (9 in System V: RAX, RCX, RDX, RSI, RDI, R8-R11)
+    var regs: [9]GeneralReg = undefined;
+    for (0..9) |i| {
+        regs[i] = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // callee_saved_used should still be 0 (all were caller-saved)
+    try std.testing.expectEqual(@as(u16, 0), cg.callee_saved_used);
+
+    // Next allocation should use a callee-saved register
+    const callee_reg = try cg.allocGeneralFor(9);
+
+    // Now callee_saved_used should have a bit set
+    try std.testing.expect(cg.callee_saved_used != 0);
+
+    // The register should be one of the callee-saved ones
+    try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
+}
+
+test "spill register when all exhausted" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Allocate all available registers (9 caller-saved + 5 callee-saved = 14)
+    // Note: RSP and RBP are not available
+    var regs: [14]GeneralReg = undefined;
+    for (0..14) |i| {
+        regs[i] = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // At this point all registers should be allocated
+    // The next allocation should trigger a spill
+    const initial_code_len = cg.getCode().len;
+    const spilled_reg = try cg.allocGeneralFor(14);
+
+    // Code should have been emitted (the spill store)
+    try std.testing.expect(cg.getCode().len > initial_code_len);
+
+    // The first local (0) should now be on the stack
+    const loc0 = cg.locals.get(0);
+    try std.testing.expect(loc0 != null);
+    try std.testing.expect(loc0.?.stack < 0); // Stack offsets are negative
+
+    // spilled_reg should be valid
+    try std.testing.expect(spilled_reg != .RSP);
+    try std.testing.expect(spilled_reg != .RBP);
+}
+
+test "reload spilled value" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Allocate all registers
+    for (0..14) |i| {
+        _ = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // Allocate one more to cause a spill
+    _ = try cg.allocGeneralFor(14);
+
+    // Local 0 should be on the stack now
+    const loc0 = cg.locals.get(0);
+    try std.testing.expect(loc0 != null);
+    try std.testing.expect(loc0.? == .stack);
+
+    // Free some registers to make room
+    cg.freeGeneral(.RAX);
+    cg.freeGeneral(.RCX);
+
+    // Record code position before reload
+    const code_before = cg.getCode().len;
+
+    // Reload local 0
+    const reloaded_reg = try cg.reloadLocal(0);
+
+    // Code should have been emitted (the reload load)
+    try std.testing.expect(cg.getCode().len > code_before);
+
+    // Local 0 should now be in a register again
+    const loc0_after = cg.locals.get(0);
+    try std.testing.expect(loc0_after != null);
+    try std.testing.expectEqual(GenericCodeGen.ValueLoc{ .general_reg = @intFromEnum(reloaded_reg) }, loc0_after.?);
+}
+
+test "prologue saves callee-saved registers" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Use some callee-saved registers by exhausting caller-saved first
+    for (0..11) |i| {
+        _ = try cg.allocGeneralFor(@intCast(i));
+    }
+
+    // Now emit prologue - it should include pushes for callee-saved regs
+    try cg.emitPrologue();
+
+    const code = cg.getCode();
+    // Should be longer than basic prologue (push rbp + mov rbp, rsp = 4 bytes)
+    try std.testing.expect(code.len > 4);
+
+    // First byte should still be push rbp (0x55)
+    try std.testing.expectEqual(@as(u8, 0x55), code[0]);
+}
+
+test "free register returns it to correct pool" {
+    var cg = SystemVCodeGen.init(std.testing.allocator);
+    defer cg.deinit();
+
+    // Allocate a caller-saved register
+    const caller_reg = try cg.allocGeneralFor(0);
+    try std.testing.expect(!SystemV.isCalleeSaved(caller_reg));
+
+    // Exhaust caller-saved to get a callee-saved one
+    for (1..10) |i| {
+        _ = try cg.allocGeneralFor(@intCast(i));
+    }
+    const callee_reg = try cg.allocGeneralFor(10);
+    try std.testing.expect(SystemV.isCalleeSaved(callee_reg));
+
+    // Free both
+    cg.freeGeneral(caller_reg);
+    cg.freeGeneral(callee_reg);
+
+    // caller_reg should be back in free_general
+    try std.testing.expect((cg.free_general & (@as(u32, 1) << @intFromEnum(caller_reg))) != 0);
+
+    // callee_reg should be back in callee_saved_available
+    try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @intFromEnum(callee_reg))) != 0);
 }

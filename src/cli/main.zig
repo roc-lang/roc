@@ -4998,8 +4998,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     }
 }
 
-fn rocRepl(ctx: *CliContext, _: cli_args.ReplArgs) !void {
-    return cli_repl.run(ctx);
+fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
+    return cli_repl.run(ctx, repl_args.backend);
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

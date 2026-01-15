@@ -27,6 +27,8 @@ pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
 /// LLVM-based evaluator for optimized expression evaluation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
+/// Dev backend-based evaluator for native code generation
+pub const DevEvaluator = @import("dev_evaluator.zig").DevEvaluator;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -36,6 +38,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("dev_evaluator.zig"));
 
     std.testing.refAllDecls(@import("test/TestEnv.zig"));
     std.testing.refAllDecls(@import("test/eval_test.zig"));

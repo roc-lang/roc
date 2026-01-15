@@ -140,7 +140,7 @@ pub fn CodeGen(
                 .allocator = allocator,
                 .stack_offset = 0,
                 .stack_alignment = 16, // Most ABIs require 16-byte alignment
-                .relocations = std.ArrayList(Relocation).init(allocator),
+                .relocations = .{},
                 .locals = std.AutoHashMap(u32, ValueLoc).init(allocator),
                 .free_general = CC.CALLER_SAVED_GENERAL_MASK,
                 .free_float = CC.CALLER_SAVED_FLOAT_MASK,
@@ -150,7 +150,7 @@ pub fn CodeGen(
         /// Clean up resources
         pub fn deinit(self: *Self) void {
             self.emit.deinit();
-            self.relocations.deinit();
+            self.relocations.deinit(self.allocator);
             self.locals.deinit();
         }
 

@@ -21,6 +21,25 @@ pub const AArch64CodeGen = struct {
     const Self = @This();
     const CC = Call;
 
+    /// Number of general-purpose registers
+    const NUM_GENERAL_REGS = 32;
+    /// Number of float registers
+    const NUM_FLOAT_REGS = 32;
+
+    /// Bitmask of callee-saved general registers available for allocation
+    /// X19-X28 (not FP/X29 or LR/X30 - they're special)
+    const CALLEE_SAVED_GENERAL_MASK: u32 =
+        (1 << @intFromEnum(GeneralReg.X19)) |
+        (1 << @intFromEnum(GeneralReg.X20)) |
+        (1 << @intFromEnum(GeneralReg.X21)) |
+        (1 << @intFromEnum(GeneralReg.X22)) |
+        (1 << @intFromEnum(GeneralReg.X23)) |
+        (1 << @intFromEnum(GeneralReg.X24)) |
+        (1 << @intFromEnum(GeneralReg.X25)) |
+        (1 << @intFromEnum(GeneralReg.X26)) |
+        (1 << @intFromEnum(GeneralReg.X27)) |
+        (1 << @intFromEnum(GeneralReg.X28));
+
     emit: Emit,
     allocator: Allocator,
     stack_offset: i32,
@@ -30,23 +49,33 @@ pub const AArch64CodeGen = struct {
     free_float: u32,
     callee_saved_used: u32, // Bitmask of callee-saved regs we used
 
+    /// Remaining callee-saved registers available (used after caller-saved exhausted)
+    callee_saved_available: u32,
+
+    /// Reverse mapping: register index -> local that owns it (null if free)
+    general_owners: [NUM_GENERAL_REGS]?u32,
+    float_owners: [NUM_FLOAT_REGS]?u32,
+
     pub fn init(allocator: Allocator) Self {
         return Self{
             .emit = Emit.init(allocator),
             .allocator = allocator,
             .stack_offset = 0,
             .relocations = .{},
-            .locals = .{},
+            .locals = std.AutoHashMap(u32, GenericCodeGen.ValueLoc).init(allocator),
             .free_general = CC.CALLER_SAVED_GENERAL_MASK,
             .free_float = CC.CALLER_SAVED_FLOAT_MASK,
             .callee_saved_used = 0,
+            .callee_saved_available = CALLEE_SAVED_GENERAL_MASK,
+            .general_owners = [_]?u32{null} ** NUM_GENERAL_REGS,
+            .float_owners = [_]?u32{null} ** NUM_FLOAT_REGS,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.emit.deinit();
         self.relocations.deinit(self.allocator);
-        self.locals.deinit(self.allocator);
+        self.locals.deinit();
     }
 
     pub fn reset(self: *Self) void {
@@ -57,6 +86,9 @@ pub const AArch64CodeGen = struct {
         self.free_general = CC.CALLER_SAVED_GENERAL_MASK;
         self.free_float = CC.CALLER_SAVED_FLOAT_MASK;
         self.callee_saved_used = 0;
+        self.callee_saved_available = CALLEE_SAVED_GENERAL_MASK;
+        self.general_owners = [_]?u32{null} ** NUM_GENERAL_REGS;
+        self.float_owners = [_]?u32{null} ** NUM_FLOAT_REGS;
     }
 
     /// Get the generated code
@@ -69,17 +101,130 @@ pub const AArch64CodeGen = struct {
         return self.emit.buf.items.len;
     }
 
-    // Register allocation
+    // Register allocation with spilling support
 
+    /// Allocate a general-purpose register for a local variable.
+    /// This will try caller-saved registers first, then callee-saved,
+    /// and finally spill an existing register if all are in use.
+    pub fn allocGeneralFor(self: *Self, local: u32) !GeneralReg {
+        // 1. Try caller-saved registers first (preferred - no save/restore needed)
+        if (self.allocFromGeneralMask(&self.free_general)) |reg| {
+            self.general_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // 2. Try callee-saved registers (will need save/restore in prologue/epilogue)
+        if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
+            self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
+            self.general_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // 3. All registers in use - must spill one
+        return self.spillAndAllocGeneral(local);
+    }
+
+    /// Allocate a general-purpose register without associating it with a local.
+    /// Returns null if no registers available. Use allocGeneralFor for spill support.
     pub fn allocGeneral(self: *Self) ?GeneralReg {
-        if (self.free_general == 0) return null;
-        const bit: u5 = @intCast(@ctz(self.free_general));
-        self.free_general &= ~(@as(u32, 1) << bit);
+        // Try caller-saved first
+        if (self.allocFromGeneralMask(&self.free_general)) |reg| {
+            return reg;
+        }
+        // Try callee-saved
+        if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
+            self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
+            return reg;
+        }
+        return null;
+    }
+
+    fn allocFromGeneralMask(_: *Self, mask: *u32) ?GeneralReg {
+        if (mask.* == 0) return null;
+        const bit: u5 = @intCast(@ctz(mask.*));
+        mask.* &= ~(@as(u32, 1) << bit);
         return @enumFromInt(bit);
     }
 
+    /// Free a general-purpose register, making it available for allocation.
     pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-        self.free_general |= @as(u32, 1) << @intFromEnum(reg);
+        const idx = @intFromEnum(reg);
+        // Clear ownership
+        self.general_owners[idx] = null;
+        // Return to appropriate pool
+        if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
+            self.callee_saved_available |= @as(u32, 1) << idx;
+        } else {
+            self.free_general |= @as(u32, 1) << idx;
+        }
+    }
+
+    /// Spill a register to make room and allocate it for the given local.
+    fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
+        // Find a register to spill - prefer lowest-numbered for consistency
+        // Skip special registers (FP, LR, SP/ZR)
+        var victim: ?GeneralReg = null;
+        for (0..NUM_GENERAL_REGS) |i| {
+            const reg: GeneralReg = @enumFromInt(i);
+            // Skip special registers
+            if (reg == .FP or reg == .LR or reg == .ZRSP or reg == .PR) continue;
+            // Skip registers we don't own (they're free)
+            if (self.general_owners[i] != null) {
+                victim = reg;
+                break;
+            }
+        }
+
+        const reg = victim orelse return error.NoRegisterToSpill;
+        const owner = self.general_owners[@intFromEnum(reg)].?;
+
+        // Allocate stack slot for the spilled value
+        const slot = self.allocStack(8);
+
+        // Emit store instruction
+        try self.emitStoreStack(.w64, slot, reg);
+
+        // Update the owner's location to stack
+        try self.locals.put( owner, .{ .stack = slot });
+
+        // Clear old ownership, set new ownership
+        self.general_owners[@intFromEnum(reg)] = local;
+
+        return reg;
+    }
+
+    /// Reload a spilled value back into a register.
+    /// Returns the register it was loaded into.
+    pub fn reloadLocal(self: *Self, local: u32) !GeneralReg {
+        // Check if it's already in a register
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .general_reg => |r| return @enumFromInt(r),
+                .stack => |slot| {
+                    // Allocate a register (might cause another spill)
+                    const reg = try self.allocGeneralFor(local);
+                    // Load from stack
+                    try self.emitLoadStack(.w64, reg, slot);
+                    // Update location
+                    try self.locals.put( local, .{ .general_reg = @intFromEnum(reg) });
+                    return reg;
+                },
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Allocate a floating-point register for a local variable.
+    pub fn allocFloatFor(self: *Self, local: u32) !FloatReg {
+        // Float registers: try caller-saved first
+        if (self.allocFromFloatMask(&self.free_float)) |reg| {
+            self.float_owners[@intFromEnum(reg)] = local;
+            return reg;
+        }
+
+        // All registers in use - must spill one
+        return self.spillAndAllocFloat(local);
     }
 
     pub fn allocFloat(self: *Self) ?FloatReg {
@@ -89,8 +234,86 @@ pub const AArch64CodeGen = struct {
         return @enumFromInt(bit);
     }
 
+    fn allocFromFloatMask(_: *Self, mask: *u32) ?FloatReg {
+        if (mask.* == 0) return null;
+        const bit: u5 = @intCast(@ctz(mask.*));
+        mask.* &= ~(@as(u32, 1) << bit);
+        return @enumFromInt(bit);
+    }
+
     pub fn freeFloat(self: *Self, reg: FloatReg) void {
-        self.free_float |= @as(u32, 1) << @intFromEnum(reg);
+        const idx = @intFromEnum(reg);
+        self.float_owners[idx] = null;
+        self.free_float |= @as(u32, 1) << idx;
+    }
+
+    fn spillAndAllocFloat(self: *Self, local: u32) !FloatReg {
+        // Find a float register to spill
+        var victim: ?FloatReg = null;
+        for (0..NUM_FLOAT_REGS) |i| {
+            if (self.float_owners[i] != null) {
+                victim = @enumFromInt(i);
+                break;
+            }
+        }
+
+        const reg = victim orelse return error.NoRegisterToSpill;
+        const owner = self.float_owners[@intFromEnum(reg)].?;
+
+        // Allocate stack slot (8 bytes for f64)
+        const slot = self.allocStack(8);
+
+        // Emit store instruction
+        try self.emitStoreStackF64(slot, reg);
+
+        // Update the owner's location to stack
+        try self.locals.put( owner, .{ .stack = slot });
+
+        // Update ownership
+        self.float_owners[@intFromEnum(reg)] = local;
+
+        return reg;
+    }
+
+    /// Reload a spilled float value back into a register.
+    pub fn reloadFloatLocal(self: *Self, local: u32) !FloatReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .float_reg => |r| return @enumFromInt(r),
+                .stack => |slot| {
+                    const reg = try self.allocFloatFor(local);
+                    try self.emitLoadStackF64(reg, slot);
+                    try self.locals.put( local, .{ .float_reg = @intFromEnum(reg) });
+                    return reg;
+                },
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Get the register holding a local, reloading if necessary.
+    pub fn getLocalReg(self: *Self, local: u32) !GeneralReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .general_reg => |r| return @enumFromInt(r),
+                .stack => return self.reloadLocal(local),
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
+    }
+
+    /// Get the float register holding a local, reloading if necessary.
+    pub fn getLocalFloatReg(self: *Self, local: u32) !FloatReg {
+        if (self.locals.get(local)) |loc| {
+            switch (loc) {
+                .float_reg => |r| return @enumFromInt(r),
+                .stack => return self.reloadFloatLocal(local),
+                else => return error.InvalidLocalLocation,
+            }
+        }
+        return error.LocalNotFound;
     }
 
     // Stack management
@@ -108,17 +331,52 @@ pub const AArch64CodeGen = struct {
 
     // Function prologue/epilogue
 
+    /// Callee-saved registers in pairs for saving/restoring
+    /// aarch64 saves registers in pairs for efficiency
+    const CALLEE_SAVED_PAIRS = [_][2]GeneralReg{
+        .{ .X19, .X20 },
+        .{ .X21, .X22 },
+        .{ .X23, .X24 },
+        .{ .X25, .X26 },
+        .{ .X27, .X28 },
+    };
+
+    /// Check if any register in a pair is used
+    fn isPairUsed(self: *Self, pair: [2]GeneralReg) bool {
+        const mask1 = @as(u32, 1) << @intFromEnum(pair[0]);
+        const mask2 = @as(u32, 1) << @intFromEnum(pair[1]);
+        return (self.callee_saved_used & (mask1 | mask2)) != 0;
+    }
+
     /// Emit function prologue (called at start of function)
+    /// Note: Call this AFTER register allocation is complete to know which
+    /// callee-saved registers need to be preserved.
     pub fn emitPrologue(self: *Self) !void {
         // stp x29, x30, [sp, #-16]! (pre-index: push FP and LR)
         try self.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
         // mov x29, sp (set frame pointer)
         try self.emit.movRegReg(.w64, .FP, .ZRSP);
+
+        // Save any callee-saved register pairs we used
+        for (CALLEE_SAVED_PAIRS) |pair| {
+            if (self.isPairUsed(pair)) {
+                try self.emit.stpPreIndex(.w64, pair[0], pair[1], .ZRSP, -2);
+            }
+        }
     }
 
     /// Emit function epilogue and return
     pub fn emitEpilogue(self: *Self) !void {
-        // mov sp, x29 (restore stack pointer) - not needed if we use ldp post-index
+        // Restore callee-saved register pairs in reverse order
+        var i: usize = CALLEE_SAVED_PAIRS.len;
+        while (i > 0) {
+            i -= 1;
+            const pair = CALLEE_SAVED_PAIRS[i];
+            if (self.isPairUsed(pair)) {
+                try self.emit.ldpPostIndex(.w64, pair[0], pair[1], .ZRSP, 2);
+            }
+        }
+
         // ldp x29, x30, [sp], #16 (post-index: pop FP and LR)
         try self.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
         // ret

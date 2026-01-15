@@ -3,6 +3,7 @@
 //! This module provides writers for different object file formats:
 //! - ELF: Linux and other Unix-like systems
 //! - Mach-O: macOS and iOS
+//! - COFF: Windows
 //!
 //! Each writer takes generated machine code and relocations and produces
 //! a relocatable object file that can be linked with other objects.
@@ -11,9 +12,11 @@ const std = @import("std");
 
 pub const elf = @import("elf.zig");
 pub const macho = @import("macho.zig");
+pub const coff = @import("coff.zig");
 
 pub const ElfWriter = elf.ElfWriter;
 pub const MachOWriter = macho.MachOWriter;
+pub const CoffWriter = coff.CoffWriter;
 
 /// Target object format based on operating system
 pub const ObjectFormat = enum {

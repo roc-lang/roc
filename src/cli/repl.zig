@@ -10,6 +10,8 @@ const Repl = repl_mod.Repl;
 
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
+const cli_args = @import("cli_args.zig");
+const Backend = cli_args.Backend;
 
 /// An implementation of RocOps for the CLI REPL.
 const ReplOps = struct {
@@ -160,11 +162,21 @@ const ReplOps = struct {
 };
 
 /// Run the interactive REPL
-pub fn run(ctx: *CliContext) !void {
+pub fn run(ctx: *CliContext, backend: Backend) !void {
     const stdout = ctx.io.stdout();
 
     // Print welcome banner
     stdout.print("Roc REPL\n", .{}) catch {};
+
+    // Show backend info
+    switch (backend) {
+        .interpreter => {},
+        .dev => {
+            stdout.print("Using dev backend (native code generation) - EXPERIMENTAL\n", .{}) catch {};
+            stdout.print("Note: Dev backend is not yet fully implemented. Falling back to interpreter.\n", .{}) catch {};
+        },
+    }
+
     stdout.print("Type :help for help, :exit to quit\n\n", .{}) catch {};
 
     // Initialize ReplOps and REPL
