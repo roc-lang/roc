@@ -207,6 +207,7 @@ pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
     output_layout: LayoutIdx,
+    is_list: bool,
 ) Error![]const u8 {
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
@@ -407,6 +408,27 @@ pub fn compileAndExecute(
     // This makes the ABI simple and platform-independent on all targets.
     //
     // Function signature: void roc_eval(<type>* out_ptr)
+
+    // Handle list output specially
+    if (is_list) {
+        // RocList is a 24-byte struct on 64-bit platforms
+        // { bytes: *u8, length: usize, capacity: usize }
+        const RocListBytes = [24]u8;
+        const EvalFn = *const fn (*RocListBytes) callconv(.c) void;
+        const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+        var result: RocListBytes = undefined;
+        eval_fn(&result);
+
+        // Read the length (second 8 bytes in the struct)
+        const length = std.mem.readInt(u64, result[8..16], .little);
+        if (length == 0) {
+            return allocator.dupe(u8, "[]") catch return error.OutOfMemory;
+        } else {
+            // Non-empty list - not yet supported
+            return allocator.dupe(u8, "[<list elements>]") catch return error.OutOfMemory;
+        }
+    }
+
     switch (output_layout) {
         // Signed integers that fit in i64
         .i8, .i16, .i32, .i64 => {

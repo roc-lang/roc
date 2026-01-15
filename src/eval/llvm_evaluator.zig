@@ -149,6 +149,7 @@ pub const LlvmEvaluator = struct {
     pub const BitcodeResult = struct {
         bitcode: []const u32,
         output_layout: layout.Idx,
+        is_list: bool,
         allocator: Allocator,
 
         pub fn deinit(self: *BitcodeResult) void {
@@ -171,10 +172,14 @@ pub const LlvmEvaluator = struct {
         }) catch return error.OutOfMemory;
         defer builder.deinit();
 
+        // Check for list expressions - they need special handling
+        const top_expr = module_env.store.getExpr(expr_idx);
+        const is_list_expr = (top_expr == .e_empty_list or top_expr == .e_list);
+
         // Determine the output layout for JIT execution
         // We need to look at the original expression to get signedness,
         // since LLVM types don't distinguish signed from unsigned
-        const output_layout: layout.Idx = self.getExprOutputLayout(module_env, expr_idx);
+        const output_layout: layout.Idx = if (is_list_expr) .i64 else self.getExprOutputLayout(module_env, expr_idx);
 
         // Determine the value type based on output layout
         const value_type: LlvmBuilder.Type = switch (output_layout) {
@@ -231,8 +236,11 @@ pub const LlvmEvaluator = struct {
         // Get the output pointer
         const out_ptr = wip.arg(0);
 
-        // Special handling for string output - write RocStr struct directly
-        if (output_layout == .str) {
+        // Special handling for list output - write RocList struct directly
+        if (is_list_expr) {
+            try ctx.emitListToPtr(top_expr, out_ptr);
+        } else if (output_layout == .str) {
+            // Special handling for string output - write RocStr struct directly
             const expr = module_env.store.getExpr(expr_idx);
             try ctx.emitStringToPtr(expr, out_ptr);
         } else {
@@ -292,6 +300,7 @@ pub const LlvmEvaluator = struct {
         return BitcodeResult{
             .bitcode = bitcode,
             .output_layout = output_layout,
+            .is_list = is_list_expr,
             .allocator = self.allocator,
         };
     }
@@ -853,6 +862,29 @@ pub const LlvmEvaluator = struct {
                 const idx_const = ctx.builder.intConst(.i64, @as(i128, @intCast(i))) catch return error.CompilationFailed;
                 const byte_ptr = ctx.wip.gep(.inbounds, i8_type, out_ptr, &.{idx_const.toValue()}, "") catch return error.CompilationFailed;
                 _ = ctx.wip.store(.normal, byte_const.toValue(), byte_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.CompilationFailed;
+            }
+        }
+
+        /// Emit a list to output pointer (writes RocList struct directly)
+        fn emitListToPtr(ctx: *ExprContext, expr: CIR.Expr, out_ptr: LlvmBuilder.Value) !void {
+            const ROC_LIST_SIZE = 24; // 3 * 8 bytes: pointer, length, capacity
+
+            switch (expr) {
+                .e_empty_list => {
+                    // Empty list: all zeros (null pointer, 0 length, 0 capacity)
+                    const i8_type = LlvmBuilder.Type.i8;
+                    const zero = ctx.builder.intConst(i8_type, 0) catch return error.CompilationFailed;
+                    for (0..ROC_LIST_SIZE) |i| {
+                        const idx_const = ctx.builder.intConst(.i64, @as(i128, @intCast(i))) catch return error.CompilationFailed;
+                        const byte_ptr = ctx.wip.gep(.inbounds, i8_type, out_ptr, &.{idx_const.toValue()}, "") catch return error.CompilationFailed;
+                        _ = ctx.wip.store(.normal, zero.toValue(), byte_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.CompilationFailed;
+                    }
+                },
+                .e_list => {
+                    // Non-empty list - not yet supported
+                    return error.UnsupportedType;
+                },
+                else => return error.UnsupportedType,
             }
         }
 

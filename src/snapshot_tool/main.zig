@@ -3572,6 +3572,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 output.gpa,
                 bitcode_result.bitcode,
                 bitcode_result.output_layout,
+                bitcode_result.is_list,
             ) catch |err| {
                 std.debug.print("LLVM compile/execute failed for input '{s}': {}\n", .{ input, err });
                 success = false;
