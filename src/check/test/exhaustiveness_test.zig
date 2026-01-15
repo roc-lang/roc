@@ -844,13 +844,14 @@ test "exhaustive - record patterns with different field subsets" {
 
 test "exhaustive - F32 literal patterns with wildcard" {
     // Matching on F32 with specific literals requires a wildcard for exhaustiveness
+    // Pattern literals infer their type from the matched value's type annotation
     const source =
         \\x : F32
-        \\x = 1.0f32
+        \\x = 1.0.F32
         \\
         \\result = match x {
-        \\    1.0f32 => "one"
-        \\    2.0f32 => "two"
+        \\    1.0 => "one"
+        \\    2.0 => "two"
         \\    _ => "other"
         \\}
     ;
@@ -864,11 +865,11 @@ test "non-exhaustive - F32 literal patterns without wildcard" {
     // F32 literals alone are not exhaustive
     const source =
         \\x : F32
-        \\x = 1.0f32
+        \\x = 1.0.F32
         \\
         \\result = match x {
-        \\    1.0f32 => "one"
-        \\    2.0f32 => "two"
+        \\    1.0 => "one"
+        \\    2.0 => "two"
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -881,11 +882,11 @@ test "exhaustive - F64 literal patterns with wildcard" {
     // Matching on F64 with specific literals requires a wildcard for exhaustiveness
     const source =
         \\x : F64
-        \\x = 3.14f64
+        \\x = 3.14.F64
         \\
         \\result = match x {
-        \\    0.0f64 => "zero"
-        \\    3.14f64 => "pi"
+        \\    0.0 => "zero"
+        \\    3.14 => "pi"
         \\    _ => "other"
         \\}
     ;
@@ -899,11 +900,11 @@ test "non-exhaustive - F64 literal patterns without wildcard" {
     // F64 literals alone are not exhaustive
     const source =
         \\x : F64
-        \\x = 3.14f64
+        \\x = 3.14.F64
         \\
         \\result = match x {
-        \\    0.0f64 => "zero"
-        \\    3.14f64 => "pi"
+        \\    0.0 => "zero"
+        \\    3.14 => "pi"
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -916,11 +917,11 @@ test "exhaustive - Dec literal patterns with wildcard" {
     // Matching on Dec with specific literals requires a wildcard for exhaustiveness
     const source =
         \\x : Dec
-        \\x = 1.0dec
+        \\x = 1.0.Dec
         \\
         \\result = match x {
-        \\    1.0dec => "one"
-        \\    2.0dec => "two"
+        \\    1.0 => "one"
+        \\    2.0 => "two"
         \\    _ => "other"
         \\}
     ;
@@ -934,11 +935,11 @@ test "non-exhaustive - Dec literal patterns without wildcard" {
     // Dec literals alone are not exhaustive
     const source =
         \\x : Dec
-        \\x = 1.0dec
+        \\x = 1.0.Dec
         \\
         \\result = match x {
-        \\    1.0dec => "one"
-        \\    2.0dec => "two"
+        \\    1.0 => "one"
+        \\    2.0 => "two"
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
@@ -951,11 +952,11 @@ test "redundant - duplicate F32 literal patterns" {
     // Same F32 literal matched twice is redundant
     const source =
         \\x : F32
-        \\x = 1.0f32
+        \\x = 1.0.F32
         \\
         \\result = match x {
-        \\    1.0f32 => "first"
-        \\    1.0f32 => "second"
+        \\    1.0 => "first"
+        \\    1.0 => "second"
         \\    _ => "other"
         \\}
     ;
@@ -969,11 +970,11 @@ test "redundant - duplicate Dec literal patterns" {
     // Same Dec literal matched twice is redundant
     const source =
         \\x : Dec
-        \\x = 1.0dec
+        \\x = 1.0.Dec
         \\
         \\result = match x {
-        \\    1.0dec => "first"
-        \\    1.0dec => "second"
+        \\    1.0 => "first"
+        \\    1.0 => "second"
         \\    _ => "other"
         \\}
     ;
