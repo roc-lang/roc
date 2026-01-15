@@ -52,8 +52,8 @@ test "Custom number type without from_numeral: integer literal does not unify" {
     var test_env = try TestEnv.init("MyType", source);
     defer test_env.deinit();
 
-    // Should fail - MyType doesn't have from_numeral
-    try test_env.assertOneTypeError("MISSING METHOD");
+    // Should fail - MyType doesn't have from_numeral, so number literal can't be used
+    try test_env.assertOneTypeError("TYPE MISMATCH");
 }
 
 test "Custom number type with negate: unary minus works" {

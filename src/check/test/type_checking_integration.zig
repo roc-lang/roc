@@ -22,8 +22,7 @@ test "check type - num - unbound" {
 test "check type - num - int suffix 1" {
     const source =
         \\{
-        \\  x : U8
-        \\  x = 10
+        \\  x = 10.U8
         \\
         \\  x
         \\}
@@ -34,8 +33,7 @@ test "check type - num - int suffix 1" {
 test "check type - num - int suffix 2" {
     const source =
         \\{
-        \\  x : I128
-        \\  x = 10
+        \\  x = 10.I128
         \\
         \\  x
         \\}
@@ -124,7 +122,8 @@ test "check type - number annotation mismatch with string" {
         \\x : Str
         \\x = 42
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - i64 annotation with fractional literal passes type checking" {
@@ -139,9 +138,9 @@ test "check type - i64 annotation with fractional literal passes type checking" 
 }
 
 test "check type - string plus number should fail" {
-    // Str + number: when we unify Str with numeric flex, the flex's from_numeral constraint
-    // gets applied to Str. Since Str doesn't have from_numeral, we get MISSING METHOD.
-    // The plus dispatch on Str also fails with MISSING METHOD.
+    // Str + number: the `+` operator desugars to calling the `.plus` method on the left operand.
+    // Since Str doesn't have a `plus` method, we get MISSING METHOD before even checking
+    // the from_numeral constraint on the number literal.
     const source =
         \\x = "hello" + 123
     ;
@@ -303,7 +302,8 @@ test "check type - list  - diff elems 1" {
     const source =
         \\["hello", 10]
     ;
-    try checkTypesExpr(source, .fail, "MISSING METHOD");
+    // Number literal used where Str is expected (first elem determines list type)
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // number requirements //
@@ -625,7 +625,8 @@ test "check type - def - func with annotation 2" {
     ;
     // The type annotation says _a is unconstrained, but the implementation returns
     // a numeric literal which requires from_numeral method. This is a type error.
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where unconstrained type is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - def - nested lambda" {
@@ -719,8 +720,6 @@ test "check type - def - polymorphic id 2" {
 }
 
 test "check type - def - out of order" {
-    // Currently errors out in czer
-
     const source =
         \\id_1 : x -> x
         \\id_1 = |x| id_2(x)
@@ -784,7 +783,174 @@ test "check type - polymorphic function function param should be constrained" {
         \\}
         \\result = use_twice(id)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 42 used where Str is expected (function type unified from both calls)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+// value restriction //
+
+test "check type - value restriction - out of order 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| {
+        \\  [x, y]
+        \\}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> List(U8)" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8, "x")
+        \\  _b = process(1.U8, Bool.False)
+        \\}
+        \\
+        \\process = |y, _z| {
+        \\  _blah = [x, y] # Force x and y to be the same type
+        \\  y
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8, _arg -> U8" },
+        },
+    );
+}
+
+test "check type - value restriction - curried 1" {
+    // Currently errors out in czer
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  _a = process(1.U8)("x")
+        \\  _b = process(1.U8)(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModule(
+        source,
+        .fail,
+        "TYPE MISMATCH",
+    );
+}
+test "check type - value restriction - curried 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  fn_a = process(1.U8)
+        \\  _a = fn_a("x")
+        \\
+        \\  fn_b = process(2.U8)
+        \\  _b = fn_b(Bool.False)
+        \\}
+        \\
+        \\process = |y| {
+        \\  |_z| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "U8" },
+            .{ .def = "process", .expected = "U8 -> (_arg -> List(U8))" },
+        },
+    );
+}
+
+test "check type - value restriction - out of order 3" {
+    // Currently errors out in czer
+
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  exec : A, I64 -> I64
+        \\  exec = |A, _| 10
+        \\}
+        \\
+        \\test = {
+        \\  _a = run_exec(A.A, "hello")
+        \\  _b = run_exec(A.A, Try.Ok("nice"))
+        \\}
+        \\
+        \\run_exec = |y, _z| {
+        \\  y.exec(x)
+        \\}
+        \\
+        \\x = 10
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "x", .expected = "I64" },
+            .{ .def = "run_exec", .expected = "a, _arg -> b where [a.exec : a, I64 -> b]" },
+        },
+    );
+}
+
+test "check type - value restriction - should fail 1" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\x = 10
+        \\
+        \\process = |y| { [x, y] }
+        \\
+        \\test = {
+        \\  _a = process(1.U8)
+        \\  _b = process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - value restriction - should fail 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\A := [A].{
+        \\  process = |_a, y| { [x, y] }
+        \\}
+        \\
+        \\x = 10
+        \\
+        \\test = {
+        \\  val = A.A
+        \\  _a = val.process(1.U8)
+        \\  _b = val.process(1.I64) # Should error: U8 != I64
+        \\}
+    ;
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // type aliases //
@@ -820,7 +986,8 @@ test "check type - alias with mismatch arg" {
         \\x : MyListAlias(Str)
         \\x = [15]
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 15 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // nominal types //
@@ -940,7 +1107,8 @@ test "check type - nominal recursive type wrong type" {
         \\x : StrConsList
         \\x = StrConsList.Cons(10, StrConsList.Nil)
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - nominal w/ polymorphic function with bad args" {
@@ -1018,7 +1186,8 @@ test "check type - if else - invalid condition 1" {
         \\x : Str
         \\x = if 5 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 5 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 2" {
@@ -1026,7 +1195,8 @@ test "check type - if else - invalid condition 2" {
         \\x : Str
         \\x = if 10 "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - invalid condition 3" {
@@ -1041,21 +1211,24 @@ test "check type - if else - different branch types 1" {
     const source =
         \\x = if True "true" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected (first branch type)
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 2" {
     const source =
         \\x = if True "true" else if False "false" else 10
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 3" {
     const source =
         \\x = if True "true" else if False 10 else "last"
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 10 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // match
@@ -1090,7 +1263,8 @@ test "check type - match - diff branch types" {
         \\    False => 100
         \\  }
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal 100 used where Str is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // unary not
@@ -1281,10 +1455,11 @@ test "check type - record - update fail" {
         \\
         \\updated = set_data({ data: "hello" }, 10)
     ;
+    // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(
         source,
         .fail,
-        "MISSING METHOD",
+        "TYPE MISMATCH",
     );
 }
 
@@ -1555,7 +1730,8 @@ test "check type - expect not bool" {
         \\  x
         \\}
     ;
-    try checkTypesModule(source, .fail, "MISSING METHOD");
+    // Number literal used where Bool is expected
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // crash //
@@ -1611,6 +1787,45 @@ test "check type - dbg" {
         \\    a.plus : a, U64 -> a,
         \\  ]
         ,
+    );
+}
+
+// type modules //
+
+test "check type - type module - fn declarations " {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Person := [].{
+        \\    name : Str
+        \\    name = "Alice"
+        \\
+        \\    age : I32
+        \\    age = 25
+        \\
+        \\    height : Dec
+        \\    height = 5.8
+        \\
+        \\    is_active : Bool
+        \\    is_active = True
+        \\
+        \\    colors : List(Str)
+        \\    colors = ["red", "green", "blue"]
+        \\
+        \\    numbers : List(I32)
+        \\    numbers = [1, 2, 3, 4, 5]
+        \\}
+    ;
+    try checkTypesModuleDefs(
+        source,
+        &.{
+            .{ .def = "Test.Person.name", .expected = "Str" },
+            .{ .def = "Test.Person.age", .expected = "I32" },
+            .{ .def = "Test.Person.height", .expected = "Dec" },
+            .{ .def = "Test.Person.is_active", .expected = "Bool" },
+            .{ .def = "Test.Person.colors", .expected = "List(Str)" },
+            .{ .def = "Test.Person.numbers", .expected = "List(I32)" },
+        },
     );
 }
 
@@ -2032,7 +2247,9 @@ test "check type - comprehensive - static dispatch with multiple methods 1" {
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    a.plus : a, c -> a,
+        \\    a.plus : a, d -> a,
         \\    c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]),
+        \\    d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)]),
         \\  ]
         ,
     );
@@ -2717,8 +2934,23 @@ fn checkTypesModule(
             return test_env.assertFirstTypeError(expected);
         },
     }
+}
 
-    return test_env.assertLastDefType(expected);
+const DefAndExpectation = struct {
+    def: []const u8,
+    expected: []const u8,
+};
+
+fn checkTypesModuleDefs(
+    comptime source_expr: []const u8,
+    comptime expectations: []const DefAndExpectation,
+) !void {
+    var test_env = try TestEnv.init("Test", source_expr);
+    defer test_env.deinit();
+
+    inline for (expectations) |expectation| {
+        try test_env.assertDefType(expectation.def, expectation.expected);
+    }
 }
 
 // helpers - expr //
@@ -3092,4 +3324,36 @@ test "check type - range inferred" {
         \\  ]
         ,
     );
+}
+
+test "check type - issue8934 recursive nominal type unification" {
+    // Regression test for https://github.com/roc-lang/roc/issues/8934
+    // The bug was that the compiler would stack overflow when type-checking
+    // recursive nominal types with nested recursive calls, like:
+    //   Node(a) := [One(a), Many(List(Node(a)))]
+    //   flatten_aux(rest, flatten_aux(e, acc))
+    //
+    // The root cause was that unifyNominalType didn't do an early merge before
+    // unifying type arguments, causing infinite recursion when the nominal type
+    // referenced itself through the tag union backing type.
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Node(a) := [One(a), Many(List(Node(a)))]
+        \\
+        \\flatten : List(Node(a)) -> List(a)
+        \\flatten = |input| {
+        \\  flatten_aux = |l, acc| {
+        \\    match l {
+        \\      [] => acc
+        \\      [One(e), .. as rest] => flatten_aux(rest, List.append(acc, e))
+        \\      [Many(e), .. as rest] => flatten_aux(rest, flatten_aux(e, acc))
+        \\    }
+        \\  }
+        \\  flatten_aux(input, [])
+        \\}
+    ;
+    // The key thing is that the compiler should NOT crash with stack overflow.
+    // It should successfully type-check the file.
+    try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
 }

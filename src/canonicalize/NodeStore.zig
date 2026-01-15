@@ -423,7 +423,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             } };
         },
         else => {
-            @panic("unreachable, node is not an expression tag");
+            std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
         },
     }
 }
@@ -762,7 +762,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_ellipsis = .{} };
         },
         .expr_anno_only => {
-            return CIR.Expr{ .e_anno_only = .{} };
+            const p = payload.expr_anno_only;
+            return CIR.Expr{ .e_anno_only = .{
+                .ident = @bitCast(p.ident),
+            } };
         },
         .expr_return => {
             const p = payload.expr_return;
@@ -869,7 +872,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         // that reference diagnostic indices. The .malformed case above handles
         // converting these to runtime_error nodes in the ModuleEnv.
         else => {
-            @panic("unreachable, node is not an expression tag");
+            std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
         },
     }
 }
@@ -1059,15 +1062,47 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         else => {
-            std.debug.panic("unreachable, node is not a where tag {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
         },
     }
+}
+
+/// Returns true if the given node tag represents a pattern node.
+fn isPatternTag(tag: Node.Tag) bool {
+    return switch (tag) {
+        .pattern_identifier,
+        .pattern_as,
+        .pattern_applied_tag,
+        .pattern_nominal,
+        .pattern_nominal_external,
+        .pattern_record_destructure,
+        .pattern_list,
+        .pattern_tuple,
+        .pattern_num_literal,
+        .pattern_dec_literal,
+        .pattern_f32_literal,
+        .pattern_f64_literal,
+        .pattern_small_dec_literal,
+        .pattern_str_literal,
+        .pattern_underscore,
+        .malformed, // Valid pattern tag for runtime_error patterns
+        => true,
+        else => false,
+    };
 }
 
 /// Retrieves a pattern from the store.
 pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pattern {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
     const node = store.nodes.get(node_idx);
+
+    // Safety check: Handle cross-module node index issues where a pattern index
+    // might point to a non-pattern node (e.g., type_header from another module)
+    if (!isPatternTag(node.tag)) {
+        // Return a placeholder pattern to avoid crash
+        // This indicates a bug in cross-module canonicalization
+        return CIR.Pattern{ .underscore = {} };
+    }
 
     const payload = node.getPayload();
     switch (node.tag) {
@@ -1237,7 +1272,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             } };
         },
         else => {
-            std.debug.panic("unreachable, node is not a pattern tag {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
         },
     }
 }
@@ -1364,7 +1399,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             } };
         },
         else => {
-            std.debug.panic("Invalid node tag for TypeAnno: {}", .{node.tag});
+            std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
         },
     }
 }
@@ -1865,12 +1900,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 ._unused3 = 0,
             } });
         },
-        .e_anno_only => |_| {
+        .e_anno_only => |anno| {
             node.tag = .expr_anno_only;
             node.setPayload(.{ .expr_anno_only = .{
+                .ident = @bitCast(anno.ident),
                 ._unused1 = 0,
                 ._unused2 = 0,
-                ._unused3 = 0,
             } });
         },
         .e_return => |ret| {

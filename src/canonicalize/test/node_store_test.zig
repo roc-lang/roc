@@ -426,7 +426,9 @@ test "NodeStore round trip - Expressions" {
         .e_ellipsis = .{},
     });
     try expressions.append(gpa, CIR.Expr{
-        .e_anno_only = .{},
+        .e_anno_only = .{
+            .ident = rand_ident_idx(),
+        },
     });
     try expressions.append(gpa, CIR.Expr{
         .e_hosted_lambda = .{

@@ -2588,14 +2588,17 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                 else => continue, // Skip non-assign patterns (like destructuring)
             }
 
-            const pattern_var = varFrom(def.pattern);
+            // Use def_idx for type lookup, not def.pattern. During type checking,
+            // def_var and pattern_var are unified, but the type store may not have
+            // slots for all pattern indices. Def indices are always within bounds.
+            const def_var = varFrom(def_idx);
 
             // Get the region for this definition
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
             // Write the type to the buffer
-            try type_writer.write(pattern_var, .one_line);
+            try type_writer.write(def_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();

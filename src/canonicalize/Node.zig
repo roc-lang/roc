@@ -95,7 +95,7 @@ pub const Payload = extern union {
     expr_crash: ExprCrash,
     expr_block: ExprBlock,
     expr_ellipsis: ExprEmpty,
-    expr_anno_only: ExprEmpty,
+    expr_anno_only: ExprAnnoOnly,
     expr_hosted_lambda: ExprHostedLambda,
     expr_low_level: ExprLowLevel,
     expr_expect: ExprExpect,
@@ -303,6 +303,12 @@ pub const Payload = extern union {
         _unused1: u32,
         _unused2: u32,
         _unused3: u32,
+    };
+
+    pub const ExprAnnoOnly = extern struct {
+        ident: u32, // Ident.Idx
+        _unused1: u32,
+        _unused2: u32,
     };
 
     pub const ExprCall = extern struct {

@@ -275,14 +275,9 @@ UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
 INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
-UNUSED VALUE - fuzz_crash_023.md:1:1:1:1
 TOO FEW ARGUMENTS - fuzz_crash_023.md:155:2:157:3
 TYPE MISMATCH - fuzz_crash_023.md:168:4:169:11
-MISSING METHOD - fuzz_crash_023.md:146:15:146:18
-MISSING METHOD - fuzz_crash_023.md:176:12:176:22
-+ - :0:0:0:0
-UNUSED VALUE - fuzz_crash_023.md:178:42:178:45
-UNUSED VALUE - fuzz_crash_023.md:190:2:190:29
+UNUSED VALUE - fuzz_crash_023.md:178:42:178:42
 TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
 # PROBLEMS
 **PARSE ERROR**
@@ -1046,18 +1041,6 @@ But all the previous patterns have this type:
 
 All patterns in an `match` must have compatible types.
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:1:1:1:1:**
-```roc
-# This is a module comment!
-```
-^
-
-It has the type:
-
-    _d
-
 **TOO FEW ARGUMENTS**
 The function `match_time` expects 2 arguments, but 1 was provided:
 **fuzz_crash_023.md:155:2:157:3:**
@@ -1087,57 +1070,19 @@ But `add_one` needs the first argument to be:
 
     U64
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
-**fuzz_crash_023.md:146:15:146:18:**
-```roc
-	var number = 123
-```
-	             ^^^
-
-The value's type, which does not have a method named **from_numeral**, is:
-
-    Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**MISSING METHOD**
-The value before this **+** operator has a type that doesn't have a **plus** method:
-**fuzz_crash_023.md:176:12:176:22:**
-```roc
-		number = number + n
-```
-		         ^^^^^^^^^^
-
-The value's type, which does not have a method named **plus**, is:
-
-    Str
-
-**Hint:**The **+** operator calls a method named **plus** on the value preceding it, passing the value after the operator as the one argument.
-
 **UNUSED VALUE**
 This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:178:42:178:45:**
+**fuzz_crash_023.md:178:42:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-	                                        ^^^
+                                         ^^^
 
 It has the type:
 
     [Blue, .._others]
 
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:190:2:190:29:**
-```roc
-	Stdout.line!(interpolated)?
-```
-	^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-It has the type:
-
-    _d
+Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -2848,8 +2793,8 @@ expect {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "U64 -> U64"))
+		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
+		(patt (type "Error -> U64"))
 		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
@@ -2895,11 +2840,11 @@ expect {
 				(ty-args
 					(ty-rigid-var (name "a"))))))
 	(expressions
-		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
 		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
 		(expr (type "Error"))
-		(expr (type "Error"))
+		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))
 ~~~

@@ -2,7 +2,7 @@ platform ""
     requires {
         main! : () => {}
     }
-    exposes [Stdout, Stderr, Stdin]
+    exposes [Stdout, Stderr, Stdin, Builder]
     packages {}
     provides { main_for_host!: "main" }
     targets: {
@@ -20,6 +20,7 @@ platform ""
 import Stdout
 import Stderr
 import Stdin
+import Builder
 
 main_for_host! : () => {}
 main_for_host! = main!

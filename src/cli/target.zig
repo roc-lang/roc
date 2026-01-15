@@ -263,3 +263,108 @@ pub const TargetsConfig = struct {
         };
     }
 };
+
+// Tests
+const testing = std.testing;
+const builtin = @import("builtin");
+
+test "getDefaultTarget returns first compatible target" {
+    // Create a config with only x64glibc (not x64musl)
+    // On a Linux x64 system, both are compatible, but we only include glibc
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .x64glibc, .items = &.{.app} },
+        },
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    // getDefaultTarget should return x64glibc if we're on Linux x64
+    // (since both x64musl and x64glibc are compatible with Linux x64)
+    if (builtin.target.os.tag == .linux and builtin.target.cpu.arch == .x86_64) {
+        const result = config.getDefaultTarget(.exe);
+        try testing.expect(result != null);
+        try testing.expectEqual(RocTarget.x64glibc, result.?);
+    }
+}
+
+test "getFirstCompatibleTarget finds exe target first" {
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .x64mac, .items = &.{.app} },
+            .{ .target = .arm64mac, .items = &.{.app} },
+        },
+        .static_lib = &.{
+            .{ .target = .wasm32, .items = &.{.app} },
+        },
+        .shared_lib = &.{},
+    };
+
+    // On macOS x64, should find x64mac from exe targets
+    if (builtin.target.os.tag == .macos and builtin.target.cpu.arch == .x86_64) {
+        const result = config.getFirstCompatibleTarget();
+        try testing.expect(result != null);
+        try testing.expectEqual(RocTarget.x64mac, result.?.target);
+        try testing.expectEqual(LinkType.exe, result.?.link_type);
+    }
+    // On macOS arm64, should find arm64mac from exe targets
+    if (builtin.target.os.tag == .macos and builtin.target.cpu.arch == .aarch64) {
+        const result = config.getFirstCompatibleTarget();
+        try testing.expect(result != null);
+        try testing.expectEqual(RocTarget.arm64mac, result.?.target);
+        try testing.expectEqual(LinkType.exe, result.?.link_type);
+    }
+}
+
+test "getFirstCompatibleTarget returns null when no compatible target" {
+    // Create a config with only Windows targets
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .x64win, .items = &.{.app} },
+            .{ .target = .arm64win, .items = &.{.app} },
+        },
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    // On non-Windows systems, no compatible target should be found
+    if (builtin.target.os.tag != .windows) {
+        const result = config.getFirstCompatibleTarget();
+        try testing.expect(result == null);
+    }
+}
+
+test "getLinkSpec returns correct spec for supported target" {
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .x64mac, .items = &.{ .{ .file_path = "libhost.a" }, .app } },
+            .{ .target = .arm64mac, .items = &.{.app} },
+        },
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    const spec = config.getLinkSpec(.x64mac, .exe);
+    try testing.expect(spec != null);
+    try testing.expectEqual(RocTarget.x64mac, spec.?.target);
+    try testing.expectEqual(@as(usize, 2), spec.?.items.len);
+}
+
+test "getLinkSpec returns null for unsupported target" {
+    const config = TargetsConfig{
+        .files_dir = "targets",
+        .exe = &.{
+            .{ .target = .x64mac, .items = &.{.app} },
+        },
+        .static_lib = &.{},
+        .shared_lib = &.{},
+    };
+
+    // x64musl is not in the config
+    const spec = config.getLinkSpec(.x64musl, .exe);
+    try testing.expect(spec == null);
+}

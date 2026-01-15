@@ -36,93 +36,92 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
 
         // Check if this is an anno-only def (e_anno_only expression)
         if (expr == .e_anno_only and def.annotation != null) {
-            // Get the identifier from the pattern
-            const pattern = env.store.getPattern(def.pattern);
-            if (pattern == .assign) {
-                const full_ident = pattern.assign.ident;
+            // Get the identifier directly from the e_anno_only expression
+            // (no need to access the pattern, which could have cross-module index issues)
+            const full_ident = expr.e_anno_only.ident;
 
-                // Get the region from the original def for better error messages
-                const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                const def_region = env.store.getRegionAt(def_node_idx);
+            // Get the region from the original def for better error messages
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const def_region = env.store.getRegionAt(def_node_idx);
 
-                // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
-                // The pattern might contain a qualified name, but we need the unqualified one
-                const full_name = env.getIdent(full_ident);
-                const unqualified_name = if (std.mem.lastIndexOfScalar(u8, full_name, '.')) |dot_idx|
-                    full_name[dot_idx + 1 ..]
-                else
-                    full_name;
-                const ident = env.common.findIdent(unqualified_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(unqualified_name));
+            // Extract the unqualified name (e.g., "line!" from "Stdout.line!")
+            // The identifier might contain a qualified name, but we need the unqualified one
+            // This matches each module's local name, and qualification happens in collectAndSortHostedFunctions
+            const full_name = env.getIdent(full_ident);
+            const unqualified_name = if (std.mem.lastIndexOfScalar(u8, full_name, '.')) |dot_idx|
+                full_name[dot_idx + 1 ..]
+            else
+                full_name;
+            const ident = env.common.findIdent(unqualified_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(unqualified_name));
 
-                // Extract the number of arguments from the annotation
-                const annotation = env.store.getAnnotation(def.annotation.?);
-                const type_anno = env.store.getTypeAnno(annotation.anno);
+            // Extract the number of arguments from the annotation
+            const annotation = env.store.getAnnotation(def.annotation.?);
+            const type_anno = env.store.getTypeAnno(annotation.anno);
 
-                const num_args: usize = if (type_anno == .@"fn") blk: {
-                    const func_type = type_anno.@"fn";
-                    const args_slice = env.store.sliceTypeAnnos(func_type.args);
+            const num_args: usize = if (type_anno == .@"fn") blk: {
+                const func_type = type_anno.@"fn";
+                const args_slice = env.store.sliceTypeAnnos(func_type.args);
 
-                    // Check if single argument is empty tuple () - if so, create 0 params
-                    if (args_slice.len == 1) {
-                        const first_arg = env.store.getTypeAnno(args_slice[0]);
-                        if (first_arg == .tuple) {
-                            if (first_arg.tuple.elems.span.len == 0) {
-                                break :blk 0; // () means 0 parameters
-                            }
+                // Check if single argument is empty tuple () - if so, create 0 params
+                if (args_slice.len == 1) {
+                    const first_arg = env.store.getTypeAnno(args_slice[0]);
+                    if (first_arg == .tuple) {
+                        if (first_arg.tuple.elems.span.len == 0) {
+                            break :blk 0; // () means 0 parameters
                         }
                     }
-
-                    break :blk args_slice.len;
-                } else 0;
-
-                // Create dummy parameter patterns for the lambda (one for each argument)
-                // Use the def's region for better error diagnostics
-                const patterns_start = env.store.scratchTop("patterns");
-                var arg_i: usize = 0;
-                while (arg_i < num_args) : (arg_i += 1) {
-                    const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
-                    defer gpa.free(arg_name);
-                    const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
-                    const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
-                    try env.store.scratch.?.patterns.append(arg_pattern_idx);
-                }
-                const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
-
-                // Create an e_crash body that crashes when the function is called in the interpreter.
-                // This is a placeholder - hosted functions are provided by the platform's native code,
-                // so this body should never be evaluated during normal compilation/execution.
-                const crash_msg = try env.insertString("Hosted functions cannot be called in the interpreter");
-                const body_idx = try env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, def_region);
-
-                // Ensure types array has entries for all new expressions
-                const body_int = @intFromEnum(body_idx);
-                while (env.types.len() <= body_int) {
-                    _ = try env.types.fresh();
                 }
 
-                // Create e_hosted_lambda expression
-                const expr_idx = try env.addExpr(.{
-                    .e_hosted_lambda = .{
-                        .symbol_name = ident,
-                        .index = 0, // Placeholder; will be assigned during sorting pass
-                        .args = args_span,
-                        .body = body_idx,
-                    },
-                }, def_region);
+                break :blk args_slice.len;
+            } else 0;
 
-                // Ensure types array has an entry for this new expression
-                const expr_int = @intFromEnum(expr_idx);
-                while (env.types.len() <= expr_int) {
-                    _ = try env.types.fresh();
-                }
-
-                // Now replace the e_anno_only expression with the e_hosted_lambda
-                // Update the def's expr field using the proper API
-                env.store.setDefExpr(def_idx, expr_idx);
-
-                // Track this modified def index
-                try modified_def_indices.append(gpa, def_idx);
+            // Create dummy parameter patterns for the lambda (one for each argument)
+            // Use the def's region for better error diagnostics
+            const patterns_start = env.store.scratchTop("patterns");
+            var arg_i: usize = 0;
+            while (arg_i < num_args) : (arg_i += 1) {
+                const arg_name = try std.fmt.allocPrint(gpa, "_arg{}", .{arg_i});
+                defer gpa.free(arg_name);
+                const arg_ident = env.common.findIdent(arg_name) orelse try env.common.insertIdent(gpa, base.Ident.for_text(arg_name));
+                const arg_pattern_idx = try env.addPattern(.{ .assign = .{ .ident = arg_ident } }, def_region);
+                try env.store.scratch.?.patterns.append(arg_pattern_idx);
             }
+            const args_span = CIR.Pattern.Span{ .span = .{ .start = @intCast(patterns_start), .len = @intCast(num_args) } };
+
+            // Create an e_crash body that crashes when the function is called in the interpreter.
+            // This is a placeholder - hosted functions are provided by the platform's native code,
+            // so this body should never be evaluated during normal compilation/execution.
+            const crash_msg = try env.insertString("Hosted functions cannot be called in the interpreter");
+            const body_idx = try env.addExpr(.{ .e_crash = .{ .msg = crash_msg } }, def_region);
+
+            // Ensure types array has entries for all new expressions
+            const body_int = @intFromEnum(body_idx);
+            while (env.types.len() <= body_int) {
+                _ = try env.types.fresh();
+            }
+
+            // Create e_hosted_lambda expression
+            const expr_idx = try env.addExpr(.{
+                .e_hosted_lambda = .{
+                    .symbol_name = ident,
+                    .index = 0, // Placeholder; will be assigned during sorting pass
+                    .args = args_span,
+                    .body = body_idx,
+                },
+            }, def_region);
+
+            // Ensure types array has an entry for this new expression
+            const expr_int = @intFromEnum(expr_idx);
+            while (env.types.len() <= expr_int) {
+                _ = try env.types.fresh();
+            }
+
+            // Now replace the e_anno_only expression with the e_hosted_lambda
+            // Update the def's expr field using the proper API
+            env.store.setDefExpr(def_idx, expr_idx);
+
+            // Track this modified def index
+            try modified_def_indices.append(gpa, def_idx);
         }
     }
 

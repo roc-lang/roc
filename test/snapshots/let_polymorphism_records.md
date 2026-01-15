@@ -49,38 +49,45 @@ main = |_| {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - let_polymorphism_records.md:26:47:26:49
-UNUSED VALUE - let_polymorphism_records.md:38:2:38:17
+TYPE MISMATCH - let_polymorphism_records.md:26:47:26:49
+MISSING METHOD - let_polymorphism_records.md:38:2:38:17
+MISSING METHOD - let_polymorphism_records.md:38:2:38:3
 # PROBLEMS
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **let_polymorphism_records.md:26:47:26:49:**
 ```roc
 updated_mismatch = update_data(str_container, 99)
 ```
                                               ^^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
 
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
-
-**UNUSED VALUE**
-This expression produces a value, but it's not being used:
+**MISSING METHOD**
+This **plus** method is being called on a value whose type doesn't have that method:
 **let_polymorphism_records.md:38:2:38:17:**
 ```roc
 	1 + update_data
 ```
 	^^^^^^^^^^^^^^^
 
-It has the type:
+The value's type, which does not have a method named **plus**, is:
 
-    a
-      where [
-        a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
-        a.plus : a, ({ ..b, data: c }, c -> { ..b, data: c }) -> a,
-      ]
+    {}
+
+**MISSING METHOD**
+This **from_numeral** method is being called on a value whose type doesn't have that method:
+**let_polymorphism_records.md:38:2:38:3:**
+```roc
+	1 + update_data
+```
+	^
+
+The value's type, which does not have a method named **from_numeral**, is:
+
+    Error
 
 # TOKENS
 ~~~zig
