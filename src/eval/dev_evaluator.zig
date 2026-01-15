@@ -740,6 +740,41 @@ pub const DevEvaluator = struct {
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
                 return self.tryEvalConstantI64WithEnvMap(module_env, backing_expr, env);
             },
+            .e_unary_not => |unary| {
+                const inner_expr = module_env.store.getExpr(unary.expr);
+                const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse return null;
+                // Boolean NOT: 0 becomes 1, non-zero becomes 0
+                return if (inner_val == 0) 1 else 0;
+            },
+            .e_block => |block| {
+                // Evaluate statements and return the final expression value
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                var new_env = env.clone() catch return null;
+                defer new_env.deinit();
+
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |decl| {
+                            // Bind the pattern to the value
+                            const value_expr = module_env.store.getExpr(decl.expr);
+                            const value = self.tryEvalConstantI64WithEnvMap(module_env, value_expr, &new_env) orelse return null;
+                            new_env.put(@intFromEnum(decl.pattern), value) catch return null;
+                        },
+                        .s_decl_gen => |decl| {
+                            // Generalized declaration - same as s_decl for constant folding
+                            const value_expr = module_env.store.getExpr(decl.expr);
+                            const value = self.tryEvalConstantI64WithEnvMap(module_env, value_expr, &new_env) orelse return null;
+                            new_env.put(@intFromEnum(decl.pattern), value) catch return null;
+                        },
+                        else => return null, // Can't handle other statement types
+                    }
+                }
+
+                // Evaluate final expression
+                const final_expr = module_env.store.getExpr(block.final_expr);
+                return self.tryEvalConstantI64WithEnvMap(module_env, final_expr, &new_env);
+            },
             else => null,
         };
     }
