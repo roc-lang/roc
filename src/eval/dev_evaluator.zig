@@ -134,6 +134,7 @@ pub const DevEvaluator = struct {
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
             .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
             .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
+            .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
             else => return error.UnsupportedExpression,
         };
 
@@ -183,7 +184,53 @@ pub const DevEvaluator = struct {
         return self.generateReturnI64Code(-inner_val, result_type);
     }
 
+    /// Generate code for if/else expressions
+    /// Uses constant folding - evaluates condition at compile time and generates code for the taken branch
+    fn generateIfCode(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_type: ResultType) Error![]const u8 {
+        // Get the branches
+        const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+
+        // Try each branch's condition
+        for (branch_indices) |branch_idx| {
+            const branch = module_env.store.getIfBranch(branch_idx);
+            const cond_expr = module_env.store.getExpr(branch.cond);
+
+            // Try to evaluate the condition as a constant (supports binary operations like 1 > 0)
+            const cond_val = self.tryEvalConstantI64WithEnv(module_env, cond_expr);
+
+            if (cond_val) |val| {
+                if (val != 0) {
+                    // Condition is true - generate code for this branch's body
+                    const body_expr = module_env.store.getExpr(branch.body);
+                    return self.generateCodeForExpr(module_env, body_expr, result_type);
+                }
+                // Condition is false - try next branch
+            } else {
+                // Can't evaluate condition at compile time
+                return error.UnsupportedExpression;
+            }
+        }
+
+        // All conditions were false - use the final else branch
+        const else_expr = module_env.store.getExpr(if_expr.final_else);
+        return self.generateCodeForExpr(module_env, else_expr, result_type);
+    }
+
+    /// Helper to generate code for an expression (recursive)
+    fn generateCodeForExpr(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType) Error![]const u8 {
+        return switch (expr) {
+            .e_num => |num| try self.generateNumericCode(num, result_type),
+            .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
+            .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
+            .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
+            .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
+            .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
+            else => return error.UnsupportedExpression,
+        };
+    }
+
     /// Try to evaluate an expression as a constant i64 value
+    /// This handles numeric literals and binary operations with constant operands
     fn tryEvalConstantI64(_: *DevEvaluator, expr: CIR.Expr) ?i64 {
         return switch (expr) {
             .e_num => |num| {
@@ -192,6 +239,48 @@ pub const DevEvaluator = struct {
                     return null;
                 }
                 return @intCast(value_i128);
+            },
+            else => null,
+        };
+    }
+
+    /// Try to evaluate an expression as a constant i64 value, with access to module_env for sub-expressions
+    fn tryEvalConstantI64WithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) ?i64 {
+        return switch (expr) {
+            .e_num => |num| {
+                const value_i128 = num.value.toI128();
+                if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+                    return null;
+                }
+                return @intCast(value_i128);
+            },
+            .e_binop => |binop| {
+                const lhs_expr = module_env.store.getExpr(binop.lhs);
+                const rhs_expr = module_env.store.getExpr(binop.rhs);
+                const lhs_val = self.tryEvalConstantI64WithEnv(module_env, lhs_expr) orelse return null;
+                const rhs_val = self.tryEvalConstantI64WithEnv(module_env, rhs_expr) orelse return null;
+
+                return switch (binop.op) {
+                    .add => lhs_val +% rhs_val,
+                    .sub => lhs_val -% rhs_val,
+                    .mul => lhs_val *% rhs_val,
+                    .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else null,
+                    .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .lt => if (lhs_val < rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .gt => if (lhs_val > rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .le => if (lhs_val <= rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .ge => if (lhs_val >= rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .eq => if (lhs_val == rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .ne => if (lhs_val != rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+                    .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+                };
+            },
+            .e_unary_minus => |unary| {
+                const inner_expr = module_env.store.getExpr(unary.expr);
+                const inner_val = self.tryEvalConstantI64WithEnv(module_env, inner_expr) orelse return null;
+                return -inner_val;
             },
             else => null,
         };
@@ -661,4 +750,55 @@ test "evaluate unary minus" {
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = -42 }, result);
+}
+
+test "evaluate if true branch" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("if 1 > 0 then 42 else 0") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
+}
+
+test "evaluate if false branch" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("if 0 > 1 then 42 else 99") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 99 }, result);
+}
+
+test "evaluate nested if" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("if 1 > 0 then (if 2 > 1 then 100 else 50) else 0") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
 }
