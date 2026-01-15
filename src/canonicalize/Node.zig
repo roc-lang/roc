@@ -295,6 +295,11 @@ pub const Payload = extern union {
     expr_zero_argument_tag: ExprZeroArgumentTag,
     expr_for: ExprFor,
     expr_expect: ExprExpect,
+    expr_typed_int: ExprTypedInt,
+    expr_typed_frac: ExprTypedFrac,
+    expr_string_segment: ExprStringSegment,
+    expr_nominal: ExprNominal,
+    expr_nominal_external: ExprNominalExternal,
 
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -623,6 +628,41 @@ pub const Payload = extern union {
         body: u32,
         _unused1: u32,
         _unused2: u32,
+    };
+
+    /// expr_typed_int: typed integer with type name and value in extra_data
+    pub const ExprTypedInt = extern struct {
+        type_name: u32,
+        val_kind: u32,
+        extra_data_idx: u32,
+    };
+
+    /// expr_typed_frac: typed fraction with type name and value in extra_data
+    pub const ExprTypedFrac = extern struct {
+        type_name: u32,
+        val_kind: u32,
+        extra_data_idx: u32,
+    };
+
+    /// expr_string_segment: string segment reference
+    pub const ExprStringSegment = extern struct {
+        segment_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_nominal: nominal type expression
+    pub const ExprNominal = extern struct {
+        nominal_type_decl: u32,
+        backing_expr: u32,
+        backing_type: u32,
+    };
+
+    /// expr_nominal_external: external nominal type
+    pub const ExprNominalExternal = extern struct {
+        module_idx: u32,
+        target_node_idx: u32,
+        extra_data_idx: u32,
     };
 
     // --- Patterns ---

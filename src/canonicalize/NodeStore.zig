@@ -538,38 +538,38 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_typed_int => {
-            const p = payload.raw;
-            // Unpack typed int: value in extra_data, type_name in data_1
-            const value_as_u32s = store.extra_data.items.items[p.data_3..][0..4];
+            const p = payload.expr_typed_int;
+            // Unpack typed int: value in extra_data
+            const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
             return CIR.Expr{
                 .e_typed_int = .{
                     .value = .{
                         .bytes = @bitCast(value_as_i128),
-                        .kind = @enumFromInt(p.data_2),
+                        .kind = @enumFromInt(p.val_kind),
                     },
-                    .type_name = @bitCast(p.data_1),
+                    .type_name = @bitCast(p.type_name),
                 },
             };
         },
         .expr_typed_frac => {
-            const p = payload.raw;
-            // Unpack typed frac: value in extra_data, type_name in data_1
-            const value_as_u32s = store.extra_data.items.items[p.data_3..][0..4];
+            const p = payload.expr_typed_frac;
+            // Unpack typed frac: value in extra_data
+            const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
             const value_as_i128: i128 = @bitCast(value_as_u32s.*);
             return CIR.Expr{
                 .e_typed_frac = .{
                     .value = .{
                         .bytes = @bitCast(value_as_i128),
-                        .kind = @enumFromInt(p.data_2),
+                        .kind = @enumFromInt(p.val_kind),
                     },
-                    .type_name = @bitCast(p.data_1),
+                    .type_name = @bitCast(p.type_name),
                 },
             };
         },
         .expr_string_segment => {
-            const p = payload.raw;
-            return CIR.Expr.initStrSegment(@enumFromInt(p.data_1));
+            const p = payload.expr_string_segment;
+            return CIR.Expr.initStrSegment(@enumFromInt(p.segment_idx));
         },
         .expr_string => {
             const p = payload.expr_string;
@@ -585,25 +585,25 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_nominal => {
-            const p = payload.raw;
+            const p = payload.expr_nominal;
             return CIR.Expr{
                 .e_nominal = .{
-                    .nominal_type_decl = @enumFromInt(p.data_1),
-                    .backing_expr = @enumFromInt(p.data_2),
-                    .backing_type = @enumFromInt(p.data_3),
+                    .nominal_type_decl = @enumFromInt(p.nominal_type_decl),
+                    .backing_expr = @enumFromInt(p.backing_expr),
+                    .backing_type = @enumFromInt(p.backing_type),
                 },
             };
         },
         .expr_nominal_external => {
-            const p = payload.raw;
-            const extra_data = store.extra_data.items.items[p.data_3..][0..2];
+            const p = payload.expr_nominal_external;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..][0..2];
             const backing_expr: CIR.Expr.Idx = @enumFromInt(extra_data[0]);
             const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
 
             return CIR.Expr{
                 .e_nominal_external = .{
-                    .module_idx = @enumFromInt(p.data_1),
-                    .target_node_idx = @intCast(p.data_2),
+                    .module_idx = @enumFromInt(p.module_idx),
+                    .target_node_idx = @intCast(p.target_node_idx),
                     .backing_expr = backing_expr,
                     .backing_type = backing_type,
                 },
@@ -1908,41 +1908,41 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
 
-            // Store type_name in data_1, value kind in data_2, value in extra_data
+            // Store value in extra_data
             const extra_data_start: u32 = @intCast(store.extra_data.len());
             const value_as_i128: i128 = @bitCast(e.value.bytes);
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
                 _ = try store.extra_data.append(store.gpa, word);
             }
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(e.type_name),
-                .data_2 = @intFromEnum(e.value.kind),
-                .data_3 = extra_data_start,
+            node.setPayload(.{ .expr_typed_int = .{
+                .type_name = @bitCast(e.type_name),
+                .val_kind = @intFromEnum(e.value.kind),
+                .extra_data_idx = extra_data_start,
             } });
         },
         .e_typed_frac => |e| {
             node.tag = .expr_typed_frac;
 
-            // Store type_name in data_1, value kind in data_2, value in extra_data
+            // Store value in extra_data
             const extra_data_start: u32 = @intCast(store.extra_data.len());
             const value_as_i128: i128 = @bitCast(e.value.bytes);
             const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
             for (value_as_u32s) |word| {
                 _ = try store.extra_data.append(store.gpa, word);
             }
-            node.setPayload(.{ .raw = .{
-                .data_1 = @bitCast(e.type_name),
-                .data_2 = @intFromEnum(e.value.kind),
-                .data_3 = extra_data_start,
+            node.setPayload(.{ .expr_typed_frac = .{
+                .type_name = @bitCast(e.type_name),
+                .val_kind = @intFromEnum(e.value.kind),
+                .extra_data_idx = extra_data_start,
             } });
         },
         .e_str_segment => |e| {
             node.tag = .expr_string_segment;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.literal),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_string_segment = .{
+                .segment_idx = @intFromEnum(e.literal),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_str => |e| {
@@ -1963,10 +1963,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_nominal => |e| {
             node.tag = .expr_nominal;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.nominal_type_decl),
-                .data_2 = @intFromEnum(e.backing_expr),
-                .data_3 = @intFromEnum(e.backing_type),
+            node.setPayload(.{ .expr_nominal = .{
+                .nominal_type_decl = @intFromEnum(e.nominal_type_decl),
+                .backing_expr = @intFromEnum(e.backing_expr),
+                .backing_type = @intFromEnum(e.backing_type),
             } });
         },
         .e_nominal_external => |e| {
@@ -1974,10 +1974,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             const extra_idx: u32 = @intCast(store.extra_data.len());
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
             _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.module_idx),
-                .data_2 = @intCast(e.target_node_idx),
-                .data_3 = extra_idx,
+            node.setPayload(.{ .expr_nominal_external = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .target_node_idx = @intCast(e.target_node_idx),
+                .extra_data_idx = extra_idx,
             } });
         },
         .e_dot_access => |e| {
