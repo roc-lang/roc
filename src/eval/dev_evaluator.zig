@@ -241,6 +241,9 @@ pub const DevEvaluator = struct {
             .e_str_segment => |seg| try self.generateStrSegmentCode(module_env, seg, result_type),
             .e_str => |str| try self.generateStrCode(module_env, str, result_type, env),
             .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, env),
+            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, env),
+            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, env),
+            .e_list => |list| try self.generateListCode(module_env, list, result_type, env),
             else => return error.UnsupportedExpression,
         };
     }
@@ -612,19 +615,17 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for a string segment (single literal)
-    fn generateStrSegmentCode(self: *DevEvaluator, module_env: *ModuleEnv, seg: anytype, _: ResultType) Error![]const u8 {
-        // Get the string text
-        const str_text = module_env.getString(seg.literal);
-        _ = str_text;
+    fn generateStrSegmentCode(_: *DevEvaluator, module_env: *ModuleEnv, seg: anytype, _: ResultType) Error![]const u8 {
+        // Get the string text (for potential future use)
+        _ = module_env.getString(seg.literal);
 
         // For now, strings are not supported in code generation
         // (would need to return a pointer to a RocStr structure)
-        _ = self;
         return error.UnsupportedExpression;
     }
 
     /// Generate code for a string expression (one or more segments)
-    fn generateStrCode(self: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: ResultType, _: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+    fn generateStrCode(_: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: ResultType, _: *std.AutoHashMap(u32, i64)) Error![]const u8 {
         const segments = module_env.store.sliceExpr(str.span);
 
         // For simple single-segment strings, we could potentially handle them
@@ -639,7 +640,6 @@ pub const DevEvaluator = struct {
             }
         }
 
-        _ = self;
         return error.UnsupportedExpression;
     }
 
@@ -674,6 +674,38 @@ pub const DevEvaluator = struct {
 
         // Multi-argument tags not yet supported
         return error.UnsupportedExpression;
+    }
+
+    /// Generate code for record expressions
+    fn generateRecordCode(self: *DevEvaluator, module_env: *ModuleEnv, rec: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // Records with extension are more complex
+        if (rec.ext != null) {
+            return error.UnsupportedExpression;
+        }
+
+        const fields = module_env.store.sliceRecordFields(rec.fields);
+
+        // Empty record
+        if (fields.len == 0) {
+            return self.generateReturnI64Code(0, result_type);
+        }
+
+        // For single-field records, return the field value (simplified representation)
+        if (fields.len == 1) {
+            const field = module_env.store.getRecordField(fields[0]);
+            const field_expr = module_env.store.getExpr(field.value);
+            const field_val = self.tryEvalConstantI64WithEnvMap(module_env, field_expr, env) orelse
+                return error.UnsupportedExpression;
+            return self.generateReturnI64Code(field_val, result_type);
+        }
+
+        // Multi-field records not yet fully supported
+        // For now, return the first field's value
+        const first_field = module_env.store.getRecordField(fields[0]);
+        const first_expr = module_env.store.getExpr(first_field.value);
+        const first_val = self.tryEvalConstantI64WithEnvMap(module_env, first_expr, env) orelse
+            return error.UnsupportedExpression;
+        return self.generateReturnI64Code(first_val, result_type);
     }
 
     /// Generate code that returns an i64/u64 value
