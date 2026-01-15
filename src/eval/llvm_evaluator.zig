@@ -778,6 +778,89 @@ pub const LlvmEvaluator = struct {
                     const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                     return ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
                 }
+
+                // Handle Num.abs_diff - absolute difference |a - b|
+                if (std.mem.eql(u8, func_name, "abs_diff") and args.len == 2) {
+                    const lhs_val = try ctx.emitExpr(args[0]);
+                    const rhs_val = try ctx.emitExpr(args[1]);
+                    const lhs_expr = ctx.module_env.store.getExpr(args[0]);
+
+                    // Compute a - b
+                    const diff = if (ctx.isFloatExpr(lhs_expr))
+                        ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
+                    else
+                        ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+
+                    // Then take abs of the result
+                    if (ctx.isFloatExpr(lhs_expr)) {
+                        const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
+                        const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
+                        const is_neg = ctx.wip.fcmp(.normal, .olt, diff, zero, "") catch return error.CompilationFailed;
+                        return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                    }
+
+                    // For integers: abs(diff)
+                    const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
+                    const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
+                    const neg_diff = ctx.wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
+                    const is_signed = ctx.isSignedExpr(lhs_expr);
+                    const is_neg = if (is_signed)
+                        ctx.wip.icmp(.slt, diff, zero, "") catch return error.CompilationFailed
+                    else
+                        // For unsigned, diff is negative if lhs < rhs (would wrap)
+                        ctx.wip.icmp(.ult, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+                    return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                }
+            }
+
+            // Handle method calls on values (e.g., (3.5).abs_diff(1.2))
+            if (func_expr == .e_dot_access) {
+                const dot = func_expr.e_dot_access;
+                const method_name = ctx.module_env.getIdentText(dot.field_name);
+                const args = ctx.module_env.store.sliceExpr(call.args);
+
+                if (std.mem.eql(u8, method_name, "abs_diff") and args.len == 1) {
+                    // abs_diff(other) computes |self - other|
+                    const lhs_expr = ctx.module_env.store.getExpr(dot.receiver);
+                    const rhs_expr = ctx.module_env.store.getExpr(args[0]);
+
+                    // For Dec literals, we can compute at compile time
+                    if (ctx.isDecExpr(lhs_expr) and ctx.isDecExpr(rhs_expr)) {
+                        // Get Dec values and compute difference
+                        const lhs_dec = ctx.getDecValue(lhs_expr) orelse return error.UnsupportedType;
+                        const rhs_dec = ctx.getDecValue(rhs_expr) orelse return error.UnsupportedType;
+                        const diff = if (lhs_dec >= rhs_dec) lhs_dec - rhs_dec else rhs_dec - lhs_dec;
+                        return (ctx.builder.intConst(.i128, @as(i128, @intCast(diff))) catch return error.CompilationFailed).toValue();
+                    }
+
+                    const lhs_val = try ctx.emitExpr(dot.receiver);
+                    const rhs_val = try ctx.emitExpr(args[0]);
+
+                    // Compute a - b
+                    const diff = if (ctx.isFloatExpr(lhs_expr))
+                        ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
+                    else
+                        ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+
+                    // Then take abs of the result
+                    if (ctx.isFloatExpr(lhs_expr)) {
+                        const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
+                        const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
+                        const is_neg = ctx.wip.fcmp(.normal, .olt, diff, zero, "") catch return error.CompilationFailed;
+                        return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                    }
+
+                    // For integers: abs(diff)
+                    const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
+                    const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
+                    const neg_diff = ctx.wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
+                    const is_signed = ctx.isSignedExpr(lhs_expr);
+                    const is_neg = if (is_signed)
+                        ctx.wip.icmp(.slt, diff, zero, "") catch return error.CompilationFailed
+                    else
+                        ctx.wip.icmp(.ult, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+                    return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                }
             }
 
             // Handle low-level lambda calls (builtins like list_len)
@@ -1159,6 +1242,52 @@ pub const LlvmEvaluator = struct {
                 return ctx.wip.bin(.sub, zero, receiver_val, "") catch return error.CompilationFailed;
             }
 
+            // Handle abs_diff method call: (3.5).abs_diff(1.2)
+            if (std.mem.eql(u8, field_name, "abs_diff")) {
+                if (dot.args) |args_span| {
+                    const args = ctx.module_env.store.sliceExpr(args_span);
+                    if (args.len == 1) {
+                        const lhs_expr = ctx.module_env.store.getExpr(dot.receiver);
+                        const rhs_expr = ctx.module_env.store.getExpr(args[0]);
+
+                        // For Dec literals, compute at compile time
+                        if (ctx.isDecExpr(lhs_expr) and ctx.isDecExpr(rhs_expr)) {
+                            const lhs_dec = ctx.getDecValue(lhs_expr) orelse return error.UnsupportedType;
+                            const rhs_dec = ctx.getDecValue(rhs_expr) orelse return error.UnsupportedType;
+                            const diff = if (lhs_dec >= rhs_dec) lhs_dec - rhs_dec else rhs_dec - lhs_dec;
+                            return (ctx.builder.intConst(.i128, diff) catch return error.CompilationFailed).toValue();
+                        }
+
+                        const lhs_val = try ctx.emitExpr(dot.receiver);
+                        const rhs_val = try ctx.emitExpr(args[0]);
+
+                        // Compute a - b
+                        const diff = if (ctx.isFloatExpr(lhs_expr))
+                            ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
+                        else
+                            ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+
+                        // Then take abs
+                        if (ctx.isFloatExpr(lhs_expr)) {
+                            const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
+                            const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
+                            const is_neg = ctx.wip.fcmp(.normal, .olt, diff, zero, "") catch return error.CompilationFailed;
+                            return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                        }
+
+                        const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
+                        const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
+                        const neg_diff = ctx.wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
+                        const is_signed = ctx.isSignedExpr(lhs_expr);
+                        const is_neg = if (is_signed)
+                            ctx.wip.icmp(.slt, diff, zero, "") catch return error.CompilationFailed
+                        else
+                            ctx.wip.icmp(.ult, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+                        return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
+                    }
+                }
+            }
+
             // Handle type annotations via dot access (e.g., 3.14.F64, 42.I32)
             if (std.mem.eql(u8, field_name, "F32") or std.mem.eql(u8, field_name, "F64") or std.mem.eql(u8, field_name, "Dec")) {
                 // Float types - emit the receiver and convert if needed
@@ -1228,6 +1357,7 @@ pub const LlvmEvaluator = struct {
             return switch (expr) {
                 .e_dec, .e_dec_small => true,
                 .e_num => |num| num.kind == .dec,
+                .e_typed_frac => |typed_frac| std.mem.eql(u8, ctx.module_env.getIdentText(typed_frac.type_name), "Dec"),
                 .e_binop => |binop| ctx.isDecExpr(ctx.module_env.store.getExpr(binop.lhs)),
                 .e_unary_minus => |unary| ctx.isDecExpr(ctx.module_env.store.getExpr(unary.expr)),
                 else => false,
@@ -1277,6 +1407,24 @@ pub const LlvmEvaluator = struct {
             // Return a boolean constant (i8 for Bool)
             const bool_val: i128 = if (result) 1 else 0;
             return (ctx.builder.intConst(.i8, bool_val) catch return error.CompilationFailed).toValue();
+        }
+
+        /// Get Dec value as scaled i128 from a Dec expression (if compile-time known)
+        fn getDecValue(ctx: *ExprContext, expr: CIR.Expr) ?i128 {
+            return switch (expr) {
+                .e_dec => |dec| dec.value.num,
+                .e_dec_small => |dec| blk: {
+                    const decimal_places: u5 = 18;
+                    const scale_factor = std.math.pow(i128, 10, decimal_places - dec.value.denominator_power_of_ten);
+                    break :blk @as(i128, dec.value.numerator) * scale_factor;
+                },
+                .e_typed_frac => |typed_frac| blk: {
+                    const type_name = ctx.module_env.getIdentText(typed_frac.type_name);
+                    if (!std.mem.eql(u8, type_name, "Dec")) break :blk null;
+                    break :blk typed_frac.value.toI128();
+                },
+                else => null,
+            };
         }
 
         /// Get string content from a string expression (if compile-time known)
@@ -1500,7 +1648,7 @@ pub const LlvmEvaluator = struct {
             .e_dot_access => |dot| {
                 // Method calls like (-3.14).abs() return the same type as the receiver
                 const field_name = module_env.getIdentText(dot.field_name);
-                if (std.mem.eql(u8, field_name, "abs") or std.mem.eql(u8, field_name, "neg")) {
+                if (std.mem.eql(u8, field_name, "abs") or std.mem.eql(u8, field_name, "neg") or std.mem.eql(u8, field_name, "abs_diff")) {
                     return self.getExprOutputLayout(module_env, dot.receiver);
                 }
                 // Type annotations via dot access like 3.14.F64, 42.I32
