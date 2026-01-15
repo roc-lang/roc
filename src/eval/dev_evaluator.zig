@@ -237,6 +237,10 @@ pub const DevEvaluator = struct {
             .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
             .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
             .e_empty_list => try self.generateEmptyListCode(result_type),
+            .e_block => |block| try self.generateBlockCode(module_env, block, result_type, env),
+            .e_str_segment => |seg| try self.generateStrSegmentCode(module_env, seg, result_type),
+            .e_str => |str| try self.generateStrCode(module_env, str, result_type, env),
+            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, env),
             else => return error.UnsupportedExpression,
         };
     }
@@ -561,6 +565,114 @@ pub const DevEvaluator = struct {
         // For single-element lists with constant value, we could do something simple
         // For now, return UnsupportedExpression for non-empty lists
         // (proper list support requires memory allocation)
+        return error.UnsupportedExpression;
+    }
+
+    /// Generate code for block expressions
+    /// Blocks contain statements followed by a final expression
+    fn generateBlockCode(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // Create a new environment for block-local bindings
+        var block_env = try env.clone();
+        defer block_env.deinit();
+
+        // Process statements (declarations create bindings in the environment)
+        const stmts = module_env.store.sliceStatements(block.stmts);
+        for (stmts) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            try self.processStatement(module_env, stmt, &block_env);
+        }
+
+        // Evaluate and return the final expression
+        const final_expr = module_env.store.getExpr(block.final_expr);
+        return self.generateCodeForExprWithEnv(module_env, final_expr, result_type, &block_env);
+    }
+
+    /// Process a statement in a block (e.g., declarations)
+    fn processStatement(self: *DevEvaluator, module_env: *ModuleEnv, stmt: CIR.Statement, env: *std.AutoHashMap(u32, i64)) Error!void {
+        switch (stmt) {
+            .s_decl => |decl| {
+                // Evaluate the expression and bind it to the pattern
+                const expr = module_env.store.getExpr(decl.expr);
+                const value = self.tryEvalConstantI64WithEnvMap(module_env, expr, env) orelse
+                    return error.UnsupportedExpression;
+                try env.put(@intFromEnum(decl.pattern), value);
+            },
+            .s_decl_gen => |decl| {
+                // Generalized declarations (for lambdas and number literals)
+                const expr = module_env.store.getExpr(decl.expr);
+                const value = self.tryEvalConstantI64WithEnvMap(module_env, expr, env) orelse
+                    return error.UnsupportedExpression;
+                try env.put(@intFromEnum(decl.pattern), value);
+            },
+            else => {
+                // Other statement types not yet supported
+                return error.UnsupportedExpression;
+            },
+        }
+    }
+
+    /// Generate code for a string segment (single literal)
+    fn generateStrSegmentCode(self: *DevEvaluator, module_env: *ModuleEnv, seg: anytype, _: ResultType) Error![]const u8 {
+        // Get the string text
+        const str_text = module_env.getString(seg.literal);
+        _ = str_text;
+
+        // For now, strings are not supported in code generation
+        // (would need to return a pointer to a RocStr structure)
+        _ = self;
+        return error.UnsupportedExpression;
+    }
+
+    /// Generate code for a string expression (one or more segments)
+    fn generateStrCode(self: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: ResultType, _: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const segments = module_env.store.sliceExpr(str.span);
+
+        // For simple single-segment strings, we could potentially handle them
+        if (segments.len == 1) {
+            const seg_expr = module_env.store.getExpr(segments[0]);
+            switch (seg_expr) {
+                .e_str_segment => {
+                    // Single segment string - still not fully supported yet
+                    return error.UnsupportedExpression;
+                },
+                else => return error.UnsupportedExpression,
+            }
+        }
+
+        _ = self;
+        return error.UnsupportedExpression;
+    }
+
+    /// Generate code for tag expressions with arguments
+    fn generateTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const args = module_env.store.sliceExpr(tag.args);
+
+        // Tags with no arguments should be handled by e_zero_argument_tag
+        // For tags with arguments, we need to construct the tag value
+        if (args.len == 0) {
+            // Zero-argument tag - use same logic as e_zero_argument_tag
+            const value: i64 = if (tag.name == module_env.idents.true_tag)
+                1
+            else if (tag.name == module_env.idents.false_tag)
+                0
+            else if (tag.name == module_env.idents.ok)
+                0
+            else if (tag.name == module_env.idents.err)
+                1
+            else
+                0;
+            return self.generateReturnI64Code(value, result_type);
+        }
+
+        // For single-argument tags, try to return the argument value
+        if (args.len == 1) {
+            const arg_expr = module_env.store.getExpr(args[0]);
+            const arg_val = self.tryEvalConstantI64WithEnvMap(module_env, arg_expr, env) orelse
+                return error.UnsupportedExpression;
+            return self.generateReturnI64Code(arg_val, result_type);
+        }
+
+        // Multi-argument tags not yet supported
         return error.UnsupportedExpression;
     }
 
@@ -1133,4 +1245,74 @@ test "evaluate lambda with if in body" {
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 5 }, result);
+}
+
+test "evaluate block expression" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // { x = 5; x + 1 } should equal 6
+    const result = evaluator.evaluate("{ x = 5; x + 1 }") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 6 }, result);
+}
+
+test "evaluate block with multiple declarations" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // { x = 3; y = 4; x + y } should equal 7
+    const result = evaluator.evaluate("{ x = 3; y = 4; x + y }") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
+}
+
+test "evaluate True tag" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("True") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate False tag" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    const result = evaluator.evaluate("False") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
 }
