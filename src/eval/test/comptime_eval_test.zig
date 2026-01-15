@@ -3060,9 +3060,7 @@ test "issue 8979: nested while - inner break does not save outer loop" {
 // why List.repeat triggers the infinite loop check. List.repeat
 // is implemented with recursion in Roc, not while loops.
 
-// ============================================
 // Numeric Literal Validation Tests
-// ============================================
 // These tests exercise the deferred numeric literal validation
 // that happens during comptime evaluation, triggering error
 // report builders in problem.zig

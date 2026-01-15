@@ -205,35 +205,20 @@ test "buildNumberDoesNotFitReport generates correct report" {
 
 This approach bypasses the need to trigger error conditions through the type checker and directly tests the report generation logic.
 
-## Important Finding: Unreachable Code in problem.zig
+## Dead Code Removed
 
-Upon investigation, the following report builders in problem.zig are **currently unreachable**:
+The following dead code was identified and removed:
 - `buildNumberDoesNotFitReport` (~35 lines)
 - `buildNegativeUnsignedIntReport` (~40 lines)
 - `buildInvalidNumericLiteralReport` (~65 lines)
+- Associated struct definitions (`NumberDoesNotFit`, `NegativeUnsignedInt`, `InvalidNumericLiteral`)
+- Error types in unify.zig error set
 
-**Why they're unreachable:**
-The error types `NumberDoesNotFit` and `NegativeUnsignedInt` are defined in unify.zig's error set but are **never actually returned**. Number validation happens during comptime evaluation (in `validateDeferredNumericLiterals`), which creates `comptime_eval_error` problems instead of the specific number validation problems.
-
-**Implications:**
-- ~140 lines in problem.zig cannot be covered because they're dead code
-- This accounts for ~7.6% of problem.zig (140/1839 lines)
-- The report builders exist for future use when number validation is moved to type checking
-
-**Recommendation:**
-Either:
-1. Accept that this code is infrastructure for future features and won't be covered
-2. Move number validation from comptime to type checking to use these report builders
-3. Remove the dead code until the feature is actually implemented
+**Why it was dead code:**
+The error types were defined but never returned anywhere. Number validation happens during comptime evaluation (in `validateDeferredNumericLiterals`), which creates `comptime_eval_error` problems instead of the specific number validation problems.
 
 ## Summary
 
 The main coverage gaps are in error paths that require:
-1. **Dead code** (~140 lines in problem.zig for number validation - unreachable)
-2. **Platform modules** (platform requirement errors)
-3. **Unimplemented features** (extension type errors returning "unimplemented")
-
-The theoretical maximum coverage for problem.zig is approximately 60% due to:
-- Dead number validation code (~7.6%)
-- Platform requirement code (not easily testable)
-- Unimplemented error placeholders
+1. **Platform modules** (platform requirement errors)
+2. **Unimplemented features** (extension type errors returning "unimplemented")

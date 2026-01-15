@@ -215,52 +215,6 @@ pub fn unifyWithConf(
                         .detail = null,
                     } };
                 },
-                error.NumberDoesNotFit => {
-                    // For number literal errors, we need to determine which var is the literal
-                    // and which is the expected type
-                    const a_resolved = types.resolveVar(a);
-
-                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
-                    const literal_is_a = switch (a_resolved.desc.content) {
-                        .structure => |structure| switch (structure) {
-                            .record_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    const literal_var = if (literal_is_a) a else b;
-                    const num_expected_var = if (literal_is_a) b else a;
-                    const num_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, num_expected_var);
-
-                    break :blk .{ .number_does_not_fit = .{
-                        .literal_var = literal_var,
-                        .expected_type = num_expected_snapshot,
-                    } };
-                },
-                error.NegativeUnsignedInt => {
-                    // For number literal errors, we need to determine which var is the literal
-                    // and which is the expected type
-                    const a_resolved = types.resolveVar(a);
-
-                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
-                    const literal_is_a = switch (a_resolved.desc.content) {
-                        .structure => |structure| switch (structure) {
-                            .record_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    const literal_var = if (literal_is_a) a else b;
-                    const neg_expected_var = if (literal_is_a) b else a;
-                    const neg_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, neg_expected_var);
-
-                    break :blk .{ .negative_unsigned_int = .{
-                        .literal_var = literal_var,
-                        .expected_type = neg_expected_snapshot,
-                    } };
-                },
                 error.UnifyErr => {
                     // Unify can error in the following ways:
                     //
@@ -408,8 +362,6 @@ const Unifier = struct {
     const Error = error{
         TypeMismatch,
         UnifyErr,
-        NumberDoesNotFit,
-        NegativeUnsignedInt,
         AllocatorError,
     };
 

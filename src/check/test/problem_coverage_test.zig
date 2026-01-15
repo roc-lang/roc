@@ -5,9 +5,7 @@
 
 const TestEnv = @import("TestEnv.zig");
 
-// ============================================
 // UNUSED VALUE (statement_not_unit)
-// ============================================
 // These test the buildStatementNotUnit and buildUnusedValueReport functions
 
 test "unused value - expression result discarded in block" {
@@ -22,9 +20,7 @@ test "unused value - expression result discarded in block" {
     try test_env.assertLastDefType("I64 -> I64");
 }
 
-// ============================================
 // INVALID TRY OPERATOR
-// ============================================
 // Tests the buildInvalidTryOperator function
 
 test "try operator - valid usage on Try type" {
@@ -45,9 +41,7 @@ test "try operator - valid usage on Try type" {
     try test_env.assertLastDefType("Try(I64, Str) -> I64");
 }
 
-// ============================================
 // TYPE DOES NOT SUPPORT EQUALITY
-// ============================================
 // Tests the buildTypeDoesNotSupportEquality function
 
 test "equality - comparing functions not supported" {
@@ -84,9 +78,7 @@ test "equality - record containing function not comparable" {
     try test_env.assertFirstTypeError("TYPE DOES NOT SUPPORT EQUALITY");
 }
 
-// ============================================
 // INVALID BOOL BINOP
-// ============================================
 // Tests the buildInvalidBoolBinop function - using and/or with non-bool types
 
 test "invalid bool binop - and with numbers" {
@@ -121,9 +113,7 @@ test "invalid bool binop - or with strings" {
     try test_env.assertFirstTypeError("INVALID BOOL OPERATION");
 }
 
-// ============================================
 // INCOMPATIBLE LIST ELEMENTS
-// ============================================
 // Tests the buildIncompatibleListElementsReport function
 
 test "incompatible list - int and string mixed" {
@@ -147,9 +137,7 @@ test "incompatible list - annotated list with wrong element" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================
 // INCOMPATIBLE IF BRANCHES
-// ============================================
 // Tests the buildIncompatibleIfBranches function
 
 test "incompatible if - different return types" {
@@ -182,9 +170,7 @@ test "incompatible if - nested incompatible branches" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================
 // INVALID IF CONDITION
-// ============================================
 // Tests the buildInvalidIfCondition function
 
 test "invalid if condition - number as condition" {
@@ -208,9 +194,7 @@ test "invalid if condition - string as condition" {
     try test_env.assertFirstTypeError("INVALID IF CONDITION");
 }
 
-// ============================================
 // INCOMPATIBLE MATCH BRANCHES
-// ============================================
 // Tests the buildIncompatibleMatchBranches function
 
 test "incompatible match branches - different return types" {
@@ -230,9 +214,7 @@ test "incompatible match branches - different return types" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================
 // INCOMPATIBLE MATCH PATTERNS
-// ============================================
 // Tests the buildIncompatibleMatchPatterns function
 
 test "incompatible match patterns - string pattern on int" {
@@ -251,9 +233,7 @@ test "incompatible match patterns - string pattern on int" {
     try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
 }
 
-// ============================================
 // FUNCTION CALL ARITY MISMATCH
-// ============================================
 // Tests the buildFnCallArityMismatchReport function
 
 test "arity mismatch - too many arguments" {
@@ -282,9 +262,7 @@ test "arity mismatch - too few arguments" {
     try test_env.assertFirstTypeError("TOO FEW ARGUMENTS");
 }
 
-// ============================================
 // TYPE APPLY ARITY MISMATCH
-// ============================================
 // Tests the buildTypeApplyArityMismatchReport function
 
 test "type arity mismatch - too few type args" {
@@ -313,9 +291,7 @@ test "type arity mismatch - too many type args" {
     try test_env.assertFirstTypeError("TOO MANY ARGS");
 }
 
-// ============================================
 // INCOMPATIBLE FUNCTION CALL ARGUMENT
-// ============================================
 // Tests the buildIncompatibleFnCallArg function
 
 test "incompatible fn arg - wrong type" {
@@ -347,9 +323,7 @@ test "incompatible fn arg - nested function wrong arg" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================
 // NON-EXHAUSTIVE MATCH
-// ============================================
 // Tests the buildNonExhaustiveMatchReport function (via exhaustive checker)
 
 test "non-exhaustive match - missing tag variant" {
@@ -370,9 +344,7 @@ test "non-exhaustive match - missing tag variant" {
     try test_env.assertFirstTypeError("NON-EXHAUSTIVE MATCH");
 }
 
-// ============================================
 // REDUNDANT PATTERN
-// ============================================
 // Tests the buildRedundantPatternReport function
 
 test "redundant pattern - duplicate wildcard" {
@@ -409,9 +381,7 @@ test "redundant pattern - duplicate number literal" {
     try test_env.assertFirstTypeError("REDUNDANT PATTERN");
 }
 
-// ============================================
 // UNMATCHABLE PATTERN
-// ============================================
 // Tests the buildUnmatchablePatternReport function
 
 test "unmatchable pattern - Err on infallible Try" {
@@ -431,9 +401,7 @@ test "unmatchable pattern - Err on infallible Try" {
     try test_env.assertFirstTypeError("UNMATCHABLE PATTERN");
 }
 
-// ============================================
 // MISSING METHOD (Static Dispatch)
-// ============================================
 // Tests dispatcher_does_not_impl_method
 
 test "missing method - undefined method on record" {
@@ -449,9 +417,7 @@ test "missing method - undefined method on record" {
     try test_env.assertFirstTypeError("MISSING METHOD");
 }
 
-// ============================================
 // GENERIC TYPE MISMATCH
-// ============================================
 // Tests the buildGenericTypeMismatchReport function
 
 test "generic mismatch - annotation vs expression" {
@@ -498,9 +464,7 @@ test "generic mismatch - tuple element type" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
-// ============================================
 // RECURSIVE TYPE TESTS
-// ============================================
 // Tests buildRecursiveAliasReport
 
 test "recursive alias - direct self-reference" {
@@ -516,9 +480,7 @@ test "recursive alias - direct self-reference" {
     try test_env.assertFirstTypeError("RECURSIVE ALIAS");
 }
 
-// ============================================
 // Tests for valid patterns that should pass
-// ============================================
 
 test "valid - exhaustive match with all branches" {
     const source =
