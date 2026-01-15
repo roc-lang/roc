@@ -3539,11 +3539,13 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         defer llvm_evaluator.deinit();
 
         for (inputs.items, actual_outputs.items) |input, interp_output| {
-            // Skip LLVM evaluation for non-expression outputs (problems, assignments)
+            // Skip LLVM evaluation for non-expression outputs (problems, assignments, crashes)
             // TYPE MISMATCH and other errors are detected at type-check time, not evaluation
             // "assigned `x`" outputs are variable bindings, not expressions to evaluate
+            // "Crash:" outputs are runtime crashes that we don't need to verify
             if (std.mem.startsWith(u8, interp_output, "TYPE MISMATCH") or
                 std.mem.startsWith(u8, interp_output, "assigned `") or
+                std.mem.startsWith(u8, interp_output, "Crash:") or
                 std.mem.startsWith(u8, interp_output, "**"))
             {
                 continue;

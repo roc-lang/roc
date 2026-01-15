@@ -963,6 +963,26 @@ pub const LlvmEvaluator = struct {
                     }
                     return error.UnsupportedType;
                 },
+                .e_call => |call| blk: {
+                    // Handle lambda calls that return strings
+                    // For identity lambdas (|s| s)("str"), get the string from the argument
+                    const func_expr = ctx.module_env.store.getExpr(call.func);
+                    if (func_expr != .e_lambda) return error.UnsupportedType;
+                    const lambda = func_expr.e_lambda;
+                    const body_expr = ctx.module_env.store.getExpr(lambda.body);
+                    if (body_expr != .e_lookup_local) return error.UnsupportedType;
+                    const lookup = body_expr.e_lookup_local;
+                    // Find which parameter this lookup refers to
+                    const params = ctx.module_env.store.slicePatterns(lambda.args);
+                    const args = ctx.module_env.store.sliceExpr(call.args);
+                    for (params, 0..) |param_idx, i| {
+                        if (param_idx == lookup.pattern_idx and i < args.len) {
+                            const arg_expr = ctx.module_env.store.getExpr(args[i]);
+                            break :blk ctx.getStringContent(arg_expr) orelse return error.UnsupportedType;
+                        }
+                    }
+                    return error.UnsupportedType;
+                },
                 else => return error.UnsupportedType,
             };
 
@@ -1460,6 +1480,19 @@ pub const LlvmEvaluator = struct {
                 // Lambda call - get layout from lambda body
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
+                    const body_expr = module_env.store.getExpr(lambda.body);
+                    // If the body is a local lookup (identity lambda), check if it's a parameter
+                    // and return the corresponding argument's layout
+                    if (body_expr == .e_lookup_local) {
+                        const lookup = body_expr.e_lookup_local;
+                        const params = module_env.store.slicePatterns(lambda.args);
+                        const args = module_env.store.sliceExpr(call.args);
+                        for (params, 0..) |param_idx, i| {
+                            if (param_idx == lookup.pattern_idx and i < args.len) {
+                                return self.getExprOutputLayout(module_env, args[i]);
+                            }
+                        }
+                    }
                     return self.getExprOutputLayout(module_env, lambda.body);
                 }
                 return .i64; // Default for unknown calls
