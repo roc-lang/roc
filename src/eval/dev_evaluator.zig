@@ -170,6 +170,18 @@ pub const DevEvaluator = struct {
             // For loops (always return {} / empty record)
             .e_for => try self.generateReturnI64Code(0, result_type),
 
+            // Nominal types - evaluate the backing expression
+            .e_nominal => |nom| blk: {
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                const code_result = try self.generateCode(module_env, backing_expr);
+                break :blk code_result.code;
+            },
+            .e_nominal_external => |nom| blk: {
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                const code_result = try self.generateCode(module_env, backing_expr);
+                break :blk code_result.code;
+            },
+
             else => return error.UnsupportedExpression,
         };
 
@@ -320,8 +332,16 @@ pub const DevEvaluator = struct {
             // Empty record (unit type)
             .e_empty_record => try self.generateReturnI64Code(0, result_type),
             .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, env),
-            .e_nominal => return error.UnsupportedExpression,
-            .e_nominal_external => return error.UnsupportedExpression,
+            .e_nominal => |nom| {
+                // Nominal types wrap a backing expression - evaluate it directly
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_type, env);
+            },
+            .e_nominal_external => |nom| {
+                // External nominal types also wrap a backing expression
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_type, env);
+            },
             .e_ellipsis => return error.UnsupportedExpression,
             .e_anno_only => return error.UnsupportedExpression,
             .e_type_var_dispatch => return error.UnsupportedExpression,
