@@ -2822,9 +2822,7 @@ pub fn build(b: *std.Build) void {
             // Hook up coverage_step to the parser summary step
             coverage_step.dependOn(&summary_step.step);
 
-            // ============================================================
             // Canonicalize Coverage
-            // ============================================================
 
             // Create canonicalize module unit tests for coverage
             const can_unit_test = b.addTest(.{

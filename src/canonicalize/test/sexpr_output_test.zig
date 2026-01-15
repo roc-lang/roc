@@ -6,7 +6,6 @@ const base = @import("base");
 const parse = @import("parse");
 const ModuleEnv = @import("../ModuleEnv.zig");
 const Can = @import("../Can.zig");
-const CIR = @import("../CIR.zig");
 
 const SExprTree = base.SExprTree;
 
@@ -93,9 +92,7 @@ fn canonicalizePatternFromDecl(source: []const u8) ![]u8 {
     return try output.toOwnedSlice(gpa);
 }
 
-// ============================================================
 // Pattern S-expression tests
-// ============================================================
 
 test "pattern sexpr - assign pattern" {
     const gpa = std.testing.allocator;
@@ -186,9 +183,7 @@ test "pattern sexpr - tag pattern in match" {
 // Note: List patterns with rest in declarations are parsed differently
 // These are tested via match expressions instead
 
-// ============================================================
 // Expression S-expression tests
-// ============================================================
 
 test "expression sexpr - integer literal" {
     const gpa = std.testing.allocator;
