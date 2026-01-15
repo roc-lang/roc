@@ -1907,7 +1907,9 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            expr_node.data_2 = @intCast(idx);
+                            var payload = expr_node.getPayload().expr_hosted_lambda;
+                            payload.index = @intCast(idx);
+                            expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
@@ -3548,7 +3550,9 @@ fn compileAndSerializeModulesForEmbedding(
                         if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
                             const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
                             var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            expr_node.data_2 = @intCast(idx);
+                            var payload = expr_node.getPayload().expr_hosted_lambda;
+                            payload.index = @intCast(idx);
+                            expr_node.setPayload(.{ .expr_hosted_lambda = payload });
                             platform_env.store.nodes.set(expr_node_idx, expr_node);
                             break;
                         }
