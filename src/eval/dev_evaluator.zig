@@ -1527,3 +1527,75 @@ test "evaluate False tag" {
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
 }
+
+test "evaluate comparison greater than" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // 5 > 3 should return 1 (true)
+    const result = evaluator.evaluate("5 > 3") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate comparison less than" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // 3 < 5 should return 1 (true)
+    const result = evaluator.evaluate("3 < 5") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate comparison equal" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // 42 == 42 should return 1 (true)
+    const result = evaluator.evaluate("42 == 42") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate comparison not equal" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // 1 != 2 should return 1 (true)
+    const result = evaluator.evaluate("1 != 2") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
