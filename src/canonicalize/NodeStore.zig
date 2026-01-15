@@ -4183,7 +4183,7 @@ test "NodeStore basic CompactWriter roundtrip" {
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
     const retrieved_node = deserialized.nodes.get(node1_idx);
     try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
-    try testing.expectEqual(@as(u32, 0), retrieved_node.data_1);
+    try testing.expectEqual(@as(u32, 0), retrieved_node.getPayload().raw.data_1);
 
     // Verify extra_data
     try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
