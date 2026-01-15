@@ -133,16 +133,40 @@ pub const DevEvaluator = struct {
         defer empty_env.deinit();
 
         const code = switch (expr) {
+            // Numeric literals
             .e_num => |num| try self.generateNumericCode(num, result_type),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
+            .e_dec => |dec| try self.generateDecCode(dec, result_type),
+            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_type),
+            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_type),
+            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_type),
+
+            // Operations
             .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
             .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
+            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_type, &empty_env),
+
+            // Control flow
             .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
+            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_type, &empty_env),
+
+            // Functions and calls
+            .e_call => |call| try self.generateCallCode(module_env, call, result_type, &empty_env),
+
+            // Data structures
             .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, &empty_env),
             .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, &empty_env),
+            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, &empty_env),
+            .e_list => |list| try self.generateListCode(module_env, list, result_type, &empty_env),
+            .e_empty_list => try self.generateEmptyListCode(result_type),
             .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, &empty_env),
             .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
+            .e_empty_record => try self.generateReturnI64Code(0, result_type),
+
+            // Blocks
+            .e_block => |block| try self.generateBlockCode(module_env, block, result_type, &empty_env),
+
             else => return error.UnsupportedExpression,
         };
 
