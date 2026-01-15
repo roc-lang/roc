@@ -665,6 +665,49 @@ pub const DevEvaluator = struct {
                 const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse return null;
                 return -inner_val;
             },
+            .e_if => |if_expr| {
+                // Try to evaluate if expression by testing each branch condition
+                const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    const cond_expr = module_env.store.getExpr(branch.cond);
+                    const cond_val = self.tryEvalConstantI64WithEnvMap(module_env, cond_expr, env) orelse return null;
+                    if (cond_val != 0) {
+                        // Condition is true, evaluate the body
+                        const body_expr = module_env.store.getExpr(branch.body);
+                        return self.tryEvalConstantI64WithEnvMap(module_env, body_expr, env);
+                    }
+                }
+                // All conditions were false, evaluate final else
+                const else_expr = module_env.store.getExpr(if_expr.final_else);
+                return self.tryEvalConstantI64WithEnvMap(module_env, else_expr, env);
+            },
+            .e_call => |call| {
+                // Handle lambda calls in constant folding
+                const func_expr = module_env.store.getExpr(call.func);
+                switch (func_expr) {
+                    .e_lambda => |lambda| {
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        const param_indices = module_env.store.slicePatterns(lambda.args);
+                        if (arg_indices.len != param_indices.len) return null;
+
+                        // Build a new environment with argument bindings
+                        var new_env = env.clone() catch return null;
+                        defer new_env.deinit();
+
+                        for (arg_indices, param_indices) |arg_idx, param_idx| {
+                            const arg_expr = module_env.store.getExpr(arg_idx);
+                            const arg_val = self.tryEvalConstantI64WithEnvMap(module_env, arg_expr, env) orelse return null;
+                            new_env.put(@intFromEnum(param_idx), arg_val) catch return null;
+                        }
+
+                        // Evaluate body with new environment
+                        const body_expr = module_env.store.getExpr(lambda.body);
+                        return self.tryEvalConstantI64WithEnvMap(module_env, body_expr, &new_env);
+                    },
+                    else => return null,
+                }
+            },
             .e_zero_argument_tag => |tag| {
                 // Handle Bool tags: True = 1, False = 0
                 // Compare using cached ident indices to avoid string comparison
