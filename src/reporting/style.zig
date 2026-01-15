@@ -49,6 +49,11 @@ pub const AnsiCodes = struct {
     pub const RESET_BLINK = "\x1b[25m";
     pub const RESET_REVERSE = "\x1b[27m";
     pub const RESET_STRIKETHROUGH = "\x1b[29m";
+
+    // Cursor control
+    pub const CLEAR_LINE = "\x1b[2K";
+    pub const CURSOR_TO_START = "\x1b[G";
+    pub const CURSOR_UP_1 = "\x1b[1A";
 };
 
 /// HTML color definitions.
