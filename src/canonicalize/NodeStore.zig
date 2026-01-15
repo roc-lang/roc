@@ -904,12 +904,13 @@ pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.
     const value_as_u32s: [4]u32 = @bitCast(value_as_i128);
     _ = try store.extra_data.appendSlice(store.gpa, &value_as_u32s);
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_num,
-        .data_1 = @intFromEnum(num_kind),
-        .data_2 = @intFromEnum(value.kind),
-        .data_3 = @intCast(extra_data_start),
-    });
+    var node = Node.init(.expr_num);
+    node.setPayload(.{ .expr_num = .{
+        .kind = @intFromEnum(num_kind),
+        .val_kind = @intFromEnum(value.kind),
+        .extra_data_idx = @intCast(extra_data_start),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_zero_argument_tag expression in-place.
@@ -932,12 +933,13 @@ pub fn replaceExprWithZeroArgumentTag(
     _ = try store.extra_data.append(store.gpa, @intFromEnum(ext_var));
     _ = try store.extra_data.append(store.gpa, @bitCast(name));
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_zero_argument_tag,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = 0,
-        .data_3 = 0,
-    });
+    var node = Node.init(.expr_zero_argument_tag);
+    node.setPayload(.{ .expr_zero_argument_tag = .{
+        .extra_data_idx = @intCast(extra_data_start),
+        ._unused1 = 0,
+        ._unused2 = 0,
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_tuple expression in-place.
@@ -958,12 +960,13 @@ pub fn replaceExprWithTuple(
         _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
     }
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_tuple,
-        .data_1 = @intCast(extra_data_start),
-        .data_2 = @intCast(elem_indices.len),
-        .data_3 = 0,
-    });
+    var node = Node.init(.expr_tuple);
+    node.setPayload(.{ .expr_tuple = .{
+        .elems_start = @intCast(extra_data_start),
+        .elems_len = @intCast(elem_indices.len),
+        ._unused = 0,
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an existing expression with an e_tag expression in-place.
@@ -985,12 +988,13 @@ pub fn replaceExprWithTag(
         _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
     }
 
-    store.nodes.set(node_idx, .{
-        .tag = .expr_tag,
-        .data_1 = @bitCast(name),
-        .data_2 = @intCast(extra_data_start),
-        .data_3 = @intCast(arg_indices.len),
-    });
+    var node = Node.init(.expr_tag);
+    node.setPayload(.{ .expr_tag = .{
+        .name = @bitCast(name),
+        .args_start = @intCast(extra_data_start),
+        .args_len = @intCast(arg_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
 }
 
 /// Get the more-specific expr index. Used to make error messages nicer.
@@ -1556,12 +1560,7 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
 ///
 /// See `setStatementNode` to see why this exists
 fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Error!Node {
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = undefined,
-    };
+    var node = Node.init(undefined);
 
     switch (statement) {
         .s_decl => |s| {
@@ -1786,12 +1785,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator.Error!CIR.Expr.Idx {
-    var node = Node{
-        .data_1 = 0,
-        .data_2 = 0,
-        .data_3 = 0,
-        .tag = undefined, // set below in switch
-    };
+    var node = Node.init(undefined); // tag set below in switch
 
     switch (expr) {
         .e_lookup_local => |local| {
@@ -2244,7 +2238,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: base.Region) Allocator.Error!CIR.RecordField.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .record_field };
+    var node = Node.init(.record_field);
     node.setPayload(.{ .record_field = .{
         .name = @bitCast(recordField.name),
         .expr = @intFromEnum(recordField.value),
@@ -2275,7 +2269,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
         },
     }
 
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .record_destruct };
+    var node = Node.init(.record_destruct);
     node.setPayload(.{ .record_destruct = .{
         .label = @bitCast(record_destruct.label),
         .ident = @bitCast(record_destruct.ident),
@@ -2292,7 +2286,7 @@ pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordD
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addCapture(store: *NodeStore, capture: CIR.Expr.Capture, region: base.Region) Allocator.Error!CIR.Expr.Capture.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .lambda_capture };
+    var node = Node.init(.lambda_capture);
     node.setPayload(.{ .lambda_capture = .{
         .name = @bitCast(capture.name),
         .scope_depth = capture.scope_depth,
@@ -2317,7 +2311,7 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
     _ = try store.extra_data.append(store.gpa, guard_idx);
     _ = try store.extra_data.append(store.gpa, @intFromEnum(branch.redundant));
 
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .match_branch };
+    var node = Node.init(.match_branch);
     node.setPayload(.{ .match_branch = .{
         .extra_data_idx = extra_data_start,
         ._unused1 = 0,
@@ -2334,7 +2328,7 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.BranchPattern, region: base.Region) Allocator.Error!CIR.Expr.Match.BranchPattern.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .match_branch_pattern };
+    var node = Node.init(.match_branch_pattern);
     node.setPayload(.{ .match_branch_pattern = .{
         .pattern = @intFromEnum(branchPattern.pattern),
         .degenerate = @intFromBool(branchPattern.degenerate),
@@ -2350,7 +2344,7 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: base.Region) Allocator.Error!CIR.WhereClause.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = undefined };
+    var node = Node.init(undefined);
 
     switch (whereClause) {
         .w_method => |where_method| {
@@ -2393,7 +2387,7 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) Allocator.Error!CIR.Pattern.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = undefined };
+    var node = Node.init(undefined);
 
     switch (pattern) {
         .assign => |p| {
@@ -2562,7 +2556,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Region) Allocator.Error!CIR.TypeAnno.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = undefined };
+    var node = Node.init(undefined);
 
     switch (typeAnno) {
         .apply => |a| {
@@ -2703,7 +2697,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
     std.debug.assert(typeHeader.args.span.len <= std.math.maxInt(u16));
     const packed_args: u32 = (@as(u32, @intCast(typeHeader.args.span.start)) << 16) | @as(u32, @intCast(typeHeader.args.span.len));
 
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .type_header };
+    var node = Node.init(.type_header);
     node.setPayload(.{ .type_header = .{
         .name = @bitCast(typeHeader.name),
         .relative_name = @bitCast(typeHeader.relative_name),
@@ -2720,7 +2714,7 @@ pub fn addTypeHeader(store: *NodeStore, typeHeader: CIR.TypeHeader, region: base
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.RecordField, region: base.Region) Allocator.Error!CIR.TypeAnno.RecordField.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .ty_record_field };
+    var node = Node.init(.ty_record_field);
     node.setPayload(.{ .ty_record_field = .{
         .name = @bitCast(annoRecordField.name),
         .ty = @intFromEnum(annoRecordField.ty),
@@ -2737,7 +2731,7 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base.Region) Allocator.Error!CIR.Annotation.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .annotation };
+    var node = Node.init(.annotation);
 
     if (annotation.where) |where_clause| {
         const extra_start: u32 = @intCast(store.extra_data.len());
@@ -2766,7 +2760,7 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: base.Region) Allocator.Error!CIR.ExposedItem.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .exposed_item };
+    var node = Node.init(.exposed_item);
     node.setPayload(.{ .exposed_item = .{
         .name = @bitCast(exposedItem.name),
         .alias = if (exposedItem.alias) |alias| @bitCast(alias) else 0,
@@ -2783,7 +2777,7 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Error!CIR.Def.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .def };
+    var node = Node.init(.def);
 
     const extra_start: u32 = @intCast(store.extra_data.len());
     _ = try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
@@ -3222,12 +3216,12 @@ pub fn ifBranchSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Expr.
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base.Region) Allocator.Error!CIR.Expr.IfBranch.Idx {
-    const node = Node{
-        .data_1 = @intFromEnum(if_branch.cond),
-        .data_2 = @intFromEnum(if_branch.body),
-        .data_3 = 0,
-        .tag = .if_branch,
-    };
+    var node = Node.init(.if_branch);
+    node.setPayload(.{ .if_branch = .{
+        .cond = @intFromEnum(if_branch.cond),
+        .body = @intFromEnum(if_branch.body),
+        ._unused = 0,
+    } });
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(node_idx));
@@ -3276,7 +3270,7 @@ pub fn sliceRecordDestructs(store: *const NodeStore, span: CIR.Pattern.RecordDes
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!CIR.Diagnostic.Idx {
-    var node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = undefined };
+    var node = Node.init(undefined);
     var region = base.Region.zero();
 
     switch (reason) {
@@ -3613,7 +3607,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, region: Region) Allocator.Error!Node.Idx {
-    var malformed_node = Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .malformed };
+    var malformed_node = Node.init(.malformed);
     malformed_node.setPayload(.{ .diagnostic = .{
         .primary = @intFromEnum(diagnostic_idx),
         .secondary = 0,
@@ -3960,12 +3954,13 @@ pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx 
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
-    const nid = try store.nodes.append(store.gpa, .{
-        .tag = .type_var_slot,
-        .data_1 = @intFromEnum(parent_node_idx),
-        .data_2 = 0,
-        .data_3 = 0,
-    });
+    var node = Node.init(.type_var_slot);
+    node.setPayload(.{ .type_var_slot = .{
+        .parent_node_idx = @intFromEnum(parent_node_idx),
+        ._unused1 = 0,
+        ._unused2 = 0,
+    } });
+    const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
 }
@@ -3978,12 +3973,13 @@ pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_no
     const idx = @intFromEnum(target_idx);
     try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
     while (store.nodes.items.len <= idx) {
-        store.nodes.items.appendAssumeCapacity(.{
-            .tag = .type_var_slot,
-            .data_1 = @intFromEnum(parent_node_idx),
-            .data_2 = 0,
-            .data_3 = 0,
-        });
+        var node = Node.init(.type_var_slot);
+        node.setPayload(.{ .type_var_slot = .{
+            .parent_node_idx = @intFromEnum(parent_node_idx),
+            ._unused1 = 0,
+            ._unused2 = 0,
+        } });
+        store.nodes.items.appendAssumeCapacity(node);
         _ = try store.regions.append(store.gpa, region);
     }
 }
@@ -4122,12 +4118,12 @@ test "NodeStore basic CompactWriter roundtrip" {
     defer original.deinit();
 
     // Add a simple expression node
-    const node1 = Node{
-        .tag = .expr_int,
-        .data_1 = 0, // extra_data index
-        .data_2 = 0,
-        .data_3 = 0,
-    };
+    var node1 = Node.init(.expr_int);
+    node1.setPayload(.{ .expr_int = .{
+        .extra_data_idx = 0,
+        ._unused1 = 0,
+        ._unused2 = 0,
+    } });
     const node1_idx = try original.nodes.append(gpa, node1);
 
     // Add integer value to extra_data (i128 as 4 u32s)
@@ -4203,37 +4199,39 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     defer original.deinit();
 
     // Add expression variable node
-    const var_node = Node{
-        .tag = .expr_var,
-        .data_1 = 5, // pattern_idx
-        .data_2 = 0,
-        .data_3 = 0,
-    };
+    var var_node = Node.init(.expr_var);
+    var_node.setPayload(.{ .expr_var = .{
+        .pattern_idx = 5,
+        ._unused1 = 0,
+        ._unused2 = 0,
+    } });
     const var_node_idx = try original.nodes.append(gpa, var_node);
 
     // Add expression list node
-    const list_node = Node{
-        .tag = .expr_list,
-        .data_1 = 10, // elems start
-        .data_2 = 3, // elems len
-        .data_3 = 0,
-    };
+    var list_node = Node.init(.expr_list);
+    list_node.setPayload(.{ .expr_list = .{
+        .elems_start = 10,
+        .elems_len = 3,
+        ._unused = 0,
+    } });
     const list_node_idx = try original.nodes.append(gpa, list_node);
 
-    // Add float node with extra data
-    const float_node = Node{
-        .tag = .expr_frac_f64,
-        .data_1 = 0, // extra_data index
-        .data_2 = 0,
-        .data_3 = 0,
-    };
-    const float_node_idx = try original.nodes.append(gpa, float_node);
-
-    // Add float value to extra_data
+    // Add float node with inline value (f64 stored as two u32s in payload)
     const float_value: f64 = 3.14159;
     const float_as_u64: u64 = @bitCast(float_value);
-    const float_as_u32s: [2]u32 = @bitCast(float_as_u64);
-    for (float_as_u32s) |u32_val| {
+    const float_lo: u32 = @truncate(float_as_u64);
+    const float_hi: u32 = @truncate(float_as_u64 >> 32);
+    var float_node = Node.init(.expr_frac_f64);
+    float_node.setPayload(.{ .expr_frac_f64 = .{
+        .value_lo = float_lo,
+        .value_hi = float_hi,
+        .has_suffix = 0,
+    } });
+    const float_node_idx = try original.nodes.append(gpa, float_node);
+
+    // Also add some extra_data to test extra_data roundtrip
+    const extra_data_float_as_u32s: [2]u32 = @bitCast(float_as_u64);
+    for (extra_data_float_as_u32s) |u32_val| {
         _ = try original.extra_data.append(gpa, u32_val);
     }
 
@@ -4280,21 +4278,27 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     // Verify var node using captured index
     const retrieved_var = deserialized.nodes.get(var_node_idx);
     try testing.expectEqual(Node.Tag.expr_var, retrieved_var.tag);
-    try testing.expectEqual(@as(u32, 5), retrieved_var.data_1);
+    try testing.expectEqual(@as(u32, 5), retrieved_var.getPayload().expr_var.pattern_idx);
 
     // Verify list node using captured index
     const retrieved_list = deserialized.nodes.get(list_node_idx);
     try testing.expectEqual(Node.Tag.expr_list, retrieved_list.tag);
-    try testing.expectEqual(@as(u32, 10), retrieved_list.data_1);
-    try testing.expectEqual(@as(u32, 3), retrieved_list.data_2);
+    try testing.expectEqual(@as(u32, 10), retrieved_list.getPayload().expr_list.elems_start);
+    try testing.expectEqual(@as(u32, 3), retrieved_list.getPayload().expr_list.elems_len);
 
     // Verify float node and extra data using captured index
     const retrieved_float = deserialized.nodes.get(float_node_idx);
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
-    const retrieved_float_u32s = deserialized.extra_data.items.items[0..2];
-    const retrieved_float_u64: u64 = @bitCast(retrieved_float_u32s.*);
-    const retrieved_float_value: f64 = @bitCast(retrieved_float_u64);
+    // Verify float value stored inline in payload
+    const payload = retrieved_float.getPayload().expr_frac_f64;
+    const retrieved_u64: u64 = @as(u64, payload.value_hi) << 32 | payload.value_lo;
+    const retrieved_float_value: f64 = @bitCast(retrieved_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
+    // Also verify extra_data roundtrip
+    const extra_data_u32s = deserialized.extra_data.items.items[0..2];
+    const extra_data_u64: u64 = @bitCast(extra_data_u32s.*);
+    const extra_data_float: f64 = @bitCast(extra_data_u64);
+    try testing.expectApproxEqAbs(float_value, extra_data_float, 0.0001);
 
     // Verify regions using captured indices
     try testing.expectEqual(@as(usize, 3), deserialized.regions.len());

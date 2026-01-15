@@ -666,7 +666,7 @@ fn rewriteNumericLiteralExpr(
         // Rewrite to e_frac_f32
         const f32_value: f32 = @floatCast(f64_value);
         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-        var node = CIR.Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .expr_frac_f32 };
+        var node = CIR.Node.init(.expr_frac_f32);
         node.setPayload(.{ .expr_frac_f32 = .{
             .value = @bitCast(f32_value),
             .has_suffix = 1,
@@ -679,7 +679,7 @@ fn rewriteNumericLiteralExpr(
         const f64_bits: u64 = @bitCast(f64_value);
         const low: u32 = @truncate(f64_bits);
         const high: u32 = @truncate(f64_bits >> 32);
-        var node = CIR.Node{ .data_1 = 0, .data_2 = 0, .data_3 = 0, .tag = .expr_frac_f64 };
+        var node = CIR.Node.init(.expr_frac_f64);
         node.setPayload(.{ .expr_frac_f64 = .{
             .value_lo = low,
             .value_hi = high,

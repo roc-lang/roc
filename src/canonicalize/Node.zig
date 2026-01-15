@@ -8,27 +8,33 @@
 const std = @import("std");
 const collections = @import("collections");
 
-data_1: u32,
-data_2: u32,
-data_3: u32,
+/// Payload storage - 3 u32s (12 bytes) interpreted via the Payload union
+payload_0: u32,
+payload_1: u32,
+payload_2: u32,
 tag: Tag,
 
 /// A list of nodes.
 pub const List = collections.SafeMultiList(@This());
 
+/// Create a new Node with the given tag and zeroed payload.
+pub fn init(tag: Tag) @This() {
+    return .{ .tag = tag, .payload_0 = 0, .payload_1 = 0, .payload_2 = 0 };
+}
+
 /// Get the payload as a typed extern union for type-safe access to node data.
-/// This reinterprets data_1/data_2/data_3 as a Payload union without copying.
+/// This reinterprets the payload bytes as a Payload union without copying.
 pub fn getPayload(self: *const @This()) Payload {
-    return @as(*const Payload, @ptrCast(&self.data_1)).*;
+    return @as(*const Payload, @ptrCast(&self.payload_0)).*;
 }
 
 /// Set the payload from a typed union value.
-/// This writes the payload data to data_1/data_2/data_3.
+/// This writes the payload data to the payload storage.
 pub fn setPayload(self: *@This(), p: Payload) void {
     const raw = @as(*const [3]u32, @ptrCast(&p)).*;
-    self.data_1 = raw[0];
-    self.data_2 = raw[1];
-    self.data_3 = raw[2];
+    self.payload_0 = raw[0];
+    self.payload_1 = raw[1];
+    self.payload_2 = raw[2];
 }
 
 /// Internal representation for where a node is stored
@@ -349,6 +355,7 @@ pub const Payload = extern union {
     ty_record_field: TyRecordField,
     exposed_item: ExposedItem,
     if_branch: IfBranch,
+    type_var_slot: TypeVarSlot,
 
     // ============================================================
     // Payload struct definitions - all must be exactly 12 bytes
@@ -955,6 +962,12 @@ pub const Payload = extern union {
         cond: u32,
         body: u32,
         _unused: u32,
+    };
+
+    pub const TypeVarSlot = extern struct {
+        parent_node_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
     };
 
     // Compile-time size verification
