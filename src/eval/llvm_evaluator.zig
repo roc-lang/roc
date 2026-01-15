@@ -779,6 +779,38 @@ pub const LlvmEvaluator = struct {
                     return ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
                 }
 
+                // Handle Num.mod_by - modulo operation (Roc semantics)
+                // Roc's mod_by returns a result with the same sign as the divisor
+                // This differs from C's % which uses truncated division
+                if (std.mem.eql(u8, func_name, "mod_by") and args.len == 2) {
+                    const lhs_val = try ctx.emitExpr(args[0]);
+                    const rhs_val = try ctx.emitExpr(args[1]);
+                    const lhs_expr = ctx.module_env.store.getExpr(args[0]);
+                    const is_signed = ctx.isSignedExpr(lhs_expr);
+
+                    if (!is_signed) {
+                        // Unsigned: simple remainder
+                        return ctx.wip.bin(.urem, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+                    }
+
+                    // Signed: implement Roc semantics (floored division modulo)
+                    // result = lhs - (floor(lhs/rhs) * rhs)
+                    // If remainder and divisor have different signs, adjust by adding divisor
+                    const rem = ctx.wip.bin(.srem, lhs_val, rhs_val, "") catch return error.CompilationFailed;
+                    const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
+                    const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
+
+                    // Check if remainder != 0 and (remainder ^ divisor) < 0 (different signs)
+                    const rem_ne_zero = ctx.wip.icmp(.ne, rem, zero, "") catch return error.CompilationFailed;
+                    const xor_result = ctx.wip.bin(.xor, rem, rhs_val, "") catch return error.CompilationFailed;
+                    const different_signs = ctx.wip.icmp(.slt, xor_result, zero, "") catch return error.CompilationFailed;
+                    const need_adjust = ctx.wip.bin(.@"and", rem_ne_zero, different_signs, "") catch return error.CompilationFailed;
+
+                    // If need_adjust, add divisor to remainder
+                    const adjusted = ctx.wip.bin(.add, rem, rhs_val, "") catch return error.CompilationFailed;
+                    return ctx.wip.select(.normal, need_adjust, adjusted, rem, "") catch return error.CompilationFailed;
+                }
+
                 // Handle Num.abs_diff - absolute difference |a - b|
                 if (std.mem.eql(u8, func_name, "abs_diff") and args.len == 2) {
                     const lhs_val = try ctx.emitExpr(args[0]);
