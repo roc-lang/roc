@@ -264,7 +264,8 @@ pub const DevEvaluator = struct {
             .e_list => |list| try self.generateListCode(module_env, list, result_type, env),
             .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, env),
             .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, env),
-            .e_empty_record => try self.generateReturnI64Code(0, result_type),
+            // Note: e_empty_record is handled in "Not yet supported" section due to
+            // a canonicalizer bug that incorrectly tags some expressions as e_empty_record
 
             // Blocks and statements
             .e_block => |block| try self.generateBlockCode(module_env, block, result_type, env),
@@ -280,7 +281,8 @@ pub const DevEvaluator = struct {
             .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_type, env),
             .e_runtime_error => return error.UnsupportedExpression, // Runtime errors
 
-            // Not yet supported
+            // Not yet supported (e_empty_record disabled due to canonicalizer bug)
+            .e_empty_record => return error.UnsupportedExpression,
             .e_dot_access => return error.UnsupportedExpression,
             .e_nominal => return error.UnsupportedExpression,
             .e_nominal_external => return error.UnsupportedExpression,
