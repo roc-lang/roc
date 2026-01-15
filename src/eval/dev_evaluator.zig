@@ -37,6 +37,10 @@ pub const DevEvaluator = struct {
     /// Loaded Builtin module (loaded once at startup)
     builtin_module: builtin_loading.LoadedModule,
 
+    /// Crash message from e_crash expression (if any)
+    /// Owned by the allocator, freed on reset or deinit
+    crash_message: ?[]const u8 = null,
+
     pub const Error = error{
         OutOfMemory,
         CompilationFailed,
@@ -47,6 +51,8 @@ pub const DevEvaluator = struct {
         TypeError,
         JitError,
         NotImplemented,
+        Crash,
+        RuntimeError,
     };
 
     /// Type of the result value for JIT execution.
@@ -117,7 +123,31 @@ pub const DevEvaluator = struct {
 
     /// Clean up the evaluator
     pub fn deinit(self: *DevEvaluator) void {
+        if (self.crash_message) |msg| {
+            self.allocator.free(msg);
+        }
         self.builtin_module.deinit();
+    }
+
+    /// Set the crash message (for e_crash and related errors)
+    fn setCrashMessage(self: *DevEvaluator, message: []const u8) !void {
+        if (self.crash_message) |old_msg| {
+            self.allocator.free(old_msg);
+        }
+        self.crash_message = try self.allocator.dupe(u8, message);
+    }
+
+    /// Get the crash message (if any)
+    pub fn getCrashMessage(self: *const DevEvaluator) ?[]const u8 {
+        return self.crash_message;
+    }
+
+    /// Clear the crash message
+    pub fn clearCrashMessage(self: *DevEvaluator) void {
+        if (self.crash_message) |msg| {
+            self.allocator.free(msg);
+            self.crash_message = null;
+        }
     }
 
     /// Generate native code for a CIR expression
@@ -325,9 +355,18 @@ pub const DevEvaluator = struct {
 
             // Debug and errors
             .e_dbg => |dbg| try self.generateDbgCode(module_env, dbg, result_type, env),
-            .e_crash => return error.UnsupportedExpression, // Crash expressions always error
+            .e_crash => |crash| {
+                // Store the crash message and return error
+                const msg = module_env.getString(crash.msg);
+                self.setCrashMessage(msg) catch return error.OutOfMemory;
+                return error.Crash;
+            },
             .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_type, env),
-            .e_runtime_error => return error.UnsupportedExpression, // Runtime errors
+            .e_runtime_error => {
+                // Runtime errors are always errors
+                self.setCrashMessage("Runtime error encountered") catch return error.OutOfMemory;
+                return error.RuntimeError;
+            },
 
             // Empty record (unit type)
             .e_empty_record => try self.generateReturnI64Code(0, result_type),
@@ -342,8 +381,14 @@ pub const DevEvaluator = struct {
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
                 return self.generateCodeForExprWithEnv(module_env, backing_expr, result_type, env);
             },
-            .e_ellipsis => return error.UnsupportedExpression,
-            .e_anno_only => return error.UnsupportedExpression,
+            .e_ellipsis => {
+                self.setCrashMessage("This expression uses `...` as a placeholder. Implementation is required.") catch return error.OutOfMemory;
+                return error.Crash;
+            },
+            .e_anno_only => {
+                self.setCrashMessage("This value has no implementation. It is only a type annotation for now.") catch return error.OutOfMemory;
+                return error.Crash;
+            },
             .e_type_var_dispatch => return error.UnsupportedExpression,
             .e_for => try self.generateReturnI64Code(0, result_type), // For loops always return {} (empty record)
             .e_hosted_lambda => return error.UnsupportedExpression,
