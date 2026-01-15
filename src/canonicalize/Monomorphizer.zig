@@ -500,11 +500,18 @@ pub fn addResolvedToLambdaSet(
     // Static dispatch implementations are typically top-level functions without captures,
     // so we create a simple closure with the method ident as the tag name.
     //
-    // Note: The lambda_body is set to the member_expr from the original unspecialized
-    // closure. This allows dispatch generation to reference the correct function.
+    // Get the actual method's expression instead of the e_type_var_dispatch expression.
+    // If we have a node_idx, use it to get the method definition's expression.
+    // Otherwise, fall back to the member_expr from the unspecialized closure.
+    const lambda_body = if (resolved.impl_lookup.node_idx) |node_idx| blk: {
+        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+        const def = self.module_env.store.getDef(def_idx);
+        break :blk def.expr;
+    } else resolved.unspecialized.member_expr;
+
     const closure_info = ClosureTransformer.ClosureInfo{
         .tag_name = resolved.impl_lookup.method_ident,
-        .lambda_body = resolved.unspecialized.member_expr,
+        .lambda_body = lambda_body,
         .lambda_args = CIR.Pattern.Span{ .span = base.DataSpan.empty() },
         .capture_names = std.ArrayList(base.Ident.Idx).empty,
         .lifted_fn_pattern = null, // Will be set during further processing if needed
@@ -1273,7 +1280,7 @@ pub fn instantiateType(
         .store = self.types_store,
         .idents = self.module_env.getIdentStoreConst(),
         .var_map = var_map,
-        .current_rank = types.Rank.top_level,
+        .current_rank = types.Rank.outermost,
         .rigid_behavior = .fresh_flex,
     };
 
@@ -1730,6 +1737,8 @@ fn duplicateExpr(
         .e_frac_f64,
         .e_dec,
         .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
         .e_str_segment,
         .e_str,
         .e_lookup_local,
