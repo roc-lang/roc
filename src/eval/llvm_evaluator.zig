@@ -385,6 +385,10 @@ pub const LlvmEvaluator = struct {
                     // External lookups are for function references - can't evaluate standalone
                     return error.UnsupportedType;
                 },
+                .e_low_level_lambda => {
+                    // Low-level lambdas are function definitions, not values
+                    return error.UnsupportedType;
+                },
                 else => {
                     std.debug.print("LLVM: Unsupported expression type: {s}\n", .{@tagName(expr)});
                     return error.UnsupportedType;
@@ -755,6 +759,48 @@ pub const LlvmEvaluator = struct {
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, arg_expr) catch return error.CompilationFailed;
                     const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                     return ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
+                }
+            }
+
+            // Handle low-level lambda calls (builtins like list_len)
+            if (func_expr == .e_low_level_lambda) {
+                const low_level = func_expr.e_low_level_lambda;
+                const args = ctx.module_env.store.sliceExpr(call.args);
+
+                switch (low_level.op) {
+                    .list_len => {
+                        // For list literals, we can compute length at compile time
+                        if (args.len == 1) {
+                            const arg_expr = ctx.module_env.store.getExpr(args[0]);
+                            if (arg_expr == .e_empty_list) {
+                                return (ctx.builder.intConst(.i64, 0) catch return error.CompilationFailed).toValue();
+                            }
+                            if (arg_expr == .e_list) {
+                                const list = arg_expr.e_list;
+                                const elems = ctx.module_env.store.sliceExpr(list.elems);
+                                return (ctx.builder.intConst(.i64, @as(i128, @intCast(elems.len))) catch return error.CompilationFailed).toValue();
+                            }
+                        }
+                        return error.UnsupportedType;
+                    },
+                    .list_is_empty => {
+                        // For list literals, we can compute is_empty at compile time
+                        if (args.len == 1) {
+                            const arg_expr = ctx.module_env.store.getExpr(args[0]);
+                            if (arg_expr == .e_empty_list) {
+                                // Empty list - return True (1)
+                                return (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
+                            }
+                            if (arg_expr == .e_list) {
+                                const list = arg_expr.e_list;
+                                const elems = ctx.module_env.store.sliceExpr(list.elems);
+                                const is_empty: i128 = if (elems.len == 0) 1 else 0;
+                                return (ctx.builder.intConst(.i8, is_empty) catch return error.CompilationFailed).toValue();
+                            }
+                        }
+                        return error.UnsupportedType;
+                    },
+                    else => return error.UnsupportedType,
                 }
             }
 
