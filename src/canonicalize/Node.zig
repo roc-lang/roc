@@ -665,7 +665,7 @@ pub const Payload = extern union {
     pub const ExprNominalExternal = extern struct {
         module_idx: u32,
         target_node_idx: u32,
-        extra_data_idx: u32,
+        backing_span2_idx: u32, // Index into span2_data: (backing_expr, backing_type)
     };
 
     /// expr_crash: crash expression with message
@@ -757,7 +757,7 @@ pub const Payload = extern union {
     pub const PatternNominalExternal = extern struct {
         module_idx: u32,
         target_node_idx: u32,
-        extra_data_idx: u32,
+        backing_span2_idx: u32, // Index into span2_data: (backing_pattern, backing_type)
     };
 
     pub const PatternSmallDecLiteral = extern struct {

@@ -678,16 +678,15 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_nominal_external => {
             const p = payload.expr_nominal_external;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..][0..2];
-            const backing_expr: CIR.Expr.Idx = @enumFromInt(extra_data[0]);
-            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+            // Retrieve backing data from span2_data
+            const backing = store.span2_data.items.items[p.backing_span2_idx];
 
             return CIR.Expr{
                 .e_nominal_external = .{
                     .module_idx = @enumFromInt(p.module_idx),
                     .target_node_idx = @intCast(p.target_node_idx),
-                    .backing_expr = backing_expr,
-                    .backing_type = backing_type,
+                    .backing_expr = @enumFromInt(backing.start),
+                    .backing_type = @enumFromInt(backing.len),
                 },
             };
         },
@@ -1218,16 +1217,15 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_nominal_external => {
             const p = payload.pattern_nominal_external;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..][0..2];
-            const backing_pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
-            const backing_type: CIR.Expr.NominalBackingType = @enumFromInt(extra_data[1]);
+            // Retrieve backing data from span2_data
+            const backing = store.span2_data.items.items[p.backing_span2_idx];
 
             return CIR.Pattern{
                 .nominal_external = .{
                     .module_idx = @enumFromInt(p.module_idx),
                     .target_node_idx = @intCast(p.target_node_idx),
-                    .backing_pattern = backing_pattern,
-                    .backing_type = backing_type,
+                    .backing_pattern = @enumFromInt(backing.start),
+                    .backing_type = @enumFromInt(backing.len),
                 },
             };
         },
@@ -1965,13 +1963,15 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_nominal_external => |e| {
             node.tag = .expr_nominal_external;
-            const extra_idx: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_expr));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.backing_type));
+            const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = @intFromEnum(e.backing_expr),
+                .len = @intFromEnum(e.backing_type),
+            });
             node.setPayload(.{ .expr_nominal_external = .{
                 .module_idx = @intFromEnum(e.module_idx),
                 .target_node_idx = @intCast(e.target_node_idx),
-                .extra_data_idx = extra_idx,
+                .backing_span2_idx = backing_span2_idx,
             } });
         },
         .e_dot_access => |e| {
@@ -2442,13 +2442,15 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .nominal_external => |n| {
             node.tag = .pattern_nominal_external;
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_pattern));
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(n.backing_type));
+            const backing_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = @intFromEnum(n.backing_pattern),
+                .len = @intFromEnum(n.backing_type),
+            });
             node.setPayload(.{ .pattern_nominal_external = .{
                 .module_idx = @intFromEnum(n.module_idx),
                 .target_node_idx = @intCast(n.target_node_idx),
-                .extra_data_idx = extra_data_start,
+                .backing_span2_idx = backing_span2_idx,
             } });
         },
         .record_destructure => |p| {
