@@ -2847,6 +2847,10 @@ pub fn build(b: *std.Build) void {
             // Run kcov on canonicalize unit tests
             const run_can_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
             run_can_coverage.addArg("--include-pattern=/src/canonicalize/");
+            // Exclude ModuleEnv.zig from coverage (it's mostly boilerplate)
+            run_can_coverage.addArg("--exclude-pattern=ModuleEnv.zig");
+            // Exclude S-expression output functions (debug/testing output, not core logic)
+            run_can_coverage.addArg("--exclude-line=SExpr");
             run_can_coverage.addArgs(&.{
                 "kcov-output/canonicalize",
                 "zig-out/bin/can_unit_coverage",
