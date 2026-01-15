@@ -786,6 +786,44 @@ pub const LlvmEvaluator = struct {
                     return (ctx.builder.intConst(.i64, @as(i128, @intCast(str_content.len))) catch return error.CompilationFailed).toValue();
                 }
 
+                // Handle Str.starts_with - check if string starts with prefix
+                if (std.mem.eql(u8, func_name, "starts_with") and args.len == 2) {
+                    const str_expr = ctx.module_env.store.getExpr(args[0]);
+                    const prefix_expr = ctx.module_env.store.getExpr(args[1]);
+                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
+                    const prefix_content = ctx.getStringContent(prefix_expr) orelse return error.UnsupportedType;
+                    const result: i128 = if (std.mem.startsWith(u8, str_content, prefix_content)) 1 else 0;
+                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
+                }
+
+                // Handle Str.ends_with - check if string ends with suffix
+                if (std.mem.eql(u8, func_name, "ends_with") and args.len == 2) {
+                    const str_expr = ctx.module_env.store.getExpr(args[0]);
+                    const suffix_expr = ctx.module_env.store.getExpr(args[1]);
+                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
+                    const suffix_content = ctx.getStringContent(suffix_expr) orelse return error.UnsupportedType;
+                    const result: i128 = if (std.mem.endsWith(u8, str_content, suffix_content)) 1 else 0;
+                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
+                }
+
+                // Handle Str.contains - check if string contains substring
+                if (std.mem.eql(u8, func_name, "contains") and args.len == 2) {
+                    const str_expr = ctx.module_env.store.getExpr(args[0]);
+                    const substr_expr = ctx.module_env.store.getExpr(args[1]);
+                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
+                    const substr_content = ctx.getStringContent(substr_expr) orelse return error.UnsupportedType;
+                    const result: i128 = if (std.mem.indexOf(u8, str_content, substr_content) != null) 1 else 0;
+                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
+                }
+
+                // Handle Str.is_empty - check if string is empty
+                if (std.mem.eql(u8, func_name, "is_empty") and args.len == 1) {
+                    const arg_expr = ctx.module_env.store.getExpr(args[0]);
+                    const str_content = ctx.getStringContent(arg_expr) orelse return error.UnsupportedType;
+                    const result: i128 = if (str_content.len == 0) 1 else 0;
+                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
+                }
+
                 // Handle Num.mod_by - modulo operation (Roc semantics)
                 // Roc's mod_by returns a result with the same sign as the divisor
                 // This differs from C's % which uses truncated division
@@ -1654,6 +1692,14 @@ pub const LlvmEvaluator = struct {
                     const func_name = module_env.getIdentText(lookup.ident_idx);
                     // Bool.not returns Bool
                     if (std.mem.eql(u8, func_name, "not")) {
+                        return .bool;
+                    }
+                    // String predicate functions return Bool
+                    if (std.mem.eql(u8, func_name, "starts_with") or
+                        std.mem.eql(u8, func_name, "ends_with") or
+                        std.mem.eql(u8, func_name, "contains") or
+                        std.mem.eql(u8, func_name, "is_empty"))
+                    {
                         return .bool;
                     }
                     // Num.abs and Num.neg return the same type as their argument
