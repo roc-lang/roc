@@ -991,24 +991,36 @@ pub const LlvmEvaluator = struct {
             }
         }
 
-        /// Emit a list to output pointer (writes RocList struct directly)
+        /// Emit a list to output pointer
+        /// Format: [length: i64][elem0: i64][elem1: i64]...
+        /// This inline format avoids pointer allocation issues in JIT
         fn emitListToPtr(ctx: *ExprContext, expr: CIR.Expr, out_ptr: LlvmBuilder.Value) !void {
-            const ROC_LIST_SIZE = 24; // 3 * 8 bytes: pointer, length, capacity
-
             switch (expr) {
                 .e_empty_list => {
-                    // Empty list: all zeros (null pointer, 0 length, 0 capacity)
-                    const i8_type = LlvmBuilder.Type.i8;
-                    const zero = ctx.builder.intConst(i8_type, 0) catch return error.CompilationFailed;
-                    for (0..ROC_LIST_SIZE) |i| {
-                        const idx_const = ctx.builder.intConst(.i64, @as(i128, @intCast(i))) catch return error.CompilationFailed;
-                        const byte_ptr = ctx.wip.gep(.inbounds, i8_type, out_ptr, &.{idx_const.toValue()}, "") catch return error.CompilationFailed;
-                        _ = ctx.wip.store(.normal, zero.toValue(), byte_ptr, LlvmBuilder.Alignment.fromByteUnits(1)) catch return error.CompilationFailed;
-                    }
+                    // Empty list: just store length = 0
+                    const zero = ctx.builder.intConst(.i64, 0) catch return error.CompilationFailed;
+                    _ = ctx.wip.store(.normal, zero.toValue(), out_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
                 },
-                .e_list => {
-                    // Non-empty list - not yet supported
-                    return error.UnsupportedType;
+                .e_list => |list| {
+                    const elems = ctx.module_env.store.sliceExpr(list.elems);
+
+                    // Store length first
+                    const length = ctx.builder.intConst(.i64, @as(i128, @intCast(elems.len))) catch return error.CompilationFailed;
+                    _ = ctx.wip.store(.normal, length.toValue(), out_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
+
+                    // Store each element (as i64)
+                    for (elems, 0..) |elem_idx, i| {
+                        const elem_value = try ctx.emitExpr(elem_idx);
+
+                        // Compute offset: 8 bytes for length + i*8 for elements
+                        const offset = (i + 1) * 8;
+                        const offset_const = ctx.builder.intConst(.i64, @as(i128, @intCast(offset))) catch return error.CompilationFailed;
+                        const elem_ptr = ctx.wip.gep(.inbounds, .i8, out_ptr, &.{offset_const.toValue()}, "") catch return error.CompilationFailed;
+
+                        // Extend to i64 and store
+                        const extended = ctx.wip.conv(.signed, elem_value, .i64, "") catch return error.CompilationFailed;
+                        _ = ctx.wip.store(.normal, extended, elem_ptr, LlvmBuilder.Alignment.fromByteUnits(8)) catch return error.CompilationFailed;
+                    }
                 },
                 else => return error.UnsupportedType,
             }

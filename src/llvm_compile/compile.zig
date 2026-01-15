@@ -412,23 +412,39 @@ pub fn compileAndExecute(
     // Function signature: void roc_eval(<type>* out_ptr)
 
     // Handle list output specially
+    // Format: [length: i64][elem0: i64][elem1: i64]...
     if (is_list) {
-        // RocList is a 24-byte struct on 64-bit platforms
-        // { bytes: *u8, length: usize, capacity: usize }
-        const RocListBytes = [24]u8;
-        const EvalFn = *const fn (*RocListBytes) callconv(.c) void;
+        // Max 16 elements (8 bytes length + 16*8 bytes elements = 136 bytes)
+        var result_buffer: [136]u8 = undefined;
+        const EvalFn = *const fn ([*]u8) callconv(.c) void;
         const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
-        var result: RocListBytes = undefined;
-        eval_fn(&result);
+        eval_fn(&result_buffer);
 
-        // Read the length (second 8 bytes in the struct)
-        const length = std.mem.readInt(u64, result[8..16], .little);
+        // Read the length (first 8 bytes)
+        const length = std.mem.readInt(u64, result_buffer[0..8], .little);
         if (length == 0) {
             return allocator.dupe(u8, "[]") catch return error.OutOfMemory;
-        } else {
-            // Non-empty list - not yet supported
-            return allocator.dupe(u8, "[<list elements>]") catch return error.OutOfMemory;
         }
+
+        // Format: [elem0, elem1, ...]
+        var output = std.ArrayListUnmanaged(u8){};
+        output.append(allocator, '[') catch return error.OutOfMemory;
+
+        var i: usize = 0;
+        while (i < length and i < 16) : (i += 1) {
+            if (i > 0) {
+                output.appendSlice(allocator, ", ") catch return error.OutOfMemory;
+            }
+            // Read element at offset 8 + i*8
+            const offset = 8 + i * 8;
+            const value = std.mem.readInt(i64, result_buffer[offset..][0..8], .little);
+            const value_str = std.fmt.allocPrint(allocator, "{d}", .{value}) catch return error.OutOfMemory;
+            defer allocator.free(value_str);
+            output.appendSlice(allocator, value_str) catch return error.OutOfMemory;
+        }
+
+        output.append(allocator, ']') catch return error.OutOfMemory;
+        return output.toOwnedSlice(allocator) catch return error.OutOfMemory;
     }
 
     // Handle record output specially
