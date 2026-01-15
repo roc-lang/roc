@@ -749,6 +749,36 @@ pub const LlvmEvaluator = struct {
                 }
             }
 
+            // Handle lambda calls: (|x| body)(arg)
+            if (func_expr == .e_lambda) {
+                const lambda = func_expr.e_lambda;
+                const param_patterns = ctx.module_env.store.slicePatterns(lambda.args);
+                const call_args = ctx.module_env.store.sliceExpr(call.args);
+
+                // Check that we have the right number of arguments
+                if (param_patterns.len != call_args.len) {
+                    return error.UnsupportedType;
+                }
+
+                // Bind each argument to its parameter
+                for (param_patterns, call_args) |param_idx, arg_idx| {
+                    const pattern = ctx.module_env.store.getPattern(param_idx);
+                    if (pattern != .assign) {
+                        // Only simple identifier patterns supported for now
+                        return error.UnsupportedType;
+                    }
+
+                    // Evaluate the argument
+                    const arg_val = try ctx.emitExpr(arg_idx);
+
+                    // Bind the parameter to the argument value
+                    ctx.locals.put(param_idx, arg_val) catch return error.CompilationFailed;
+                }
+
+                // Evaluate the lambda body
+                return ctx.emitExpr(lambda.body);
+            }
+
             // For other calls, return unsupported
             return error.UnsupportedType;
         }
@@ -1197,6 +1227,11 @@ pub const LlvmEvaluator = struct {
                             return self.getExprOutputLayout(module_env, args[0]);
                         }
                     }
+                }
+                // Lambda call - get layout from lambda body
+                if (func_expr == .e_lambda) {
+                    const lambda = func_expr.e_lambda;
+                    return self.getExprOutputLayout(module_env, lambda.body);
                 }
                 return .i64; // Default for unknown calls
             },
