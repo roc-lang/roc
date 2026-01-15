@@ -912,7 +912,7 @@ pub const Payload = extern union {
     };
 
     pub const Def = extern struct {
-        extra_data_idx: u32,
+        def_data_idx: u32, // Index into def_data
         _unused1: u32,
         _unused2: u32,
     };

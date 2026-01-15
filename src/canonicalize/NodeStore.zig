@@ -38,6 +38,7 @@ match_data: collections.SafeList(MatchData), // Typed storage for match expressi
 match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for match branch data
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
 zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
+def_data: collections.SafeList(DefData), // Typed storage for definitions
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A pair of u32 values representing a span (start index and length).
@@ -91,6 +92,16 @@ pub const ZeroArgTagData = extern struct {
     variant_var: u32,
     ext_var: u32,
     name: u32,
+};
+
+/// Definition data.
+/// Stores pattern, expr, kind (2 u32s), and annotation index.
+pub const DefData = extern struct {
+    pattern: u32,
+    expr: u32,
+    kind_0: u32,
+    kind_1: u32,
+    anno_idx: u32, // 0 if no annotation
 };
 
 const Scratch = struct {
@@ -175,6 +186,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8),
         .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
         .zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16),
+        .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -191,6 +203,7 @@ pub fn deinit(store: *NodeStore) void {
     store.match_branch_data.deinit(store.gpa);
     store.closure_data.deinit(store.gpa);
     store.zero_arg_tag_data.deinit(store.gpa);
+    store.def_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -209,6 +222,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.match_branch_data.relocate(offset);
     store.closure_data.relocate(offset);
     store.zero_arg_tag_data.relocate(offset);
+    store.def_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -2777,17 +2791,19 @@ pub fn addExposedItem(store: *NodeStore, exposedItem: CIR.ExposedItem, region: b
 pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Error!CIR.Def.Idx {
     var node = Node.init(.def);
 
-    const extra_start: u32 = @intCast(store.extra_data.len());
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.pattern));
-    _ = try store.extra_data.append(store.gpa, @intFromEnum(def.expr));
+    const def_data_idx: u32 = @intCast(store.def_data.len());
     const kind_encoded = def.kind.encode();
-    _ = try store.extra_data.append(store.gpa, kind_encoded[0]);
-    _ = try store.extra_data.append(store.gpa, kind_encoded[1]);
     const anno_idx = if (def.annotation) |anno| @intFromEnum(anno) else 0;
-    _ = try store.extra_data.append(store.gpa, anno_idx);
+    _ = try store.def_data.append(store.gpa, .{
+        .pattern = @intFromEnum(def.pattern),
+        .expr = @intFromEnum(def.expr),
+        .kind_0 = kind_encoded[0],
+        .kind_1 = kind_encoded[1],
+        .anno_idx = anno_idx,
+    });
 
     node.setPayload(.{ .def = .{
-        .extra_data_idx = extra_start,
+        .def_data_idx = def_data_idx,
         ._unused1 = 0,
         ._unused2 = 0,
     } });
@@ -2805,19 +2821,15 @@ pub fn getDef(store: *const NodeStore, def_idx: CIR.Def.Idx) CIR.Def {
     std.debug.assert(node.tag == .def);
 
     const payload = node.getPayload();
-    const extra_start = payload.def.extra_data_idx;
-    const extra_data = store.extra_data.items.items[extra_start..];
+    // Retrieve def data from def_data list
+    const dd = store.def_data.items.items[payload.def.def_data_idx];
 
-    const pattern: CIR.Pattern.Idx = @enumFromInt(extra_data[0]);
-    const expr: CIR.Expr.Idx = @enumFromInt(extra_data[1]);
-    const kind_encoded = [_]u32{ extra_data[2], extra_data[3] };
-    const kind = CIR.Def.Kind.decode(kind_encoded);
-    const anno_idx = extra_data[4];
-    const annotation = if (anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(anno_idx));
+    const kind = CIR.Def.Kind.decode(.{ dd.kind_0, dd.kind_1 });
+    const annotation = if (dd.anno_idx == 0) null else @as(CIR.Annotation.Idx, @enumFromInt(dd.anno_idx));
 
     return CIR.Def{
-        .pattern = pattern,
-        .expr = expr,
+        .pattern = @enumFromInt(dd.pattern),
+        .expr = @enumFromInt(dd.expr),
         .annotation = annotation,
         .kind = kind,
     };
@@ -2832,8 +2844,8 @@ pub fn setDefExpr(store: *NodeStore, def_idx: CIR.Def.Idx, new_expr: CIR.Expr.Id
     std.debug.assert(node.tag == .def);
 
     const payload = node.getPayload();
-    const extra_start = payload.def.extra_data_idx;
-    store.extra_data.items.items[extra_start + 1] = @intFromEnum(new_expr);
+    // Update expr field in def_data list
+    store.def_data.items.items[payload.def.def_data_idx].expr = @intFromEnum(new_expr);
 }
 
 /// Retrieves a capture from the store.
@@ -4081,6 +4093,7 @@ pub const Serialized = extern struct {
     match_branch_data: collections.SafeList(MatchBranchData).Serialized,
     closure_data: collections.SafeList(ClosureData).Serialized,
     zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
+    def_data: collections.SafeList(DefData).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4110,6 +4123,8 @@ pub const Serialized = extern struct {
         try self.closure_data.serialize(&store.closure_data, allocator, writer);
         // Serialize zero_arg_tag_data
         try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
+        // Serialize def_data
+        try self.def_data.serialize(&store.def_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4121,6 +4136,7 @@ pub const Serialized = extern struct {
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order (last to first)
+        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
         const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
         const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
         const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
@@ -4147,6 +4163,7 @@ pub const Serialized = extern struct {
             .match_branch_data = deserialized_match_branch_data,
             .closure_data = deserialized_closure_data,
             .zero_arg_tag_data = deserialized_zero_arg_tag_data,
+            .def_data = deserialized_def_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

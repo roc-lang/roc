@@ -117,12 +117,12 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             }
 
             // Now replace the e_anno_only expression with the e_hosted_lambda
-            // The def's expr field is stored in extra_data[extra_start + 1]
+            // The def's expr field is stored in def_data
             // (reuse def_node_idx from above)
             const def_node = env.store.nodes.get(def_node_idx);
-            const extra_start = def_node.getPayload().def.extra_data_idx;
+            const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-            env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+            env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
 
             // Track this modified def index
             try modified_def_indices.append(gpa, def_idx);
