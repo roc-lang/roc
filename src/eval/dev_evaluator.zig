@@ -281,8 +281,8 @@ pub const DevEvaluator = struct {
             .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_type, env),
             .e_runtime_error => return error.UnsupportedExpression, // Runtime errors
 
-            // Not yet supported (e_empty_record disabled due to canonicalizer bug)
-            .e_empty_record => return error.UnsupportedExpression,
+            // Empty record (unit type)
+            .e_empty_record => try self.generateReturnI64Code(0, result_type),
             .e_dot_access => return error.UnsupportedExpression,
             .e_nominal => return error.UnsupportedExpression,
             .e_nominal_external => return error.UnsupportedExpression,
@@ -1073,6 +1073,9 @@ pub const DevEvaluator = struct {
             return error.ParseError;
         }
 
+        // Clear scratch buffers before canonicalization (required for proper span handling)
+        parse_ast.store.emptyScratch();
+
         // Step 2: Initialize CIR and canonicalize
         module_env.initCIRFields("dev_eval") catch return error.OutOfMemory;
 
@@ -1339,7 +1342,7 @@ test "evaluate if true branch" {
     };
     defer evaluator.deinit();
 
-    const result = evaluator.evaluate("if 1 > 0 then 42 else 0") catch |err| {
+    const result = evaluator.evaluate("if 1 > 0 42 else 0") catch |err| {
         if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
             return error.SkipZigTest;
         }
@@ -1356,7 +1359,7 @@ test "evaluate if false branch" {
     };
     defer evaluator.deinit();
 
-    const result = evaluator.evaluate("if 0 > 1 then 42 else 99") catch |err| {
+    const result = evaluator.evaluate("if 0 > 1 42 else 99") catch |err| {
         if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
             return error.SkipZigTest;
         }
@@ -1373,7 +1376,7 @@ test "evaluate nested if" {
     };
     defer evaluator.deinit();
 
-    const result = evaluator.evaluate("if 1 > 0 then (if 2 > 1 then 100 else 50) else 0") catch |err| {
+    const result = evaluator.evaluate("if 1 > 0 (if 2 > 1 100 else 50) else 0") catch |err| {
         if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
             return error.SkipZigTest;
         }
