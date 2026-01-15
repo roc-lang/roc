@@ -218,14 +218,200 @@ pub const DevEvaluator = struct {
 
     /// Helper to generate code for an expression (recursive)
     fn generateCodeForExpr(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType) Error![]const u8 {
+        // Use empty environment for non-function context
+        var empty_env = std.AutoHashMap(u32, i64).init(self.allocator);
+        defer empty_env.deinit();
+        return self.generateCodeForExprWithEnv(module_env, expr, result_type, &empty_env);
+    }
+
+    /// Helper to generate code for an expression with variable environment (for lambda bodies)
+    fn generateCodeForExprWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
         return switch (expr) {
             .e_num => |num| try self.generateNumericCode(num, result_type),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
-            .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
-            .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
-            .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
+            .e_binop => |binop| try self.generateBinopCodeWithEnv(module_env, binop, result_type, env),
+            .e_unary_minus => |unary| try self.generateUnaryMinusCodeWithEnv(module_env, unary, result_type, env),
+            .e_if => |if_expr| try self.generateIfCodeWithEnv(module_env, if_expr, result_type, env),
+            .e_call => |call| try self.generateCallCode(module_env, call, result_type, env),
+            .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
             else => return error.UnsupportedExpression,
+        };
+    }
+
+    /// Generate code for function calls
+    /// For now, handles simple lambda applications with constant arguments
+    fn generateCallCode(self: *DevEvaluator, module_env: *ModuleEnv, call: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        // Get the function being called
+        const func_expr = module_env.store.getExpr(call.func);
+
+        // Handle lambda application
+        switch (func_expr) {
+            .e_lambda => |lambda| {
+                // Get argument values
+                const arg_indices = module_env.store.sliceExpr(call.args);
+                const param_indices = module_env.store.slicePatterns(lambda.args);
+
+                if (arg_indices.len != param_indices.len) {
+                    return error.UnsupportedExpression;
+                }
+
+                // Create new environment with argument bindings
+                var new_env = try env.clone();
+                defer new_env.deinit();
+
+                for (arg_indices, param_indices) |arg_idx, param_idx| {
+                    const arg_expr = module_env.store.getExpr(arg_idx);
+                    const arg_val = self.tryEvalConstantI64WithEnvMap(module_env, arg_expr, env) orelse
+                        return error.UnsupportedExpression;
+
+                    // Add binding: pattern_idx -> value
+                    try new_env.put(@intFromEnum(param_idx), arg_val);
+                }
+
+                // Evaluate lambda body with new environment
+                const body_expr = module_env.store.getExpr(lambda.body);
+                return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, &new_env);
+            },
+            .e_closure => |closure| {
+                // Get the underlying lambda
+                const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+                switch (lambda_expr) {
+                    .e_lambda => |lambda| {
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        const param_indices = module_env.store.slicePatterns(lambda.args);
+
+                        if (arg_indices.len != param_indices.len) {
+                            return error.UnsupportedExpression;
+                        }
+
+                        var new_env = try env.clone();
+                        defer new_env.deinit();
+
+                        for (arg_indices, param_indices) |arg_idx, param_idx| {
+                            const arg_expr = module_env.store.getExpr(arg_idx);
+                            const arg_val = self.tryEvalConstantI64WithEnvMap(module_env, arg_expr, env) orelse
+                                return error.UnsupportedExpression;
+                            try new_env.put(@intFromEnum(param_idx), arg_val);
+                        }
+
+                        const body_expr = module_env.store.getExpr(lambda.body);
+                        return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, &new_env);
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Generate code for local variable lookup
+    fn generateLookupLocalCode(self: *DevEvaluator, lookup: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const pattern_key = @intFromEnum(lookup.pattern_idx);
+        const value = env.get(pattern_key) orelse return error.UnsupportedExpression;
+        return self.generateReturnI64Code(value, result_type);
+    }
+
+    /// Binary operation with environment support
+    fn generateBinopCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const lhs_expr = module_env.store.getExpr(binop.lhs);
+        const rhs_expr = module_env.store.getExpr(binop.rhs);
+
+        const lhs_val = self.tryEvalConstantI64WithEnvMap(module_env, lhs_expr, env) orelse return error.UnsupportedExpression;
+        const rhs_val = self.tryEvalConstantI64WithEnvMap(module_env, rhs_expr, env) orelse return error.UnsupportedExpression;
+
+        const result_val: i64 = switch (binop.op) {
+            .add => lhs_val +% rhs_val,
+            .sub => lhs_val -% rhs_val,
+            .mul => lhs_val *% rhs_val,
+            .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .lt => if (lhs_val < rhs_val) @as(i64, 1) else @as(i64, 0),
+            .gt => if (lhs_val > rhs_val) @as(i64, 1) else @as(i64, 0),
+            .le => if (lhs_val <= rhs_val) @as(i64, 1) else @as(i64, 0),
+            .ge => if (lhs_val >= rhs_val) @as(i64, 1) else @as(i64, 0),
+            .eq => if (lhs_val == rhs_val) @as(i64, 1) else @as(i64, 0),
+            .ne => if (lhs_val != rhs_val) @as(i64, 1) else @as(i64, 0),
+            .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+            .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+        };
+
+        return self.generateReturnI64Code(result_val, result_type);
+    }
+
+    /// Unary minus with environment support
+    fn generateUnaryMinusCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const inner_expr = module_env.store.getExpr(unary.expr);
+        const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse return error.UnsupportedExpression;
+        return self.generateReturnI64Code(-inner_val, result_type);
+    }
+
+    /// If/else with environment support
+    fn generateIfCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_type: ResultType, env: *std.AutoHashMap(u32, i64)) Error![]const u8 {
+        const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+
+        for (branch_indices) |branch_idx| {
+            const branch = module_env.store.getIfBranch(branch_idx);
+            const cond_expr = module_env.store.getExpr(branch.cond);
+            const cond_val = self.tryEvalConstantI64WithEnvMap(module_env, cond_expr, env);
+
+            if (cond_val) |val| {
+                if (val != 0) {
+                    const body_expr = module_env.store.getExpr(branch.body);
+                    return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, env);
+                }
+            } else {
+                return error.UnsupportedExpression;
+            }
+        }
+
+        const else_expr = module_env.store.getExpr(if_expr.final_else);
+        return self.generateCodeForExprWithEnv(module_env, else_expr, result_type, env);
+    }
+
+    /// Try to evaluate expression with environment (for variable lookups)
+    fn tryEvalConstantI64WithEnvMap(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, env: *std.AutoHashMap(u32, i64)) ?i64 {
+        return switch (expr) {
+            .e_num => |num| {
+                const value_i128 = num.value.toI128();
+                if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+                    return null;
+                }
+                return @intCast(value_i128);
+            },
+            .e_lookup_local => |lookup| {
+                return env.get(@intFromEnum(lookup.pattern_idx));
+            },
+            .e_binop => |binop| {
+                const lhs_expr = module_env.store.getExpr(binop.lhs);
+                const rhs_expr = module_env.store.getExpr(binop.rhs);
+                const lhs_val = self.tryEvalConstantI64WithEnvMap(module_env, lhs_expr, env) orelse return null;
+                const rhs_val = self.tryEvalConstantI64WithEnvMap(module_env, rhs_expr, env) orelse return null;
+
+                return switch (binop.op) {
+                    .add => lhs_val +% rhs_val,
+                    .sub => lhs_val -% rhs_val,
+                    .mul => lhs_val *% rhs_val,
+                    .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else null,
+                    .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .lt => if (lhs_val < rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .gt => if (lhs_val > rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .le => if (lhs_val <= rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .ge => if (lhs_val >= rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .eq => if (lhs_val == rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .ne => if (lhs_val != rhs_val) @as(i64, 1) else @as(i64, 0),
+                    .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+                    .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+                };
+            },
+            .e_unary_minus => |unary| {
+                const inner_expr = module_env.store.getExpr(unary.expr);
+                const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse return null;
+                return -inner_val;
+            },
+            else => null,
         };
     }
 
