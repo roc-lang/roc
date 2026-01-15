@@ -64,10 +64,6 @@ fn countModuleNotFoundDiagnostics(diagnostics: []const CIR.Diagnostic) u32 {
     return count;
 }
 
-// ============================================================================
-// Cross-module import error tests
-// ============================================================================
-
 test "cross-module: module not found with empty module_envs" {
     var gpa_state = std.heap.GeneralPurposeAllocator(.{ .safety = true }){};
     defer std.debug.assert(gpa_state.deinit() == .ok);
