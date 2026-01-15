@@ -452,6 +452,38 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
+        .bool => {
+            // Bool is stored as i64 (extended from i1/i8) in the eval function
+            const EvalFn = *const fn (*i64) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i64 = undefined;
+            eval_fn(&result);
+            const str = if (result != 0) "True" else "False";
+            return allocator.dupe(u8, str) catch return error.OutOfMemory;
+        },
+        .str => {
+            // RocStr is a 24-byte struct on 64-bit platforms
+            // For small strings (< 24 bytes), content is stored inline with length in last byte
+            const RocStrBytes = [24]u8;
+            const EvalFn = *const fn (*RocStrBytes) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: RocStrBytes = undefined;
+            eval_fn(&result);
+
+            // Check if it's a small string (last byte has high bit set)
+            const last_byte = result[23];
+            if (last_byte & 0x80 != 0) {
+                // Small string - length is in the last byte (without high bit)
+                const length = last_byte & 0x7F;
+                const content = result[0..length];
+                // Format as quoted string
+                return std.fmt.allocPrint(allocator, "\"{s}\"", .{content}) catch return error.OutOfMemory;
+            } else {
+                // Big string - we'd need to dereference a pointer which is complex
+                // For now, return a placeholder
+                return allocator.dupe(u8, "\"<heap string>\"") catch return error.OutOfMemory;
+            }
+        },
         else => return error.UnsupportedLayout,
     }
 }

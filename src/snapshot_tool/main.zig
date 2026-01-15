@@ -3541,10 +3541,23 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         for (inputs.items, actual_outputs.items) |input, interp_output| {
             // Step 1: Generate LLVM bitcode from source
             var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
-                // Skip unsupported expressions - they'll return UnsupportedType
+                // Report all errors - no silent skipping
                 switch (err) {
-                    error.UnsupportedType => continue,
-                    error.ParseError, error.CanonicalizeError, error.TypeError => continue,
+                    error.UnsupportedType => {
+                        std.debug.print("LLVM UNSUPPORTED in {s}:\n  Input: {s}\n  (expression type not yet implemented in LLVM backend)\n", .{ snapshot_path, input });
+                        success = false;
+                        continue;
+                    },
+                    error.UnsupportedLayout => {
+                        std.debug.print("LLVM UNSUPPORTED LAYOUT in {s}:\n  Input: {s}\n  (output layout not yet implemented in LLVM backend)\n", .{ snapshot_path, input });
+                        success = false;
+                        continue;
+                    },
+                    error.ParseError, error.CanonicalizeError, error.TypeError => {
+                        std.debug.print("LLVM FRONTEND ERROR in {s}:\n  Input: {s}\n  Error: {}\n", .{ snapshot_path, input, err });
+                        success = false;
+                        continue;
+                    },
                     else => {
                         std.debug.print("LLVM bitcode generation failed for input '{s}': {}\n", .{ input, err });
                         success = false;
