@@ -267,6 +267,8 @@ pub const Payload = extern union {
 
     // === Expression payloads ===
     expr_var: ExprVar,
+    expr_external_lookup: ExprExternalLookup,
+    expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
     expr_list: ExprList,
     expr_call: ExprCall,
@@ -284,6 +286,7 @@ pub const Payload = extern union {
     expr_int: ExprInt,
     expr_num: ExprNum,
     expr_dec: ExprDec,
+    expr_dec_small: ExprDecSmall,
     expr_string: ExprString,
     expr_dot_access: ExprDotAccess,
     expr_field_access: ExprFieldAccess,
@@ -443,10 +446,32 @@ pub const Payload = extern union {
 
     // --- Expressions ---
 
+    /// expr_var: local variable lookup by pattern index
     pub const ExprVar = extern struct {
-        ident: u32,
+        pattern_idx: u32,
         _unused1: u32,
         _unused2: u32,
+    };
+
+    /// expr_external_lookup: lookup from another module
+    pub const ExprExternalLookup = extern struct {
+        module_idx: u32,
+        target_node_idx: u32,
+        ident_idx: u32,
+    };
+
+    /// expr_required_lookup: lookup from platform requires clause
+    pub const ExprRequiredLookup = extern struct {
+        requires_idx: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// expr_dec_small: small decimal value
+    pub const ExprDecSmall = extern struct {
+        numerator: u32,
+        denom_power: u32,
+        has_suffix: u32,
     };
 
     pub const ExprTuple = extern struct {
@@ -539,10 +564,11 @@ pub const Payload = extern union {
         _unused2: u32,
     };
 
+    /// expr_num: numeric literal with kind and value in extra_data
     pub const ExprNum = extern struct {
+        kind: u32,
+        val_kind: u32,
         extra_data_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
     };
 
     pub const ExprDec = extern struct {

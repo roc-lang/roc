@@ -419,38 +419,38 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
     switch (node.tag) {
         .expr_var => {
-            const p = payload.raw;
+            const p = payload.expr_var;
             return CIR.Expr{
                 .e_lookup_local = .{
-                    .pattern_idx = @enumFromInt(p.data_1),
+                    .pattern_idx = @enumFromInt(p.pattern_idx),
                 },
             };
         },
         .expr_external_lookup => {
-            const p = payload.raw;
+            const p = payload.expr_external_lookup;
             // Handle external lookups
             return CIR.Expr{ .e_lookup_external = .{
-                .module_idx = @enumFromInt(p.data_1),
-                .target_node_idx = @intCast(p.data_2),
-                .ident_idx = @bitCast(p.data_3),
+                .module_idx = @enumFromInt(p.module_idx),
+                .target_node_idx = @intCast(p.target_node_idx),
+                .ident_idx = @bitCast(p.ident_idx),
                 .region = store.getRegionAt(node_idx),
             } };
         },
         .expr_required_lookup => {
-            const p = payload.raw;
+            const p = payload.expr_required_lookup;
             // Handle required lookups (platform requires clause)
             return CIR.Expr{ .e_lookup_required = .{
-                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(p.data_1),
+                .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(p.requires_idx),
             } };
         },
         .expr_num => {
-            const p = payload.raw;
+            const p = payload.expr_num;
             // Get requirements
-            const kind: CIR.NumKind = @enumFromInt(p.data_1);
+            const kind: CIR.NumKind = @enumFromInt(p.kind);
 
-            // Read i128 from extra_data (stored as 4 u32s in data_1)
-            const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.data_2);
-            const value_as_u32s = store.extra_data.items.items[p.data_3..][0..4];
+            // Read i128 from extra_data (stored as 4 u32s)
+            const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
+            const value_as_u32s = store.extra_data.items.items[p.extra_data_idx..][0..4];
 
             // Retrieve type variable from data_2 and requirements from data_3
             return CIR.Expr{
@@ -522,12 +522,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_dec_small => {
-            const p = payload.raw;
-            // Unpack small dec data from data_1 and data_3
-            // data_1: numerator (i16) stored as u32
-            // data_3: denominator_power_of_ten (u8) in lower 8 bits
-            const numerator = @as(i16, @intCast(@as(i32, @bitCast(p.data_1))));
-            const denominator_power_of_ten = @as(u8, @truncate(p.data_2));
+            const p = payload.expr_dec_small;
+            // Unpack small dec data
+            const numerator = @as(i16, @intCast(@as(i32, @bitCast(p.numerator))));
+            const denominator_power_of_ten = @as(u8, @truncate(p.denom_power));
 
             return CIR.Expr{
                 .e_dec_small = .{
@@ -535,7 +533,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                         .numerator = numerator,
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
-                    .has_suffix = p.data_3 != 0,
+                    .has_suffix = p.has_suffix != 0,
                 },
             };
         },
@@ -1800,28 +1798,28 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
     switch (expr) {
         .e_lookup_local => |local| {
             node.tag = .expr_var;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(local.pattern_idx),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_var = .{
+                .pattern_idx = @intFromEnum(local.pattern_idx),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_lookup_external => |e| {
             // For external lookups, store the module index, target node index, and ident
             node.tag = .expr_external_lookup;
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.module_idx),
-                .data_2 = e.target_node_idx,
-                .data_3 = @bitCast(e.ident_idx),
+            node.setPayload(.{ .expr_external_lookup = .{
+                .module_idx = @intFromEnum(e.module_idx),
+                .target_node_idx = e.target_node_idx,
+                .ident_idx = @bitCast(e.ident_idx),
             } });
         },
         .e_lookup_required => |e| {
             // For required lookups (platform requires clause), store the index
             node.tag = .expr_required_lookup;
-            node.setPayload(.{ .raw = .{
-                .data_1 = e.requires_idx.toU32(),
-                .data_2 = 0,
-                .data_3 = 0,
+            node.setPayload(.{ .expr_required_lookup = .{
+                .requires_idx = e.requires_idx.toU32(),
+                ._unused1 = 0,
+                ._unused2 = 0,
             } });
         },
         .e_num => |e| {
@@ -1838,10 +1836,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 _ = try store.extra_data.append(store.gpa, word);
             }
 
-            node.setPayload(.{ .raw = .{
-                .data_1 = @intFromEnum(e.kind),
-                .data_2 = @intFromEnum(e.value.kind),
-                .data_3 = extra_data_start,
+            node.setPayload(.{ .expr_num = .{
+                .kind = @intFromEnum(e.kind),
+                .val_kind = @intFromEnum(e.value.kind),
+                .extra_data_idx = extra_data_start,
             } });
         },
         .e_list => |e| {
@@ -1900,13 +1898,11 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dec_small => |e| {
             node.tag = .expr_dec_small;
 
-            // Pack small dec data into data_1 and data_3
-            // data_1: numerator (i16) - fits in lower 16 bits
-            // data_2: denominator_power_of_ten (u8) in lower 8 bits
-            node.setPayload(.{ .raw = .{
-                .data_1 = @as(u32, @bitCast(@as(i32, e.value.numerator))),
-                .data_2 = @as(u32, e.value.denominator_power_of_ten),
-                .data_3 = @intFromBool(e.has_suffix),
+            // Pack small dec data
+            node.setPayload(.{ .expr_dec_small = .{
+                .numerator = @as(u32, @bitCast(@as(i32, e.value.numerator))),
+                .denom_power = @as(u32, e.value.denominator_power_of_ten),
+                .has_suffix = @intFromBool(e.has_suffix),
             } });
         },
         .e_typed_int => |e| {
