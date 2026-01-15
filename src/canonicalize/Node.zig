@@ -343,7 +343,15 @@ pub const Payload = extern union {
     def: Def,
     lambda_capture: LambdaCapture,
     annotation: Annotation,
-    diagnostic: Diagnostic,
+    // === Diagnostic payloads (typed variants) ===
+    diag_empty: DiagEmpty,
+    diag_single_ident: DiagSingleIdent,
+    diag_single_value: DiagSingleValue,
+    diag_two_idents: DiagTwoIdents,
+    diag_ident_with_region: DiagIdentWithRegion,
+    diag_two_idents_extra: DiagTwoIdentsExtra,
+    diag_single_ident_extra: DiagSingleIdentExtra,
+    diag_two_enums: DiagTwoEnums,
     type_header: TypeHeader,
     ty_record_field: TyRecordField,
     exposed_item: ExposedItem,
@@ -563,15 +571,16 @@ pub const Payload = extern union {
         _unused2: u32,
     };
 
-    /// expr_num: numeric literal with kind and value in extra_data
+    /// expr_num: numeric literal with kind and value in int128_values
     pub const ExprNum = extern struct {
         kind: u32,
         val_kind: u32,
-        extra_data_idx: u32,
+        int128_idx: u32,
     };
 
+    /// expr_dec: decimal literal with value in int128_values
     pub const ExprDec = extern struct {
-        extra_data_idx: u32,
+        int128_idx: u32,
         has_suffix: u32,
         _unused: u32,
     };
@@ -624,18 +633,18 @@ pub const Payload = extern union {
         _unused2: u32,
     };
 
-    /// expr_typed_int: typed integer with type name and value in extra_data
+    /// expr_typed_int: typed integer with type name and value in int128_values
     pub const ExprTypedInt = extern struct {
         type_name: u32,
         val_kind: u32,
-        extra_data_idx: u32,
+        int128_idx: u32,
     };
 
-    /// expr_typed_frac: typed fraction with type name and value in extra_data
+    /// expr_typed_frac: typed fraction with type name and value in int128_values
     pub const ExprTypedFrac = extern struct {
         type_name: u32,
         val_kind: u32,
-        extra_data_idx: u32,
+        int128_idx: u32,
     };
 
     /// expr_string_segment: string segment reference
@@ -732,10 +741,11 @@ pub const Payload = extern union {
         _unused: u32,
     };
 
+    /// pattern_num_literal: numeric pattern with value in int128_values
     pub const PatternNumLiteral = extern struct {
         kind: u32,
         value_kind: u32,
-        extra_data_idx: u32,
+        int128_idx: u32,
     };
 
     pub const PatternNominal = extern struct {
@@ -756,8 +766,9 @@ pub const Payload = extern union {
         has_suffix: u32,
     };
 
+    /// pattern_dec_literal: decimal pattern with value in int128_values
     pub const PatternDecLiteral = extern struct {
-        extra_data_idx: u32,
+        int128_idx: u32,
         has_suffix: u32,
         _unused: u32,
     };
@@ -918,15 +929,70 @@ pub const Payload = extern union {
         extra_data_idx: u32,
     };
 
-    /// Diagnostic payload - used for all diagnostic node types.
-    /// Fields are interpreted based on the specific diagnostic tag.
-    pub const Diagnostic = extern struct {
-        /// Primary value (ident, feature ID, count, etc.)
-        primary: u32,
-        /// Secondary value (ident, region start, etc.)
-        secondary: u32,
-        /// Tertiary value (region end, extra data index, etc.)
-        tertiary: u32,
+    // === Diagnostic payload structs ===
+
+    /// Diagnostics that only need region (stored separately), no payload data.
+    /// Used by: diag_invalid_num_literal, diag_empty_tuple, diag_break_outside_loop, etc.
+    pub const DiagEmpty = extern struct {
+        _unused1: u32,
+        _unused2: u32,
+        _unused3: u32,
+    };
+
+    /// Diagnostics with a single identifier.
+    /// Used by: diag_ident_not_in_scope, diag_unused_variable, diag_undeclared_type, etc.
+    pub const DiagSingleIdent = extern struct {
+        ident: u32, // @bitCast(Ident.Idx)
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// Diagnostics with a single u32 value (feature ID, count, bool, enum, etc.)
+    /// Used by: diag_not_implemented, diag_too_many_exports, diag_default_app_wrong_arity, etc.
+    pub const DiagSingleValue = extern struct {
+        value: u32,
+        _unused1: u32,
+        _unused2: u32,
+    };
+
+    /// Diagnostics with two identifiers.
+    /// Used by: diag_value_not_exposed, diag_type_name_case_mismatch, diag_nested_type_not_found, etc.
+    pub const DiagTwoIdents = extern struct {
+        ident1: u32, // @bitCast(Ident.Idx)
+        ident2: u32, // @bitCast(Ident.Idx)
+        _unused: u32,
+    };
+
+    /// Diagnostics with an identifier and inline region offsets.
+    /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, etc.
+    pub const DiagIdentWithRegion = extern struct {
+        ident: u32,        // @bitCast(Ident.Idx)
+        region_start: u32, // offset
+        region_end: u32,   // offset
+    };
+
+    /// Diagnostics with two values plus an extra_data index for region.
+    /// Used by: diag_type_shadowed_warning, diag_type_parameter_conflict, diag_mutually_recursive_type_aliases
+    pub const DiagTwoIdentsExtra = extern struct {
+        ident1: u32,    // @bitCast(Ident.Idx) or value
+        ident2: u32,    // @bitCast(Ident.Idx) or bool flag
+        extra_idx: u32, // index into extra_data for region offsets
+    };
+
+    /// Diagnostics with a single identifier plus extra_data index.
+    /// Used by: diag_redundant_exposed
+    pub const DiagSingleIdentExtra = extern struct {
+        ident: u32,     // @bitCast(Ident.Idx)
+        extra_idx: u32, // index into extra_data for region offsets
+        _unused: u32,
+    };
+
+    /// Diagnostics with two enum values.
+    /// Used by: diag_deprecated_number_suffix
+    pub const DiagTwoEnums = extern struct {
+        enum1: u32, // @intFromEnum
+        enum2: u32, // @intFromEnum
+        _unused: u32,
     };
 
     pub const TypeHeader = extern struct {
