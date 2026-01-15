@@ -779,6 +779,13 @@ pub const LlvmEvaluator = struct {
                     return ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
                 }
 
+                // Handle Str.count_utf8_bytes - return string byte length
+                if (std.mem.eql(u8, func_name, "count_utf8_bytes") and args.len == 1) {
+                    const arg_expr = ctx.module_env.store.getExpr(args[0]);
+                    const str_content = ctx.getStringContent(arg_expr) orelse return error.UnsupportedType;
+                    return (ctx.builder.intConst(.i64, @as(i128, @intCast(str_content.len))) catch return error.CompilationFailed).toValue();
+                }
+
                 // Handle Num.mod_by - modulo operation (Roc semantics)
                 // Roc's mod_by returns a result with the same sign as the divisor
                 // This differs from C's % which uses truncated division
