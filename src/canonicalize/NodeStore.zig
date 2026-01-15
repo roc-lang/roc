@@ -777,11 +777,11 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_type_var_dispatch => {
+            const p = payload.raw;
             // Retrieve type var dispatch data from node and extra_data
-            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(node.data_1);
-            const method_name: base.Ident.Idx = @bitCast(node.data_2);
-            const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const type_var_alias_stmt: CIR.Statement.Idx = @enumFromInt(p.data_1);
+            const method_name: base.Ident.Idx = @bitCast(p.data_2);
+            const extra_data = store.extra_data.items.items[p.data_3..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
@@ -793,54 +793,53 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_hosted_lambda => {
+            const p = payload.expr_hosted_lambda;
             // Retrieve hosted lambda data from node and extra_data
-            const symbol_name: base.Ident.Idx = @bitCast(node.data_1);
-            const index = node.data_2;
-            const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
 
             return CIR.Expr{ .e_hosted_lambda = .{
-                .symbol_name = symbol_name,
-                .index = index,
+                .symbol_name = @bitCast(p.symbol_name),
+                .index = p.index,
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
                 .body = @enumFromInt(body_idx),
             } };
         },
         .expr_low_level => {
+            const p = payload.expr_low_level;
             // Retrieve low-level lambda data from extra_data
-            const op: CIR.Expr.LowLevel = @enumFromInt(node.data_1);
-            const extra_start = node.data_2;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const args_start = extra_data[0];
             const args_len = extra_data[1];
             const body_idx = extra_data[2];
 
             return CIR.Expr{ .e_low_level_lambda = .{
-                .op = op,
+                .op = @enumFromInt(p.op),
                 .args = .{ .span = .{ .start = args_start, .len = args_len } },
                 .body = @enumFromInt(body_idx),
             } };
         },
         .expr_expect => {
+            const p = payload.raw;
             return CIR.Expr{ .e_expect = .{
-                .body = @enumFromInt(node.data_1),
+                .body = @enumFromInt(p.data_1),
             } };
         },
         .expr_for => {
+            const p = payload.statement_for;
             return CIR.Expr{ .e_for = .{
-                .patt = @enumFromInt(node.data_1),
-                .expr = @enumFromInt(node.data_2),
-                .body = @enumFromInt(node.data_3),
+                .patt = @enumFromInt(p.patt),
+                .expr = @enumFromInt(p.expr),
+                .body = @enumFromInt(p.body),
             } };
         },
         .expr_if_then_else => {
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const p = payload.expr_if_then_else;
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
             const branches_span_start: u32 = extra_data[0];
             const branches_span_end: u32 = extra_data[1];
@@ -858,9 +857,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_dot_access => {
+            const p = payload.expr_dot_access;
             // Read extra data: field_name_region (2 u32s) + optional args (1 u32)
-            const extra_start = node.data_3;
-            const extra_data = store.extra_data.items.items[extra_start..];
+            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
             const field_name_region = base.Region{
                 .start = .{ .offset = extra_data[0] },
                 .end = .{ .offset = extra_data[1] },
@@ -873,15 +872,16 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } else null;
 
             return CIR.Expr{ .e_dot_access = .{
-                .receiver = @enumFromInt(node.data_1),
-                .field_name = @bitCast(node.data_2),
+                .receiver = @enumFromInt(p.receiver),
+                .field_name = @bitCast(p.field_name),
                 .field_name_region = field_name_region,
                 .args = args_span,
             } };
         },
         .malformed => {
+            const p = payload.diagnostic;
             return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(node.data_1),
+                .diagnostic = @enumFromInt(p.primary),
             } };
         },
 
