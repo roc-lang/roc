@@ -153,8 +153,9 @@ pub const DevEvaluator = struct {
         const rhs_expr = module_env.store.getExpr(binop.rhs);
 
         // Try to evaluate both sides as constants (constant folding)
-        const lhs_val = self.tryEvalConstantI64(lhs_expr) orelse return error.UnsupportedExpression;
-        const rhs_val = self.tryEvalConstantI64(rhs_expr) orelse return error.UnsupportedExpression;
+        // Uses tryEvalConstantI64WithEnv to support True/False tags
+        const lhs_val = self.tryEvalConstantI64WithEnv(module_env, lhs_expr) orelse return error.UnsupportedExpression;
+        const rhs_val = self.tryEvalConstantI64WithEnv(module_env, rhs_expr) orelse return error.UnsupportedExpression;
 
         // Perform the operation at compile time
         const result_val: i64 = switch (binop.op) {
@@ -477,6 +478,18 @@ pub const DevEvaluator = struct {
                 }
                 return null;
             },
+            .e_tag => |tag| {
+                // Handle Bool tags with no arguments: True = 1, False = 0
+                const args = module_env.store.sliceExpr(tag.args);
+                if (args.len == 0) {
+                    if (tag.name == module_env.idents.true_tag) {
+                        return 1;
+                    } else if (tag.name == module_env.idents.false_tag) {
+                        return 0;
+                    }
+                }
+                return null;
+            },
             else => null,
         };
     }
@@ -533,6 +546,27 @@ pub const DevEvaluator = struct {
                 const inner_expr = module_env.store.getExpr(unary.expr);
                 const inner_val = self.tryEvalConstantI64WithEnv(module_env, inner_expr) orelse return null;
                 return -inner_val;
+            },
+            .e_zero_argument_tag => |tag| {
+                // Handle Bool tags: True = 1, False = 0
+                if (tag.name == module_env.idents.true_tag) {
+                    return 1;
+                } else if (tag.name == module_env.idents.false_tag) {
+                    return 0;
+                }
+                return null;
+            },
+            .e_tag => |tag| {
+                // Handle Bool tags with no arguments: True = 1, False = 0
+                const args = module_env.store.sliceExpr(tag.args);
+                if (args.len == 0) {
+                    if (tag.name == module_env.idents.true_tag) {
+                        return 1;
+                    } else if (tag.name == module_env.idents.false_tag) {
+                        return 0;
+                    }
+                }
+                return null;
             },
             else => null,
         };
@@ -1646,9 +1680,41 @@ test "evaluate modulo" {
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
 }
 
-// Note: Boolean and/or tests temporarily disabled pending parser/canonicalizer investigation
-// test "evaluate boolean and" { ... }
-// test "evaluate boolean or" { ... }
+test "evaluate boolean and" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // True and True should return 1
+    const result = evaluator.evaluate("True and True") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
+
+test "evaluate boolean or" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // False or True should return 1
+    const result = evaluator.evaluate("False or True") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
+}
 
 test "evaluate multi-parameter lambda" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
@@ -1668,5 +1734,21 @@ test "evaluate multi-parameter lambda" {
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
 }
 
-// Note: Complex arithmetic test temporarily disabled pending operator precedence investigation
-// test "evaluate complex arithmetic expression" { ... }
+test "evaluate complex arithmetic expression" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        if (err == error.OutOfMemory) return error.SkipZigTest;
+        return err;
+    };
+    defer evaluator.deinit();
+
+    // Complex expression: (5 + 3) * 2 - 10 // 2
+    const result = evaluator.evaluate("(5 + 3) * 2 - 10 // 2") catch |err| {
+        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
+            return error.SkipZigTest;
+        }
+        return err;
+    };
+
+    // (5 + 3) * 2 - 10 // 2 = 8 * 2 - 5 = 16 - 5 = 11
+    try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 11 }, result);
+}
