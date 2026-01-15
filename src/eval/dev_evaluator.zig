@@ -19,6 +19,7 @@ const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
 const backend = @import("backend");
+const layout_mod = @import("layout");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -26,6 +27,12 @@ const CIR = can.CIR;
 const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
+const comptime_value = eval_mod.comptime_value;
+const ComptimeHeap = comptime_value.ComptimeHeap;
+const ComptimeValue = comptime_value.ComptimeValue;
+const ComptimeEnv = comptime_value.ComptimeEnv;
+const LayoutStore = layout_mod.Store;
+const LayoutIdx = layout_mod.Idx;
 
 /// Dev backend-based evaluator for Roc expressions
 pub const DevEvaluator = struct {
