@@ -54,6 +54,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/where_clause_test.zig"));
     std.testing.refAllDecls(@import("test/can_error_test.zig"));
     std.testing.refAllDecls(@import("test/can_edge_cases_test.zig"));
+    std.testing.refAllDecls(@import("test/cross_module_test.zig"));
 
     // Backend tests (Roc emitter)
     std.testing.refAllDecls(@import("RocEmitter.zig"));
