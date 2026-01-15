@@ -12,7 +12,11 @@ Format := [Format]
 x = @Format(Format)
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - can_nominal_type_instance.md:5:5:5:12
+PARSE ERROR - can_nominal_type_instance.md:5:12:5:13
+PARSE ERROR - can_nominal_type_instance.md:5:19:5:20
+MODULE HEADER DEPRECATED - can_nominal_type_instance.md:1:1:1:11
+UNRECOGNIZED SYNTAX - can_nominal_type_instance.md:5:5:5:12
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Format** is not expected in an expression.

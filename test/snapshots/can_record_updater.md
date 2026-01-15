@@ -8,7 +8,11 @@ type=expr
 {& foo: 1 }
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - can_record_updater.md:1:1:1:12
+UNEXPECTED TOKEN IN EXPRESSION - can_record_updater.md:1:2:1:3
+UNEXPECTED TOKEN IN TYPE ANNOTATION - can_record_updater.md:1:9:1:10
+UNRECOGNIZED SYNTAX - can_record_updater.md:1:2:1:3
+MALFORMED TYPE - can_record_updater.md:1:9:1:10
+UNUSED VARIABLE - can_record_updater.md:1:4:1:10
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **&** is not expected in an expression.

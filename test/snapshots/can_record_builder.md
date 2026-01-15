@@ -8,7 +8,7 @@ type=expr
 {build} foo bar
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - can_record_builder.md:1:1:1:16
+UNDEFINED VARIABLE - can_record_builder.md:1:2:1:7
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `build` in this scope.

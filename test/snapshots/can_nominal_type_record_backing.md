@@ -12,7 +12,18 @@ Point := { x: I64, y: I64 }
 point = @Point({ x: 0, y: 0 })
 ~~~
 # EXPECTED
-NIL
+UNEXPECTED TOKEN IN EXPRESSION - can_nominal_type_record_backing.md:5:9:5:15
+PARSE ERROR - can_nominal_type_record_backing.md:5:15:5:16
+PARSE ERROR - can_nominal_type_record_backing.md:5:16:5:17
+UNEXPECTED TOKEN IN TYPE ANNOTATION - can_nominal_type_record_backing.md:5:21:5:22
+PARSE ERROR - can_nominal_type_record_backing.md:5:22:5:23
+UNEXPECTED TOKEN IN TYPE ANNOTATION - can_nominal_type_record_backing.md:5:27:5:28
+PARSE ERROR - can_nominal_type_record_backing.md:5:29:5:30
+PARSE ERROR - can_nominal_type_record_backing.md:5:30:5:31
+MODULE HEADER DEPRECATED - can_nominal_type_record_backing.md:1:1:1:15
+UNRECOGNIZED SYNTAX - can_nominal_type_record_backing.md:5:9:5:15
+MALFORMED TYPE - can_nominal_type_record_backing.md:5:21:5:22
+MALFORMED TYPE - can_nominal_type_record_backing.md:5:27:5:28
 # PROBLEMS
 **UNEXPECTED TOKEN IN EXPRESSION**
 The token **@Point** is not expected in an expression.

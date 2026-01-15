@@ -12,7 +12,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-WHERE CLAUSE NOT ALLOWED IN TYPE DECL - can_type_decl_where_clause_error.md:2:5:2:39
+WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION - can_type_decl_where_clause_error.md:2:5:2:39
 # PROBLEMS
 **WHERE CLAUSE NOT ALLOWED IN TYPE DECLARATION**
 You cannot define a `where` clause inside a type declaration.

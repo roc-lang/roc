@@ -11,7 +11,7 @@ type=expr
 }
 ~~~
 # EXPECTED
-INVALID NUMBER LITERAL - can_pattern_int_overflow.md:2:5:2:47
+INVALID NUMBER - can_pattern_int_overflow.md:2:5:2:47
 # PROBLEMS
 **INVALID NUMBER**
 This number literal is not valid: `999999999999999999999999999999999999999999`
