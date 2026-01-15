@@ -3538,3 +3538,60 @@ test "check type - if branch type mismatch" {
     // Results in TYPE MISMATCH because 42 and "hello" don't unify
     try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
+
+// Pattern matching tests
+
+test "check type - pattern destructuring tuple with annotation" {
+    // Tuple destructuring in pattern match
+    const source =
+        \\x : (I64, Str)
+        \\x = (42, "hello")
+        \\
+        \\result : Str
+        \\result = match x {
+        \\    (_, s) => s
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "Str");
+}
+
+test "check type - pattern match nested tags" {
+    // Nested tag patterns
+    const source =
+        \\x : [Outer([Inner(I64)])]
+        \\x = Outer(Inner(42))
+        \\
+        \\result : I64
+        \\result = match x {
+        \\    Outer(Inner(n)) => n
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
+
+// Polymorphism tests
+
+test "check type - identity function applied to concrete types" {
+    // Identity function should work with different types
+    const source =
+        \\id = |x| x
+        \\
+        \\a : I64
+        \\a = id(42)
+        \\
+        \\b : Str
+        \\b = id("hello")
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "a" } }, "I64");
+}
+
+test "check type - polymorphic function with concrete usage" {
+    // Const function should work with different types
+    const source =
+        \\const = |x, _y| x
+        \\
+        \\result : I64
+        \\result = const(42, "ignored")
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "I64");
+}
