@@ -3539,6 +3539,16 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
         defer llvm_evaluator.deinit();
 
         for (inputs.items, actual_outputs.items) |input, interp_output| {
+            // Skip LLVM evaluation for non-expression outputs (problems, assignments)
+            // TYPE MISMATCH and other errors are detected at type-check time, not evaluation
+            // "assigned `x`" outputs are variable bindings, not expressions to evaluate
+            if (std.mem.startsWith(u8, interp_output, "TYPE MISMATCH") or
+                std.mem.startsWith(u8, interp_output, "assigned `") or
+                std.mem.startsWith(u8, interp_output, "**"))
+            {
+                continue;
+            }
+
             // Step 1: Generate LLVM bitcode from source
             var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
                 // Report all errors - no silent skipping
