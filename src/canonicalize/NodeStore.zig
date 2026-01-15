@@ -1352,7 +1352,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             return CIR.TypeAnno{ .apply = .{
                 .name = @bitCast(p.name),
                 .base = type_base,
-                .args = .{ .span = .{ .start = p.extra_data_idx, .len = args_len } },
+                .args = .{ .span = .{ .start = p.args_start, .len = args_len } },
             } };
         },
         .ty_rigid_var => {
