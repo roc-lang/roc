@@ -123,15 +123,17 @@ pub const DevEvaluator = struct {
     /// Generate native code for a CIR expression
     /// Returns the generated code and result type
     /// The caller is responsible for freeing the code via result.deinit()
-    pub fn generateCode(self: *DevEvaluator, _: *ModuleEnv, expr: CIR.Expr) Error!CodeResult {
+    pub fn generateCode(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!CodeResult {
         // Get the result type from the expression
         const result_type = self.getExprResultType(expr);
 
         // Generate code based on the expression type
         const code = switch (expr) {
             .e_num => |num| try self.generateNumericCode(num, result_type),
-            .e_frac_f64 => |frac| try self.generateFloatCode(frac),
-            .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac)),
+            .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
+            .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
+            .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
+            .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
             else => return error.UnsupportedExpression,
         };
 
@@ -142,10 +144,68 @@ pub const DevEvaluator = struct {
         };
     }
 
+    /// Generate code for binary operations
+    /// For now, uses constant folding when both operands are literals
+    fn generateBinopCode(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_type: ResultType) Error![]const u8 {
+        // Get the left and right expressions
+        const lhs_expr = module_env.store.getExpr(binop.lhs);
+        const rhs_expr = module_env.store.getExpr(binop.rhs);
+
+        // Try to evaluate both sides as constants (constant folding)
+        const lhs_val = self.tryEvalConstantI64(lhs_expr) orelse return error.UnsupportedExpression;
+        const rhs_val = self.tryEvalConstantI64(rhs_expr) orelse return error.UnsupportedExpression;
+
+        // Perform the operation at compile time
+        const result_val: i64 = switch (binop.op) {
+            .add => lhs_val +% rhs_val,
+            .sub => lhs_val -% rhs_val,
+            .mul => lhs_val *% rhs_val,
+            .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+            .lt => if (lhs_val < rhs_val) @as(i64, 1) else @as(i64, 0),
+            .gt => if (lhs_val > rhs_val) @as(i64, 1) else @as(i64, 0),
+            .le => if (lhs_val <= rhs_val) @as(i64, 1) else @as(i64, 0),
+            .ge => if (lhs_val >= rhs_val) @as(i64, 1) else @as(i64, 0),
+            .eq => if (lhs_val == rhs_val) @as(i64, 1) else @as(i64, 0),
+            .ne => if (lhs_val != rhs_val) @as(i64, 1) else @as(i64, 0),
+            .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+            .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
+        };
+
+        return self.generateReturnI64Code(result_val, result_type);
+    }
+
+    /// Generate code for unary minus
+    fn generateUnaryMinusCode(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_type: ResultType) Error![]const u8 {
+        const inner_expr = module_env.store.getExpr(unary.expr);
+        const inner_val = self.tryEvalConstantI64(inner_expr) orelse return error.UnsupportedExpression;
+        return self.generateReturnI64Code(-inner_val, result_type);
+    }
+
+    /// Try to evaluate an expression as a constant i64 value
+    fn tryEvalConstantI64(_: *DevEvaluator, expr: CIR.Expr) ?i64 {
+        return switch (expr) {
+            .e_num => |num| {
+                const value_i128 = num.value.toI128();
+                if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+                    return null;
+                }
+                return @intCast(value_i128);
+            },
+            else => null,
+        };
+    }
+
     /// Generate code for a numeric literal
-    fn generateNumericCode(self: *DevEvaluator, num: CIR.Num, result_type: ResultType) Error![]const u8 {
-        // Get the value as i64 or u64
-        const value: i64 = num.toI64() orelse return error.UnsupportedType;
+    fn generateNumericCode(self: *DevEvaluator, num: anytype, result_type: ResultType) Error![]const u8 {
+        // Get the value as i64
+        // The num has .value (IntValue) and .kind (NumKind) fields
+        const value_i128 = num.value.toI128();
+        if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+            return error.UnsupportedType;
+        }
+        const value: i64 = @intCast(value_i128);
 
         return self.generateReturnI64Code(value, result_type);
     }
