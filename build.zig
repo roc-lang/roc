@@ -2819,8 +2819,51 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             coverage_step.dependOn(&windows_parse_build.step);
 
-            // Hook up coverage_step to the summary step
+            // Hook up coverage_step to the parser summary step
             coverage_step.dependOn(&summary_step.step);
+
+            // ============================================================
+            // Canonicalize Coverage
+            // ============================================================
+
+            // Create canonicalize module unit tests for coverage
+            const can_unit_test = b.addTest(.{
+                .name = "can_unit_coverage",
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/canonicalize/mod.zig"),
+                    .target = target,
+                    .optimize = .Debug, // Debug required for DWARF debug info
+                }),
+            });
+            roc_modules.addModuleDependencies(can_unit_test, .can);
+
+            // Install canonicalize test
+            const install_can_test = b.addInstallArtifact(can_unit_test, .{});
+            build_cov_tests.dependOn(&install_can_test.step);
+
+            // Create output directory for canonicalize coverage
+            const mkdir_can_step = b.addSystemCommand(&.{ "mkdir", "-p", "kcov-output/canonicalize" });
+            mkdir_can_step.setCwd(b.path("."));
+            mkdir_can_step.step.dependOn(&summary_step.step); // Run after parser coverage
+
+            // Run kcov on canonicalize unit tests
+            const run_can_coverage = b.addSystemCommand(&.{"zig-out/bin/kcov"});
+            run_can_coverage.addArg("--include-pattern=/src/canonicalize/");
+            run_can_coverage.addArgs(&.{
+                "kcov-output/canonicalize",
+                "zig-out/bin/can_unit_coverage",
+            });
+            run_can_coverage.setCwd(b.path("."));
+            run_can_coverage.step.dependOn(&mkdir_can_step.step);
+            run_can_coverage.step.dependOn(&install_can_test.step);
+
+            // Add coverage summary step for canonicalize
+            // Start with 0% threshold to see what we have, then increase
+            const can_summary_step = CoverageSummaryStep.create(b, "kcov-output/canonicalize", "Canonicalize", "src/canonicalize", 0.0);
+            can_summary_step.step.dependOn(&run_can_coverage.step);
+
+            // Hook up coverage_step to the canonicalize summary step
+            coverage_step.dependOn(&can_summary_step.step);
         }
     } else if (!is_coverage_supported) {
         // On unsupported platforms, print a message
