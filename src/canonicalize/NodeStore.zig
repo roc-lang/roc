@@ -821,9 +821,9 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             } };
         },
         .expr_expect => {
-            const p = payload.raw;
+            const p = payload.expr_expect;
             return CIR.Expr{ .e_expect = .{
-                .body = @enumFromInt(p.data_1),
+                .body = @enumFromInt(p.body),
             } };
         },
         .expr_for => {
@@ -1042,10 +1042,10 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
     std.debug.assert(node.tag == .match_branch_pattern);
 
-    const p = payload.raw;
+    const p = payload.match_branch_pattern;
     return CIR.Expr.Match.BranchPattern{
-        .pattern = @enumFromInt(p.data_1),
-        .degenerate = p.data_2 != 0,
+        .pattern = @enumFromInt(p.pattern),
+        .degenerate = p.degenerate != 0,
     };
 }
 
@@ -1082,9 +1082,9 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
             } };
         },
         .where_alias => {
-            const p = payload.raw;
-            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.data_1));
-            const alias_name = @as(Ident.Idx, @bitCast(p.data_2));
+            const p = payload.where_alias;
+            const var_ = @as(CIR.TypeAnno.Idx, @enumFromInt(p.var_idx));
+            const alias_name = @as(Ident.Idx, @bitCast(p.alias_name));
 
             return CIR.WhereClause{ .w_alias = .{
                 .var_ = var_,
@@ -2369,10 +2369,10 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
         },
         .w_alias => |mod_alias| {
             node.tag = .where_alias;
-            node.setPayload(.{ .where_clause = .{
+            node.setPayload(.{ .where_alias = .{
                 .var_idx = @intFromEnum(mod_alias.var_),
-                .name = @bitCast(mod_alias.alias_name),
-                .extra_data_idx = 0,
+                .alias_name = @bitCast(mod_alias.alias_name),
+                ._unused = 0,
             } });
         },
         .w_malformed => |malformed| {

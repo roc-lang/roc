@@ -341,6 +341,7 @@ pub const Payload = extern union {
     match_branch: MatchBranch,
     match_branch_pattern: MatchBranchPattern,
     where_clause: WhereClause,
+    where_alias: WhereAlias,
     where_malformed: WhereMalformed,
     def: Def,
     lambda_capture: LambdaCapture,
@@ -895,6 +896,13 @@ pub const Payload = extern union {
         diagnostic: u32,
         _unused1: u32,
         _unused2: u32,
+    };
+
+    /// where_alias: type variable alias in where clause
+    pub const WhereAlias = extern struct {
+        var_idx: u32,
+        alias_name: u32,
+        _unused: u32,
     };
 
     pub const Def = extern struct {
