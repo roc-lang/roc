@@ -519,7 +519,32 @@ pub const DevEvaluator = struct {
                     else => return error.UnsupportedExpression,
                 }
             },
-            .list_get_unsafe,
+            .list_get_unsafe => {
+                // Get element at index from constant list
+                if (arg_indices.len != 2) return error.UnsupportedExpression;
+                const list_expr = module_env.store.getExpr(arg_indices[0]);
+                const index_expr = module_env.store.getExpr(arg_indices[1]);
+
+                // Get the index value
+                const index_val = self.tryEvalConstantI64WithEnvMap(module_env, index_expr, env) orelse
+                    return error.UnsupportedExpression;
+                if (index_val < 0) return error.UnsupportedExpression;
+
+                switch (list_expr) {
+                    .e_list => |list| {
+                        const elements = module_env.store.sliceExpr(list.elems);
+                        const index: usize = @intCast(index_val);
+                        if (index >= elements.len) return error.UnsupportedExpression;
+
+                        // Get the element and evaluate it
+                        const elem_expr = module_env.store.getExpr(elements[index]);
+                        const elem_val = self.tryEvalConstantI64WithEnvMap(module_env, elem_expr, env) orelse
+                            return error.UnsupportedExpression;
+                        return self.generateReturnI64Code(elem_val, result_type);
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
             .list_append_unsafe,
             .list_concat,
             .list_with_capacity,
