@@ -1324,13 +1324,12 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
 pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.TypeAnno {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(typeAnno));
     const node = store.nodes.get(node_idx);
+    const payload = node.getPayload();
 
     switch (node.tag) {
         .ty_apply => {
-            const name: Ident.Idx = @bitCast(node.data_1);
-            const args_start = node.data_2;
-
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const p = payload.ty_apply;
+            const extra_data = store.extra_data.items.items[p._unused..];
             const args_len = extra_data[0];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
@@ -1351,23 +1350,28 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             };
 
             return CIR.TypeAnno{ .apply = .{
-                .name = name,
+                .name = @bitCast(p.name),
                 .base = type_base,
-                .args = .{ .span = .{ .start = args_start, .len = args_len } },
+                .args = .{ .span = .{ .start = p.extra_data_idx, .len = args_len } },
             } };
         },
-        .ty_rigid_var => return CIR.TypeAnno{ .rigid_var = .{
-            .name = @bitCast(node.data_1),
-        } },
-        .ty_rigid_var_lookup => return CIR.TypeAnno{ .rigid_var_lookup = .{
-            .ref = @enumFromInt(node.data_1),
-        } },
+        .ty_rigid_var => {
+            const p = payload.raw;
+            return CIR.TypeAnno{ .rigid_var = .{
+                .name = @bitCast(p.data_1),
+            } };
+        },
+        .ty_rigid_var_lookup => {
+            const p = payload.raw;
+            return CIR.TypeAnno{ .rigid_var_lookup = .{
+                .ref = @enumFromInt(p.data_1),
+            } };
+        },
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_lookup => {
-            const name: Ident.Idx = @bitCast(node.data_1);
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(node.data_2);
-
-            const extra_data = store.extra_data.items.items[node.data_3..];
+            const p = payload.ty_lookup;
+            const extra_data = store.extra_data.items.items[p._unused..];
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(p.base);
             const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
                 switch (base_enum) {
                     .builtin => {
@@ -1386,46 +1390,67 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
             };
 
             return CIR.TypeAnno{ .lookup = .{
-                .name = name,
+                .name = @bitCast(p.name),
                 .base = type_base,
             } };
         },
-        .ty_tag_union => return CIR.TypeAnno{ .tag_union = .{
-            .tags = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-            .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
-        } },
-        .ty_tag => return CIR.TypeAnno{ .tag = .{
-            .name = @bitCast(node.data_1),
-            .args = .{ .span = .{ .start = node.data_2, .len = node.data_3 } },
-        } },
-        .ty_tuple => return CIR.TypeAnno{ .tuple = .{
-            .elems = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-        } },
-        .ty_record => return CIR.TypeAnno{
-            .record = .{
-                .fields = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
-                .ext = if (node.data_3 != 0) @enumFromInt(node.data_3 - OPTIONAL_VALUE_OFFSET) else null,
-            },
+        .ty_tag_union => {
+            const p = payload.ty_tag_union;
+            return CIR.TypeAnno{ .tag_union = .{
+                .tags = .{ .span = .{ .start = p.tags_start, .len = p.tags_len } },
+                .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+            } };
+        },
+        .ty_tag => {
+            const p = payload.ty_tag;
+            return CIR.TypeAnno{ .tag = .{
+                .name = @bitCast(p.name),
+                .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
+            } };
+        },
+        .ty_tuple => {
+            const p = payload.ty_tuple;
+            return CIR.TypeAnno{ .tuple = .{
+                .elems = .{ .span = .{ .start = p.elems_start, .len = p.elems_len } },
+            } };
+        },
+        .ty_record => {
+            const p = payload.ty_record;
+            return CIR.TypeAnno{
+                .record = .{
+                    .fields = .{ .span = .{ .start = p.fields_start, .len = p.fields_len } },
+                    .ext = if (p.ext_plus_one != 0) @enumFromInt(p.ext_plus_one - OPTIONAL_VALUE_OFFSET) else null,
+                },
+            };
         },
         .ty_fn => {
-            const extra_data_idx = node.data_3;
-            const effectful = store.extra_data.items.items[extra_data_idx] != 0;
-            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[extra_data_idx + 1]);
+            const p = payload.ty_fn;
+            const effectful = store.extra_data.items.items[p.extra_data_idx] != 0;
+            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[p.extra_data_idx + 1]);
             return CIR.TypeAnno{ .@"fn" = .{
-                .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
                 .ret = ret,
                 .effectful = effectful,
             } };
         },
-        .ty_parens => return CIR.TypeAnno{ .parens = .{
-            .anno = @enumFromInt(node.data_1),
-        } },
-        .ty_malformed => return CIR.TypeAnno{ .malformed = .{
-            .diagnostic = @enumFromInt(node.data_1),
-        } },
-        .malformed => return CIR.TypeAnno{ .malformed = .{
-            .diagnostic = @enumFromInt(node.data_1),
-        } },
+        .ty_parens => {
+            const p = payload.raw;
+            return CIR.TypeAnno{ .parens = .{
+                .anno = @enumFromInt(p.data_1),
+            } };
+        },
+        .ty_malformed => {
+            const p = payload.diagnostic;
+            return CIR.TypeAnno{ .malformed = .{
+                .diagnostic = @enumFromInt(p.primary),
+            } };
+        },
+        .malformed => {
+            const p = payload.diagnostic;
+            return CIR.TypeAnno{ .malformed = .{
+                .diagnostic = @enumFromInt(p.primary),
+            } };
+        },
         else => {
             std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
         },
