@@ -147,20 +147,20 @@ test "unused value - discarded expression" {
 
 Note: The block syntax `{ expr1; expr2 }` may not trigger this if block semantics return last expression. Need to verify exact syntax that triggers unused value detection.
 
-### 6. Unimplemented Error Types
+### 6. Recursion Error Types (Now Implemented and Tested)
 
 **Error Types:**
-- `infinite_recursion`
-- `anonymous_recursion`
-- `invalid_number_type`
-- `invalid_record_ext`
-- `invalid_tag_union_ext`
-- `bug`
+- `infinite_recursion` - Triggered by `f = |x| f([x])` creating `a = List(a)`
+- `anonymous_recursion` - Triggered by recursive types through records/tags without nominal wrapper, e.g. `f = |x| f({field: x})`
+- `bug` - Internal compiler error, triggered when unification fails without error context
 
 **Status:**
-These currently return `buildUnimplementedReport()` placeholder. Testing them requires:
-1. First implementing the actual report builders
-2. Then creating test cases that trigger those error conditions
+These have been implemented with proper error reports and are tested in `problem_coverage_test.zig`.
+
+**Removed Error Types:**
+- `invalid_number_type` - Was dead code, never thrown
+- `invalid_record_ext` - Unreachable through user code, replaced with `unreachable`
+- `invalid_tag_union_ext` - Unreachable through user code, replaced with `unreachable`
 
 ## Recommended Implementation Order
 
@@ -213,12 +213,15 @@ The following dead code was identified and removed:
 - `buildInvalidNumericLiteralReport` (~65 lines)
 - Associated struct definitions (`NumberDoesNotFit`, `NegativeUnsignedInt`, `InvalidNumericLiteral`)
 - Error types in unify.zig error set
+- `invalid_number_type` problem type (never thrown)
+- `invalid_record_ext` and `invalid_tag_union_ext` (unreachable, replaced with `unreachable`)
+- `buildInvalidRecordExtReport` and `buildInvalidTagUnionExtReport` report builders
 
 **Why it was dead code:**
-The error types were defined but never returned anywhere. Number validation happens during comptime evaluation (in `validateDeferredNumericLiterals`), which creates `comptime_eval_error` problems instead of the specific number validation problems.
+- Number validation errors: Error types were defined but never returned anywhere. Number validation happens during comptime evaluation (in `validateDeferredNumericLiterals`), which creates `comptime_eval_error` problems instead of the specific number validation problems.
+- Extension type errors: The parser enforces that extensions must be type variables, making it impossible for user code to create invalid extensions. The checks were replaced with `unreachable` to catch internal bugs.
 
 ## Summary
 
 The main coverage gaps are in error paths that require:
 1. **Platform modules** (platform requirement errors)
-2. **Unimplemented features** (extension type errors returning "unimplemented")

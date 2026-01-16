@@ -115,26 +115,28 @@ test "invalid bool binop - or with strings" {
 
 // INCOMPATIBLE LIST ELEMENTS
 // Tests the buildIncompatibleListElementsReport function
+// NOTE: We use tags instead of numbers because numeric literals trigger
+// static dispatch errors before the list element type mismatch is detected.
 
-test "incompatible list - int and string mixed" {
+test "incompatible list - tag and string mixed" {
     const source =
-        \\x = [1, 2, "three", 4]
+        \\x = [Ok, Err, "three"]
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("TYPE MISMATCH");
+    try test_env.assertFirstTypeError("INCOMPATIBLE LIST ELEMENTS");
 }
 
-test "incompatible list - annotated list with wrong element" {
+test "incompatible list - annotated list with wrong element type" {
     const source =
-        \\x : List(I64)
-        \\x = [1, 2, "three"]
+        \\x : List([Ok, Err])
+        \\x = [Ok, Err, "three"]
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    try test_env.assertFirstTypeError("TYPE MISMATCH");
+    try test_env.assertFirstTypeError("INCOMPATIBLE LIST ELEMENTS");
 }
 
 // INCOMPATIBLE IF BRANCHES
@@ -524,3 +526,98 @@ test "valid - function with correct types" {
 
     try test_env.assertLastDefType("I64");
 }
+
+// Tests for infinite type recursion (INFINITE TYPE)
+// Based on comment in Check.zig: `f = |x| f([x])` creates `a = List(a)`
+
+test "infinite type - function wrapping argument in list" {
+    // f = |x| f([x]) creates an infinite type a = List(a)
+    const source =
+        \\f = |x| f([x])
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INFINITE TYPE");
+}
+
+// Tests for anonymous recursion (RECURSIVE TYPE WITHOUT NAME)
+// Recursion through record/tag fields without going through a nominal type
+
+test "anonymous recursion - recursive record field" {
+    // This creates a recursive type through record fields without a nominal wrapper
+    // f = |x| f({field: x}) creates {field: a} where a = {field: a}
+    const source =
+        \\f = |x| f({field: x})
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("RECURSIVE TYPE WITHOUT NAME");
+}
+
+test "anonymous recursion - recursive tag payload" {
+    // This creates a recursive type through tag payloads without a nominal wrapper
+    // f = |x| f(Tag(x)) where x becomes Tag(a) and a = Tag(a)
+    const source =
+        \\f = |x| f(Wrap(x))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("RECURSIVE TYPE WITHOUT NAME");
+}
+
+// Tests for UNUSED VALUE
+// Triggered when an expression value is discarded
+
+test "unused value - expression in block discarded" {
+    // In Roc, statements in a block must return {} (unit)
+    // An expression that returns something else triggers UNUSED VALUE
+    const source =
+        \\f = |_| {
+        \\    Ok
+        \\    Err
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("UNUSED VALUE");
+}
+
+// Tests for ? (try) operator on non-Try types
+// When ? is used on non-Try, the match pattern check fails first with incompatible_match_cond_pattern
+// because ? desugars to a match with Ok/Err patterns
+
+test "try operator on non-result - match pattern error" {
+    // The ? suffix operator desugars to match with Ok/Err patterns
+    // Using it on Str triggers incompatible_match_cond_pattern first
+    const source =
+        \\str : Str
+        \\str = "hello"
+        \\
+        \\x = str?
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The desugared match checks patterns first, triggering incompatible_match_cond_pattern
+    try test_env.assertAnyTypeMismatchDetail(.incompatible_match_cond_pattern);
+}
+
+// Tests for UNSUPPORTED WHERE CLAUSE
+// The old ability syntax is no longer supported
+
+test "unsupported where clause - old ability syntax" {
+    // The old syntax `where [a.Decode]` is no longer valid
+    const source =
+        \\f : a -> a where [a.Decode]
+        \\f = |x| x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("UNSUPPORTED WHERE CLAUSE");
+}
+

@@ -244,27 +244,6 @@ pub fn unifyWithConf(
                                     .snapshot = snapshot,
                                 } };
                             },
-                            .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_number_type = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_record_ext = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_tag_union_ext = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
                         }
                     } else {
                         const bug_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
@@ -1579,10 +1558,15 @@ const Unifier = struct {
                                 .empty_record => {
                                     return .{ .ext = ext, .range = range };
                                 },
-                                else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                                // Record extensions can only be records, empty_record, or record_unbound.
+                                // If we reach here, there's a bug in the type checker - the extension
+                                // variable was unified with a non-record type, which should be impossible.
+                                else => unreachable,
                             }
                         },
-                        else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                        // Record extensions must be flex, rigid, alias, or structure containing a record.
+                        // Any other content indicates an internal bug.
+                        else => unreachable,
                     }
                 },
             }
@@ -2040,10 +2024,14 @@ const Unifier = struct {
                         .empty_tag_union => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
+                        // Tag union extensions can only be tag_union or empty_tag_union.
+                        // If we reach here, there's a bug in the type checker.
+                        else => unreachable,
                     }
                 },
-                else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
+                // Tag union extensions must be flex, rigid, alias, or structure containing a tag union.
+                // Any other content indicates an internal bug.
+                else => unreachable,
             }
         }
     }
@@ -2394,9 +2382,6 @@ const Unifier = struct {
 pub const UnifyErrCtx = union(enum) {
     recursion_infinite: Var,
     recursion_anonymous: Var,
-    invalid_number_type: Var,
-    invalid_record_ext: Var,
-    invalid_tag_union_ext: Var,
 };
 
 /// A list of constraint that should apply to concrete type

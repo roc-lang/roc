@@ -587,6 +587,47 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
     try testing.expectEqualStrings(expected, report.title);
 }
 
+/// Assert that any problem is a type mismatch with a specific detail tag.
+pub fn assertAnyTypeMismatchDetail(self: *TestEnv, expected_detail_tag: std.meta.Tag(problem_mod.TypeMismatchDetail)) !void {
+    try self.assertNoParseProblems();
+
+    // Assert at least 1 problem
+    try testing.expect(self.checker.problems.problems.items.len >= 1);
+
+    // Search through all problems to find one with the expected detail
+    for (self.checker.problems.problems.items, 0..) |problem, i| {
+        switch (problem) {
+            .type_mismatch => |mismatch| {
+                if (mismatch.detail) |detail| {
+                    if (std.meta.activeTag(detail) == expected_detail_tag) {
+                        return; // Found the expected detail
+                    }
+                }
+            },
+            else => {},
+        }
+        _ = i;
+    }
+
+    // Didn't find the expected detail - print all problems for debugging
+    std.debug.print("Expected to find type_mismatch with detail {any}, but found these problems:\n", .{expected_detail_tag});
+    for (self.checker.problems.problems.items, 0..) |problem, i| {
+        switch (problem) {
+            .type_mismatch => |mismatch| {
+                if (mismatch.detail) |detail| {
+                    std.debug.print("  [{d}] type_mismatch with detail: {any}\n", .{ i, std.meta.activeTag(detail) });
+                } else {
+                    std.debug.print("  [{d}] type_mismatch with detail: null\n", .{i});
+                }
+            },
+            else => |tag| {
+                std.debug.print("  [{d}] {any}\n", .{ i, tag });
+            },
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
 fn renderReportToMarkdownBuffer(buf: *std.array_list.Managed(u8), report: anytype) !void {
     buf.clearRetainingCapacity();
     var unmanaged = buf.moveToUnmanaged();
