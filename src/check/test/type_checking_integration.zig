@@ -2962,6 +2962,7 @@ fn checkTypesModuleDefs(
 const ExprExpectation = union(enum) {
     pass,
     fail,
+    fail_with,
 };
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
@@ -2983,6 +2984,9 @@ fn checkTypesExpr(
         },
         .fail => {
             return test_env.assertOneTypeError(expected);
+        },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
         },
     }
 
@@ -3362,7 +3366,89 @@ test "check type - issue8934 recursive nominal type unification" {
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
 }
 
-// recursive functions
+// early return //
+
+test "check type - early return - pass" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return []
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - early return - fail" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return "hello"
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `return` does not match the function's return type:
+        \\**test:3:12:3:19:**
+        \\```roc
+        \\    return "hello"
+        \\```
+        \\           ^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\But the function's return type is:
+        \\
+        \\    List(_a)
+        \\
+        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - early return - ? - fail" {
+    const source =
+        \\|| {
+        \\  _val = Try.Err("hello")?
+        \\  Try.Err(Bool.True)
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .pass,
+        \\**TYPE MISMATCH**
+        \\This `return` does not match the function's return type:
+        \\**test:3:12:3:19:**
+        \\```roc
+        \\    return "hello"
+        \\```
+        \\           ^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\But the function's return type is:
+        \\
+        \\    List(_a)
+        \\
+        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
+        ,
+    );
+}
+
+// recursive functions //
 
 test "check type - self recursive function - fibonacci - pass" {
     const source =

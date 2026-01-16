@@ -1618,7 +1618,7 @@ fn duplicateExpr(
             const new_expr = try self.duplicateExpr(ret.expr, type_subs);
             if (new_expr == ret.expr) return expr_idx;
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr, .lambda = ret.lambda },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
         },
 

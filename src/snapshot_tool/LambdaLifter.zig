@@ -549,7 +549,7 @@ fn transformBodyWithCaptures(
             const new_expr = try self.transformBodyWithCaptures(ret.expr);
             if (new_expr == ret.expr) return body_idx;
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr, .lambda = ret.lambda },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
         },
 

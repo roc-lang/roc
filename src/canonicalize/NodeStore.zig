@@ -707,6 +707,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_return = .{
                 .expr = @enumFromInt(node.data_1),
                 .lambda = @enumFromInt(node.data_2),
+                .context = @enumFromInt(node.data_3),
             } };
         },
         .expr_type_var_dispatch => {
@@ -1826,6 +1827,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_return;
             node.data_1 = @intFromEnum(ret.expr);
             node.data_2 = @intFromEnum(ret.lambda);
+            node.data_3 = @intFromEnum(ret.context);
         },
         .e_type_var_dispatch => |tvd| {
             node.tag = .expr_type_var_dispatch;
