@@ -6148,13 +6148,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
         .record_builder => |rb| {
-            const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
-            const feature = try self.env.insertString("canonicalize record_builder expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = region,
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            return try self.canonicalizeRecordBuilder(rb);
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -6280,6 +6274,449 @@ fn canonicalizeForLoop(
         .body = body.idx,
         .free_vars = free_vars,
     };
+}
+
+/// Canonicalize a record builder expression: `{ a: fa, b: fb }.T`
+/// Desugars to chained map2 calls:
+/// - 2 fields: `T.map2(fa, fb, |a, b| { a, b })`
+/// - 3 fields: `T.map2(fa, T.map2(fb, fc, |b, c| (b, c)), |a, (b, c)| { a, b, c })`
+/// - N fields: Chain map2 calls right-to-left with tuple intermediates
+fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).record_builder)) std.mem.Allocator.Error!CanonicalizedExpr {
+    const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
+
+    // Get the fields from the record builder
+    const fields_slice = self.parse_ir.store.recordFieldSlice(rb.fields);
+    const field_count = fields_slice.len;
+
+    if (field_count == 0) {
+        const feature = try self.env.insertString("empty record builder expression");
+        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    }
+
+    if (field_count == 1) {
+        const feature = try self.env.insertString("single-field record builder (minimum 2 fields required)");
+        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    }
+
+    // Step 1: Extract the type name from the mapper
+    const mapper_expr = self.parse_ir.store.getExpr(rb.mapper);
+    const type_name: Ident.Idx = switch (mapper_expr) {
+        .tag => |tag| self.parse_ir.tokens.resolveIdentifier(tag.token) orelse {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        },
+        else => {
+            const feature = try self.env.insertString("record builder with non-type mapper");
+            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+    };
+
+    // Use scratch_captures to collect free vars from field values
+    const captures_top = self.scratch_captures.top();
+    defer self.scratch_captures.clearFrom(captures_top);
+
+    // Step 2: Collect field names and canonicalize field values
+    var field_names: [64]Ident.Idx = undefined;
+    var field_values: [64]Expr.Idx = undefined;
+    if (field_count > 64) {
+        const feature = try self.env.insertString("record builder with more than 64 fields");
+        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    }
+
+    for (fields_slice, 0..) |field_idx, i| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+
+        // Get field name
+        const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        };
+        field_names[i] = field_name;
+
+        // Canonicalize field value
+        if (field.value) |value_idx| {
+            if (try self.canonicalizeExpr(value_idx)) |can_value| {
+                field_values[i] = can_value.idx;
+                // Collect free vars from field value
+                const value_free_vars = self.scratch_free_vars.sliceFromSpan(can_value.free_vars);
+                for (value_free_vars) |fv| {
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
+                }
+            } else {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } });
+                field_values[i] = malformed_idx;
+            }
+        } else {
+            // Shorthand: { foo } means { foo: foo }
+            if (self.scopeContains(.ident, field_name)) |pattern_idx| {
+                const lookup_idx = try self.env.addExpr(CIR.Expr{
+                    .e_lookup_local = .{ .pattern_idx = pattern_idx },
+                }, region);
+                field_values[i] = lookup_idx;
+                if (!self.scratch_captures.contains(pattern_idx)) {
+                    try self.scratch_captures.append(pattern_idx);
+                }
+            } else {
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                    .ident = field_name,
+                    .region = region,
+                } });
+                field_values[i] = malformed_idx;
+            }
+        }
+    }
+
+    // Step 3: Look up T.map2
+    const type_name_text = self.env.getIdent(type_name);
+    const map2_method_name = try self.env.insertQualifiedIdent(type_name_text, "map2");
+
+    const map2_pattern_idx: ?Pattern.Idx = switch (self.scopeLookup(.ident, map2_method_name)) {
+        .found => |found| found,
+        .not_found => null,
+    };
+
+    if (map2_pattern_idx == null) {
+        // map2 not found - generate error
+        const map2_ident = try self.env.insertIdent(Ident.for_text("map2"));
+        return CanonicalizedExpr{
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
+                .parent_name = type_name,
+                .nested_name = map2_ident,
+                .region = region,
+            } }),
+            .free_vars = DataSpan.empty(),
+        };
+    }
+
+    // Mark map2 as used
+    try self.used_patterns.put(self.env.gpa, map2_pattern_idx.?, {});
+
+    // Step 4: Build the chained map2 calls
+    // For 2 fields: T.map2(fa, fb, |a, b| { a, b })
+    // For 3+ fields: Build right-to-left with tuple intermediates
+    const result_expr = try self.buildChainedMap2(
+        region,
+        map2_pattern_idx.?,
+        field_names[0..field_count],
+        field_values[0..field_count],
+    );
+
+    // Collect all free variables
+    const free_vars_start = self.scratch_free_vars.top();
+    const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+    for (captures_slice) |fv| {
+        try self.scratch_free_vars.append(fv);
+    }
+    try self.scratch_free_vars.append(map2_pattern_idx.?);
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+
+    return CanonicalizedExpr{ .idx = result_expr, .free_vars = free_vars_span };
+}
+
+/// Build chained map2 calls for record builder desugaring.
+/// For N fields, builds: T.map2(f0, T.map2(f1, ..., T.map2(f_{n-2}, f_{n-1}, |p_{n-2}, p_{n-1}| (p_{n-2}, p_{n-1}))...), |p0, tuple| { fields })
+fn buildChainedMap2(
+    self: *Self,
+    region: base.Region,
+    map2_pattern_idx: Pattern.Idx,
+    field_names: []const Ident.Idx,
+    field_values: []const Expr.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    const n = field_names.len;
+    std.debug.assert(n >= 2);
+
+    if (n == 2) {
+        // Base case: T.map2(f0, f1, |p0, p1| { p0, p1 })
+        const lambda_idx = try self.buildFinalRecordLambda(region, field_names);
+        return try self.buildMap2Call(region, map2_pattern_idx, field_values[0], field_values[1], lambda_idx);
+    }
+
+    // Recursive case: Build from right to left
+    // Start with innermost: T.map2(f_{n-2}, f_{n-1}, |p_{n-2}, p_{n-1}| (p_{n-2}, p_{n-1}))
+    var inner_expr = try self.buildInnerMap2WithTuple(
+        region,
+        map2_pattern_idx,
+        field_values[n - 2],
+        field_values[n - 1],
+        field_names[n - 2],
+        field_names[n - 1],
+    );
+
+    // Build intermediate layers (from index n-3 down to 1)
+    // Each produces: T.map2(f_i, inner, |p_i, (rest...)| (p_i, rest...))
+    var i: usize = n - 3;
+    while (i >= 1) : (i -= 1) {
+        inner_expr = try self.buildIntermediateMap2(
+            region,
+            map2_pattern_idx,
+            field_values[i],
+            inner_expr,
+            field_names[i],
+            field_names[i + 1 .. n],
+        );
+    }
+
+    // Final layer: T.map2(f_0, inner, |p_0, (rest...)| { all fields })
+    const final_lambda_idx = try self.buildFinalLambdaWithTupleDestructure(region, field_names);
+    return try self.buildMap2Call(region, map2_pattern_idx, field_values[0], inner_expr, final_lambda_idx);
+}
+
+/// Build a map2 call: map2(arg1, arg2, lambda)
+fn buildMap2Call(
+    self: *Self,
+    region: base.Region,
+    map2_pattern_idx: Pattern.Idx,
+    arg1: Expr.Idx,
+    arg2: Expr.Idx,
+    lambda: Expr.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    // Create function lookup
+    const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+        .pattern_idx = map2_pattern_idx,
+    } }, region);
+
+    // Build args
+    const args_start = self.env.store.scratchExprTop();
+    try self.env.store.addScratchExpr(arg1);
+    try self.env.store.addScratchExpr(arg2);
+    try self.env.store.addScratchExpr(lambda);
+    const args_span = try self.env.store.exprSpanFrom(args_start);
+
+    return try self.env.addExpr(CIR.Expr{
+        .e_call = .{
+            .func = func_expr_idx,
+            .args = args_span,
+            .called_via = CalledVia.apply,
+        },
+    }, region);
+}
+
+/// Build the innermost map2 call that produces a 2-tuple:
+/// T.map2(fa, fb, |a, b| (a, b))
+fn buildInnerMap2WithTuple(
+    self: *Self,
+    region: base.Region,
+    map2_pattern_idx: Pattern.Idx,
+    arg1: Expr.Idx,
+    arg2: Expr.Idx,
+    name1: Ident.Idx,
+    name2: Ident.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    // Create lambda |a, b| (a, b)
+    try self.enterFunction(region);
+    defer self.exitFunction();
+    try self.scopeEnter(self.env.gpa, true);
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    // Create patterns for parameters
+    const patterns_start = self.env.store.scratch.?.patterns.top();
+
+    const p1 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name1 } }, region);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name1, p1, false, true);
+    try self.env.store.scratch.?.patterns.append(p1);
+
+    const p2 = try self.env.addPattern(Pattern{ .assign = .{ .ident = name2 } }, region);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name2, p2, false, true);
+    try self.env.store.scratch.?.patterns.append(p2);
+
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
+
+    // Mark patterns as used
+    try self.used_patterns.put(self.env.gpa, p1, {});
+    try self.used_patterns.put(self.env.gpa, p2, {});
+
+    // Create tuple body (a, b)
+    const lookup1 = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = p1 } }, region);
+    const lookup2 = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = p2 } }, region);
+
+    const tuple_start = self.env.store.scratchExprTop();
+    try self.env.store.addScratchExpr(lookup1);
+    try self.env.store.addScratchExpr(lookup2);
+    const tuple_span = try self.env.store.exprSpanFrom(tuple_start);
+
+    const tuple_body = try self.env.addExpr(CIR.Expr{ .e_tuple = .{ .elems = tuple_span } }, region);
+
+    const lambda_idx = try self.env.addExpr(CIR.Expr{
+        .e_lambda = .{ .args = args_span, .body = tuple_body },
+    }, region);
+
+    return try self.buildMap2Call(region, map2_pattern_idx, arg1, arg2, lambda_idx);
+}
+
+/// Build an intermediate map2 call that extends a tuple:
+/// T.map2(fa, inner, |a, (b, c, ...)| (a, b, c, ...))
+fn buildIntermediateMap2(
+    self: *Self,
+    region: base.Region,
+    map2_pattern_idx: Pattern.Idx,
+    arg1: Expr.Idx,
+    inner: Expr.Idx,
+    new_name: Ident.Idx,
+    tuple_names: []const Ident.Idx,
+) std.mem.Allocator.Error!Expr.Idx {
+    // Create lambda |a, (b, c, ...)| (a, b, c, ...)
+    try self.enterFunction(region);
+    defer self.exitFunction();
+    try self.scopeEnter(self.env.gpa, true);
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    const patterns_start = self.env.store.scratch.?.patterns.top();
+
+    // First parameter: simple assign pattern
+    const p_new = try self.env.addPattern(Pattern{ .assign = .{ .ident = new_name } }, region);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, new_name, p_new, false, true);
+    try self.env.store.scratch.?.patterns.append(p_new);
+    try self.used_patterns.put(self.env.gpa, p_new, {});
+
+    // Second parameter: tuple pattern (b, c, ...) or nested tuple pattern
+    const tuple_pattern = try self.buildTuplePattern(region, tuple_names);
+    try self.env.store.scratch.?.patterns.append(tuple_pattern);
+
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
+
+    // Create tuple body (a, b, c, ...)
+    const tuple_start = self.env.store.scratchExprTop();
+
+    // Add lookup for new element
+    const lookup_new = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = p_new } }, region);
+    try self.env.store.addScratchExpr(lookup_new);
+
+    // Add lookups for tuple elements
+    for (tuple_names) |name| {
+        if (self.scopeContains(.ident, name)) |pattern_idx| {
+            try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, region);
+            try self.env.store.addScratchExpr(lookup);
+        }
+    }
+
+    const tuple_span = try self.env.store.exprSpanFrom(tuple_start);
+    const tuple_body = try self.env.addExpr(CIR.Expr{ .e_tuple = .{ .elems = tuple_span } }, region);
+
+    const lambda_idx = try self.env.addExpr(CIR.Expr{
+        .e_lambda = .{ .args = args_span, .body = tuple_body },
+    }, region);
+
+    return try self.buildMap2Call(region, map2_pattern_idx, arg1, inner, lambda_idx);
+}
+
+/// Build a tuple pattern for destructuring: (a, b, ...) or nested ((a, b), c)
+fn buildTuplePattern(self: *Self, region: base.Region, names: []const Ident.Idx) std.mem.Allocator.Error!Pattern.Idx {
+    const tuple_patterns_start = self.env.store.scratch.?.patterns.top();
+
+    for (names) |name| {
+        const elem_pattern = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, elem_pattern, false, true);
+        try self.env.store.scratch.?.patterns.append(elem_pattern);
+    }
+
+    const patterns_span = try self.env.store.patternSpanFrom(tuple_patterns_start);
+    return try self.env.addPattern(Pattern{ .tuple = .{ .patterns = patterns_span } }, region);
+}
+
+/// Build the final lambda that produces the record:
+/// |a, b| { a, b } (for 2 fields, no tuple destructure needed)
+fn buildFinalRecordLambda(self: *Self, region: base.Region, field_names: []const Ident.Idx) std.mem.Allocator.Error!Expr.Idx {
+    try self.enterFunction(region);
+    defer self.exitFunction();
+    try self.scopeEnter(self.env.gpa, true);
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    // Create patterns for all parameters
+    const patterns_start = self.env.store.scratch.?.patterns.top();
+    var param_patterns: [64]Pattern.Idx = undefined;
+
+    for (field_names, 0..) |name, i| {
+        const p = try self.env.addPattern(Pattern{ .assign = .{ .ident = name } }, region);
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, name, p, false, true);
+        try self.env.store.scratch.?.patterns.append(p);
+        param_patterns[i] = p;
+        try self.used_patterns.put(self.env.gpa, p, {});
+    }
+
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
+
+    // Create record body { a: a, b: b, ... }
+    const record_fields_start = self.env.store.scratch.?.record_fields.top();
+
+    for (field_names, 0..) |name, i| {
+        const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = param_patterns[i] } }, region);
+        const field_idx = try self.env.addRecordField(CIR.RecordField{ .name = name, .value = lookup }, region);
+        try self.env.store.scratch.?.record_fields.append(field_idx);
+    }
+
+    const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+
+    return try self.env.addExpr(CIR.Expr{
+        .e_lambda = .{ .args = args_span, .body = record_body },
+    }, region);
+}
+
+/// Build the final lambda with tuple destructure:
+/// |a, (b, c, ...)| { a, b, c, ... }
+fn buildFinalLambdaWithTupleDestructure(self: *Self, region: base.Region, field_names: []const Ident.Idx) std.mem.Allocator.Error!Expr.Idx {
+    try self.enterFunction(region);
+    defer self.exitFunction();
+    try self.scopeEnter(self.env.gpa, true);
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    const patterns_start = self.env.store.scratch.?.patterns.top();
+
+    // First parameter: simple assign pattern for first field
+    const p_first = try self.env.addPattern(Pattern{ .assign = .{ .ident = field_names[0] } }, region);
+    _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, field_names[0], p_first, false, true);
+    try self.env.store.scratch.?.patterns.append(p_first);
+    try self.used_patterns.put(self.env.gpa, p_first, {});
+
+    // Second parameter: tuple pattern for remaining fields
+    const tuple_pattern = try self.buildTuplePattern(region, field_names[1..]);
+    try self.env.store.scratch.?.patterns.append(tuple_pattern);
+
+    const args_span = try self.env.store.patternSpanFrom(patterns_start);
+
+    // Create record body { a: a, b: b, c: c, ... }
+    const record_fields_start = self.env.store.scratch.?.record_fields.top();
+
+    for (field_names) |name| {
+        if (self.scopeContains(.ident, name)) |pattern_idx| {
+            try self.used_patterns.put(self.env.gpa, pattern_idx, {});
+            const lookup = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } }, region);
+            const field_idx = try self.env.addRecordField(CIR.RecordField{ .name = name, .value = lookup }, region);
+            try self.env.store.scratch.?.record_fields.append(field_idx);
+        }
+    }
+
+    const record_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
+    const record_body = try self.env.addExpr(CIR.Expr{ .e_record = .{ .fields = record_span, .ext = null } }, region);
+
+    return try self.env.addExpr(CIR.Expr{
+        .e_lambda = .{ .args = args_span, .body = record_body },
+    }, region);
 }
 
 // Canonicalize a tag expr
