@@ -139,8 +139,7 @@ pub const Statement = union(enum) {
     s_return: struct {
         expr: Expr.Idx,
         /// The lambda this return belongs to (for type unification).
-        /// This is null if the return is outside a function (an error case).
-        lambda: ?Expr.Idx,
+        lambda: Expr.Idx,
     },
     /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
     ///

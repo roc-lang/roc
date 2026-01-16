@@ -120,6 +120,9 @@ current_alias_name: ?Ident.Idx = null,
 /// Used to detect self-referential definitions like `a = a` or `a = [a]`.
 /// This is null when we're inside a lambda (where self-references are valid for recursion).
 defining_pattern: ?Pattern.Idx = null,
+/// The expression index of the enclosing lambda, if any.
+/// Used to track which lambda a return expression belongs to.
+enclosing_lambda: ?Expr.Idx = null,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -5241,6 +5244,20 @@ pub fn canonicalizeExpr(
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
 
+            // Create lambda with undefined body first (for enclosing_lambda tracking)
+            const lambda_expr = Expr{
+                .e_lambda = .{
+                    .args = args_span,
+                    .body = undefined, // Placeholder, will be updated after body canonicalization
+                },
+            };
+            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+
+            // Set enclosing lambda context for return expressions
+            const saved_enclosing_lambda = self.enclosing_lambda;
+            self.enclosing_lambda = lambda_idx;
+            defer self.enclosing_lambda = saved_enclosing_lambda;
+
             // Define the set of captures
             const captures_top = self.scratch_captures.top();
             defer self.scratch_captures.clearFrom(captures_top);
@@ -5279,15 +5296,8 @@ pub fn canonicalizeExpr(
                 break :blk can_body.idx;
             };
 
-            // Create the pure lambda expression first
-            const lambda_expr = Expr{
-                .e_lambda = .{
-                    .args = args_span,
-                    .body = body_idx,
-                },
-            };
-
-            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+            // Update lambda with the actual body
+            self.env.store.updateLambdaBody(lambda_idx, body_idx);
 
             // Get a slice of the captured vars in the body
             const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
@@ -5710,9 +5720,16 @@ pub fn canonicalizeExpr(
                     }, region);
 
                     // Create return Err(#err) expression
-                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
-                        .expr = err_tag_expr_idx,
-                    } }, region);
+                    break :blk if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(CIR.Expr{ .e_return = .{
+                            .expr = err_tag_expr_idx,
+                            .lambda = lambda_idx,
+                        } }, region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = region,
+                            .context = .try_suffix,
+                        } });
                 };
 
                 // Create the Err branch
@@ -9721,9 +9738,16 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     // This is for when return is the final expression in a block
                     const inner_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
                     const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-                    const return_expr_idx = try self.env.addExpr(Expr{ .e_return = .{
-                        .expr = inner_expr.idx,
-                    } }, return_region);
+                    const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(Expr{ .e_return = .{
+                            .expr = inner_expr.idx,
+                            .lambda = lambda_idx,
+                        } }, return_region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = return_region,
+                            .context = .return_expr,
+                        } });
                     last_expr = CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = inner_expr.free_vars };
                 },
                 .crash => |crash_stmt| {
@@ -10012,11 +10036,18 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Canonicalize the return expression
             const expr = try self.canonicalizeExprOrMalformed(r.expr);
 
-            // Create return statement (lambda is null for now - will be implemented later)
-            const stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
-                .expr = expr.idx,
-                .lambda = null,
-            } }, region);
+            // Create return statement with enclosing lambda, or emit error if outside function
+            const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addStatement(Statement{ .s_return = .{
+                    .expr = expr.idx,
+                    .lambda = lambda_idx,
+                } }, region)
+            else
+                // Return outside function - create malformed statement
+                try self.env.pushMalformed(Statement.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = region,
+                    .context = .return_statement,
+                } });
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
         },

@@ -408,6 +408,8 @@ pub const Expr = union(enum) {
     /// ```
     e_return: struct {
         expr: Expr.Idx,
+        /// The lambda this return belongs to (for type unification).
+        lambda: Expr.Idx,
     },
 
     /// Type variable dispatch expression for calling methods on type variable aliases.

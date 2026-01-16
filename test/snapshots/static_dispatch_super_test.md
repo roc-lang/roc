@@ -33,6 +33,46 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
         ^^^^
 
 
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:15:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:41:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:72:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**static_dispatch_super_test.md:1:1:1:86:**
+```roc
+some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
+```
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 LowerIdent,NoSpaceOpenRound,LowerIdent,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpenRound,CloseRound,NoSpaceOpQuestion,NoSpaceDotLowerIdent,NoSpaceOpQuestion,
@@ -96,11 +136,7 @@ NO CHANGE
 																				(pattern (degenerate false)
 																					(p-applied-tag)))
 																			(value
-																				(e-return
-																					(e-tag (name "Err")
-																						(args
-																							(e-lookup-local
-																								(p-assign (ident "#err"))))))))))))
+																				(e-runtime-error (tag "return_outside_fn"))))))))
 														(args)))
 												(branches
 													(branch
@@ -115,11 +151,7 @@ NO CHANGE
 															(pattern (degenerate false)
 																(p-applied-tag)))
 														(value
-															(e-return
-																(e-tag (name "Err")
-																	(args
-																		(e-lookup-local
-																			(p-assign (ident "#err"))))))))))))
+															(e-runtime-error (tag "return_outside_fn"))))))))
 									(args)))
 							(branches
 								(branch
@@ -134,11 +166,7 @@ NO CHANGE
 										(pattern (degenerate false)
 											(p-applied-tag)))
 									(value
-										(e-return
-											(e-tag (name "Err")
-												(args
-													(e-lookup-local
-														(p-assign (ident "#err"))))))))))))))
+										(e-runtime-error (tag "return_outside_fn"))))))))))
 		(branches
 			(branch
 				(patterns
@@ -152,13 +180,9 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-return
-						(e-tag (name "Err")
-							(args
-								(e-lookup-local
-									(p-assign (ident "#err")))))))))))
+					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "ok"))
+(expr (type "Error"))
 ~~~

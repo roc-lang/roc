@@ -272,7 +272,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 64;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
@@ -441,7 +441,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
             const p = payload.statement_return;
             return CIR.Statement{ .s_return = .{
                 .expr = @enumFromInt(p.expr),
-                .lambda = if (p.lambda_plus_one == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(p.lambda_plus_one - 1)),
+                .lambda = @enumFromInt(p.lambda),
             } };
         },
         .statement_import => {
@@ -726,13 +726,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_lambda => {
             const p = payload.expr_lambda;
-            // Retrieve lambda data from span_with_node_data
-            const args_body = store.span_with_node_data.items.items[p.args_body_idx];
-
             return CIR.Expr{
                 .e_lambda = .{
-                    .args = .{ .span = .{ .start = args_body.start, .len = args_body.len } },
-                    .body = @enumFromInt(args_body.node),
+                    .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
+                    .body = @enumFromInt(p.body),
                 },
             };
         },
@@ -841,6 +838,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_return;
             return CIR.Expr{ .e_return = .{
                 .expr = @enumFromInt(p.expr),
+                .lambda = @enumFromInt(p.lambda),
             } };
         },
         .expr_type_var_dispatch => {
@@ -1038,6 +1036,24 @@ pub fn replaceExprWithTag(
         .name = @bitCast(name),
         .args_start = @intCast(index_data_start),
         .args_len = @intCast(arg_indices.len),
+    } });
+    store.nodes.set(node_idx, node);
+}
+
+/// Updates the body of an e_lambda expression.
+/// Used when the lambda was created with a placeholder body and needs to be updated
+/// after the actual body is canonicalized.
+pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: CIR.Expr.Idx) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(lambda_idx));
+    var node = store.nodes.get(node_idx);
+
+    std.debug.assert(node.tag == .expr_lambda);
+    const p = node.getPayload().expr_lambda;
+
+    node.setPayload(.{ .expr_lambda = .{
+        .args_start = p.args_start,
+        .args_len = p.args_len,
+        .body = @intFromEnum(body_idx),
     } });
     store.nodes.set(node_idx, node);
 }
@@ -1650,13 +1666,10 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_return => |s| {
             node.tag = .statement_return;
-            node.setPayload(.{
-                .statement_return = .{
-                    .expr = @intFromEnum(s.expr),
-                    // Store lambda using 0 for null and idx+1 for valid indices
-                    .lambda_plus_one = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0,
-                },
-            });
+            node.setPayload(.{ .statement_return = .{
+                .expr = @intFromEnum(s.expr),
+                .lambda = @intFromEnum(s.lambda),
+            } });
         },
         .s_import => |s| {
             node.tag = .statement_import;
@@ -1938,6 +1951,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_return;
             node.setPayload(.{ .expr_return = .{
                 .expr = @intFromEnum(ret.expr),
+                .lambda = @intFromEnum(ret.lambda),
             } });
         },
         .e_type_var_dispatch => |tvd| {
@@ -2067,15 +2081,10 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_lambda => |e| {
             node.tag = .expr_lambda;
-            const args_body_idx: u32 = @intCast(store.span_with_node_data.len());
-            _ = try store.span_with_node_data.append(store.gpa, .{
-                .start = e.args.span.start,
-                .len = e.args.span.len,
-                .node = @intFromEnum(e.body),
-            });
-
             node.setPayload(.{ .expr_lambda = .{
-                .args_body_idx = args_body_idx,
+                .args_start = e.args.span.start,
+                .args_len = e.args.span.len,
+                .body = @intFromEnum(e.body),
             } });
         },
         .e_binop => |e| {
@@ -3448,6 +3457,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_break_outside_loop;
             region = r.region;
         },
+        .return_outside_fn => |r| {
+            node.tag = .diag_return_outside_fn;
+            region = r.region;
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.context) } });
+        },
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
             region = r.region;
@@ -3841,6 +3855,13 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
             .region = store.getRegionAt(node_idx),
         } },
+        .diag_return_outside_fn => {
+            const p = payload.diag_single_value;
+            return CIR.Diagnostic{ .return_outside_fn = .{
+                .region = store.getRegionAt(node_idx),
+                .context = @enumFromInt(p.value),
+            } };
+        },
         .diag_mutually_recursive_type_aliases => {
             const p = payload.diag_two_idents_extra;
             const region_data = store.span2_data.items.items[p.region_span2_idx];

@@ -234,6 +234,7 @@ pub const Tag = enum {
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,
+    diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
 };
@@ -408,7 +409,7 @@ pub const Payload = extern union {
     /// statement_return: expr + optional lambda
     pub const StatementReturn = extern struct {
         expr: u32,
-        lambda_plus_one: u32,
+        lambda: u32,
         _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
@@ -511,8 +512,9 @@ pub const Payload = extern union {
     };
 
     pub const ExprLambda = extern struct {
-        args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        args_start: u32,
+        args_len: u32,
+        body: u32,
     };
 
     pub const ExprBinOp = extern struct {
@@ -670,7 +672,8 @@ pub const Payload = extern union {
     /// expr_return: return expression
     pub const ExprReturn = extern struct {
         expr: u32,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        lambda: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_type_var_dispatch: type variable method dispatch
