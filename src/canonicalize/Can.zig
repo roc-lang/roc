@@ -5596,6 +5596,24 @@ pub fn canonicalizeExpr(
             const ok_tag_ident = self.env.idents.ok;
             const err_tag_ident = self.env.idents.err;
 
+            // Look up Try type for nominal wrapping (improves error messages)
+            const try_ident = self.env.idents.@"try";
+            const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+                if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+                    switch (type_binding_loc.binding.*) {
+                        .external_nominal => |ext| {
+                            if (ext.import_idx) |import_idx| {
+                                if (ext.target_node_idx) |target_node_idx| {
+                                    break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                break :blk null;
+            };
+
             // Mark the start of scratch match branches
             const scratch_top = self.env.store.scratchMatchBranchTop();
 
@@ -5618,13 +5636,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(ok_assign_pattern_idx);
                 const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
 
-                // Create the Ok tag pattern: Ok(#ok)
-                const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = ok_tag_ident,
-                        .args = ok_args_span,
-                    },
-                }, region);
+                // Create the Ok tag pattern: Ok(#ok), wrapped in nominal_external if Try type is available
+                const ok_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = ok_tag_ident,
+                            .args = ok_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5674,13 +5706,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(err_assign_pattern_idx);
                 const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
 
-                // Create the Err tag pattern: Err(#err)
-                const err_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_args_span,
-                    },
-                }, region);
+                // Create the Err tag pattern: Err(#err), wrapped in nominal_external if Try type is available
+                const err_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5707,17 +5753,31 @@ pub fn canonicalizeExpr(
                     // Mark the pattern as used
                     try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                    // Create Err(#err) tag expression
+                    // Create Err(#err) tag expression, wrapped in e_nominal_external if Try type is available
                     const err_tag_args_start = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(err_lookup_idx);
                     const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_tag = .{
-                            .name = err_tag_ident,
-                            .args = err_tag_args_span,
-                        },
-                    }, region);
+                    const err_tag_expr_idx = expr_blk: {
+                        const tag_expr = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = err_tag_ident,
+                                .args = err_tag_args_span,
+                            },
+                        }, region);
+
+                        if (try_nominal_info) |info| {
+                            break :expr_blk try self.env.addExpr(CIR.Expr{
+                                .e_nominal_external = .{
+                                    .module_idx = info.import_idx,
+                                    .target_node_idx = info.target_node_idx,
+                                    .backing_expr = tag_expr,
+                                    .backing_type = .tag,
+                                },
+                            }, region);
+                        }
+                        break :expr_blk tag_expr;
+                    };
 
                     // Create return Err(#err) expression
                     break :blk if (self.enclosing_lambda) |lambda_idx|
