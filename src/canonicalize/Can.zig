@@ -9781,7 +9781,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
-                    .s_decl_gen => |decl| try self.collectBoundVarsToScratch(decl.pattern),
                     .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
                     else => {},
                 }
@@ -10770,18 +10769,8 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // Restore defining_pattern
     self.defining_pattern = saved_defining_pattern;
 
-    // Determine if we should generalize based on RHS
-    // TODO: Remove, generalization is handled solely in type checking
-    const should_generalize = self.shouldGeneralizeBinding(expr.idx);
-
-    // Create a declaration statement (generalized or not)
-    const stmt_idx = if (should_generalize)
-        try self.env.addStatement(Statement{ .s_decl_gen = .{
-            .pattern = pattern_idx,
-            .expr = expr.idx,
-            .anno = mb_validated_anno,
-        } }, region)
-    else
+    // Create a declaration statement
+    const stmt_idx =
         try self.env.addStatement(Statement{ .s_decl = .{
             .pattern = pattern_idx,
             .expr = expr.idx,
@@ -10789,23 +10778,6 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } }, region);
 
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
-}
-
-/// Determines whether a let binding should be generalized based on its RHS expression.
-/// According to Roc's value restriction, only lambdas and number literals should be generalized.
-// TODO: Remove, generalization is handled solely in type checking
-fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    return switch (expr) {
-        // Lambdas should be generalized (both closures and pure lambdas)
-        .e_closure, .e_lambda => true,
-
-        // Number literals should be generalized
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
-
-        // Everything else should NOT be generalized
-        else => false,
-    };
 }
 
 // A canonicalized statement

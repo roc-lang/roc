@@ -71,14 +71,6 @@ test "NodeStore round trip - Statements" {
     });
 
     try statements.append(gpa, CIR.Statement{
-        .s_decl_gen = .{
-            .pattern = rand_idx(CIR.Pattern.Idx),
-            .expr = rand_idx(CIR.Expr.Idx),
-            .anno = rand_idx(CIR.Annotation.Idx),
-        },
-    });
-
-    try statements.append(gpa, CIR.Statement{
         .s_var = .{
             .pattern_idx = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),

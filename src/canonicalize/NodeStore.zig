@@ -276,7 +276,7 @@ pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 64;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
-pub const MODULEENV_STATEMENT_NODE_COUNT = 18;
+pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
 pub const MODULEENV_TYPE_ANNO_NODE_COUNT = 12;
 /// Count of the pattern nodes in the ModuleEnv
@@ -363,21 +363,6 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_decl => {
             const p = payload.statement_decl;
             return CIR.Statement{ .s_decl = .{
-                .pattern = @enumFromInt(p.pattern),
-                .expr = @enumFromInt(p.expr),
-                .anno = blk: {
-                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
-                    if (anno_data.start != 0) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(anno_data.len));
-                    } else {
-                        break :blk null;
-                    }
-                },
-            } };
-        },
-        .statement_decl_gen => {
-            const p = payload.statement_decl;
-            return CIR.Statement{ .s_decl_gen = .{
                 .pattern = @enumFromInt(p.pattern),
                 .expr = @enumFromInt(p.expr),
                 .anno = blk: {
@@ -1593,21 +1578,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_decl;
-            node.setPayload(.{ .statement_decl = .{
-                .pattern = @intFromEnum(s.pattern),
-                .expr = @intFromEnum(s.expr),
-                .anno_span2_idx = anno_span2_idx,
-            } });
-        },
-        .s_decl_gen => |s| {
-            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
-            const anno_data: Span2 = if (s.anno) |anno| .{
-                .start = 1,
-                .len = @intFromEnum(anno),
-            } else .{ .start = 0, .len = 0 };
-            _ = try store.span2_data.append(store.gpa, anno_data);
-
-            node.tag = .statement_decl_gen;
             node.setPayload(.{ .statement_decl = .{
                 .pattern = @intFromEnum(s.pattern),
                 .expr = @intFromEnum(s.expr),

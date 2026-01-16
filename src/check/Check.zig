@@ -2808,10 +2808,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Check if this is a lambda expression. If so, then we should generalize.
     const is_closure = expr == .e_closure;
-    _ = expr == .e_anno_only and expected == .expected and blk: {
-        // TODO: If anno, then
-        break :blk false;
-    };
     const should_generalize = isLambdaExpr(expr);
 
     // Push/pop ranks based on if we should generalize
@@ -4145,53 +4141,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
-                self.enclosing_func_name = inner_blk: {
-                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
-                    switch (pattern) {
-                        .assign => |assign| break :inner_blk assign.ident,
-                        else => break :inner_blk null,
-                    }
-                };
+                self.enclosing_func_name = self.getPatternIdent(decl_stmt.pattern);
                 defer self.enclosing_func_name = saved_func_name;
 
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        break :blk Expected{ .expected = annotation_idx };
-                    } else {
-                        break :blk Expected.no_expectation;
-                    }
-                };
-
-                does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
-
-                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-                _ = try self.unify(stmt_var, decl_pattern_var, env);
-            },
-            .s_decl_gen => |decl_stmt| {
-                // Generalized declarations (let-polymorphism) - handled same as s_decl for type checking
-                // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env);
-                const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
-
-                // Extract function name from the pattern (for better error messages)
-                const saved_func_name = self.enclosing_func_name;
-                self.enclosing_func_name = inner_blk: {
-                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
-                    switch (pattern) {
-                        .assign => |assign| break :inner_blk assign.ident,
-                        else => break :inner_blk null,
-                    }
-                };
-                defer self.enclosing_func_name = saved_func_name;
-
-                // Evaluate the rhs of the expression
-                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
-
-                // Check the annotation, if it exists
-                const expectation = blk: {
-                    if (decl_stmt.anno) |annotation_idx| {
-                        // Return the expectation
                         break :blk Expected{ .expected = annotation_idx };
                     } else {
                         break :blk Expected.no_expectation;
@@ -4420,10 +4375,6 @@ fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var:
         },
         .s_decl => |decl| {
             // Recurse into the declaration's expression
-            try self.unifyEarlyReturns(decl.expr, return_var, env);
-        },
-        .s_decl_gen => |decl| {
-            // Recurse into the generalized declaration's expression
             try self.unifyEarlyReturns(decl.expr, return_var, env);
         },
         .s_var => |var_stmt| {

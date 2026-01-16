@@ -428,7 +428,6 @@ const SemanticCollector = struct {
         const stmt = self.module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |d| try self.visitDecl(d.pattern, d.expr),
-            .s_decl_gen => |d| try self.visitDecl(d.pattern, d.expr),
             .s_var => |v| try self.visitDecl(v.pattern_idx, v.expr),
             .s_expr => |e| try self.visitExpr(e.expr),
             // Type declarations and imports don't need special handling
@@ -437,7 +436,7 @@ const SemanticCollector = struct {
         }
     }
 
-    /// Visit a declaration (s_decl, s_decl_gen, s_var).
+    /// Visit a declaration (s_decl, s_var).
     fn visitDecl(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) !void {
         // Check if RHS is a lambda/closure (then LHS is a function name)
         const expr = self.module_env.store.getExpr(expr_idx);
