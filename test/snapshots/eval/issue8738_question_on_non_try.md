@@ -20,23 +20,26 @@ do_something = || {
 result = do_something()
 ~~~
 # EXPECTED
-EXPECTED TRY TYPE - issue8738_question_on_non_try.md:9:7:9:7
+INCOMPATIBLE MATCH PATTERNS - issue8738_question_on_non_try.md:9:7:9:7
 # PROBLEMS
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
+**INCOMPATIBLE MATCH PATTERNS**
+The first pattern in this `match` is incompatible:
 **issue8738_question_on_non_try.md:9:7:**
 ```roc
 	_x = ok_or(Err(""), Exit(5))?
 ```
-      ^^^^^^^^^^^^^^^^^^^^^^^
+      ^^^^^^^^^^^^^^^^^^^^^^^^
 
-This expression has type:
+The first pattern has the type:
 
-_[Exit(a), Ok(_b), Err(_c), .._others]
-  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
+    Try(ok, err)
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+But the expression between the `match` parenthesis has the type:
+
+    [Exit(a), .._others]
+      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+
+These two types can never match!
 
 # TOKENS
 ~~~zig
@@ -163,20 +166,24 @@ NO CHANGE
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-lookup-local
 												(p-assign (ident "#ok")))))
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-return
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "#err")))))))))))))
 					(e-tag (name "Ok")
 						(args
 							(e-empty_record)))))))
@@ -191,10 +198,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
-		(patt (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(patt (type "[Err(_a), Ok({}), .._others]")))
+		(patt (type "({}) -> Try({}, err)"))
+		(patt (type "[Ok({}), .._others]")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
-		(expr (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(expr (type "[Err(_a), Ok({}), .._others]"))))
+		(expr (type "({}) -> Try({}, err)"))
+		(expr (type "[Ok({}), .._others]"))))
 ~~~

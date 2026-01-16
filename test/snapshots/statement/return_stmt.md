@@ -8,7 +8,7 @@ type=statement
 return Bool.True
 ~~~
 # EXPECTED
-NIL
+RETURN OUTSIDE FUNCTION - return_stmt.md:1:1:1:17
 # PROBLEMS
 **RETURN OUTSIDE FUNCTION**
 The `return` keyword can only be used inside function bodies.
