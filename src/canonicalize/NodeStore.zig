@@ -30,7 +30,6 @@ const NodeStore = @This();
 gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
-extra_data: collections.SafeList(u32),
 int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
@@ -212,7 +211,6 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
-        .extra_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 2),
         .int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8),
         .span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4),
         .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
@@ -233,7 +231,6 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
 pub fn deinit(store: *NodeStore) void {
     store.nodes.deinit(store.gpa);
     store.regions.deinit(store.gpa);
-    store.extra_data.deinit(store.gpa);
     store.int128_values.deinit(store.gpa);
     store.span2_data.deinit(store.gpa);
     store.span_with_node_data.deinit(store.gpa);
@@ -256,7 +253,6 @@ pub fn deinit(store: *NodeStore) void {
 pub fn relocate(store: *NodeStore, offset: isize) void {
     store.nodes.relocate(offset);
     store.regions.relocate(offset);
-    store.extra_data.relocate(offset);
     store.int128_values.relocate(offset);
     store.span2_data.relocate(offset);
     store.span_with_node_data.relocate(offset);
@@ -1584,7 +1580,7 @@ pub fn setStatementNode(store: *NodeStore, stmt_idx: CIR.Statement.Idx, statemen
 }
 
 /// Creates a statement node, but does not append to the store.
-/// IMPORTANT: It *does* append to extra_data though
+/// IMPORTANT: It *does* append to typed data lists (span2_data, import_data, etc.)
 ///
 /// See `setStatementNode` to see why this exists
 fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Error!Node {
@@ -4073,7 +4069,6 @@ pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
-    extra_data: collections.SafeList(u32).Serialized,
     int128_values: collections.SafeList(i128).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
@@ -4099,8 +4094,6 @@ pub const Serialized = extern struct {
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
-        // Serialize extra_data
-        try self.extra_data.serialize(&store.extra_data, allocator, writer);
         // Serialize int128_values
         try self.int128_values.serialize(&store.int128_values, allocator, writer);
         // Serialize span2_data
@@ -4132,7 +4125,7 @@ pub const Serialized = extern struct {
     pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *NodeStore {
         // Note: Serialized may be smaller than the runtime struct.
         // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
-        // regions and extra_data fields. We must deserialize in REVERSE order (last to first)
+        // fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order (last to first)
@@ -4148,7 +4141,6 @@ pub const Serialized = extern struct {
         const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
         const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
         const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
-        const deserialized_extra_data = self.extra_data.deserialize(base_addr).*;
         const deserialized_regions = self.regions.deserialize(base_addr).*;
         const deserialized_nodes = self.nodes.deserialize(base_addr).*;
 
@@ -4159,7 +4151,6 @@ pub const Serialized = extern struct {
             .gpa = gpa,
             .nodes = deserialized_nodes,
             .regions = deserialized_regions,
-            .extra_data = deserialized_extra_data,
             .int128_values = deserialized_int128_values,
             .span2_data = deserialized_span2_data,
             .span_with_node_data = deserialized_span_with_node_data,
@@ -4219,7 +4210,7 @@ test "NodeStore empty CompactWriter roundtrip" {
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
     try testing.expectEqual(@as(usize, 0), deserialized.regions.len());
-    try testing.expectEqual(@as(usize, 0), deserialized.extra_data.len());
+    try testing.expectEqual(@as(usize, 0), deserialized.int128_values.len());
 }
 
 test "NodeStore basic CompactWriter roundtrip" {
@@ -4230,22 +4221,18 @@ test "NodeStore basic CompactWriter roundtrip" {
     var original = try NodeStore.init(gpa);
     defer original.deinit();
 
-    // Add a simple expression node
-    var node1 = Node.init(.expr_int);
-    node1.setPayload(.{ .expr_int = .{
-        .extra_data_idx = 0,
-        ._unused1 = 0,
-        ._unused2 = 0,
+    // Add integer value to int128_values
+    const value: i128 = 42;
+    const int128_idx = try original.int128_values.append(gpa, value);
+
+    // Add a numeric expression node using the int128 value
+    var node1 = Node.init(.expr_num);
+    node1.setPayload(.{ .expr_num = .{
+        .kind = 0, // Integer kind
+        .val_kind = 0,
+        .int128_idx = @intFromEnum(int128_idx),
     } });
     const node1_idx = try original.nodes.append(gpa, node1);
-
-    // Add integer value to extra_data (i128 as 4 u32s)
-    const value: i128 = 42;
-    const value_bytes: [16]u8 = @bitCast(value);
-    const value_u32s: [4]u32 = @bitCast(value_bytes);
-    for (value_u32s) |u32_val| {
-        _ = try original.extra_data.append(gpa, u32_val);
-    }
 
     // Add a region
     const region = Region{
@@ -4286,14 +4273,12 @@ test "NodeStore basic CompactWriter roundtrip" {
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
     const retrieved_node = deserialized.nodes.get(node1_idx);
-    try testing.expectEqual(Node.Tag.expr_int, retrieved_node.tag);
-    try testing.expectEqual(@as(u32, 0), retrieved_node.getPayload().expr_int.extra_data_idx);
+    try testing.expectEqual(Node.Tag.expr_num, retrieved_node.tag);
+    try testing.expectEqual(@as(u32, 0), retrieved_node.getPayload().expr_num.int128_idx);
 
-    // Verify extra_data
-    try testing.expectEqual(@as(usize, 4), deserialized.extra_data.len());
-    const retrieved_u32s = deserialized.extra_data.items.items[0..4];
-    const retrieved_bytes: [16]u8 = @bitCast(retrieved_u32s.*);
-    const retrieved_value: i128 = @bitCast(retrieved_bytes);
+    // Verify int128_values
+    try testing.expectEqual(@as(usize, 1), deserialized.int128_values.len());
+    const retrieved_value = deserialized.int128_values.items.items[0];
     try testing.expectEqual(@as(i128, 42), retrieved_value);
 
     // Verify regions
@@ -4341,12 +4326,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
         .has_suffix = 0,
     } });
     const float_node_idx = try original.nodes.append(gpa, float_node);
-
-    // Also add some extra_data to test extra_data roundtrip
-    const extra_data_float_as_u32s: [2]u32 = @bitCast(float_as_u64);
-    for (extra_data_float_as_u32s) |u32_val| {
-        _ = try original.extra_data.append(gpa, u32_val);
-    }
 
     // Add regions for each node
     const region1 = Region{ .start = .{ .offset = 0 }, .end = .{ .offset = 5 } };
@@ -4399,7 +4378,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     try testing.expectEqual(@as(u32, 10), retrieved_list.getPayload().expr_list.elems_start);
     try testing.expectEqual(@as(u32, 3), retrieved_list.getPayload().expr_list.elems_len);
 
-    // Verify float node and extra data using captured index
+    // Verify float node using captured index
     const retrieved_float = deserialized.nodes.get(float_node_idx);
     try testing.expectEqual(Node.Tag.expr_frac_f64, retrieved_float.tag);
     // Verify float value stored inline in payload
@@ -4407,11 +4386,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     const retrieved_u64: u64 = @as(u64, payload.value_hi) << 32 | payload.value_lo;
     const retrieved_float_value: f64 = @bitCast(retrieved_u64);
     try testing.expectApproxEqAbs(float_value, retrieved_float_value, 0.0001);
-    // Also verify extra_data roundtrip
-    const extra_data_u32s = deserialized.extra_data.items.items[0..2];
-    const extra_data_u64: u64 = @bitCast(extra_data_u32s.*);
-    const extra_data_float: f64 = @bitCast(extra_data_u64);
-    try testing.expectApproxEqAbs(float_value, extra_data_float, 0.0001);
 
     // Verify regions using captured indices
     try testing.expectEqual(@as(usize, 3), deserialized.regions.len());

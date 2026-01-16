@@ -73,7 +73,6 @@ pub const Tag = enum {
     expr_string,
     expr_string_segment,
     expr_num,
-    expr_int,
     expr_frac_f32,
     expr_frac_f64,
     expr_dec,
@@ -279,7 +278,6 @@ pub const Payload = extern union {
     expr_match: ExprMatch,
     expr_frac_f32: ExprFracF32,
     expr_frac_f64: ExprFracF64,
-    expr_int: ExprInt,
     expr_num: ExprNum,
     expr_dec: ExprDec,
     expr_dec_small: ExprDecSmall,
@@ -360,14 +358,14 @@ pub const Payload = extern union {
 
     // Payload struct definitions - all must be exactly 12 bytes
 
-    /// statement_decl, statement_decl_gen: pattern + expr + extra_data for anno
+    /// statement_decl, statement_decl_gen: pattern + expr + annotation info
     pub const StatementDecl = extern struct {
         pattern: u32,
         expr: u32,
         anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
     };
 
-    /// statement_var: pattern_idx + expr + extra_data for anno
+    /// statement_var: pattern_idx + expr + annotation info
     pub const StatementVar = extern struct {
         pattern_idx: u32,
         expr: u32,
@@ -416,7 +414,7 @@ pub const Payload = extern union {
         _unused: u32,
     };
 
-    /// statement_import: module_name_tok + extra_data_idx
+    /// statement_import: module_name_tok + import_data_idx
     pub const StatementImport = extern struct {
         module_name_tok: u32,
         import_data_idx: u32, // Index into import_data list
@@ -430,14 +428,14 @@ pub const Payload = extern union {
         _unused: u32,
     };
 
-    /// statement_nominal_decl: header + anno + extra_data_idx
+    /// statement_nominal_decl: header + anno + is_opaque flag
     pub const StatementNominalDecl = extern struct {
         header: u32,
         anno: u32,
         is_opaque: u32, // 0 or 1
     };
 
-    /// statement_type_anno: extra_data_idx contains all fields
+    /// statement_type_anno: annotation + name + optional where clause
     pub const StatementTypeAnno = extern struct {
         anno: u32,
         name: u32,
@@ -563,12 +561,6 @@ pub const Payload = extern union {
         value_lo: u32,
         value_hi: u32,
         has_suffix: u32,
-    };
-
-    pub const ExprInt = extern struct {
-        extra_data_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
     };
 
     /// expr_num: numeric literal with kind and value in int128_values

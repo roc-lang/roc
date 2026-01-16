@@ -1044,17 +1044,17 @@ pub const ComptimeEvaluator = struct {
                 try arg_indices.append(arg_expr_idx);
             }
 
-            // Create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // Create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             // Create and return the tag expression
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1141,16 +1141,16 @@ pub const ComptimeEvaluator = struct {
             }
 
             // Create the tag expression with arguments
-            // First, create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // First, create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1198,15 +1198,15 @@ pub const ComptimeEvaluator = struct {
             try elem_indices.append(elem_expr_idx);
         }
 
-        // Create span in extra_data for tuple elements
-        const extra_data_start = self.env.store.extra_data.len();
+        // Create span in index_data for tuple elements
+        const index_data_start = self.env.store.index_data.len();
         for (elem_indices.items) |elem_idx| {
-            _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
             .e_tuple = .{
-                .elems = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(elem_indices.items.len) } },
+                .elems = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(elem_indices.items.len) } },
             },
         };
         return try self.env.addExpr(tuple_expr, region);
