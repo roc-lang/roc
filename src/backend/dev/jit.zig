@@ -126,15 +126,12 @@ fn makeExecutable(memory: []align(std.heap.page_size_min) u8) !void {
         .windows => {
             // On Windows, change protection to execute-read
             var old_protect: std.os.windows.DWORD = undefined;
-            const success = std.os.windows.VirtualProtect(
+            std.os.windows.VirtualProtect(
                 memory.ptr,
                 memory.len,
                 std.os.windows.PAGE_EXECUTE_READ,
                 &old_protect,
-            );
-            if (success == 0) {
-                return error.VirtualProtectFailed;
-            }
+            ) catch return error.VirtualProtectFailed;
         },
         else => return error.UnsupportedPlatform,
     }
@@ -147,7 +144,7 @@ fn freeExecutableMemory(memory: []align(std.heap.page_size_min) u8) void {
             std.posix.munmap(memory);
         },
         .windows => {
-            _ = std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE);
+            std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE) catch {};
         },
         else => {},
     }

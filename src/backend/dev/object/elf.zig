@@ -474,9 +474,9 @@ pub const ElfWriter = struct {
     }
 
     fn padTo(self: *Self, output: *std.ArrayList(u8), target: u64) !void {
-        const current = output.items.len;
+        const current: u64 = @intCast(output.items.len);
         if (current < target) {
-            const padding = target - current;
+            const padding: usize = @intCast(target - current);
             try output.appendNTimes(self.allocator, 0, padding);
         }
     }
