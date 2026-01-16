@@ -994,11 +994,6 @@ fn exprContainsPatternRef(
                             return true;
                         }
                     },
-                    .s_decl_gen => |decl| {
-                        if (self.exprContainsPatternRef(decl.expr, target_pattern)) {
-                            return true;
-                        }
-                    },
                     else => {},
                 }
             }
@@ -2092,43 +2087,6 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
                         // Create new statement with transformed expression
                         const new_stmt_idx = try self.module_env.store.addStatement(
                             CIR.Statement{ .s_decl = .{
-                                .pattern = decl.pattern,
-                                .expr = result.expr,
-                                .anno = decl.anno,
-                            } },
-                            base.Region.zero(),
-                        );
-                        try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
-                    },
-                    .s_decl_gen => |decl| {
-                        const pattern = self.module_env.store.getPattern(decl.pattern);
-                        const name_hint: ?base.Ident.Idx = switch (pattern) {
-                            .assign => |a| a.ident,
-                            else => null,
-                        };
-
-                        // Transform expression and collect lambda set
-                        const result = try self.transformExprWithLambdaSet(decl.expr, name_hint);
-
-                        // Track this pattern's lambda set if it has closures
-                        if (result.lambda_set) |lambda_set| {
-                            try self.pattern_lambda_sets.put(decl.pattern, lambda_set);
-
-                            // Detect recursive closures: check if any closure in the lambda set
-                            // references the binding pattern in its body
-                            if (self.pattern_lambda_sets.getPtr(decl.pattern)) |stored_lambda_set| {
-                                for (stored_lambda_set.closures.items, 0..) |*closure_info, i| {
-                                    // Check if this closure references the binding pattern
-                                    if (self.detectRecursion(decl.pattern, closure_info.lambda_body)) {
-                                        markLambdaSetRecursive(stored_lambda_set, &stored_lambda_set.closures.items[i]);
-                                        break; // Only one closure needs to be marked recursive
-                                    }
-                                }
-                            }
-                        }
-
-                        const new_stmt_idx = try self.module_env.store.addStatement(
-                            CIR.Statement{ .s_decl_gen = .{
                                 .pattern = decl.pattern,
                                 .expr = result.expr,
                                 .anno = decl.anno,
