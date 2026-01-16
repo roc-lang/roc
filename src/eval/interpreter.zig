@@ -20,8 +20,6 @@ const TypeScope = types.TypeScope;
 const Content = types.Content;
 const HashMap = std.hash_map.HashMap;
 const unify = @import("check").unifier;
-const problem_mod = @import("check").problem;
-const snapshot_mod = @import("check").snapshot;
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
@@ -358,11 +356,8 @@ pub const Interpreter = struct {
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
     current_module_id: u32,
     next_module_id: u32,
-    problems: problem_mod.Store,
-    snapshots: snapshot_mod.Store,
     import_mapping: *const import_mapping_mod.ImportMapping,
     unify_scratch: unify.Scratch,
-    type_writer: types.TypeWriter,
 
     // Minimal eval support
     stack_memory: stack.Stack,
@@ -529,11 +524,8 @@ pub const Interpreter = struct {
             .import_envs = import_envs,
             .current_module_id = 0, // Current module always gets ID 0
             .next_module_id = next_module_id,
-            .problems = try problem_mod.Store.initCapacity(allocator, 64),
-            .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
-            .type_writer = try types.TypeWriter.initFromParts(allocator, rt_types_ptr, env.common.getIdentStore(), null),
             .stack_memory = try stack.Stack.initCapacity(allocator, stack_size),
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
@@ -687,7 +679,7 @@ pub const Interpreter = struct {
 
         // Follow the substitution chain from target, checking both rigid_subst and rigid_name_subst
         // (same logic as getRuntimeLayout uses)
-        var resolved = self.runtime_types.resolveVar(target);
+        var resolved = self.runtime_types.resolveVarAndCompressPath(target);
         var count: u32 = 0;
         while (true) {
             count += 1;
@@ -703,11 +695,11 @@ pub const Interpreter = struct {
 
             // Try to follow substitution chain (same order as getRuntimeLayout)
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                resolved = self.runtime_types.resolveVar(substituted_var);
+                resolved = self.runtime_types.resolveVarAndCompressPath(substituted_var);
             } else if (resolved.desc.content == .rigid) {
                 const rigid_name = resolved.desc.content.rigid.name;
                 if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                    resolved = self.runtime_types.resolveVar(substituted_var);
+                    resolved = self.runtime_types.resolveVarAndCompressPath(substituted_var);
                 } else {
                     // No more substitutions available
                     break;
@@ -1792,7 +1784,7 @@ pub const Interpreter = struct {
                 const maybe_layout = try self.getRuntimeLayout(provided_rt_var);
                 const result_rt_var, const result_layout = if (maybe_layout.tag == .list or maybe_layout.tag == .list_of_zst) blk: {
                     // Layout is already a list - check if the type is also a List
-                    const resolved_rt = self.runtime_types.resolveVar(provided_rt_var);
+                    const resolved_rt = self.runtime_types.resolveVarAndCompressPath(provided_rt_var);
                     const is_list_type = switch (resolved_rt.desc.content) {
                         .structure => |s| switch (s) {
                             .nominal_type => true,
@@ -2295,7 +2287,7 @@ pub const Interpreter = struct {
 
                 // Use the value's rt_var to determine rendering
                 const effective_rt_var = value.rt_var;
-                const resolved = self.runtime_types.resolveVar(effective_rt_var);
+                const resolved = self.runtime_types.resolveVarAndCompressPath(effective_rt_var);
 
                 // Check if the type has a to_inspect method
                 const maybe_to_inspect: ?StackValue = if (resolved.desc.content == .structure)
@@ -2469,7 +2461,7 @@ pub const Interpreter = struct {
                 // This ensures method dispatch works when the CT return type was a flex var.
                 const result_rt_var = blk: {
                     if (return_rt_var) |rt_var| {
-                        const resolved = self.runtime_types.resolveVar(rt_var);
+                        const resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
                         if (resolved.desc.content != .flex and resolved.desc.content != .rigid) {
                             break :blk rt_var;
                         }
@@ -2602,7 +2594,7 @@ pub const Interpreter = struct {
                 // Only fall back to return_rt_var if it's concrete and list type is polymorphic.
                 const elem_rt_var: types.Var = blk: {
                     // First try extracting from the list's attached type - this has concrete type info
-                    const list_resolved = self.runtime_types.resolveVar(list_arg.rt_var);
+                    const list_resolved = self.runtime_types.resolveVarAndCompressPath(list_arg.rt_var);
                     if (list_resolved.desc.content == .structure) {
                         if (list_resolved.desc.content.structure == .nominal_type) {
                             const nom = list_resolved.desc.content.structure.nominal_type;
@@ -2611,19 +2603,19 @@ pub const Interpreter = struct {
                             if (vars.len == 2) {
                                 const elem_var = vars[1];
                                 // Follow aliases to check if underlying type is concrete
-                                var elem_resolved = self.runtime_types.resolveVar(elem_var);
+                                var elem_resolved = self.runtime_types.resolveVarAndCompressPath(elem_var);
                                 if (comptime builtin.mode == .Debug) {
                                     var unwrap_count: u32 = 0;
                                     while (elem_resolved.desc.content == .alias) {
                                         unwrap_count += 1;
                                         std.debug.assert(unwrap_count < 1000);
                                         const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
-                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                        elem_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                                     }
                                 } else {
                                     while (elem_resolved.desc.content == .alias) {
                                         const backing = self.runtime_types.getAliasBackingVar(elem_resolved.desc.content.alias);
-                                        elem_resolved = self.runtime_types.resolveVar(backing);
+                                        elem_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                                     }
                                 }
                                 // If element type is concrete (structure or alias to structure), create a fresh copy
@@ -2640,7 +2632,7 @@ pub const Interpreter = struct {
                                         var it = self.flex_type_context.iterator();
                                         while (it.next()) |entry| {
                                             const mapped_var = entry.value_ptr.*;
-                                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                                            const mapped_resolved = self.runtime_types.resolveVarAndCompressPath(mapped_var);
                                             if (mapped_resolved.desc.content == .structure) {
                                                 const fresh_var = try self.runtime_types.freshFromContent(mapped_resolved.desc.content);
                                                 break :blk fresh_var;
@@ -2658,19 +2650,19 @@ pub const Interpreter = struct {
                     }
                     // List came from polymorphic context - try return_rt_var if it's concrete
                     if (return_rt_var) |rv| {
-                        var rv_resolved = self.runtime_types.resolveVar(rv);
+                        var rv_resolved = self.runtime_types.resolveVarAndCompressPath(rv);
                         if (comptime builtin.mode == .Debug) {
                             var unwrap_count: u32 = 0;
                             while (rv_resolved.desc.content == .alias) {
                                 unwrap_count += 1;
                                 std.debug.assert(unwrap_count < 1000);
                                 const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
-                                rv_resolved = self.runtime_types.resolveVar(backing);
+                                rv_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                             }
                         } else {
                             while (rv_resolved.desc.content == .alias) {
                                 const backing = self.runtime_types.getAliasBackingVar(rv_resolved.desc.content.alias);
-                                rv_resolved = self.runtime_types.resolveVar(backing);
+                                rv_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                             }
                         }
                         if (rv_resolved.desc.content == .structure) {
@@ -2684,7 +2676,7 @@ pub const Interpreter = struct {
                         var it = self.flex_type_context.iterator();
                         while (it.next()) |entry| {
                             const mapped_var = entry.value_ptr.*;
-                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                            const mapped_resolved = self.runtime_types.resolveVarAndCompressPath(mapped_var);
                             if (mapped_resolved.desc.content == .structure and
                                 mapped_resolved.desc.content.structure == .nominal_type)
                             {
@@ -6575,7 +6567,7 @@ pub const Interpreter = struct {
         // Check for nominal types FIRST (before resolveBaseVar) to dispatch to their is_eq method.
         // This is critical because resolveBaseVar follows nominal types to their backing var,
         // but we need to dispatch to the nominal type's is_eq method instead.
-        const direct_resolved = self.runtime_types.resolveVar(lhs_var);
+        const direct_resolved = self.runtime_types.resolveVarAndCompressPath(lhs_var);
         if (direct_resolved.desc.content == .structure) {
             if (direct_resolved.desc.content.structure == .nominal_type) {
                 const nom = direct_resolved.desc.content.structure.nominal_type;
@@ -6927,19 +6919,19 @@ pub const Interpreter = struct {
     }
 
     fn resolveBaseVar(self: *Interpreter, runtime_var: types.Var) types.store.ResolvedVarDesc {
-        var current = self.runtime_types.resolveVar(runtime_var);
+        var current = self.runtime_types.resolveVarAndCompressPath(runtime_var);
         var guard = types.debug.IterationGuard.init("resolveBaseVar");
         while (true) {
             guard.tick();
             switch (current.desc.content) {
                 .alias => |al| {
                     const backing = self.runtime_types.getAliasBackingVar(al);
-                    current = self.runtime_types.resolveVar(backing);
+                    current = self.runtime_types.resolveVarAndCompressPath(backing);
                 },
                 .structure => |st| switch (st) {
                     .nominal_type => |nom| {
                         const backing = self.runtime_types.getNominalBackingVar(nom);
-                        current = self.runtime_types.resolveVar(backing);
+                        current = self.runtime_types.resolveVarAndCompressPath(backing);
                     },
                     else => return current,
                 },
@@ -6957,20 +6949,20 @@ pub const Interpreter = struct {
         while (var_stack.items.len > 0) {
             outer_guard.tick();
             const current_var = var_stack.pop().?;
-            var resolved = self.runtime_types.resolveVar(current_var);
+            var resolved = self.runtime_types.resolveVarAndCompressPath(current_var);
             var inner_guard = types.debug.IterationGuard.init("appendUnionTags.expand");
             expand: while (true) {
                 inner_guard.tick();
                 switch (resolved.desc.content) {
                     .alias => |al| {
                         const backing = self.runtime_types.getAliasBackingVar(al);
-                        resolved = self.runtime_types.resolveVar(backing);
+                        resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                         continue :expand;
                     },
                     .structure => |flat| switch (flat) {
                         .nominal_type => |nom| {
                             const backing = self.runtime_types.getNominalBackingVar(nom);
-                            resolved = self.runtime_types.resolveVar(backing);
+                            resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                             continue :expand;
                         },
                         .tag_union => |tu| {
@@ -6980,7 +6972,7 @@ pub const Interpreter = struct {
                             }
                             const ext_var = tu.ext;
                             if (@intFromEnum(ext_var) != 0) {
-                                const ext_resolved = self.runtime_types.resolveVar(ext_var);
+                                const ext_resolved = self.runtime_types.resolveVarAndCompressPath(ext_var);
                                 if (!(ext_resolved.desc.content == .structure and ext_resolved.desc.content.structure == .empty_tag_union)) {
                                     try var_stack.append(ext_var);
                                 }
@@ -7100,7 +7092,7 @@ pub const Interpreter = struct {
                             // Check if the arg var has a rigid substitution (from polymorphic method
                             // instantiation). If so, use the substituted type's layout.
                             const arg_var = arg_vars[0];
-                            const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                            const arg_resolved = self.runtime_types.resolveVarAndCompressPath(arg_var);
                             const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
                                 if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
                                     // Use the substituted concrete type's layout
@@ -7135,7 +7127,7 @@ pub const Interpreter = struct {
 
                 // Get tuple element rt_vars if available from value's type
                 const tuple_elem_vars: ?[]const types.Var = blk: {
-                    const resolved = self.runtime_types.resolveVar(value.rt_var);
+                    const resolved = self.runtime_types.resolveVarAndCompressPath(value.rt_var);
                     if (resolved.desc.content == .structure) {
                         if (resolved.desc.content.structure == .tuple) {
                             break :blk self.runtime_types.sliceVars(resolved.desc.content.structure.tuple.elems);
@@ -7186,7 +7178,7 @@ pub const Interpreter = struct {
                         // during tag creation.
                         // See https://github.com/roc-lang/roc/issues/8872
                         const arg_var = arg_vars[0];
-                        const arg_resolved = self.runtime_types.resolveVar(arg_var);
+                        const arg_resolved = self.runtime_types.resolveVarAndCompressPath(arg_var);
                         const effective_layout = blk: {
                             // First try: if arg is a rigid with a substitution, use substituted type's layout
                             if (arg_resolved.desc.content == .rigid) {
@@ -7343,7 +7335,7 @@ pub const Interpreter = struct {
 
                 // Get the element rt_var from the Box type's type argument
                 const elem_rt_var = blk: {
-                    const box_resolved = self.runtime_types.resolveVar(value.rt_var);
+                    const box_resolved = self.runtime_types.resolveVarAndCompressPath(value.rt_var);
                     if (box_resolved.desc.content == .structure) {
                         const flat = box_resolved.desc.content.structure;
                         if (flat == .nominal_type) {
@@ -7461,7 +7453,7 @@ pub const Interpreter = struct {
     ) !void {
         // Get the element rt_var from the Box type's type argument
         const elem_rt_var = blk: {
-            const box_resolved = self.runtime_types.resolveVar(boxed_value.rt_var);
+            const box_resolved = self.runtime_types.resolveVarAndCompressPath(boxed_value.rt_var);
             if (box_resolved.desc.content == .structure) {
                 const flat = box_resolved.desc.content.structure;
                 if (flat == .nominal_type) {
@@ -7557,7 +7549,7 @@ pub const Interpreter = struct {
         const roc_ops = cb_ctx.roc_ops;
 
         // Check if this is a nominal type with to_inspect
-        const resolved = self.runtime_types.resolveVar(rt_var);
+        const resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
         if (resolved.desc.content != .structure) return null;
         const nom = switch (resolved.desc.content.structure) {
             .nominal_type => |n| n,
@@ -7887,7 +7879,7 @@ pub const Interpreter = struct {
                 const list_layout = value.layout;
 
                 // Check if the list value itself is polymorphic (from a polymorphic function)
-                const value_rt_resolved = self.runtime_types.resolveVar(value_rt_var);
+                const value_rt_resolved = self.runtime_types.resolveVarAndCompressPath(value_rt_var);
                 const list_is_polymorphic = value_rt_resolved.desc.content == .flex or
                     value_rt_resolved.desc.content == .rigid;
 
@@ -7909,7 +7901,7 @@ pub const Interpreter = struct {
                     }
                     // Fallback to pattern translation if structure is unexpected
                     const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
-                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
+                    const list_rt_content = self.runtime_types.resolveVarAndCompressPath(list_rt_var).desc.content;
                     std.debug.assert(list_rt_content == .structure);
                     std.debug.assert(list_rt_content.structure == .nominal_type);
                     const nom = list_rt_content.structure.nominal_type;
@@ -7919,7 +7911,7 @@ pub const Interpreter = struct {
                 } else blk: {
                     // Value's type is not a nominal List type - extract from pattern
                     const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
-                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
+                    const list_rt_content = self.runtime_types.resolveVarAndCompressPath(list_rt_var).desc.content;
                     std.debug.assert(list_rt_content == .structure);
                     std.debug.assert(list_rt_content.structure == .nominal_type);
                     const nominal = list_rt_content.structure.nominal_type;
@@ -8202,11 +8194,8 @@ pub const Interpreter = struct {
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
-        self.snapshots.deinit();
-        self.problems.deinit(self.allocator);
         // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
-        self.type_writer.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
@@ -8325,7 +8314,7 @@ pub const Interpreter = struct {
         receiver_var: types.Var,
         method_name: base_pkg.Ident.Idx,
     ) Error!types.StaticDispatchConstraint {
-        const resolved = self.runtime_types.resolveVar(receiver_var);
+        const resolved = self.runtime_types.resolveVarAndCompressPath(receiver_var);
 
         // Get constraints from flex or rigid vars
         const constraints: []const types.StaticDispatchConstraint = switch (resolved.desc.content) {
@@ -8644,7 +8633,7 @@ pub const Interpreter = struct {
         // Create a fresh copy of the element type to avoid corruption from later unifications.
         // If we use the original element_rt_var directly, it can be unified with other types
         // during evaluation (e.g., during equality checking), corrupting this list type.
-        const elem_resolved = self.runtime_types.resolveVar(element_rt_var);
+        const elem_resolved = self.runtime_types.resolveVarAndCompressPath(element_rt_var);
         const fresh_elem_var = try self.runtime_types.freshFromContent(elem_resolved.desc.content);
 
         // List has one type argument (element type)
@@ -8884,16 +8873,16 @@ pub const Interpreter = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        var resolved = self.runtime_types.resolveVar(type_var);
+        var resolved = self.runtime_types.resolveVarAndCompressPath(type_var);
 
         // Apply rigid variable substitution if this is a rigid variable.
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions.
         while (resolved.desc.content == .rigid) {
             const rigid_name = resolved.desc.content.rigid.name;
             if (self.rigid_subst.get(resolved.var_)) |substituted_var| {
-                resolved = self.runtime_types.resolveVar(substituted_var);
+                resolved = self.runtime_types.resolveVarAndCompressPath(substituted_var);
             } else if (self.rigid_name_subst.get(rigid_name.idx)) |substituted_var| {
-                resolved = self.runtime_types.resolveVar(substituted_var);
+                resolved = self.runtime_types.resolveVarAndCompressPath(substituted_var);
             } else {
                 break;
             }
@@ -8979,7 +8968,7 @@ pub const Interpreter = struct {
         if (visited.contains(ct_var)) return;
         try visited.put(ct_var, {});
 
-        const resolved = module.types.resolveVar(ct_var);
+        const resolved = module.types.resolveVarAndCompressPath(ct_var);
         switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
                 .record => |rec| {
@@ -9023,7 +9012,7 @@ pub const Interpreter = struct {
         rigids: *std.ArrayList(types.Var),
         visited: *std.AutoHashMap(types.Var, void),
     ) error{OutOfMemory}!void {
-        const resolved = module.types.resolveVar(var_);
+        const resolved = module.types.resolveVarAndCompressPath(var_);
         if (visited.contains(resolved.var_)) return;
         try visited.put(resolved.var_, {});
 
@@ -9084,7 +9073,7 @@ pub const Interpreter = struct {
         rigids: *std.ArrayListUnmanaged(types.Var),
         visited: *std.AutoHashMap(types.Var, void),
     ) error{OutOfMemory}!void {
-        const resolved = self.runtime_types.resolveVar(var_);
+        const resolved = self.runtime_types.resolveVarAndCompressPath(var_);
         if (visited.contains(resolved.var_)) return;
         try visited.put(resolved.var_, {});
 
@@ -9156,7 +9145,7 @@ pub const Interpreter = struct {
             // Resolve the type_arg - if it's a rigid that we already have a mapping for,
             // follow the chain to get the concrete type
             var resolved_type_arg = type_args[i];
-            const type_arg_resolved = self.runtime_types.resolveVar(type_args[i]);
+            const type_arg_resolved = self.runtime_types.resolveVarAndCompressPath(type_args[i]);
             if (type_arg_resolved.desc.content == .rigid) {
                 // Type arg is itself a rigid - look it up in empty_scope or rigid_subst
                 if (self.empty_scope.lookup(type_args[i])) |mapped| {
@@ -9197,8 +9186,8 @@ pub const Interpreter = struct {
     /// This ensures that when we later encounter just `a` (e.g., in `List a` for an empty list),
     /// we can find the mapping.
     fn propagateFlexMappings(self: *Interpreter, module: *can.ModuleEnv, ct_var: types.Var, rt_var: types.Var) Error!void {
-        const ct_resolved = module.types.resolveVar(ct_var);
-        const rt_resolved = self.runtime_types.resolveVar(rt_var);
+        const ct_resolved = module.types.resolveVarAndCompressPath(ct_var);
+        const rt_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
 
         // If the CT type is a flex var, add the mapping directly
         if (ct_resolved.desc.content == .flex) {
@@ -9298,7 +9287,7 @@ pub const Interpreter = struct {
                                 .nominal_type => |nom| {
                                     // Unwrap nominal to get backing type
                                     const backing = self.runtime_types.getNominalBackingVar(nom);
-                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    const backing_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                                     if (backing_resolved.desc.content == .structure and
                                         backing_resolved.desc.content.structure == .tag_union)
                                     {
@@ -9396,7 +9385,7 @@ pub const Interpreter = struct {
             const real_func = real_resolved.desc.content.unwrapFunc() orelse continue;
 
             // Get the constraint's function type
-            const constraint_resolved = module.types.resolveVar(constraint.fn_var);
+            const constraint_resolved = module.types.resolveVarAndCompressPath(constraint.fn_var);
             const constraint_func = constraint_resolved.desc.content.unwrapFunc() orelse continue;
 
             // Propagate return type mapping: constraint ret -> real method ret
@@ -9419,7 +9408,7 @@ pub const Interpreter = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
-        const resolved = module.types.resolveVar(compile_var);
+        const resolved = module.types.resolveVarAndCompressPath(compile_var);
         const key = ModuleVarKey{ .module = module, .var_ = resolved.var_ };
 
         // Check flex_type_context BEFORE translate_cache for flex and rigid types.
@@ -9789,7 +9778,7 @@ pub const Interpreter = struct {
                     // Check if this rigid should be substituted (during nominal type backing translation)
                     if (self.translate_rigid_subst.get(resolved.var_)) |substitute_var| {
                         // Check if the substitute_var is itself a rigid with a for-clause mapping
-                        const sub_resolved = module.types.resolveVar(substitute_var);
+                        const sub_resolved = module.types.resolveVarAndCompressPath(substitute_var);
                         if (sub_resolved.desc.content == .rigid) {
                             const sub_rigid = sub_resolved.desc.content.rigid;
                             const sub_name_str = module.getIdent(sub_rigid.name);
@@ -9931,7 +9920,7 @@ pub const Interpreter = struct {
         subst_map.clearRetainingCapacity();
         var iter = self.instantiate_scratch.iterator();
         while (iter.next()) |entry| {
-            const key_resolved = self.runtime_types.resolveVar(entry.key_ptr.*);
+            const key_resolved = self.runtime_types.resolveVarAndCompressPath(entry.key_ptr.*);
             if (key_resolved.desc.content == .rigid) {
                 try subst_map.put(entry.key_ptr.*, entry.value_ptr.*);
             }
@@ -9961,7 +9950,7 @@ pub const Interpreter = struct {
         var guard = types.debug.IterationGuard.init("interpreter.gatherTags");
         while (true) {
             guard.tick();
-            const resolved_ext = module.types.resolveVar(current_ext);
+            const resolved_ext = module.types.resolveVarAndCompressPath(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| {
                     switch (ext_flat_type) {
@@ -10016,7 +10005,7 @@ pub const Interpreter = struct {
         var guard = types.debug.IterationGuard.init("interpreter.findTerminalTagUnionExt");
         while (true) {
             guard.tick();
-            const resolved_ext = module.types.resolveVar(current_ext);
+            const resolved_ext = module.types.resolveVarAndCompressPath(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| {
                     switch (ext_flat_type) {
@@ -10066,7 +10055,7 @@ pub const Interpreter = struct {
 
         if (return_var_hint) |ret| {
             _ = try self.getRuntimeLayout(ret);
-            const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(ret).var_);
+            const root_idx: usize = @intFromEnum(self.runtime_types.resolveVarAndCompressPath(ret).var_);
             try self.ensureVarLayoutCapacity(root_idx + 1);
             // Decode: extract layout slot from encoded value (low 24 bits)
             const encoded_slot = self.var_to_layout_slot.items[root_idx];
@@ -10090,7 +10079,7 @@ pub const Interpreter = struct {
 
         if (self.polyLookup(module_id, func_id, args)) |found| return found;
 
-        const func_resolved = self.runtime_types.resolveVar(func_type_var);
+        const func_resolved = self.runtime_types.resolveVarAndCompressPath(func_type_var);
 
         const ret_var: types.Var = switch (func_resolved.desc.content) {
             .structure => |flat| switch (flat) {
@@ -10116,24 +10105,21 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithConf(
+            unify.unifyAssumeOk(
                 self.runtime_layout_store.env,
                 self.runtime_types,
-                &self.problems,
-                &self.snapshots,
-                &self.type_writer,
+
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
                 params[i],
                 args[i],
-                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
         }
         // ret_var may now be constrained
 
         // Apply rigid substitutions to ret_var if needed
         // Follow the substitution chain until we reach a non-rigid variable or run out of substitutions
-        var resolved_ret = self.runtime_types.resolveVar(ret_var);
+        var resolved_ret = self.runtime_types.resolveVarAndCompressPath(ret_var);
         var substituted_ret = ret_var;
         if (comptime builtin.mode == .Debug) {
             var ret_count: u32 = 0;
@@ -10142,7 +10128,7 @@ pub const Interpreter = struct {
                     ret_count += 1;
                     std.debug.assert(ret_count < 1000);
                     substituted_ret = subst_var;
-                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                    resolved_ret = self.runtime_types.resolveVarAndCompressPath(subst_var);
                 } else {
                     break;
                 }
@@ -10151,7 +10137,7 @@ pub const Interpreter = struct {
             while (resolved_ret.desc.content == .rigid) {
                 if (self.rigid_subst.get(resolved_ret.var_)) |subst_var| {
                     substituted_ret = subst_var;
-                    resolved_ret = self.runtime_types.resolveVar(subst_var);
+                    resolved_ret = self.runtime_types.resolveVarAndCompressPath(subst_var);
                 } else {
                     break;
                 }
@@ -10160,7 +10146,7 @@ pub const Interpreter = struct {
 
         // Ensure layout slot for return var
         _ = try self.getRuntimeLayout(substituted_ret);
-        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVar(substituted_ret).var_);
+        const root_idx: usize = @intFromEnum(self.runtime_types.resolveVarAndCompressPath(substituted_ret).var_);
         try self.ensureVarLayoutCapacity(root_idx + 1);
         // Decode: extract layout slot from encoded value (low 24 bits)
         const encoded_slot = self.var_to_layout_slot.items[root_idx];
@@ -11347,7 +11333,7 @@ pub const Interpreter = struct {
                 const dispatch_rt_var = try self.translateTypeVar(self.env, ct_var);
 
                 // Resolve the type to find the nominal type info
-                var resolved = self.runtime_types.resolveVar(dispatch_rt_var);
+                var resolved = self.runtime_types.resolveVarAndCompressPath(dispatch_rt_var);
 
                 // Follow aliases to get to the underlying type
                 if (comptime builtin.mode == .Debug) {
@@ -11357,13 +11343,13 @@ pub const Interpreter = struct {
                         std.debug.assert(alias_count < 1000);
                         const alias = resolved.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        resolved = self.runtime_types.resolveVar(backing);
+                        resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 } else {
                     while (resolved.desc.content == .alias) {
                         const alias = resolved.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        resolved = self.runtime_types.resolveVar(backing);
+                        resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 }
 
@@ -11643,8 +11629,8 @@ pub const Interpreter = struct {
                         // Strategy:
                         // - If one operand is concrete (not flex/rigid), unify the other with it
                         // - If both are unresolved (flex/rigid), default both to Dec
-                        const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
-                        const rhs_resolved = self.runtime_types.resolveVar(rhs_rt_var);
+                        const lhs_resolved = self.runtime_types.resolveVarAndCompressPath(lhs_rt_var);
+                        const rhs_resolved = self.runtime_types.resolveVarAndCompressPath(rhs_rt_var);
                         const lhs_is_flex = lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid;
                         const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
 
@@ -11659,7 +11645,7 @@ pub const Interpreter = struct {
                             const target_var = blk: {
                                 if (is_arithmetic) {
                                     if (expected_rt_var) |exp_var| {
-                                        const exp_resolved = self.runtime_types.resolveVar(exp_var);
+                                        const exp_resolved = self.runtime_types.resolveVarAndCompressPath(exp_var);
                                         const exp_is_concrete = exp_resolved.desc.content != .flex and exp_resolved.desc.content != .rigid;
                                         if (exp_is_concrete) {
                                             break :blk exp_var;
@@ -11671,23 +11657,17 @@ pub const Interpreter = struct {
                                 break :blk try self.runtime_types.freshFromContent(dec_content);
                             };
                             const dec_var = target_var;
-                            _ = try unify.unify(
+                            unify.unifyAssumeOk(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 lhs_rt_var,
                                 dec_var,
                             );
-                            _ = try unify.unify(
+                            unify.unifyAssumeOk(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 rhs_rt_var,
@@ -11695,12 +11675,9 @@ pub const Interpreter = struct {
                             );
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
-                            _ = try unify.unify(
+                            unify.unifyAssumeOk(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 lhs_rt_var,
@@ -11708,12 +11685,9 @@ pub const Interpreter = struct {
                             );
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
-                            _ = try unify.unify(
+                            unify.unifyAssumeOk(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 rhs_rt_var,
@@ -11866,7 +11840,7 @@ pub const Interpreter = struct {
                     // where vars[0] is backing and vars[1] is the element type.
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
-                    const list_resolved = self.runtime_types.resolveVar(list_rt_var);
+                    const list_resolved = self.runtime_types.resolveVarAndCompressPath(list_rt_var);
                     std.debug.assert(list_resolved.desc.content == .structure);
                     std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
                     const nom = list_resolved.desc.content.structure.nominal_type;
@@ -11874,7 +11848,7 @@ pub const Interpreter = struct {
                     std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
                     const elem_rt_var = vars[1];
 
-                    const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
+                    const elem_resolved = self.runtime_types.resolveVarAndCompressPath(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
                     const is_elem_zst = switch (elem_content) {
                         .structure => |ft| switch (ft) {
@@ -11967,14 +11941,14 @@ pub const Interpreter = struct {
                 else if (expected_rt_var) |expected| blk: {
                     // Use the expected type's backing - but we need to set up rigid substitution
                     // because the backing may still have rigids that need to map to concrete type args
-                    const expected_resolved = self.runtime_types.resolveVar(expected);
+                    const expected_resolved = self.runtime_types.resolveVarAndCompressPath(expected);
 
                     // If expected type is flex or rigid (not concrete), fall through to create from CT
                     if (expected_resolved.desc.content == .flex or expected_resolved.desc.content == .rigid) {
                         // Expected type is polymorphic - need to create the nominal type from CT
                         // First try the expression's type, then fall back to the type declaration's type
                         const ct_var = can.ModuleEnv.varFrom(expr_idx);
-                        const ct_resolved = self.env.types.resolveVar(ct_var);
+                        const ct_resolved = self.env.types.resolveVarAndCompressPath(ct_var);
 
                         // If the expression's type is err (e.g., for local types that weren't fully type-checked),
                         // fall back to using the type declaration's type
@@ -11984,7 +11958,7 @@ pub const Interpreter = struct {
                             ct_var;
 
                         const nominal_rt_var = try self.translateTypeVar(self.env, effective_ct_var);
-                        const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                        const nominal_resolved = self.runtime_types.resolveVarAndCompressPath(nominal_rt_var);
                         break :blk switch (nominal_resolved.desc.content) {
                             .structure => |st| switch (st) {
                                 .nominal_type => |nt| BackingInfo{
@@ -12025,7 +11999,7 @@ pub const Interpreter = struct {
                                     // Also add to rigid_subst for backwards compatibility
                                     const num_mappings = @min(rigids.items.len, rt_type_args.len);
                                     for (0..num_mappings) |i| {
-                                        const arg_resolved = self.runtime_types.resolveVar(rt_type_args[i]);
+                                        const arg_resolved = self.runtime_types.resolveVarAndCompressPath(rt_type_args[i]);
                                         // If the type arg is itself a rigid, look it up in rigid_subst
                                         // to get the concrete type from an outer context
                                         const concrete_type = switch (arg_resolved.desc.content) {
@@ -12052,7 +12026,7 @@ pub const Interpreter = struct {
                     // Fall back to translating from current env
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
-                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const nominal_resolved = self.runtime_types.resolveVarAndCompressPath(nominal_rt_var);
                     break :blk switch (nominal_resolved.desc.content) {
                         .structure => |st| switch (st) {
                             .nominal_type => |nt| BackingInfo{
@@ -12085,7 +12059,7 @@ pub const Interpreter = struct {
                 const rt_var = expected_rt_var orelse blk: {
                     const ct_var = can.ModuleEnv.varFrom(expr_idx);
                     const nominal_rt_var = try self.translateTypeVar(self.env, ct_var);
-                    const nominal_resolved = self.runtime_types.resolveVar(nominal_rt_var);
+                    const nominal_resolved = self.runtime_types.resolveVarAndCompressPath(nominal_rt_var);
                     const backing_rt_var = switch (nominal_resolved.desc.content) {
                         .structure => |st| switch (st) {
                             .nominal_type => |nt| self.runtime_types.getNominalBackingVar(nt),
@@ -12147,7 +12121,7 @@ pub const Interpreter = struct {
                 // passed but still be flex, while ct_var correctly resolves to the concrete type.
                 var rt_var = blk: {
                     if (expected_rt_var) |expected| {
-                        const expected_resolved = self.runtime_types.resolveVar(expected);
+                        const expected_resolved = self.runtime_types.resolveVarAndCompressPath(expected);
                         // Use expected only if it's concrete (not flex)
                         if (expected_resolved.desc.content == .structure or
                             expected_resolved.desc.content == .alias)
@@ -12173,12 +12147,12 @@ pub const Interpreter = struct {
                 if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
                     const nom = resolved.desc.content.structure.nominal_type;
                     const backing = self.runtime_types.getNominalBackingVar(nom);
-                    resolved = self.runtime_types.resolveVar(backing);
+                    resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                 }
                 // Also handle aliases that wrap tag unions
                 if (resolved.desc.content == .alias) {
                     const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
-                    resolved = self.runtime_types.resolveVar(backing);
+                    resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                 }
                 if (resolved.desc.content != .structure or resolved.desc.content.structure != .tag_union) {
                     const content_tag = @tagName(resolved.desc.content);
@@ -12186,7 +12160,7 @@ pub const Interpreter = struct {
                     const tag_name_str = self.env.getIdent(tag.name);
                     // Also show what the compile-time type resolves to for debugging
                     const ct_var_for_debug = can.ModuleEnv.varFrom(expr_idx);
-                    const ct_resolved = self.env.types.resolveVar(ct_var_for_debug);
+                    const ct_resolved = self.env.types.resolveVarAndCompressPath(ct_var_for_debug);
                     const ct_content_tag = @tagName(ct_resolved.desc.content);
                     const has_expected = expected_rt_var != null;
                     const msg = std.fmt.allocPrint(self.allocator, "e_tag: expected tag_union but got rt={s}:{s} ct={s} has_expected={} for tag `{s}`", .{ content_tag, struct_tag, ct_content_tag, has_expected, tag_name_str }) catch "e_tag: expected tag_union structure type";
@@ -12223,11 +12197,11 @@ pub const Interpreter = struct {
                         if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
                             const nom = resolved.desc.content.structure.nominal_type;
                             const backing = self.runtime_types.getNominalBackingVar(nom);
-                            resolved = self.runtime_types.resolveVar(backing);
+                            resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                         }
                         if (resolved.desc.content == .alias) {
                             const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
-                            resolved = self.runtime_types.resolveVar(backing);
+                            resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                         }
                     }
                 }
@@ -12514,7 +12488,7 @@ pub const Interpreter = struct {
                 const func_rt_var_orig = try self.translateTypeVar(self.env, func_ct_var);
 
                 // Only instantiate if we have an actual function type (not a flex variable)
-                const func_rt_orig_resolved = self.runtime_types.resolveVar(func_rt_var_orig);
+                const func_rt_orig_resolved = self.runtime_types.resolveVarAndCompressPath(func_rt_var_orig);
                 const should_instantiate = func_rt_orig_resolved.desc.content == .structure and
                     (func_rt_orig_resolved.desc.content.structure == .fn_pure or
                         func_rt_orig_resolved.desc.content.structure == .fn_effectful or
@@ -12580,7 +12554,7 @@ pub const Interpreter = struct {
                             // Avoid seeding from a rigid CT var directly; rigid vars typically represent
                             // generalized parameters (e.g. `state` in List.fold). Mapping them to a concrete
                             // runtime type here can introduce cycles in layout computation.
-                            const arg_ct_resolved = self.env.types.resolveVar(arg_ct_var);
+                            const arg_ct_resolved = self.env.types.resolveVarAndCompressPath(arg_ct_var);
                             if (arg_ct_resolved.desc.content == .rigid) break;
 
                             // IMPORTANT: Always map to a fresh runtime type var derived from the layout.
@@ -12606,7 +12580,7 @@ pub const Interpreter = struct {
                     // Use subst_map for the current call's substitutions (not yet in rigid_subst),
                     // and fall back to rigid_subst for outer call substitutions.
                     if (should_instantiate) {
-                        const arg_resolved = self.runtime_types.resolveVar(arg_rt_var);
+                        const arg_resolved = self.runtime_types.resolveVarAndCompressPath(arg_rt_var);
                         if (arg_resolved.desc.content == .rigid) {
                             if (subst_map.get(arg_resolved.var_)) |substituted_arg| {
                                 arg_rt_vars[i] = substituted_arg;
@@ -12635,17 +12609,14 @@ pub const Interpreter = struct {
                 // call_ret_rt_var (fresh translation) because the function's return var
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
-                    _ = try unify.unifyWithConf(
+                    unify.unifyAssumeOk(
                         self.runtime_layout_store.env,
                         self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.type_writer,
+
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         call_ret_rt_var,
                         entry.return_var,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                     );
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
@@ -12666,7 +12637,7 @@ pub const Interpreter = struct {
                         const source = entry.key_ptr.*;
                         const target = entry.value_ptr.*;
                         // Check if unification made this entry cyclic
-                        const resolved_target = self.runtime_types.resolveVar(target);
+                        const resolved_target = self.runtime_types.resolveVarAndCompressPath(target);
                         if (resolved_target.var_ == source) {
                             // Skip - this entry would create a cycle
                             continue;
@@ -12714,7 +12685,7 @@ pub const Interpreter = struct {
                 var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
 
                 // Resolve the operand type
-                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+                const operand_resolved = self.runtime_types.resolveVarAndCompressPath(operand_rt_var);
 
                 // If the type is still a flex/rigid var, default to Dec
                 if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
@@ -12740,7 +12711,7 @@ pub const Interpreter = struct {
                 var operand_rt_var = try self.translateTypeVar(self.env, operand_ct_var);
 
                 // Resolve the operand type
-                const operand_resolved = self.runtime_types.resolveVar(operand_rt_var);
+                const operand_resolved = self.runtime_types.resolveVarAndCompressPath(operand_rt_var);
 
                 // If the type is still a flex/rigid var, default to Bool (shouldn't happen for bool, but be safe)
                 if (operand_resolved.desc.content == .flex or operand_resolved.desc.content == .rigid) {
@@ -12765,7 +12736,7 @@ pub const Interpreter = struct {
                 var receiver_rt_var = try self.translateTypeVar(self.env, receiver_ct_var);
 
                 // Check if the translated type is flex/rigid (unresolved)
-                const receiver_resolved = self.runtime_types.resolveVar(receiver_rt_var);
+                const receiver_resolved = self.runtime_types.resolveVarAndCompressPath(receiver_rt_var);
 
                 // For METHOD CALLS (args != null) with flex/rigid receiver type that has from_numeral
                 // constraint, default to Dec. This ensures numeric literals like `(-3.14).abs()` get
@@ -12847,7 +12818,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
 
         // If the layout isn't a numeric type (e.g., ZST from unconstrained flex/rigid),
@@ -12904,7 +12875,7 @@ pub const Interpreter = struct {
         // update the rt_var to a concrete numeric type for method dispatch.
         // This is needed because getRuntimeLayout defaults flex vars to Dec layout
         // but doesn't update the rt_var itself.
-        const rt_resolved = self.runtime_types.resolveVar(value.rt_var);
+        const rt_resolved = self.runtime_types.resolveVarAndCompressPath(value.rt_var);
         if (rt_resolved.desc.content == .flex) {
             // Create concrete type based on the layout we used
             const concrete_rt_var = switch (layout_val.tag) {
@@ -12951,7 +12922,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F32 type for method dispatch to work.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
             const f32_content = try self.mkNumberTypeContentRuntime("F32");
@@ -12981,7 +12952,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete F64 type for method dispatch to work.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
             const f64_content = try self.mkNumberTypeContentRuntime("F64");
@@ -13011,7 +12982,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
@@ -13052,7 +13023,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
             const dec_content = try self.mkNumberTypeContentRuntime("Dec");
@@ -13090,7 +13061,7 @@ pub const Interpreter = struct {
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // For typed literals, this shouldn't normally happen since the type is explicit.
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
 
         // If the layout isn't a numeric type, default based on the explicit type annotation
@@ -13163,7 +13134,7 @@ pub const Interpreter = struct {
         var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
-        const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
+        const resolved_rt = self.runtime_types.resolveVarAndCompressPath(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
 
         // If the layout isn't a numeric type, default based on the explicit type annotation
@@ -13257,7 +13228,7 @@ pub const Interpreter = struct {
         };
 
         // Get the element type from the list type and use flex_type_context for it
-        const list_resolved = self.runtime_types.resolveVar(rt_var);
+        const list_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
         var final_rt_var = rt_var;
         if (list_resolved.desc.content == .structure) {
             if (list_resolved.desc.content.structure == .nominal_type) {
@@ -13265,7 +13236,7 @@ pub const Interpreter = struct {
                 const list_args = self.runtime_types.sliceNominalArgs(list_nom);
                 if (list_args.len > 0) {
                     const elem_var = list_args[0];
-                    const elem_resolved = self.runtime_types.resolveVar(elem_var);
+                    const elem_resolved = self.runtime_types.resolveVarAndCompressPath(elem_var);
                     // If element type is a flex var and we have mappings, use the mapped type
                     if (elem_resolved.desc.content == .flex and self.flex_type_context.count() > 0) {
                         var it = self.flex_type_context.iterator();
@@ -13273,10 +13244,10 @@ pub const Interpreter = struct {
                         var all_same = true;
                         while (it.next()) |entry| {
                             const mapped_var = entry.value_ptr.*;
-                            const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                            const mapped_resolved = self.runtime_types.resolveVarAndCompressPath(mapped_var);
                             if (mapped_resolved.desc.content != .flex) {
                                 if (first_concrete) |first| {
-                                    const first_resolved = self.runtime_types.resolveVar(first);
+                                    const first_resolved = self.runtime_types.resolveVarAndCompressPath(first);
                                     if (first_resolved.var_ != mapped_resolved.var_) {
                                         all_same = false;
                                         break;
@@ -13404,7 +13375,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             };
             // Get rt_var for the tag field from the record type
-            const record_resolved = self.runtime_types.resolveVar(rt_var);
+            const record_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
             const tag_rt_var = blk: {
                 if (record_resolved.desc.content == .structure) {
                     const flat = record_resolved.desc.content.structure;
@@ -13439,7 +13410,7 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             var acc = try dest.asTuple(&self.runtime_layout_store);
             // Element 1 is the tag discriminant - get its rt_var from the tuple type
-            const tuple_resolved = self.runtime_types.resolveVar(rt_var);
+            const tuple_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
             const elem_rt_var = if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) blk: {
                 const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
                 break :blk if (elem_vars.len > 1) elem_vars[1] else rt_var;
@@ -13492,7 +13463,7 @@ pub const Interpreter = struct {
                 return error.Crash;
             };
             // Get rt_var for the tag field from the record type
-            const record_resolved = self.runtime_types.resolveVar(rt_var);
+            const record_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
             const tag_rt_var = blk: {
                 if (record_resolved.desc.content == .structure) {
                     const flat = record_resolved.desc.content.structure;
@@ -13523,7 +13494,7 @@ pub const Interpreter = struct {
             var dest = try self.pushRaw(layout_val, 0, rt_var);
             var acc = try dest.asTuple(&self.runtime_layout_store);
             // Get element rt_var from tuple type
-            const tuple_resolved = self.runtime_types.resolveVar(rt_var);
+            const tuple_resolved = self.runtime_types.resolveVarAndCompressPath(rt_var);
             const elem_rt_var = if (tuple_resolved.desc.content == .structure and tuple_resolved.desc.content.structure == .tuple) blk: {
                 const elem_vars = self.runtime_types.sliceVars(tuple_resolved.desc.content.structure.tuple.elems);
                 break :blk if (elem_vars.len > 1) elem_vars[1] else rt_var;
@@ -14819,7 +14790,7 @@ pub const Interpreter = struct {
                     // This ensures nested lists compute their own concrete types
                     // instead of inheriting a polymorphic type from the outer list.
                     const elem_expected_rt_var: ?types.Var = blk: {
-                        const elem_resolved = self.runtime_types.resolveVar(lc.elem_rt_var);
+                        const elem_resolved = self.runtime_types.resolveVarAndCompressPath(lc.elem_rt_var);
                         if (elem_resolved.desc.content == .flex or elem_resolved.desc.content == .rigid) {
                             break :blk null;
                         }
@@ -14998,7 +14969,7 @@ pub const Interpreter = struct {
                         // Always use the actual element's rt_var to construct the list type,
                         // since it reflects the concrete types from evaluation.
                         var final_list_rt_var = lc.list_rt_var;
-                        const first_elem_rt_resolved = self.runtime_types.resolveVar(values[0].rt_var);
+                        const first_elem_rt_resolved = self.runtime_types.resolveVarAndCompressPath(values[0].rt_var);
 
                         // If actual element has a concrete type (not flex), create a new List type
                         // with the concrete element type. Always use createListTypeWithElement to
@@ -15160,7 +15131,7 @@ pub const Interpreter = struct {
                     const rec_layout = self.runtime_layout_store.getLayout(record_layout_idx);
 
                     // Cache the layout for this var with generation encoding
-                    const resolved_rt = self.runtime_types.resolveVar(rc.rt_var);
+                    const resolved_rt = self.runtime_types.resolveVarAndCompressPath(rc.rt_var);
                     const root_idx: usize = @intFromEnum(resolved_rt.var_);
                     try self.ensureVarLayoutCapacity(root_idx + 1);
                     const gen_byte: u8 = @truncate(self.poly_context_generation);
@@ -16271,7 +16242,7 @@ pub const Interpreter = struct {
                         // Strategy: Check if ci.call_ret_rt_var contains unresolved type parameters.
                         // If it's concrete, use it. Otherwise, fall back to the lambda's return type.
                         const ret_rt_var = blk: {
-                            const call_ret_resolved = self.runtime_types.resolveVar(ci.call_ret_rt_var);
+                            const call_ret_resolved = self.runtime_types.resolveVarAndCompressPath(ci.call_ret_rt_var);
                             // Check if the call return type is concrete (no unresolved flex/rigid parameters)
                             const is_concrete = switch (call_ret_resolved.desc.content) {
                                 .structure => |st| switch (st) {
@@ -16279,7 +16250,7 @@ pub const Interpreter = struct {
                                         // Check if any type args are unresolved flex/rigid
                                         const type_args = self.runtime_types.sliceNominalArgs(nom);
                                         for (type_args) |arg| {
-                                            const arg_resolved = self.runtime_types.resolveVar(arg);
+                                            const arg_resolved = self.runtime_types.resolveVarAndCompressPath(arg);
                                             switch (arg_resolved.desc.content) {
                                                 .flex => |flex| if (flex.constraints.count == 0) break :is_concrete false,
                                                 .rigid => |rigid| if (rigid.constraints.count == 0) break :is_concrete false,
@@ -16302,7 +16273,7 @@ pub const Interpreter = struct {
                                 // Fall back to the lambda's function return type
                                 const low_level_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
                                 const low_level_rt_var = try self.translateTypeVar(self.env, low_level_ct_var);
-                                const resolved_func = self.runtime_types.resolveVar(low_level_rt_var);
+                                const resolved_func = self.runtime_types.resolveVarAndCompressPath(low_level_rt_var);
                                 break :blk if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
                             }
                         };
@@ -16362,7 +16333,7 @@ pub const Interpreter = struct {
                     // Check if this is a hosted lambda and invoke it
                     const hosted_lambda_ct_var = can.ModuleEnv.varFrom(header.lambda_expr_idx);
                     const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const resolved_func = self.runtime_types.resolveVarAndCompressPath(hosted_lambda_rt_var);
                     const ret_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ci.call_ret_rt_var;
 
                     if (try self.tryInvokeHostedClosure(header, arg_values, ret_rt_var, roc_ops)) |result| {
@@ -16413,7 +16384,7 @@ pub const Interpreter = struct {
                         // If the arg type is still flex/rigid, the default Dec fallback should apply.
                         if (ci.arg_rt_vars_to_free) |vars| {
                             if (idx < vars.len) {
-                                const arg_rt_resolved = self.runtime_types.resolveVar(vars[idx]);
+                                const arg_rt_resolved = self.runtime_types.resolveVarAndCompressPath(vars[idx]);
                                 // Only add mapping if the argument has a concrete type (structure)
                                 if (arg_rt_resolved.desc.content == .structure) {
                                     const param_ct_var = can.ModuleEnv.varFrom(param);
@@ -16667,7 +16638,7 @@ pub const Interpreter = struct {
                 defer operand.decref(&self.runtime_layout_store, roc_ops);
 
                 // Resolve the operand type, following aliases to find the nominal type
-                var operand_resolved = self.runtime_types.resolveVar(ua.operand_rt_var);
+                var operand_resolved = self.runtime_types.resolveVarAndCompressPath(ua.operand_rt_var);
 
                 // Follow aliases to get to the underlying type (but NOT through nominal types)
                 if (comptime builtin.mode == .Debug) {
@@ -16677,13 +16648,13 @@ pub const Interpreter = struct {
                         std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
                         const alias = operand_resolved.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        operand_resolved = self.runtime_types.resolveVar(backing);
+                        operand_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 } else {
                     while (operand_resolved.desc.content == .alias) {
                         const alias = operand_resolved.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        operand_resolved = self.runtime_types.resolveVar(backing);
+                        operand_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 }
 
@@ -16741,7 +16712,7 @@ pub const Interpreter = struct {
                 // Check if hosted lambda and invoke with operand
                 const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                 const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                const resolved_func = self.runtime_types.resolveVarAndCompressPath(hosted_lambda_rt_var);
                 const return_rt_var = if (resolved_func.desc.content.unwrapFunc()) |func| func.ret else ua.operand_rt_var;
                 var args = [1]StackValue{operand};
 
@@ -16826,7 +16797,7 @@ pub const Interpreter = struct {
                 var effective_receiver_rt_var = ba.receiver_rt_var;
                 var value_is_polymorphic = false;
                 const val_rt_var = lhs.rt_var;
-                const val_resolved = self.runtime_types.resolveVar(val_rt_var);
+                const val_resolved = self.runtime_types.resolveVarAndCompressPath(val_rt_var);
                 // Only use the value's type if it's concrete (has structure/alias)
                 if (val_resolved.desc.content == .structure or val_resolved.desc.content == .alias) {
                     effective_receiver_rt_var = val_rt_var;
@@ -16838,7 +16809,7 @@ pub const Interpreter = struct {
                 // Check if effective type is still flex/rigid after trying value's rt_var
                 // Track whether we had to default to Dec so we know to use direct numeric handling
                 var defaulted_to_dec = false;
-                const resolved_check = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                const resolved_check = self.runtime_types.resolveVarAndCompressPath(effective_receiver_rt_var);
                 if (resolved_check.desc.content == .flex or resolved_check.desc.content == .rigid) {
                     // No concrete type info available, default to Dec for numeric operations
                     const dec_content = try self.mkNumberTypeContentRuntime("Dec");
@@ -16852,7 +16823,7 @@ pub const Interpreter = struct {
                 }
 
                 // Resolve the lhs type
-                const lhs_resolved = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                const lhs_resolved = self.runtime_types.resolveVarAndCompressPath(effective_receiver_rt_var);
 
                 // Get nominal type info, or handle anonymous structural types
                 // Follow aliases to get to the underlying type
@@ -16865,13 +16836,13 @@ pub const Interpreter = struct {
                         std.debug.assert(alias_count < 1000);
                         const alias = current_resolved.desc.content.alias;
                         current_var = self.runtime_types.getAliasBackingVar(alias);
-                        current_resolved = self.runtime_types.resolveVar(current_var);
+                        current_resolved = self.runtime_types.resolveVarAndCompressPath(current_var);
                     }
                 } else {
                     while (current_resolved.desc.content == .alias) {
                         const alias = current_resolved.desc.content.alias;
                         current_var = self.runtime_types.getAliasBackingVar(alias);
-                        current_resolved = self.runtime_types.resolveVar(current_var);
+                        current_resolved = self.runtime_types.resolveVarAndCompressPath(current_var);
                     }
                 }
 
@@ -16995,7 +16966,7 @@ pub const Interpreter = struct {
 
                             // For non-scalar types, we need rt_var to dispatch to the type's is_eq method.
                             // Values must have rt_var set by the code that created them.
-                            const resolved = self.runtime_types.resolveVar(lhs.rt_var);
+                            const resolved = self.runtime_types.resolveVarAndCompressPath(lhs.rt_var);
                             if (resolved.desc.content == .structure) {
                                 if (resolved.desc.content.structure == .nominal_type) {
                                     const nom = resolved.desc.content.structure.nominal_type;
@@ -17163,11 +17134,11 @@ pub const Interpreter = struct {
                 // Use effective_receiver_rt_var computed earlier, rhs.rt_var is always set
                 const arg_rt_vars = [2]types.Var{ effective_receiver_rt_var, rhs.rt_var };
                 for (params, 0..) |param, idx| {
-                    const arg_rt_resolved = self.runtime_types.resolveVar(arg_rt_vars[idx]);
+                    const arg_rt_resolved = self.runtime_types.resolveVarAndCompressPath(arg_rt_vars[idx]);
                     // Only add mapping if the argument has a concrete type (structure)
                     if (arg_rt_resolved.desc.content == .structure) {
                         const param_ct_var = can.ModuleEnv.varFrom(param);
-                        const param_resolved = self.env.types.resolveVar(param_ct_var);
+                        const param_resolved = self.env.types.resolveVarAndCompressPath(param_ct_var);
                         const flex_key = ModuleVarKey{ .module = self.env, .var_ = param_resolved.var_ };
                         try self.putFlexTypeContext(flex_key, arg_rt_vars[idx]);
 
@@ -17187,7 +17158,7 @@ pub const Interpreter = struct {
                                     // vars[0] is the backing var, vars[1..] are the type params
                                     var i: usize = 1;
                                     while (i < ct_vars.len and i < rt_vars.len) : (i += 1) {
-                                        const ct_param_resolved = self.env.types.resolveVar(ct_vars[i]);
+                                        const ct_param_resolved = self.env.types.resolveVarAndCompressPath(ct_vars[i]);
                                         const ct_param_key = ModuleVarKey{ .module = self.env, .var_ = ct_param_resolved.var_ };
                                         try self.putFlexTypeContext(ct_param_key, rt_vars[i]);
                                     }
@@ -17233,7 +17204,7 @@ pub const Interpreter = struct {
                     const hosted = binary_op_lambda_expr.e_hosted_lambda;
                     const hosted_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                     const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const resolved_func = self.runtime_types.resolveVarAndCompressPath(hosted_lambda_rt_var);
                     const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
 
                     // Collect the two bound arguments from bindings
@@ -17321,7 +17292,7 @@ pub const Interpreter = struct {
                 //   runtime value has the concrete String type from dec_to_str
                 // - For direct numeric literals like `11.to_str()`, copied_receiver.rt_var
                 //   will be Dec (from evalNum's concrete type assignment)
-                const eval_resolved = self.runtime_types.resolveVar(copied_receiver.rt_var);
+                const eval_resolved = self.runtime_types.resolveVarAndCompressPath(copied_receiver.rt_var);
                 const final_receiver_rt_var: types.Var = if (eval_resolved.desc.content != .flex and eval_resolved.desc.content != .rigid)
                     // Use the concrete type from evaluation (handles bindings to non-numeric results)
                     copied_receiver.rt_var
@@ -17372,7 +17343,7 @@ pub const Interpreter = struct {
                     };
 
                     // Get the field's rt_var from the receiver's record type
-                    const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                    const receiver_resolved = self.runtime_types.resolveVarAndCompressPath(receiver_value.rt_var);
                     const field_rt_var = blk: {
                         if (receiver_resolved.desc.content == .structure) {
                             const flat = receiver_resolved.desc.content.structure;
@@ -17408,7 +17379,7 @@ pub const Interpreter = struct {
                 // Don't use resolveBaseVar here - we need to keep the nominal type
                 // for method dispatch (resolveBaseVar unwraps nominal types to their backing)
                 // However, we DO need to follow aliases to find the nominal type.
-                var resolved_receiver = self.runtime_types.resolveVar(effective_receiver_rt_var);
+                var resolved_receiver = self.runtime_types.resolveVarAndCompressPath(effective_receiver_rt_var);
 
                 // Follow aliases to get to the underlying type (but NOT through nominal types)
                 if (comptime builtin.mode == .Debug) {
@@ -17418,13 +17389,13 @@ pub const Interpreter = struct {
                         std.debug.assert(alias_count < 1000); // Prevent infinite loops in debug builds
                         const alias = resolved_receiver.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                        resolved_receiver = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 } else {
                     while (resolved_receiver.desc.content == .alias) {
                         const alias = resolved_receiver.desc.content.alias;
                         const backing = self.runtime_types.getAliasBackingVar(alias);
-                        resolved_receiver = self.runtime_types.resolveVar(backing);
+                        resolved_receiver = self.runtime_types.resolveVarAndCompressPath(backing);
                     }
                 }
 
@@ -17644,7 +17615,7 @@ pub const Interpreter = struct {
                         // For flex/rigid types, first check if the actual value has a concrete
                         // type in its rt_var. This handles cases like Bool where the value was
                         // created with a concrete type but the compile-time type is polymorphic.
-                        const value_rt_var_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                        const value_rt_var_resolved = self.runtime_types.resolveVarAndCompressPath(receiver_value.rt_var);
                         if (value_rt_var_resolved.desc.content == .structure) {
                             switch (value_rt_var_resolved.desc.content.structure) {
                                 .nominal_type => |nom| {
@@ -17701,7 +17672,7 @@ pub const Interpreter = struct {
                             var ctx_it = self.flex_type_context.iterator();
                             while (ctx_it.next()) |entry| {
                                 const mapped_var = entry.value_ptr.*;
-                                const mapped_resolved = self.runtime_types.resolveVar(mapped_var);
+                                const mapped_resolved = self.runtime_types.resolveVarAndCompressPath(mapped_var);
                                 if (mapped_resolved.desc.content == .structure) {
                                     switch (mapped_resolved.desc.content.structure) {
                                         .nominal_type => |nom| {
@@ -17853,7 +17824,7 @@ pub const Interpreter = struct {
                     // This properly constrains rigid type variables (like `item` in List.first).
                     const method_lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                     const method_lambda_rt_var = try self.translateTypeVar(self.env, method_lambda_ct_var);
-                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+                    const method_resolved = self.runtime_types.resolveVarAndCompressPath(method_lambda_rt_var);
 
                     // Get the return type from the CALL SITE, not the method's internal type.
                     // This is critical because the call site's CT type has the correct
@@ -17872,17 +17843,13 @@ pub const Interpreter = struct {
                         // Unify the method's first parameter with the receiver type
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
-                            _ = try unify.unifyWithConf(
+                            unify.unifyAssumeOk(
                                 self.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 method_params[0],
                                 da.receiver_rt_var,
-                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                             );
                         }
 
@@ -17954,7 +17921,7 @@ pub const Interpreter = struct {
                 // Extract parameter types from the method signature (excluding receiver).
                 // We need to handle different resolved type cases explicitly.
                 const expected_arg_rt_vars: ?[]const types.Var = blk: {
-                    const method_resolved = self.runtime_types.resolveVar(method_lambda_rt_var);
+                    const method_resolved = self.runtime_types.resolveVarAndCompressPath(method_lambda_rt_var);
                     const func_info: ?types.Func = switch (method_resolved.desc.content) {
                         .structure => method_resolved.desc.content.unwrapFunc(),
                         // Polymorphic method - type variable doesn't provide concrete param types
@@ -17962,12 +17929,12 @@ pub const Interpreter = struct {
                         .alias => |alias| inner: {
                             // Follow alias to get the underlying function type
                             const backing = self.runtime_types.getAliasBackingVar(alias);
-                            const backing_resolved = self.runtime_types.resolveVar(backing);
+                            const backing_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                             switch (backing_resolved.desc.content) {
                                 .structure => break :inner backing_resolved.desc.content.unwrapFunc(),
                                 // Polymorphic backing - no concrete param types
                                 .flex, .rigid => break :blk null,
-                                // Nested alias shouldn't happen after resolveVar
+                                // Nested alias shouldn't happen after resolveVarAndCompressPath
                                 .alias => unreachable,
                                 .err => unreachable,
                             }
@@ -18003,14 +17970,14 @@ pub const Interpreter = struct {
                 const first_arg_rt_var = blk: {
                     if (expected_arg_rt_vars != null and expected_arg_rt_vars.?.len > 0) {
                         const expected = expected_arg_rt_vars.?[0];
-                        const resolved = self.runtime_types.resolveVar(expected);
+                        const resolved = self.runtime_types.resolveVarAndCompressPath(expected);
                         switch (resolved.desc.content) {
                             .structure => break :blk expected, // Concrete type - use it
                             .flex, .rigid => {}, // Type variable - fall through to use argument's type
                             .alias => {
                                 // Follow alias to check underlying type
                                 const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
-                                const backing_resolved = self.runtime_types.resolveVar(backing);
+                                const backing_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                                 if (backing_resolved.desc.content == .structure) {
                                     break :blk expected;
                                 }
@@ -18057,13 +18024,13 @@ pub const Interpreter = struct {
                     const next_arg_rt_var = blk: {
                         if (next_expected_arg_rt_vars != null and next_expected_arg_rt_vars.?.len > 0) {
                             const expected = next_expected_arg_rt_vars.?[0];
-                            const resolved = self.runtime_types.resolveVar(expected);
+                            const resolved = self.runtime_types.resolveVarAndCompressPath(expected);
                             switch (resolved.desc.content) {
                                 .structure => break :blk expected,
                                 .flex, .rigid => {},
                                 .alias => {
                                     const backing = self.runtime_types.getAliasBackingVar(resolved.desc.content.alias);
-                                    const backing_resolved = self.runtime_types.resolveVar(backing);
+                                    const backing_resolved = self.runtime_types.resolveVarAndCompressPath(backing);
                                     if (backing_resolved.desc.content == .structure) {
                                         break :blk expected;
                                     }
@@ -18150,7 +18117,7 @@ pub const Interpreter = struct {
                     var subst_map = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
                     defer subst_map.deinit();
                     const instantiated_func_var = try self.instantiateType(lambda_rt_var, &subst_map);
-                    const lambda_resolved = self.runtime_types.resolveVar(instantiated_func_var);
+                    const lambda_resolved = self.runtime_types.resolveVarAndCompressPath(instantiated_func_var);
 
                     // Extract return type from function signature and unify with argument types
                     const return_rt_var: types.Var = if (lambda_resolved.desc.content == .structure) blk: {
@@ -18171,20 +18138,17 @@ pub const Interpreter = struct {
                             const arg_count_to_unify = @min(param_vars.len, all_args.len);
                             for (0..arg_count_to_unify) |unify_idx| {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
-                                const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
+                                const arg_resolved = self.runtime_types.resolveVarAndCompressPath(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
-                                _ = unify.unifyWithConf(
+                                unify.unifyAssumeOk(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
-                                    &self.problems,
-                                    &self.snapshots,
-                                    &self.type_writer,
+
                                     &self.unify_scratch,
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
                                     arg_copy,
-                                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                                ) catch {};
+                                );
                             }
                             // Return type is now properly instantiated through unification
                             break :blk info.ret;
@@ -18232,7 +18196,7 @@ pub const Interpreter = struct {
                 // properly substituted with the concrete types from the call site.
                 const lambda_ct_var = can.ModuleEnv.varFrom(closure_header.lambda_expr_idx);
                 const lambda_rt_var = try self.translateTypeVar(self.env, lambda_ct_var);
-                const lambda_resolved = self.runtime_types.resolveVar(lambda_rt_var);
+                const lambda_resolved = self.runtime_types.resolveVarAndCompressPath(lambda_rt_var);
 
                 const should_instantiate_method = lambda_resolved.desc.content == .structure and
                     (lambda_resolved.desc.content.structure == .fn_pure or
@@ -18258,20 +18222,17 @@ pub const Interpreter = struct {
                 };
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
-                    const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    const recv_resolved = self.runtime_types.resolveVarAndCompressPath(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
-                    _ = unify.unifyWithConf(
+                    unify.unifyAssumeOk(
                         self.env,
                         self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.type_writer,
+
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         fn_args[0],
                         recv_copy,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                    ) catch {};
+                    );
                 }
 
                 if (should_instantiate_method) {
@@ -18314,7 +18275,7 @@ pub const Interpreter = struct {
                 const receiver_param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[0]));
 
                 // Propagate flex mappings for receiver (needed for polymorphic type propagation)
-                const receiver_rt_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                const receiver_rt_resolved = self.runtime_types.resolveVarAndCompressPath(dac.receiver_rt_var);
                 if (receiver_rt_resolved.desc.content == .structure) {
                     const receiver_param_ct_var = can.ModuleEnv.varFrom(params[0]);
                     try self.propagateFlexMappings(self.env, receiver_param_ct_var, dac.receiver_rt_var);
@@ -18341,7 +18302,7 @@ pub const Interpreter = struct {
                     const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
 
                     // Propagate flex mappings for each argument (needed for polymorphic type propagation)
-                    const arg_rt_resolved = self.runtime_types.resolveVar(arg.rt_var);
+                    const arg_rt_resolved = self.runtime_types.resolveVarAndCompressPath(arg.rt_var);
                     if (arg_rt_resolved.desc.content == .structure) {
                         const param_ct_var = can.ModuleEnv.varFrom(params[1 + idx]);
                         try self.propagateFlexMappings(self.env, param_ct_var, arg.rt_var);
@@ -18472,7 +18433,7 @@ pub const Interpreter = struct {
                         // where format has type SimpleFormat (a local type from the test module),
                         // we need to map Builtin's fmt type parameter to SimpleFormat.
                         // This allows Fmt.encode_u8(format, self) inside U8.encode to resolve correctly.
-                        const arg_rt_resolved = self.runtime_types.resolveVar(arg_values[idx].rt_var);
+                        const arg_rt_resolved = self.runtime_types.resolveVarAndCompressPath(arg_values[idx].rt_var);
                         if (arg_rt_resolved.desc.content == .structure) {
                             try self.propagateFlexMappings(self.env, param_ct_var, arg_values[idx].rt_var);
                         }
@@ -18702,7 +18663,7 @@ pub const Interpreter = struct {
                 // The list's actual runtime type (e.g., List(I64)) has the concrete element type
                 // that we need for method resolution to work correctly.
                 const elem_rt_var = blk: {
-                    const list_resolved = self.runtime_types.resolveVar(list_value.rt_var);
+                    const list_resolved = self.runtime_types.resolveVarAndCompressPath(list_value.rt_var);
                     if (list_resolved.desc.content == .structure) {
                         if (list_resolved.desc.content.structure == .nominal_type) {
                             const list_nom = list_resolved.desc.content.structure.nominal_type;
@@ -18729,7 +18690,7 @@ pub const Interpreter = struct {
                     const inner = self.runtime_layout_store.getLayout(type_based_elem_layout.data.box);
                     if (inner.tag == .scalar and inner.data.scalar.tag == .opaque_ptr) {
                         // Need to resolve the nominal type to get its backing layout
-                        const resolved = self.runtime_types.resolveVar(elem_rt_var);
+                        const resolved = self.runtime_types.resolveVarAndCompressPath(elem_rt_var);
                         if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
                             const nom = resolved.desc.content.structure.nominal_type;
                             const backing = self.runtime_types.getNominalBackingVar(nom);
@@ -19199,7 +19160,7 @@ pub const Interpreter = struct {
                         // Check if this is a hosted lambda and invoke it
                         const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
                         const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                        const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                        const resolved_func = self.runtime_types.resolveVarAndCompressPath(hosted_lambda_rt_var);
                         const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
 
                         // Collect the two bound arguments
@@ -19319,7 +19280,7 @@ pub const Interpreter = struct {
                     // Check if this is a hosted lambda and invoke it
                     const hosted_lambda_ct_var = can.ModuleEnv.varFrom(cmp_header.lambda_expr_idx);
                     const hosted_lambda_rt_var = try self.translateTypeVar(self.env, hosted_lambda_ct_var);
-                    const resolved_func = self.runtime_types.resolveVar(hosted_lambda_rt_var);
+                    const resolved_func = self.runtime_types.resolveVarAndCompressPath(hosted_lambda_rt_var);
                     const return_rt_var = (resolved_func.desc.content.unwrapFunc() orelse return error.TypeMismatch).ret;
 
                     // Collect the two bound arguments
@@ -19457,7 +19418,7 @@ test "interpreter: translateTypeVar for str" {
     const rt_var = try interp.translateTypeVar(str_module.env, ct_str);
 
     // The runtime var should be a nominal Str type
-    const resolved = interp.runtime_types.resolveVar(rt_var);
+    const resolved = interp.runtime_types.resolveVarAndCompressPath(rt_var);
     try std.testing.expect(resolved.desc.content == .structure);
     try std.testing.expect(resolved.desc.content.structure == .nominal_type);
 }
@@ -19510,12 +19471,12 @@ test "interpreter: translateTypeVar for alias of Str" {
     const ct_alias_var = try env.types.freshFromContent(ct_alias_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_alias_var);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
+    const resolved = interp.runtime_types.resolveVarAndCompressPath(rt_var);
     try std.testing.expect(resolved.desc.content == .alias);
     const rt_alias = resolved.desc.content.alias;
     try std.testing.expectEqual(alias_name, rt_alias.ident.ident_idx);
     const rt_backing = interp.runtime_types.getAliasBackingVar(rt_alias);
-    const backing_resolved = interp.runtime_types.resolveVar(rt_backing);
+    const backing_resolved = interp.runtime_types.resolveVarAndCompressPath(rt_backing);
     try std.testing.expect(backing_resolved.desc.content == .structure);
     try std.testing.expect(backing_resolved.desc.content.structure == .nominal_type);
 }
@@ -19564,13 +19525,13 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     const ct_nominal_var = try env.types.freshFromContent(ct_nominal_content);
 
     const rt_var = try interp.translateTypeVar(&env, ct_nominal_var);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
+    const resolved = interp.runtime_types.resolveVarAndCompressPath(rt_var);
     try std.testing.expect(resolved.desc.content == .structure);
     switch (resolved.desc.content.structure) {
         .nominal_type => |nom| {
             try std.testing.expectEqual(name_nominal, nom.ident.ident_idx);
             const backing = interp.runtime_types.getNominalBackingVar(nom);
-            const b_resolved = interp.runtime_types.resolveVar(backing);
+            const b_resolved = interp.runtime_types.resolveVarAndCompressPath(backing);
             try std.testing.expect(b_resolved.desc.content == .structure);
             try std.testing.expect(b_resolved.desc.content.structure == .nominal_type);
         },
@@ -19602,7 +19563,7 @@ test "interpreter: translateTypeVar for flex var" {
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
     const rt_var = try interp.translateTypeVar(&env, ct_flex);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
+    const resolved = interp.runtime_types.resolveVarAndCompressPath(rt_var);
     try std.testing.expect(resolved.desc.content == .flex);
 }
 
@@ -19631,7 +19592,7 @@ test "interpreter: translateTypeVar for rigid var" {
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
     const ct_rigid = try env.types.freshFromContent(.{ .rigid = types.Rigid.init(name_a) });
     const rt_var = try interp.translateTypeVar(&env, ct_rigid);
-    const resolved = interp.runtime_types.resolveVar(rt_var);
+    const resolved = interp.runtime_types.resolveVarAndCompressPath(rt_var);
     try std.testing.expect(resolved.desc.content == .rigid);
     try std.testing.expectEqual(name_a, resolved.desc.content.rigid.name);
 }
@@ -19728,7 +19689,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     const entry = try interp.prepareCallWithFuncVar(0, func_id, func_var, &.{rt_str});
 
     // After unification, return var should resolve to str (nominal type)
-    const resolved_ret = interp.runtime_types.resolveVar(entry.return_var);
+    const resolved_ret = interp.runtime_types.resolveVarAndCompressPath(entry.return_var);
     try std.testing.expect(resolved_ret.desc.content == .structure);
     try std.testing.expect(resolved_ret.desc.content.structure == .nominal_type);
     try std.testing.expect(entry.return_layout_slot != 0);
