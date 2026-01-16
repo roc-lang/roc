@@ -958,23 +958,23 @@ pub const Payload = extern union {
     /// Diagnostics with an identifier and inline region offsets.
     /// Used by: diag_shadowing_warning, diag_type_redeclared, diag_duplicate_record_field, etc.
     pub const DiagIdentWithRegion = extern struct {
-        ident: u32,        // @bitCast(Ident.Idx)
+        ident: u32, // @bitCast(Ident.Idx)
         region_start: u32, // offset
-        region_end: u32,   // offset
+        region_end: u32, // offset
     };
 
     /// Diagnostics with two values plus region stored in span2_data.
     /// Used by: diag_type_shadowed_warning, diag_type_parameter_conflict, diag_mutually_recursive_type_aliases
     pub const DiagTwoIdentsExtra = extern struct {
-        ident1: u32,           // @bitCast(Ident.Idx) or value
-        ident2: u32,           // @bitCast(Ident.Idx) or bool flag
+        ident1: u32, // @bitCast(Ident.Idx) or value
+        ident2: u32, // @bitCast(Ident.Idx) or bool flag
         region_span2_idx: u32, // index into span2_data: (region_start, region_end)
     };
 
     /// Diagnostics with a single identifier plus region stored in span2_data.
     /// Used by: diag_redundant_exposed
     pub const DiagSingleIdentExtra = extern struct {
-        ident: u32,            // @bitCast(Ident.Idx)
+        ident: u32, // @bitCast(Ident.Idx)
         region_span2_idx: u32, // index into span2_data: (region_start, region_end)
         _unused: u32,
     };

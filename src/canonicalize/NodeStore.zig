@@ -4227,11 +4227,13 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Add a numeric expression node using the int128 value
     var node1 = Node.init(.expr_num);
-    node1.setPayload(.{ .expr_num = .{
-        .kind = 0, // Integer kind
-        .val_kind = 0,
-        .int128_idx = @intFromEnum(int128_idx),
-    } });
+    node1.setPayload(.{
+        .expr_num = .{
+            .kind = 0, // Integer kind
+            .val_kind = 0,
+            .int128_idx = @intFromEnum(int128_idx),
+        },
+    });
     const node1_idx = try original.nodes.append(gpa, node1);
 
     // Add a region
