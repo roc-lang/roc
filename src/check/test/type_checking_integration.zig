@@ -1679,9 +1679,9 @@ test "check type - patterns record field mismatch" {
 test "check type - var reassignment" {
     const source =
         \\main = {
-        \\  var x = 1
-        \\  x = x + 1
-        \\  x
+        \\  var $x = 1
+        \\  $x = $x + 1
+        \\  $x
         \\}
     ;
     try checkTypesModule(
@@ -1834,11 +1834,11 @@ test "check type - type module - fn declarations " {
 test "check type - for" {
     const source =
         \\main = {
-        \\  var result = 0
+        \\  var $result = 0
         \\  for x in [1, 2, 3] {
-        \\    result = result + x
+        \\    $result = $result + x
         \\  }
-        \\  result
+        \\  $result
         \\}
     ;
     try checkTypesModule(
@@ -1858,11 +1858,11 @@ test "check type - for mismatch" {
     const source =
         \\main : I64
         \\main = {
-        \\  var result = 0.I64
+        \\  var $result = 0.I64
         \\  for x in ["a", "b", "c"] {
-        \\    result = result + x
+        \\    $result = $result + x
         \\  }
-        \\  result
+        \\  $result
         \\}
     ;
     try checkTypesModule(
