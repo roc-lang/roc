@@ -8,9 +8,11 @@
 
 const std = @import("std");
 const layout_mod = @import("layout");
+const can = @import("can");
 const Layout = layout_mod.Layout;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
+const CIR = can.CIR;
 
 /// Heap memory for compile-time evaluation.
 ///
@@ -100,45 +102,69 @@ pub const ComptimeValue = struct {
 ///
 /// Maps pattern indices to their computed values.
 /// All values are allocated from the associated ComptimeHeap.
+/// Closures are stored separately by expression index to avoid mixing
+/// evaluated values with deferred expressions.
 pub const ComptimeEnv = struct {
     heap: *ComptimeHeap,
+    /// Evaluated values (numbers, records, etc.)
     bindings: std.AutoHashMap(u32, ComptimeValue),
-    layout_store: *LayoutStore,
+    /// Closures stored by expression index (deferred evaluation)
+    closure_refs: std.AutoHashMap(u32, CIR.Expr.Idx),
+    /// Optional layout store for interpreting values. Can be null during
+    /// initial development when we only need bind/lookup functionality.
+    layout_store: ?*LayoutStore,
 
-    pub fn init(heap: *ComptimeHeap, layout_store: *LayoutStore) ComptimeEnv {
+    pub fn init(heap: *ComptimeHeap, layout_store: ?*LayoutStore) ComptimeEnv {
         return .{
             .heap = heap,
             .bindings = std.AutoHashMap(u32, ComptimeValue).init(heap.allocator()),
+            .closure_refs = std.AutoHashMap(u32, CIR.Expr.Idx).init(heap.allocator()),
             .layout_store = layout_store,
         };
     }
 
-    /// Bind a pattern index to a value.
+    /// Bind a pattern index to an evaluated value.
     pub fn bind(self: *ComptimeEnv, pattern_idx: u32, value: ComptimeValue) !void {
         try self.bindings.put(pattern_idx, value);
     }
 
-    /// Look up a pattern index.
+    /// Bind a pattern index to a closure (stored by expression index).
+    pub fn bindClosure(self: *ComptimeEnv, pattern_idx: u32, expr_idx: CIR.Expr.Idx) !void {
+        try self.closure_refs.put(pattern_idx, expr_idx);
+    }
+
+    /// Look up an evaluated value by pattern index.
     pub fn lookup(self: *const ComptimeEnv, pattern_idx: u32) ?ComptimeValue {
         return self.bindings.get(pattern_idx);
     }
 
+    /// Look up a closure by pattern index.
+    pub fn lookupClosure(self: *const ComptimeEnv, pattern_idx: u32) ?CIR.Expr.Idx {
+        return self.closure_refs.get(pattern_idx);
+    }
+
     /// Create a child environment that inherits bindings from this one.
-    /// The child uses the same heap but has its own bindings map.
+    /// The child uses the same heap but has its own bindings maps.
     pub fn child(self: *const ComptimeEnv) !ComptimeEnv {
         var new_env = ComptimeEnv.init(self.heap, self.layout_store);
-        // Copy parent bindings
+        // Copy parent value bindings
         var iter = self.bindings.iterator();
         while (iter.next()) |entry| {
             try new_env.bindings.put(entry.key_ptr.*, entry.value_ptr.*);
         }
+        // Copy parent closure bindings
+        var closure_iter = self.closure_refs.iterator();
+        while (closure_iter.next()) |entry| {
+            try new_env.closure_refs.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
         return new_env;
     }
 
-    /// Clean up the bindings map.
+    /// Clean up the bindings maps.
     /// Note: The actual bytes are owned by the heap and freed when the heap is deinited.
     pub fn deinit(self: *ComptimeEnv) void {
         self.bindings.deinit();
+        self.closure_refs.deinit();
     }
 };
 
@@ -157,7 +183,7 @@ test "ComptimeValue read/write i64" {
     defer heap.deinit();
 
     const bytes = try heap.alloc8(8);
-    const value = ComptimeValue.fromBytes(bytes, @enumFromInt(0));
+    const value = ComptimeValue.fromBytes(bytes, undefined);
 
     value.set(i64, 42);
     try std.testing.expectEqual(@as(i64, 42), value.as(i64));
@@ -167,14 +193,11 @@ test "ComptimeEnv bind and lookup" {
     var heap = ComptimeHeap.init(std.testing.allocator);
     defer heap.deinit();
 
-    // Create a mock layout store (we don't actually use it in this test)
-    var layout_store: LayoutStore = undefined;
-
-    var env = ComptimeEnv.init(&heap, &layout_store);
+    var env = ComptimeEnv.init(&heap, null);
     defer env.deinit();
 
     const bytes = try heap.alloc8(8);
-    const value = ComptimeValue.fromBytes(bytes, @enumFromInt(0));
+    const value = ComptimeValue.fromBytes(bytes, undefined);
     value.set(i64, 123);
 
     try env.bind(42, value);
@@ -188,13 +211,11 @@ test "ComptimeEnv child inherits bindings" {
     var heap = ComptimeHeap.init(std.testing.allocator);
     defer heap.deinit();
 
-    var layout_store: LayoutStore = undefined;
-
-    var parent = ComptimeEnv.init(&heap, &layout_store);
+    var parent = ComptimeEnv.init(&heap, null);
     defer parent.deinit();
 
     const bytes = try heap.alloc8(8);
-    const value = ComptimeValue.fromBytes(bytes, @enumFromInt(0));
+    const value = ComptimeValue.fromBytes(bytes, undefined);
     value.set(i64, 999);
     try parent.bind(1, value);
 
@@ -208,7 +229,7 @@ test "ComptimeEnv child inherits bindings" {
 
     // Add new binding to child
     const bytes2 = try heap.alloc8(8);
-    const value2 = ComptimeValue.fromBytes(bytes2, @enumFromInt(0));
+    const value2 = ComptimeValue.fromBytes(bytes2, undefined);
     value2.set(i64, 777);
     try child_env.bind(2, value2);
 

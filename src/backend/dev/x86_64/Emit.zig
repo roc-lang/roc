@@ -844,12 +844,13 @@ const ALL_GENERAL_REGS = [_]GeneralReg{
 
 const SAFE_GENERAL_REGS = [_]GeneralReg{
     .RAX, .RCX, .RDX, .RBX, .RSI, .RDI,
-    .R8,  .R9,  .R10, .R11, .R12, .R13, .R14, .R15,
+    .R8,  .R9,  .R10, .R11, .R12, .R13,
+    .R14, .R15,
 };
 
 const ALL_FLOAT_REGS = [_]FloatReg{
-    .XMM0,  .XMM1,  .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
-    .XMM8,  .XMM9,  .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
+    .XMM0, .XMM1, .XMM2,  .XMM3,  .XMM4,  .XMM5,  .XMM6,  .XMM7,
+    .XMM8, .XMM9, .XMM10, .XMM11, .XMM12, .XMM13, .XMM14, .XMM15,
 };
 
 test "mov reg64, reg64 - all register combinations" {
@@ -970,10 +971,10 @@ test "jcc rel8 - all conditions" {
     defer emit.deinit();
 
     const conditions = [_]Condition{
-        .overflow,         .not_overflow,     .below,            .above_or_equal,
-        .equal,            .not_equal,        .below_or_equal,   .above,
-        .sign,             .not_sign,         .parity_even,      .parity_odd,
-        .less,             .greater_or_equal, .less_or_equal,    .greater,
+        .overflow, .not_overflow,     .below,          .above_or_equal,
+        .equal,    .not_equal,        .below_or_equal, .above,
+        .sign,     .not_sign,         .parity_even,    .parity_odd,
+        .less,     .greater_or_equal, .less_or_equal,  .greater,
     };
 
     for (conditions, 0..) |cond, i| {
@@ -989,10 +990,10 @@ test "jcc rel32 - all conditions" {
     defer emit.deinit();
 
     const conditions = [_]Condition{
-        .overflow,         .not_overflow,     .below,            .above_or_equal,
-        .equal,            .not_equal,        .below_or_equal,   .above,
-        .sign,             .not_sign,         .parity_even,      .parity_odd,
-        .less,             .greater_or_equal, .less_or_equal,    .greater,
+        .overflow, .not_overflow,     .below,          .above_or_equal,
+        .equal,    .not_equal,        .below_or_equal, .above,
+        .sign,     .not_sign,         .parity_even,    .parity_odd,
+        .less,     .greater_or_equal, .less_or_equal,  .greater,
     };
 
     for (conditions, 0..) |cond, i| {

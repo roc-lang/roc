@@ -604,7 +604,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
             \\Usage: roc repl [OPTIONS]

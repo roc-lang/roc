@@ -180,7 +180,7 @@ pub const SystemVCodeGen = struct {
         try self.emitStoreStack(.w64, slot, reg);
 
         // Update the owner's location to stack
-        try self.locals.put( owner, .{ .stack = slot });
+        try self.locals.put(owner, .{ .stack = slot });
 
         // Clear old ownership, set new ownership
         self.general_owners[@intFromEnum(reg)] = local;
@@ -201,7 +201,7 @@ pub const SystemVCodeGen = struct {
                     // Load from stack
                     try self.emitLoadStack(.w64, reg, slot);
                     // Update location
-                    try self.locals.put( local, .{ .general_reg = @intFromEnum(reg) });
+                    try self.locals.put(local, .{ .general_reg = @intFromEnum(reg) });
                     return reg;
                 },
                 else => return error.InvalidLocalLocation,
@@ -262,7 +262,7 @@ pub const SystemVCodeGen = struct {
         try self.emitStoreStackF64(slot, reg);
 
         // Update the owner's location to stack
-        try self.locals.put( owner, .{ .stack = slot });
+        try self.locals.put(owner, .{ .stack = slot });
 
         // Update ownership
         self.float_owners[@intFromEnum(reg)] = local;
@@ -278,7 +278,7 @@ pub const SystemVCodeGen = struct {
                 .stack => |slot| {
                     const reg = try self.allocFloatFor(local);
                     try self.emitLoadStackF64(reg, slot);
-                    try self.locals.put( local, .{ .float_reg = @intFromEnum(reg) });
+                    try self.locals.put(local, .{ .float_reg = @intFromEnum(reg) });
                     return reg;
                 },
                 else => return error.InvalidLocalLocation,
