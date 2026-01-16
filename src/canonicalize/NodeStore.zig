@@ -324,10 +324,9 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .pattern = @enumFromInt(p.pattern),
                 .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-                    const has_anno = extra_data[0] != 0;
-                    if (has_anno) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    if (anno_data.start != 0) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(anno_data.len));
                     } else {
                         break :blk null;
                     }
@@ -340,10 +339,9 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .pattern = @enumFromInt(p.pattern),
                 .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-                    const has_anno = extra_data[0] != 0;
-                    if (has_anno) {
-                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(extra_data[1]));
+                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    if (anno_data.start != 0) {
+                        break :blk @as(CIR.Annotation.Idx, @enumFromInt(anno_data.len));
                     } else {
                         break :blk null;
                     }
@@ -356,9 +354,9 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
                 .pattern_idx = @enumFromInt(p.pattern_idx),
                 .expr = @enumFromInt(p.expr),
                 .anno = blk: {
-                    const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-                    if (extra_data[0] != 0) {
-                        break :blk @enumFromInt(extra_data[1]);
+                    const anno_data = store.span2_data.items.items[p.anno_span2_idx];
+                    if (anno_data.start != 0) {
+                        break :blk @enumFromInt(anno_data.len);
                     } else {
                         break :blk null;
                     }
@@ -1450,12 +1448,11 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         },
         .ty_fn => {
             const p = payload.ty_fn;
-            const effectful = store.extra_data.items.items[p.extra_data_idx] != 0;
-            const ret: CIR.TypeAnno.Idx = @enumFromInt(store.extra_data.items.items[p.extra_data_idx + 1]);
+            const fn_info = store.span2_data.items.items[p.fn_info_span2_idx];
             return CIR.TypeAnno{ .@"fn" = .{
                 .args = .{ .span = .{ .start = p.args_start, .len = p.args_len } },
-                .ret = ret,
-                .effectful = effectful,
+                .ret = @enumFromInt(fn_info.len),
+                .effectful = fn_info.start != 0,
             } };
         },
         .ty_parens => {
@@ -1526,11 +1523,8 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
     const anno: CIR.TypeAnno.Idx = @enumFromInt(p.anno);
 
     const where_clause = if (p.has_where == 1) blk: {
-        const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-
-        const where_start = extra_data[0];
-        const where_len = extra_data[1];
-        break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+        const where_data = store.span2_data.items.items[p.where_span2_idx];
+        break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
     } else null;
 
     return CIR.Annotation{
@@ -1590,51 +1584,48 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
 
     switch (statement) {
         .s_decl => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
+            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
+            const anno_data: Span2 = if (s.anno) |anno| .{
+                .start = 1,
+                .len = @intFromEnum(anno),
+            } else .{ .start = 0, .len = 0 };
+            _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_decl;
             node.setPayload(.{ .statement_decl = .{
                 .pattern = @intFromEnum(s.pattern),
                 .expr = @intFromEnum(s.expr),
-                .extra_data_idx = extra_data_start,
+                .anno_span2_idx = anno_span2_idx,
             } });
         },
         .s_decl_gen => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
+            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
+            const anno_data: Span2 = if (s.anno) |anno| .{
+                .start = 1,
+                .len = @intFromEnum(anno),
+            } else .{ .start = 0, .len = 0 };
+            _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_decl_gen;
             node.setPayload(.{ .statement_decl = .{
                 .pattern = @intFromEnum(s.pattern),
                 .expr = @intFromEnum(s.expr),
-                .extra_data_idx = extra_data_start,
+                .anno_span2_idx = anno_span2_idx,
             } });
         },
         .s_var => |s| {
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            if (s.anno) |anno| {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(true));
-                _ = try store.extra_data.append(store.gpa, @intFromEnum(anno));
-            } else {
-                _ = try store.extra_data.append(store.gpa, @intFromBool(false));
-            }
+            const anno_span2_idx: u32 = @intCast(store.span2_data.len());
+            const anno_data: Span2 = if (s.anno) |anno| .{
+                .start = 1,
+                .len = @intFromEnum(anno),
+            } else .{ .start = 0, .len = 0 };
+            _ = try store.span2_data.append(store.gpa, anno_data);
 
             node.tag = .statement_var;
             node.setPayload(.{ .statement_var = .{
                 .pattern_idx = @intFromEnum(s.pattern_idx),
                 .expr = @intFromEnum(s.expr),
-                .extra_data_idx = extra_data_start,
+                .anno_span2_idx = anno_span2_idx,
             } });
         },
         .s_reassign => |s| {
@@ -2665,13 +2656,15 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         },
         .@"fn" => |f| {
             node.tag = .ty_fn;
-            const ed_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, if (f.effectful) @as(u32, 1) else 0);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(f.ret));
+            const fn_info_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = if (f.effectful) 1 else 0,
+                .len = @intFromEnum(f.ret),
+            });
             node.setPayload(.{ .ty_fn = .{
                 .args_start = f.args.span.start,
                 .args_len = f.args.span.len,
-                .extra_data_idx = ed_start,
+                .fn_info_span2_idx = fn_info_span2_idx,
             } });
         },
         .parens => |p| {
@@ -2743,19 +2736,21 @@ pub fn addAnnotation(store: *NodeStore, annotation: CIR.Annotation, region: base
     var node = Node.init(.annotation);
 
     if (annotation.where) |where_clause| {
-        const extra_start: u32 = @intCast(store.extra_data.len());
-        _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-        _ = try store.extra_data.append(store.gpa, where_clause.span.len);
+        const where_span2_idx: u32 = @intCast(store.span2_data.len());
+        _ = try store.span2_data.append(store.gpa, .{
+            .start = where_clause.span.start,
+            .len = where_clause.span.len,
+        });
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
             .has_where = 1,
-            .extra_data_idx = extra_start,
+            .where_span2_idx = where_span2_idx,
         } });
     } else {
         node.setPayload(.{ .annotation = .{
             .anno = @intFromEnum(annotation.anno),
             .has_where = 0,
-            .extra_data_idx = 0,
+            .where_span2_idx = 0,
         } });
     }
 
@@ -3306,10 +3301,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .redundant_exposed => |r| {
             node.tag = .diag_redundant_exposed;
             region = r.region;
-            const extra_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
-            node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .extra_idx = extra_start, ._unused = 0 } });
+            const region_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = r.original_region.start.offset,
+                .len = r.original_region.end.offset,
+            });
+            node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx, ._unused = 0 } });
         },
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
@@ -3512,18 +3509,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .type_shadowed_warning => |r| {
             node.tag = .diag_type_shadowed_warning;
             region = r.region;
-            const extra_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
-            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @intFromBool(r.cross_scope), .extra_idx = extra_start } });
+            const region_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = r.original_region.start.offset,
+                .len = r.original_region.end.offset,
+            });
+            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @intFromBool(r.cross_scope), .region_span2_idx = region_span2_idx } });
         },
         .type_parameter_conflict => |r| {
             node.tag = .diag_type_parameter_conflict;
             region = r.region;
-            const extra_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, r.original_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.original_region.end.offset);
-            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.parameter_name), .extra_idx = extra_start } });
+            const region_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = r.original_region.start.offset,
+                .len = r.original_region.end.offset,
+            });
+            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.parameter_name), .region_span2_idx = region_span2_idx } });
         },
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
@@ -3575,10 +3576,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
             region = r.region;
-            const extra_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, r.other_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, r.other_region.end.offset);
-            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.other_name), .extra_idx = extra_start } });
+            const region_span2_idx: u32 = @intCast(store.span2_data.len());
+            _ = try store.span2_data.append(store.gpa, .{
+                .start = r.other_region.start.offset,
+                .len = r.other_region.end.offset,
+            });
+            node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.other_name), .region_span2_idx = region_span2_idx } });
         },
         .deprecated_number_suffix => |r| {
             node.tag = .diag_deprecated_number_suffix;
@@ -3654,15 +3657,13 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_redundant_exposed => {
             const p = payload.diag_single_ident_extra;
-            const extra_data = store.extra_data.items.items[p.extra_idx..];
-            const original_start = extra_data[0];
-            const original_end = extra_data[1];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
             return CIR.Diagnostic{ .redundant_exposed = .{
                 .ident = @bitCast(p.ident),
                 .region = store.getRegionAt(node_idx),
                 .original_region = Region{
-                    .start = .{ .offset = original_start },
-                    .end = .{ .offset = original_end },
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
                 },
             } };
         },
@@ -3883,31 +3884,27 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         },
         .diag_type_shadowed_warning => {
             const p = payload.diag_two_idents_extra;
-            const extra_data = store.extra_data.items.items[p.extra_idx..];
-            const original_start = extra_data[0];
-            const original_end = extra_data[1];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
             return CIR.Diagnostic{ .type_shadowed_warning = .{
                 .name = @bitCast(p.ident1),
                 .region = store.getRegionAt(node_idx),
                 .cross_scope = p.ident2 != 0,
                 .original_region = .{
-                    .start = .{ .offset = original_start },
-                    .end = .{ .offset = original_end },
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
                 },
             } };
         },
         .diag_type_parameter_conflict => {
             const p = payload.diag_two_idents_extra;
-            const extra_data = store.extra_data.items.items[p.extra_idx..];
-            const original_start = extra_data[0];
-            const original_end = extra_data[1];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
             return CIR.Diagnostic{ .type_parameter_conflict = .{
                 .name = @bitCast(p.ident1),
                 .parameter_name = @bitCast(p.ident2),
                 .region = store.getRegionAt(node_idx),
                 .original_region = .{
-                    .start = .{ .offset = original_start },
-                    .end = .{ .offset = original_end },
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
                 },
             } };
         },
@@ -3969,16 +3966,14 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_mutually_recursive_type_aliases => {
             const p = payload.diag_two_idents_extra;
-            const extra_data = store.extra_data.items.items[p.extra_idx..];
-            const other_start = extra_data[0];
-            const other_end = extra_data[1];
+            const region_data = store.span2_data.items.items[p.region_span2_idx];
             return CIR.Diagnostic{ .mutually_recursive_type_aliases = .{
                 .name = @bitCast(p.ident1),
                 .other_name = @bitCast(p.ident2),
                 .region = store.getRegionAt(node_idx),
                 .other_region = .{
-                    .start = .{ .offset = other_start },
-                    .end = .{ .offset = other_end },
+                    .start = .{ .offset = region_data.start },
+                    .end = .{ .offset = region_data.len },
                 },
             } };
         },

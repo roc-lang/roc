@@ -364,14 +364,14 @@ pub const Payload = extern union {
     pub const StatementDecl = extern struct {
         pattern: u32,
         expr: u32,
-        extra_data_idx: u32,
+        anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
     };
 
     /// statement_var: pattern_idx + expr + extra_data for anno
     pub const StatementVar = extern struct {
         pattern_idx: u32,
         expr: u32,
-        extra_data_idx: u32,
+        anno_span2_idx: u32, // Index into span2_data: (has_anno, anno_idx_or_zero)
     };
 
     /// statement_reassign: pattern_idx + expr
@@ -832,7 +832,7 @@ pub const Payload = extern union {
     pub const TyFn = extern struct {
         args_start: u32,
         args_len: u32,
-        extra_data_idx: u32,
+        fn_info_span2_idx: u32, // Index into span2_data: (effectful, ret_idx)
     };
 
     pub const TyLookup = extern struct {
@@ -926,7 +926,7 @@ pub const Payload = extern union {
     pub const Annotation = extern struct {
         anno: u32,
         has_where: u32,
-        extra_data_idx: u32,
+        where_span2_idx: u32, // Index into span2_data: (where_start, where_len) when has_where == 1
     };
 
     // === Diagnostic payload structs ===
@@ -971,19 +971,19 @@ pub const Payload = extern union {
         region_end: u32,   // offset
     };
 
-    /// Diagnostics with two values plus an extra_data index for region.
+    /// Diagnostics with two values plus region stored in span2_data.
     /// Used by: diag_type_shadowed_warning, diag_type_parameter_conflict, diag_mutually_recursive_type_aliases
     pub const DiagTwoIdentsExtra = extern struct {
-        ident1: u32,    // @bitCast(Ident.Idx) or value
-        ident2: u32,    // @bitCast(Ident.Idx) or bool flag
-        extra_idx: u32, // index into extra_data for region offsets
+        ident1: u32,           // @bitCast(Ident.Idx) or value
+        ident2: u32,           // @bitCast(Ident.Idx) or bool flag
+        region_span2_idx: u32, // index into span2_data: (region_start, region_end)
     };
 
-    /// Diagnostics with a single identifier plus extra_data index.
+    /// Diagnostics with a single identifier plus region stored in span2_data.
     /// Used by: diag_redundant_exposed
     pub const DiagSingleIdentExtra = extern struct {
-        ident: u32,     // @bitCast(Ident.Idx)
-        extra_idx: u32, // index into extra_data for region offsets
+        ident: u32,            // @bitCast(Ident.Idx)
+        region_span2_idx: u32, // index into span2_data: (region_start, region_end)
         _unused: u32,
     };
 
