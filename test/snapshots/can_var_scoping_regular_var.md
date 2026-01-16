@@ -7,22 +7,22 @@ type=snippet
 ~~~roc
 # Regular function with var usage
 processItems = |items| {
-	var count_ = 0
-	var total_ = 0
+	var $count = 0
+	var $total = 0
 
 	# Reassign vars within same function - should work
-	count_ = count_ + 1
-	total_ = total_ + 10
+	$count = $count + 1
+	$total = $total + 10
 
 	# Nested function - var reassignment should fail across function boundary
 	nestedFunc = |_| {
-		count_ = count_ + 5 # Should cause error - different function
-		total_ = total_ * 2 # Should cause error - different function
-		count_
+		$count = $count + 5 # Should cause error - different function
+		$total = $total * 2 # Should cause error - different function
+		$count
 	}
 
 	result = nestedFunc({})
-	total_ + result
+	$total + result
 }
 ~~~
 # EXPECTED
@@ -79,19 +79,19 @@ EndOfFile,
 					(p-ident (raw "items")))
 				(e-block
 					(statements
-						(s-var (name "count_")
+						(s-var (name "$count")
 							(e-int (raw "0")))
-						(s-var (name "total_")
+						(s-var (name "$total")
 							(e-int (raw "0")))
 						(s-decl
-							(p-ident (raw "count_"))
+							(p-ident (raw "$count"))
 							(e-binop (op "+")
-								(e-ident (raw "count_"))
+								(e-ident (raw "$count"))
 								(e-int (raw "1"))))
 						(s-decl
-							(p-ident (raw "total_"))
+							(p-ident (raw "$total"))
 							(e-binop (op "+")
-								(e-ident (raw "total_"))
+								(e-ident (raw "$total"))
 								(e-int (raw "10"))))
 						(s-decl
 							(p-ident (raw "nestedFunc"))
@@ -101,23 +101,23 @@ EndOfFile,
 								(e-block
 									(statements
 										(s-decl
-											(p-ident (raw "count_"))
+											(p-ident (raw "$count"))
 											(e-binop (op "+")
-												(e-ident (raw "count_"))
+												(e-ident (raw "$count"))
 												(e-int (raw "5"))))
 										(s-decl
-											(p-ident (raw "total_"))
+											(p-ident (raw "$total"))
 											(e-binop (op "*")
-												(e-ident (raw "total_"))
+												(e-ident (raw "$total"))
 												(e-int (raw "2"))))
-										(e-ident (raw "count_"))))))
+										(e-ident (raw "$count"))))))
 						(s-decl
 							(p-ident (raw "result"))
 							(e-apply
 								(e-ident (raw "nestedFunc"))
 								(e-record)))
 						(e-binop (op "+")
-							(e-ident (raw "total_"))
+							(e-ident (raw "$total"))
 							(e-ident (raw "result")))))))))
 ~~~
 # FORMATTED
@@ -134,40 +134,40 @@ NO CHANGE
 				(p-assign (ident "items")))
 			(e-block
 				(s-var
-					(p-assign (ident "count_"))
+					(p-assign (ident "$count"))
 					(e-num (value "0")))
 				(s-var
-					(p-assign (ident "total_"))
+					(p-assign (ident "$total"))
 					(e-num (value "0")))
 				(s-reassign
-					(p-assign (ident "count_"))
+					(p-assign (ident "$count"))
 					(e-binop (op "add")
 						(e-lookup-local
-							(p-assign (ident "count_")))
+							(p-assign (ident "$count")))
 						(e-num (value "1"))))
 				(s-reassign
-					(p-assign (ident "total_"))
+					(p-assign (ident "$total"))
 					(e-binop (op "add")
 						(e-lookup-local
-							(p-assign (ident "total_")))
+							(p-assign (ident "$total")))
 						(e-num (value "10"))))
 				(s-let
 					(p-assign (ident "nestedFunc"))
 					(e-closure
 						(captures
-							(capture (ident "count_")))
+							(capture (ident "$count")))
 						(e-lambda
 							(args
 								(p-underscore))
 							(e-block
 								(s-reassign
-									(p-assign (ident "count_"))
+									(p-assign (ident "$count"))
 									(e-runtime-error (tag "var_across_function_boundary")))
 								(s-reassign
-									(p-assign (ident "total_"))
+									(p-assign (ident "$total"))
 									(e-runtime-error (tag "var_across_function_boundary")))
 								(e-lookup-local
-									(p-assign (ident "count_")))))))
+									(p-assign (ident "$count")))))))
 				(s-let
 					(p-assign (ident "result"))
 					(e-call
@@ -176,7 +176,7 @@ NO CHANGE
 						(e-empty_record)))
 				(e-binop (op "add")
 					(e-lookup-local
-						(p-assign (ident "total_")))
+						(p-assign (ident "$total")))
 					(e-lookup-local
 						(p-assign (ident "result"))))))))
 ~~~

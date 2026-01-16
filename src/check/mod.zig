@@ -42,6 +42,7 @@ test "check tests" {
     std.testing.refAllDecls(@import("test/generalize_redirect_test.zig"));
     std.testing.refAllDecls(@import("test/exhaustiveness_test.zig"));
     std.testing.refAllDecls(@import("test/repros_test.zig"));
+    std.testing.refAllDecls(@import("test/problem_coverage_test.zig"));
 
     // Cross-module monomorphization tests
     std.testing.refAllDecls(@import("test/cross_module_mono_test.zig"));

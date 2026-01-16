@@ -795,6 +795,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_without_dollar_prefix = .{
+            .name = rand_ident_idx(),
+            .suggested_name = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .underscore_in_type_declaration = .{
             .is_alias = rand.random().boolean(),
             .region = rand_region(),

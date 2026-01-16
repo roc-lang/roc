@@ -150,7 +150,7 @@ expect # Comment after expect keyword
 main! : List(String) -> Try({}, _)
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
-	var number = 123
+	var $number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comment after return keyword
@@ -168,19 +168,19 @@ main! = |_| { # Yeah I can leave a comment here
 	)
 	crash # Comment after crash keyword
 		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
+	tag_with_payload = Ok($number)
 	interpolated = "Hello, ${world}"
 	list = [
 		add_one(
 			dbg # After dbg in list
-				number, # after dbg expr as arg
+				$number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
 		789, # Comment three
 	]
 	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
+		Stdout.line!("Adding ${n} to ${$number}")
+		$number = $number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -197,7 +197,7 @@ main! = |_| { # Yeah I can leave a comment here
 	Stdout.line!(interpolated)?
 	Stdout.line!(
 		"How about ${ # Comment after string interpolation open
-			Num.toStr(number) # Comment after string interpolation expr
+			Num.toStr($number) # Comment after string interpolation expr
 		} as a string?",
 	)
 } # Comment after top-level decl
@@ -267,7 +267,7 @@ UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
 INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
 INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
-TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
+TYPE MISMATCH - syntax_grab_bag.md:168:4:169:12
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 # PROBLEMS
@@ -638,7 +638,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **syntax_grab_bag.md:175:3:175:15:**
 ```roc
-		Stdout.line!("Adding ${n} to ${number}")
+		Stdout.line!("Adding ${n} to ${$number}")
 ```
 		^^^^^^^^^^^^
 
@@ -771,7 +771,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **syntax_grab_bag.md:193:4:193:13:**
 ```roc
-			Num.toStr(number) # Comment after string interpolation expr
+			Num.toStr($number) # Comment after string interpolation expr
 ```
 			^^^^^^^^^
 
@@ -783,7 +783,7 @@ If you don't need this variable, prefix it with an underscore like `_tag_with_pa
 The unused variable is declared here:
 **syntax_grab_bag.md:164:2:164:18:**
 ```roc
-	tag_with_payload = Ok(number)
+	tag_with_payload = Ok($number)
 ```
 	^^^^^^^^^^^^^^^^
 
@@ -948,10 +948,10 @@ The function has the signature:
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**syntax_grab_bag.md:168:4:169:11:**
+**syntax_grab_bag.md:168:4:169:12:**
 ```roc
 			dbg # After dbg in list
-				number, # after dbg expr as arg
+				$number, # after dbg expr as arg
 ```
 
 This argument has the type:
@@ -984,7 +984,7 @@ This expression is used in an unexpected way:
 ```roc
 main! = |_| { # Yeah I can leave a comment here
 	world = "World"
-	var number = 123
+	var $number = 123
 	expect blah == 1
 	tag = Blue
 	return # Comment after return keyword
@@ -1002,19 +1002,19 @@ main! = |_| { # Yeah I can leave a comment here
 	)
 	crash # Comment after crash keyword
 		"Unreachable!" # Comment after crash statement
-	tag_with_payload = Ok(number)
+	tag_with_payload = Ok($number)
 	interpolated = "Hello, ${world}"
 	list = [
 		add_one(
 			dbg # After dbg in list
-				number, # after dbg expr as arg
+				$number, # after dbg expr as arg
 		), # Comment one
 		456, # Comment two
 		789, # Comment three
 	]
 	for n in list {
-		Stdout.line!("Adding ${n} to ${number}")
-		number = number + n
+		Stdout.line!("Adding ${n} to ${$number}")
+		$number = $number + n
 	}
 	record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
 	tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
@@ -1031,7 +1031,7 @@ main! = |_| { # Yeah I can leave a comment here
 	Stdout.line!(interpolated)?
 	Stdout.line!(
 		"How about ${ # Comment after string interpolation open
-			Num.toStr(number) # Comment after string interpolation expr
+			Num.toStr($number) # Comment after string interpolation expr
 		} as a string?",
 	)
 } # Comment after top-level decl
@@ -1574,7 +1574,7 @@ EndOfFile,
 							(p-ident (raw "world"))
 							(e-string
 								(e-string-part (raw "World"))))
-						(s-var (name "number")
+						(s-var (name "$number")
 							(e-int (raw "123")))
 						(s-expect
 							(e-binop (op "==")
@@ -1600,7 +1600,7 @@ EndOfFile,
 							(p-ident (raw "tag_with_payload"))
 							(e-apply
 								(e-tag (raw "Ok"))
-								(e-ident (raw "number"))))
+								(e-ident (raw "$number"))))
 						(s-decl
 							(p-ident (raw "interpolated"))
 							(e-string
@@ -1613,7 +1613,7 @@ EndOfFile,
 								(e-apply
 									(e-ident (raw "add_one"))
 									(e-dbg
-										(e-ident (raw "number"))))
+										(e-ident (raw "$number"))))
 								(e-int (raw "456"))
 								(e-int (raw "789"))))
 						(s-for
@@ -1627,12 +1627,12 @@ EndOfFile,
 											(e-string-part (raw "Adding "))
 											(e-ident (raw "n"))
 											(e-string-part (raw " to "))
-											(e-ident (raw "number"))
+											(e-ident (raw "$number"))
 											(e-string-part (raw ""))))
 									(s-decl
-										(p-ident (raw "number"))
+										(p-ident (raw "$number"))
 										(e-binop (op "+")
-											(e-ident (raw "number"))
+											(e-ident (raw "$number"))
 											(e-ident (raw "n")))))))
 						(s-decl
 							(p-ident (raw "record"))
@@ -1739,7 +1739,7 @@ EndOfFile,
 								(e-string-part (raw "How about "))
 								(e-apply
 									(e-ident (raw "Num.toStr"))
-									(e-ident (raw "number")))
+									(e-ident (raw "$number")))
 								(e-string-part (raw " as a string?"))))))))
 		(s-type-anno (name "empty")
 			(ty-record))
@@ -2046,7 +2046,7 @@ NO CHANGE
 						(e-string
 							(e-literal (string "World"))))
 					(s-var
-						(p-assign (ident "number"))
+						(p-assign (ident "$number"))
 						(e-num (value "123")))
 					(s-expect
 						(e-binop (op "eq")
@@ -2076,7 +2076,7 @@ NO CHANGE
 						(e-tag (name "Ok")
 							(args
 								(e-lookup-local
-									(p-assign (ident "number"))))))
+									(p-assign (ident "$number"))))))
 					(s-let
 						(p-assign (ident "interpolated"))
 						(e-string
@@ -2093,7 +2093,7 @@ NO CHANGE
 										(p-assign (ident "add_one")))
 									(e-dbg
 										(e-lookup-local
-											(p-assign (ident "number")))))
+											(p-assign (ident "$number")))))
 								(e-num (value "456"))
 								(e-num (value "789")))))
 					(s-for
@@ -2110,13 +2110,13 @@ NO CHANGE
 											(p-assign (ident "n")))
 										(e-literal (string " to "))
 										(e-lookup-local
-											(p-assign (ident "number")))
+											(p-assign (ident "$number")))
 										(e-literal (string "")))))
 							(s-reassign
-								(p-assign (ident "number"))
+								(p-assign (ident "$number"))
 								(e-binop (op "add")
 									(e-lookup-local
-										(p-assign (ident "number")))
+										(p-assign (ident "$number")))
 									(e-lookup-local
 										(p-assign (ident "n")))))
 							(e-empty_record)))
@@ -2338,7 +2338,7 @@ NO CHANGE
 							(e-call
 								(e-runtime-error (tag "qualified_ident_does_not_exist"))
 								(e-lookup-local
-									(p-assign (ident "number"))))
+									(p-assign (ident "$number"))))
 							(e-literal (string " as a string?")))))))
 		(annotation
 			(ty-fn (effectful false)

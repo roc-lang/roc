@@ -7,10 +7,10 @@ type=snippet
 ~~~roc
 # Test var redeclaration (should produce shadowing warning)
 redeclareTest = |_| {
-	var x_ = 5
-	var x_ = 10 # Redeclare var - should warn but proceed
-	x_ = 15 # Reassign - should work without warning
-	x_
+	var $x = 5
+	var $x = 10 # Redeclare var - should warn but proceed
+	$x = 15 # Reassign - should work without warning
+	$x
 }
 
 result = redeclareTest({})
@@ -19,19 +19,19 @@ result = redeclareTest({})
 DUPLICATE DEFINITION - can_var_scoping_var_redeclaration.md:4:2:4:13
 # PROBLEMS
 **DUPLICATE DEFINITION**
-The name `x_` is being redeclared in this scope.
+The name `$x` is being redeclared in this scope.
 
 The redeclaration is here:
 **can_var_scoping_var_redeclaration.md:4:2:4:13:**
 ```roc
-	var x_ = 10 # Redeclare var - should warn but proceed
+	var $x = 10 # Redeclare var - should warn but proceed
 ```
 	^^^^^^^^^^^
 
-But `x_` was already defined here:
+But `$x` was already defined here:
 **can_var_scoping_var_redeclaration.md:3:2:3:12:**
 ```roc
-	var x_ = 5
+	var $x = 5
 ```
 	^^^^^^^^^^
 
@@ -59,14 +59,14 @@ EndOfFile,
 					(p-underscore))
 				(e-block
 					(statements
-						(s-var (name "x_")
+						(s-var (name "$x")
 							(e-int (raw "5")))
-						(s-var (name "x_")
+						(s-var (name "$x")
 							(e-int (raw "10")))
 						(s-decl
-							(p-ident (raw "x_"))
+							(p-ident (raw "$x"))
 							(e-int (raw "15")))
-						(e-ident (raw "x_"))))))
+						(e-ident (raw "$x"))))))
 		(s-decl
 			(p-ident (raw "result"))
 			(e-apply
@@ -87,16 +87,16 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-var
-					(p-assign (ident "x_"))
+					(p-assign (ident "$x"))
 					(e-num (value "5")))
 				(s-var
-					(p-assign (ident "x_"))
+					(p-assign (ident "$x"))
 					(e-num (value "10")))
 				(s-reassign
-					(p-assign (ident "x_"))
+					(p-assign (ident "$x"))
 					(e-num (value "15")))
 				(e-lookup-local
-					(p-assign (ident "x_"))))))
+					(p-assign (ident "$x"))))))
 	(d-let
 		(p-assign (ident "result"))
 		(e-call
