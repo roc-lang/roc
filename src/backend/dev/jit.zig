@@ -144,7 +144,11 @@ fn freeExecutableMemory(memory: []align(std.heap.page_size_min) u8) void {
             std.posix.munmap(memory);
         },
         .windows => {
-            std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE) catch {};
+            // VirtualFree returns void on native Windows, error union on cross-compilation
+            const result = std.os.windows.VirtualFree(memory.ptr, 0, std.os.windows.MEM_RELEASE);
+            if (@typeInfo(@TypeOf(result)) == .error_union) {
+                _ = result catch {};
+            }
         },
         else => {},
     }
