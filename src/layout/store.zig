@@ -2099,11 +2099,29 @@ pub const Store = struct {
                         // Skip container types - they should be handled in the container finish path.
                         // This prevents incorrect matching when a recursion_var resolves to the same
                         // var as the backing type, but we haven't actually finished processing the container.
+                        //
+                        // IMPORTANT: Only skip if there's actually a pending container for this var.
+                        // Enum-like tag unions (no payloads) resolve to scalars without creating a
+                        // pending container, so they should NOT be skipped here. (fixes issue #9011)
                         if (current.desc.content == .structure) {
                             const flat_type = current.desc.content.structure;
                             if (flat_type == .tag_union or flat_type == .record or flat_type == .tuple) {
-                                // Container type - will be handled in container path below
-                                continue;
+                                // Check if there's actually a pending container for this var
+                                const has_pending_container = blk: {
+                                    const containers = self.work.pending_containers.slice();
+                                    for (containers.items(.var_)) |container_var| {
+                                        if (container_var) |cv| {
+                                            if (cv == current.var_) break :blk true;
+                                        }
+                                    }
+                                    break :blk false;
+                                };
+                                if (has_pending_container) {
+                                    // Container type - will be handled in container path below
+                                    continue;
+                                }
+                                // No pending container for this type - it resolved to a scalar
+                                // (e.g., enum-like tag union), so handle it here
                             }
                         }
                         // The backing type just finished!

@@ -2365,3 +2365,8 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\}
     , 42, .no_trace);
 }
+
+// Note: Issue #9011 (nominal type wrapping enum-like tag union in tuple) is tested in
+// test/fx/issue9011.roc and test/fx/issue9011_minimal.roc. The bug is specifically about
+// nominal types defined with the := syntax, which cannot be tested in the eval test
+// framework since it only accepts expressions, not full module definitions.
