@@ -107,7 +107,7 @@ fn allocateExecutableMemory(size: usize) ![]align(std.heap.page_size_min) u8 {
                 size,
                 std.os.windows.MEM_COMMIT | std.os.windows.MEM_RESERVE,
                 std.os.windows.PAGE_READWRITE,
-            ) orelse return error.VirtualAllocFailed;
+            ) catch return error.VirtualAllocFailed;
             const ptr: [*]align(std.heap.page_size_min) u8 = @ptrCast(@alignCast(mem));
             return ptr[0..size];
         },
