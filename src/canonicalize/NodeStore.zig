@@ -894,15 +894,14 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dot_access => {
             const p = payload.expr_dot_access;
-            // Read extra data: field_name_region (2 u32s) + optional args (1 u32)
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
+            // Read region + args from span_with_node_data
+            const region_args = store.span_with_node_data.items.items[p.region_args_idx];
             const field_name_region = base.Region{
-                .start = .{ .offset = extra_data[0] },
-                .end = .{ .offset = extra_data[1] },
+                .start = .{ .offset = region_args.start },
+                .end = .{ .offset = region_args.len },
             };
-            const args_packed = extra_data[2];
-            const args_span = if (args_packed != 0) blk: {
-                const packed_span = FunctionArgs.fromU32(args_packed - OPTIONAL_VALUE_OFFSET);
+            const args_span = if (region_args.node != 0) blk: {
+                const packed_span = FunctionArgs.fromU32(region_args.node - OPTIONAL_VALUE_OFFSET);
                 const data_span = packed_span.toDataSpan();
                 break :blk CIR.Expr.Span{ .span = data_span };
             } else null;
@@ -1976,21 +1975,22 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_dot_access => |e| {
             node.tag = .expr_dot_access;
-            // Store extra data: field_name_region (2 u32s) + optional args (1 u32)
-            const extra_idx: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, e.field_name_region.start.offset);
-            _ = try store.extra_data.append(store.gpa, e.field_name_region.end.offset);
-            if (e.args) |args| {
+            // Store region + optional args in span_with_node_data
+            const region_args_idx: u32 = @intCast(store.span_with_node_data.len());
+            const packed_args: u32 = if (e.args) |args| blk: {
                 std.debug.assert(FunctionArgs.canFit(args.span));
                 const packed_span = FunctionArgs.fromDataSpanUnchecked(args.span);
-                _ = try store.extra_data.append(store.gpa, packed_span.toU32() + OPTIONAL_VALUE_OFFSET);
-            } else {
-                _ = try store.extra_data.append(store.gpa, 0);
-            }
+                break :blk packed_span.toU32() + OPTIONAL_VALUE_OFFSET;
+            } else 0;
+            _ = try store.span_with_node_data.append(store.gpa, .{
+                .start = e.field_name_region.start.offset,
+                .len = e.field_name_region.end.offset,
+                .node = packed_args,
+            });
             node.setPayload(.{ .expr_dot_access = .{
                 .receiver = @intFromEnum(e.receiver),
                 .field_name = @bitCast(e.field_name),
-                .extra_data_idx = extra_idx,
+                .region_args_idx = region_args_idx,
             } });
         },
         .e_runtime_error => |e| {

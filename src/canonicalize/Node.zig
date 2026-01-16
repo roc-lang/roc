@@ -594,7 +594,7 @@ pub const Payload = extern union {
     pub const ExprDotAccess = extern struct {
         receiver: u32,
         field_name: u32,
-        extra_data_idx: u32,
+        region_args_idx: u32, // Index into span_with_node_data: (region_start, region_end, packed_args)
     };
 
     pub const ExprFieldAccess = extern struct {
