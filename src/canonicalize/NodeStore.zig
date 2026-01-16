@@ -40,6 +40,7 @@ closure_data: collections.SafeList(ClosureData), // Typed storage for closure ex
 zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
 def_data: collections.SafeList(DefData), // Typed storage for definitions
 import_data: collections.SafeList(ImportData), // Typed storage for import statements
+type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type annotation apply
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A pair of u32 values representing a span (start index and length).
@@ -113,6 +114,15 @@ pub const ImportData = extern struct {
     flags: u32, // bit 0 = has_alias, bit 1 = has_qualifier
     exposes_start: u32,
     exposes_len: u32,
+};
+
+/// Type annotation apply data.
+/// Stores args_len, base_tag, and base value(s).
+pub const TypeApplyData = extern struct {
+    args_len: u32,
+    base_tag: u32, // LocalOrExternal.Tag
+    value1: u32, // builtin_type, decl_idx, or module_idx
+    value2: u32, // target_node_idx for external, 0 otherwise
 };
 
 const Scratch = struct {
@@ -199,6 +209,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16),
         .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8),
         .import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16),
+        .type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -217,6 +228,7 @@ pub fn deinit(store: *NodeStore) void {
     store.zero_arg_tag_data.deinit(store.gpa);
     store.def_data.deinit(store.gpa);
     store.import_data.deinit(store.gpa);
+    store.type_apply_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -237,6 +249,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.zero_arg_tag_data.relocate(offset);
     store.def_data.relocate(offset);
     store.import_data.relocate(offset);
+    store.type_apply_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -1352,30 +1365,21 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     switch (node.tag) {
         .ty_apply => {
             const p = payload.ty_apply;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
-            const args_len = extra_data[0];
-            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(extra_data[1]);
-            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
-                switch (base_enum) {
-                    .builtin => {
-                        break :blk .{ .builtin = @enumFromInt(extra_data[2]) };
-                    },
-                    .local => {
-                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[2]) } };
-                    },
-                    .external => {
-                        break :blk .{ .external = .{
-                            .module_idx = @enumFromInt(extra_data[2]),
-                            .target_node_idx = @intCast(extra_data[3]),
-                        } };
-                    },
-                }
+            const apply_data = store.type_apply_data.items.items[p.type_apply_data_idx];
+            const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(apply_data.base_tag);
+            const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
+                .builtin => .{ .builtin = @enumFromInt(apply_data.value1) },
+                .local => .{ .local = .{ .decl_idx = @enumFromInt(apply_data.value1) } },
+                .external => .{ .external = .{
+                    .module_idx = @enumFromInt(apply_data.value1),
+                    .target_node_idx = @intCast(apply_data.value2),
+                } },
             };
 
             return CIR.TypeAnno{ .apply = .{
                 .name = @bitCast(p.name),
                 .base = type_base,
-                .args = .{ .span = .{ .start = p.args_start, .len = args_len } },
+                .args = .{ .span = .{ .start = p.args_start, .len = apply_data.args_len } },
             } };
         },
         .ty_rigid_var => {
@@ -1393,23 +1397,15 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
         .ty_underscore => return CIR.TypeAnno{ .underscore = {} },
         .ty_lookup => {
             const p = payload.ty_lookup;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
+            const base_data = store.span2_data.items.items[p.base_span2_idx];
             const base_enum: CIR.TypeAnno.LocalOrExternal.Tag = @enumFromInt(p.base);
-            const type_base: CIR.TypeAnno.LocalOrExternal = blk: {
-                switch (base_enum) {
-                    .builtin => {
-                        break :blk .{ .builtin = @enumFromInt(extra_data[0]) };
-                    },
-                    .local => {
-                        break :blk .{ .local = .{ .decl_idx = @enumFromInt(extra_data[0]) } };
-                    },
-                    .external => {
-                        break :blk .{ .external = .{
-                            .module_idx = @enumFromInt(extra_data[0]),
-                            .target_node_idx = @intCast(extra_data[1]),
-                        } };
-                    },
-                }
+            const type_base: CIR.TypeAnno.LocalOrExternal = switch (base_enum) {
+                .builtin => .{ .builtin = @enumFromInt(base_data.start) },
+                .local => .{ .local = .{ .decl_idx = @enumFromInt(base_data.start) } },
+                .external => .{ .external = .{
+                    .module_idx = @enumFromInt(base_data.start),
+                    .target_node_idx = @intCast(base_data.len),
+                } },
             };
 
             return CIR.TypeAnno{ .lookup = .{
@@ -2539,25 +2535,32 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
     switch (typeAnno) {
         .apply => |a| {
             node.tag = .ty_apply;
-            const ed_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, a.args.span.len);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(a.base))));
-            switch (a.base) {
-                .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+            const type_apply_data_idx: u32 = @intCast(store.type_apply_data.len());
+            const apply_data: TypeApplyData = switch (a.base) {
+                .builtin => |builtin_type| .{
+                    .args_len = a.args.span.len,
+                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.builtin),
+                    .value1 = @intFromEnum(builtin_type),
+                    .value2 = 0,
                 },
-                .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                .local => |local| .{
+                    .args_len = a.args.span.len,
+                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.local),
+                    .value1 = @intFromEnum(local.decl_idx),
+                    .value2 = 0,
                 },
-                .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                .external => |ext| .{
+                    .args_len = a.args.span.len,
+                    .base_tag = @intFromEnum(CIR.TypeAnno.LocalOrExternal.Tag.external),
+                    .value1 = @intFromEnum(ext.module_idx),
+                    .value2 = @intCast(ext.target_node_idx),
                 },
-            }
+            };
+            _ = try store.type_apply_data.append(store.gpa, apply_data);
             node.setPayload(.{ .ty_apply = .{
                 .name = @bitCast(a.name),
                 .args_start = a.args.span.start,
-                .extra_data_idx = ed_start,
+                .type_apply_data_idx = type_apply_data_idx,
             } });
         },
         .rigid_var => |tv| {
@@ -2581,23 +2584,26 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
         },
         .lookup => |t| {
             node.tag = .ty_lookup;
-            const ed_start: u32 = @intCast(store.extra_data.len());
-            switch (t.base) {
-                .builtin => |builtin_type| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(builtin_type));
+            const base_span2_idx: u32 = @intCast(store.span2_data.len());
+            const base_data: Span2 = switch (t.base) {
+                .builtin => |builtin_type| .{
+                    .start = @intFromEnum(builtin_type),
+                    .len = 0,
                 },
-                .local => |local| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(local.decl_idx));
+                .local => |local| .{
+                    .start = @intFromEnum(local.decl_idx),
+                    .len = 0,
                 },
-                .external => |ext| {
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(ext.module_idx));
-                    _ = try store.extra_data.append(store.gpa, @intCast(ext.target_node_idx));
+                .external => |ext| .{
+                    .start = @intFromEnum(ext.module_idx),
+                    .len = @intCast(ext.target_node_idx),
                 },
-            }
+            };
+            _ = try store.span2_data.append(store.gpa, base_data);
             node.setPayload(.{ .ty_lookup = .{
                 .name = @bitCast(t.name),
                 .base = @intFromEnum(@as(CIR.TypeAnno.LocalOrExternal.Tag, std.meta.activeTag(t.base))),
-                .extra_data_idx = ed_start,
+                .base_span2_idx = base_span2_idx,
             } });
         },
         .tag_union => |tu| {
@@ -4064,6 +4070,7 @@ pub const Serialized = extern struct {
     zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
     def_data: collections.SafeList(DefData).Serialized,
     import_data: collections.SafeList(ImportData).Serialized,
+    type_apply_data: collections.SafeList(TypeApplyData).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4097,6 +4104,8 @@ pub const Serialized = extern struct {
         try self.def_data.serialize(&store.def_data, allocator, writer);
         // Serialize import_data
         try self.import_data.serialize(&store.import_data, allocator, writer);
+        // Serialize type_apply_data
+        try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4108,6 +4117,7 @@ pub const Serialized = extern struct {
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order (last to first)
+        const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
         const deserialized_import_data = self.import_data.deserialize(base_addr).*;
         const deserialized_def_data = self.def_data.deserialize(base_addr).*;
         const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
@@ -4138,6 +4148,7 @@ pub const Serialized = extern struct {
             .zero_arg_tag_data = deserialized_zero_arg_tag_data,
             .def_data = deserialized_def_data,
             .import_data = deserialized_import_data,
+            .type_apply_data = deserialized_type_apply_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

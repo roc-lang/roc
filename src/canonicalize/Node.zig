@@ -802,7 +802,7 @@ pub const Payload = extern union {
     pub const TyApply = extern struct {
         name: u32,
         args_start: u32,
-        extra_data_idx: u32,
+        type_apply_data_idx: u32, // Index into type_apply_data list
     };
 
     pub const TyTagUnion = extern struct {
@@ -837,8 +837,8 @@ pub const Payload = extern union {
 
     pub const TyLookup = extern struct {
         name: u32,
-        base: u32,
-        extra_data_idx: u32,
+        base: u32, // LocalOrExternal.Tag
+        base_span2_idx: u32, // Index into span2_data: (value1, value2) - value2=0 for non-external
     };
 
     pub const TyRigidVar = extern struct {
