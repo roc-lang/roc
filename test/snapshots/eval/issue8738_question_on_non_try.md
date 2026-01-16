@@ -20,26 +20,23 @@ do_something = || {
 result = do_something()
 ~~~
 # EXPECTED
-INCOMPATIBLE MATCH PATTERNS - issue8738_question_on_non_try.md:9:7:9:7
+EXPECTED TRY TYPE - issue8738_question_on_non_try.md:9:7:9:7
 # PROBLEMS
-**INCOMPATIBLE MATCH PATTERNS**
-The first pattern in this `match` is incompatible:
+**EXPECTED TRY TYPE**
+The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
+but I found:
 **issue8738_question_on_non_try.md:9:7:**
 ```roc
 	_x = ok_or(Err(""), Exit(5))?
 ```
-      ^^^^^^^^^^^^^^^^^^^^^^^^
+      ^^^^^^^^^^^^^^^^^^^^^^^
 
-The first pattern has the type:
+This expression has type:
 
-    Try(ok, err)
+_[Exit(a), .._others]
+  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
-But the expression between the `match` parenthesis has the type:
-
-    [Exit(a), .._others]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
-
-These two types can never match!
+Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
 
 # TOKENS
 ~~~zig

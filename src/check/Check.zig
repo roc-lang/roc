@@ -1084,9 +1084,8 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
-    try self.checkDeferredConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
@@ -1479,12 +1478,15 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check the expr
     _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkFlexVarConstraintCompatibility(expr_var, &env);
+
+    // Check for infinite types
+    try self.checkForInfiniteType(ModuleEnv.varFrom(expr_idx));
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -1529,8 +1531,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // Check the expr
     _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
+
+    // After solving all deferred constraints, check for infinite types
+    for (defs_slice) |def_idx| {
+        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+    }
 }
 
 // defs //
@@ -4078,7 +4085,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(env);
+    try self.checkStaticDispatchConstraints(env);
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -4451,6 +4458,28 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // If so, we'll skip exhaustiveness checking since the types may be invalid
     var had_type_error = false;
 
+    // For matches desugared from `?` operator, verify the condition unifies with Try type FIRST.
+    // If it doesn't, report the specific error and skip pattern checking to avoid confusing errors.
+    var has_invalid_try = false;
+    if (match.is_try_suffix) {
+        // Get the actual Try type from builtins and instantiate it with fresh type vars
+        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
+        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
+            try self.copyVar(try_type_var, builtin_env, Region.zero())
+        else
+            try_type_var;
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
+
+        // Unify the condition with Try type
+        const try_result = try self.unify(try_var, cond_var, env);
+        if (!try_result.isOk()) {
+            has_invalid_try = true;
+            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
+                .expr = match.cond,
+            } });
+        }
+    }
+
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
@@ -4458,6 +4487,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
+    // Skip pattern checking if we already know the condition isn't a Try type
+    // This prevents confusing cascading errors about pattern incompatibility
     for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, env);
@@ -4478,7 +4509,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
         const branch = self.cir.store.getMatchBranch(branch_idx);
 
-        // First, check the patterns of this branch
+        // First, check the patterns of this branch (skip if invalid try to avoid confusing errors)
         const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
@@ -4513,7 +4544,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
                 const other_branch = self.cir.store.getMatchBranch(other_branch_idx);
 
-                // Still check the other patterns
+                // Still check the other patterns (skip if invalid try to avoid confusing errors)
                 const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
@@ -4539,29 +4570,6 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
             // Then stop type checking for this branch
             break;
-        }
-    }
-
-    // For matches desugared from `?` operator, verify the condition unifies with Try type.
-    // If it doesn't, report an error. Skip exhaustiveness checking for invalid try since
-    // the desugared match only handles Ok/Err branches and would report confusing errors.
-    var has_invalid_try = false;
-    if (match.is_try_suffix) {
-        // Get the actual Try type from builtins and instantiate it with fresh type vars
-        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
-        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
-            try self.copyVar(try_type_var, builtin_env, Region.zero())
-        else
-            try_type_var;
-        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
-
-        // Unify the condition with Try type
-        const try_result = try self.unify(try_var, cond_var, env);
-        if (!try_result.isOk()) {
-            has_invalid_try = true;
-            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
-                .expr = match.cond,
-            } });
         }
     }
 
@@ -5217,7 +5225,18 @@ fn checkNominalTypeUsage(
 
 // validate constraints //
 
-fn checkDeferredConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+/// Check all constraints
+/// We loop here because checkStaticDispatchConstraints and add new regular
+/// constraints.
+fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    while (self.constraints.items.items.len > 0) {
+        try self.checkConstraints(env);
+        try self.checkStaticDispatchConstraints(env);
+    }
+}
+
+/// Check any accumulated constraints
+fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     var iter = self.constraints.iterIndices();
     while (iter.next()) |idx| {
         const constraint = self.constraints.get(idx);
@@ -5236,9 +5255,8 @@ fn checkDeferredConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
             },
         }
     }
+    self.constraints.items.clearRetainingCapacity();
 }
-
-// validate static dispatch constraints //
 
 /// Check static dispatch constraints
 ///
@@ -5252,7 +5270,7 @@ fn checkDeferredConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // During this pass, we want to hold onto any flex vars we encounter and
     // check them again later, when maybe they've been resolved
     const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();

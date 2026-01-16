@@ -9,7 +9,7 @@ A?
 ~~~
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
-INCOMPATIBLE MATCH PATTERNS - try_undefined_tag.md:1:1:1:1
+EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
 # PROBLEMS
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
@@ -21,23 +21,20 @@ A?
 ^^
 
 
-**INCOMPATIBLE MATCH PATTERNS**
-The first pattern in this `match` is incompatible:
+**EXPECTED TRY TYPE**
+The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
+but I found:
 **try_undefined_tag.md:1:1:**
 ```roc
 A?
 ```
-^^
+^
 
-The first pattern has the type:
+This expression has type:
 
-    Try(ok, err)
+_[A, .._others]_
 
-But the expression between the `match` parenthesis has the type:
-
-    [A, .._others]
-
-These two types can never match!
+Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
 
 # TOKENS
 ~~~zig
