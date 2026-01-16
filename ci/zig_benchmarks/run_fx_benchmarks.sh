@@ -7,6 +7,10 @@ set -euo pipefail
 MAIN_ROC=$1
 PR_ROC=$2
 
+echo "=== Building FX platform ==="
+zig build test-platforms -Dplatform=fx
+
+echo ""
 echo "=== FX File Execution Benchmarks ==="
 echo "Main binary: $MAIN_ROC"
 echo "PR binary: $PR_ROC"
