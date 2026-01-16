@@ -229,6 +229,11 @@ pub fn isJITSupported() bool {
     return comptime !(builtin.abi == .musl or builtin.abi == .musleabi or builtin.abi == .musleabihf);
 }
 
+/// Get a millisecond timestamp for debug logging
+fn getTimestampMs() i64 {
+    return std.time.milliTimestamp();
+}
+
 /// JIT compile LLVM bitcode and execute it, returning the formatted result.
 /// Returns `error.JITNotSupported` on platforms where JIT is not available
 /// (e.g., statically-linked musl binaries).
@@ -237,6 +242,9 @@ pub fn compileAndExecute(
     bitcode: []const u32,
     result_type: ResultType,
 ) Error![]const u8 {
+    const jit_start_ts = getTimestampMs();
+    std.debug.print("[DEBUG compile.zig] [{d}ms] compileAndExecute started\n", .{jit_start_ts});
+
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
     if (comptime !isJITSupported()) {
@@ -247,7 +255,9 @@ pub fn compileAndExecute(
     const bitcode_bytes: []const u8 = @as([*]const u8, @ptrCast(bitcode.ptr))[0 .. bitcode.len * 4];
 
     // Initialize all targets (needed for JIT)
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Initializing all targets\n", .{getTimestampMs()});
     bindings.initializeAllTargets();
+    std.debug.print("[DEBUG compile.zig] [{d}ms] All targets initialized\n", .{getTimestampMs()});
 
     // Create thread-safe context
     // Note: We don't dispose the context here - the JIT takes ownership through the ThreadSafeModule
@@ -342,12 +352,14 @@ pub fn compileAndExecute(
     }
 
     // Create LLJIT instance
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Creating LLJIT instance\n", .{getTimestampMs()});
     var jit: *bindings.OrcLLJIT = undefined;
     if (bindings.createLLJIT(&jit, builder)) |err| {
         bindings.consumeError(err);
         ts_module.dispose();
         return error.JITCreationFailed;
     }
+    std.debug.print("[DEBUG compile.zig] [{d}ms] LLJIT instance created\n", .{getTimestampMs()});
     defer {
         if (jit.dispose()) |err| {
             bindings.consumeError(err);
@@ -360,6 +372,7 @@ pub fn compileAndExecute(
     // Add a generator so the JIT can find symbols from the current process
     // (not needed for roc_eval since it doesn't call external functions,
     // but keep it for future flexibility)
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Creating dynamic library search generator (macOS-specific symbol resolution)\n", .{getTimestampMs()});
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -371,23 +384,28 @@ pub fn compileAndExecute(
         bindings.consumeError(err);
         return error.JITCreationFailed;
     }
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Dynamic library search generator created\n", .{getTimestampMs()});
     bindings.jitDylibAddGenerator(dylib, process_syms_generator);
 
     // Add module to JIT (takes ownership of ts_module)
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Adding LLVM IR module to JIT\n", .{getTimestampMs()});
     if (jit.addLLVMIRModule(dylib, ts_module)) |err| {
         bindings.consumeError(err);
         return error.ModuleAddFailed;
     }
+    std.debug.print("[DEBUG compile.zig] [{d}ms] LLVM IR module added\n", .{getTimestampMs()});
 
     // Look up the roc_eval function
     // The bitcode uses \x01_roc_eval on macOS (which becomes _roc_eval verbatim) or roc_eval elsewhere
     const symbol_name: [*:0]const u8 = if (builtin.os.tag == .macos) "_roc_eval" else "roc_eval";
 
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Looking up symbol: {s}\n", .{ getTimestampMs(), symbol_name });
     var eval_addr: bindings.OrcExecutorAddress = 0;
     if (jit.lookup(&eval_addr, symbol_name)) |err| {
         bindings.consumeError(err);
         return error.SymbolNotFound;
     }
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Symbol lookup complete, addr=0x{x}\n", .{ getTimestampMs(), eval_addr });
 
     if (eval_addr == 0) {
         return error.SymbolNotFound;
@@ -400,12 +418,14 @@ pub fn compileAndExecute(
     // This makes the ABI simple and platform-independent on all targets.
     //
     // Function signature: void roc_eval(<type>* out_ptr)
+    std.debug.print("[DEBUG compile.zig] [{d}ms] Calling eval function (result_type={})\n", .{ getTimestampMs(), result_type });
     switch (result_type) {
         .i64 => {
             const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i64 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .u64 => {
@@ -413,6 +433,7 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: u64 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .i128 => {
@@ -420,6 +441,7 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i128 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .u128 => {
@@ -427,6 +449,7 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i128 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
         },
         .f64 => {
@@ -434,6 +457,7 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: f64 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
         .dec => {
@@ -441,6 +465,7 @@ pub fn compileAndExecute(
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i128 = undefined;
             eval_fn(&result);
+            std.debug.print("[DEBUG compile.zig] [{d}ms] Eval function returned (elapsed since start: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - jit_start_ts });
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
     }

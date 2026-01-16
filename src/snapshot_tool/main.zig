@@ -1486,6 +1486,9 @@ const ProcessContext = struct {
 /// Worker function that processes a single work item
 fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usize) void {
     const work_item = context.work_list.items[item_id];
+    const start_ts = std.time.milliTimestamp();
+    std.debug.print("[DEBUG main.zig] [{d}ms] Processing item {d}: {s} (kind={})\n", .{ start_ts, item_id, work_item.path, work_item.kind });
+
     const success = switch (work_item.kind) {
         .snapshot_file => processSnapshotFile(allocator, work_item.path, context.config) catch false,
         .multi_file_snapshot => blk: {
@@ -1495,6 +1498,9 @@ fn processWorkItem(allocator: Allocator, context: *ProcessContext, item_id: usiz
             break :blk res;
         },
     };
+
+    const elapsed = std.time.milliTimestamp() - start_ts;
+    std.debug.print("[DEBUG main.zig] [{d}ms] Finished item {d}: {s} (success={}, elapsed={d}ms)\n", .{ std.time.milliTimestamp(), item_id, work_item.path, success, elapsed });
 
     if (success) {
         _ = context.success_count.fetchAdd(1, .monotonic);
@@ -3531,14 +3537,17 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     // This ensures the LLVM backend produces the same results as the interpreter.
     // Skip on platforms where JIT is not supported (e.g., statically-linked musl).
     if (llvm_compile.isJITSupported()) {
+        std.debug.print("[DEBUG main.zig] [{d}ms] Starting LLVM dual-mode testing for {s} ({d} inputs)\n", .{ std.time.milliTimestamp(), snapshot_path, inputs.items.len });
         var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
             std.debug.print("LLVM evaluator init failed: {}\n", .{err});
             success = false;
             return success;
         };
         defer llvm_evaluator.deinit();
+        std.debug.print("[DEBUG main.zig] [{d}ms] LLVM evaluator initialized\n", .{std.time.milliTimestamp()});
 
-        for (inputs.items, actual_outputs.items) |input, interp_output| {
+        for (inputs.items, actual_outputs.items, 0..) |input, interp_output, input_idx| {
+            std.debug.print("[DEBUG main.zig] [{d}ms] LLVM testing input {d}/{d}: '{s}'\n", .{ std.time.milliTimestamp(), input_idx + 1, inputs.items.len, input });
             // Step 1: Generate LLVM bitcode from source
             var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
                 // Skip unsupported expressions - they'll return UnsupportedType
@@ -3553,6 +3562,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 }
             };
             defer bitcode_result.deinit();
+            std.debug.print("[DEBUG main.zig] [{d}ms] Bitcode generated, calling compileAndExecute\n", .{std.time.milliTimestamp()});
 
             // Step 2: Compile and execute using full LLVM pipeline
             // Convert between the two ResultType enums (they have the same variants)
@@ -3567,6 +3577,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 continue;
             };
             defer output.gpa.free(llvm_output);
+            std.debug.print("[DEBUG main.zig] [{d}ms] LLVM execution complete for input {d}\n", .{ std.time.milliTimestamp(), input_idx + 1 });
 
             // Compare outputs - fail the snapshot if they differ
             if (!std.mem.eql(u8, interp_output, llvm_output)) {
@@ -3580,6 +3591,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
                 success = false;
             }
         }
+        std.debug.print("[DEBUG main.zig] [{d}ms] LLVM dual-mode testing complete for {s}\n", .{ std.time.milliTimestamp(), snapshot_path });
     }
 
     switch (config.output_section_command) {
