@@ -3097,7 +3097,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3426,24 +3426,26 @@ test "check type - early return - ? - fail" {
     ;
     try checkTypesExpr(
         source,
-        .pass,
+        .fail_with,
         \\**TYPE MISMATCH**
-        \\This `return` does not match the function's return type:
-        \\**test:3:12:3:19:**
+        \\This `?` may return early with a type that doesn't match the function body:
+        \\**test:2:10:2:27:**
         \\```roc
-        \\    return "hello"
+        \\  _val = Try.Err("hello")?
         \\```
-        \\           ^^^^^^^
+        \\         ^^^^^^^^^^^^^^^^^
         \\
-        \\It has the type:
+        \\On error, this would return:
         \\
-        \\    Str
+        \\    Try(ok, Str)
         \\
-        \\But the function's return type is:
+        \\But the function body evaluates to:
         \\
-        \\    List(_a)
+        \\    Try(ok, Bool)
         \\
-        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
+        \\**Hint:** The error types from all `?` operators and the function body must be compatible since any of them could be the actual return value.
+        \\
+        \\
         ,
     );
 }
