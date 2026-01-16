@@ -215,47 +215,6 @@ pub fn unifyWithConf(
                         .detail = null,
                     } };
                 },
-                error.UnifyErr => {
-                    // Unify can error in the following ways:
-                    //
-                    // 1. Encountering illegal recursion (infinite or anonymous)
-                    // 2. Encountering an invalid polymorphic number type
-                    // 2. Encountering an invalid record extensible type
-                    // 2. Encountering an invalid tag union extensible type
-                    //
-                    // In these cases, before throwing, we set error state in
-                    // `scratch.occurs_err`. This is necessary because you cannot
-                    // associated an error payload when throwing.
-                    //
-                    // If we threw but there is no error data, it is a bug
-                    if (unify_scratch.err) |unify_err| {
-                        switch (unify_err) {
-                            .recursion_anonymous => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .anonymous_recursion = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .recursion_infinite => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .infinite_recursion = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                        }
-                    } else {
-                        const bug_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                        const bug_actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-                        break :blk .{ .bug = .{
-                            .expected_var = a,
-                            .expected = bug_expected_snapshot,
-                            .actual_var = b,
-                            .actual = bug_actual_snapshot,
-                        } };
-                    }
-                },
             }
         };
         const problem_idx = try problems.appendProblem(module_env.gpa, problem);
@@ -340,7 +299,6 @@ const Unifier = struct {
 
     const Error = error{
         TypeMismatch,
-        UnifyErr,
         AllocatorError,
     };
 
@@ -2370,18 +2328,6 @@ const Unifier = struct {
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
         };
     }
-
-    /// Set error data in scratch & throw
-    inline fn setUnifyErrAndThrow(self: *Self, err: UnifyErrCtx) Error!void {
-        self.scratch.setUnifyErr(err);
-        return error.UnifyErr;
-    }
-};
-
-/// A fatal occurs error
-pub const UnifyErrCtx = union(enum) {
-    recursion_infinite: Var,
-    recursion_anonymous: Var,
 };
 
 /// A list of constraint that should apply to concrete type
@@ -2477,9 +2423,6 @@ pub const Scratch = struct {
     // occurs
     occurs_scratch: occurs.Scratch,
 
-    // err
-    err: ?UnifyErrCtx,
-
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         // Initial capacities are conservative estimates. Lists grow dynamically as needed.
@@ -2503,7 +2446,6 @@ pub const Scratch = struct {
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
-            .err = null,
         };
     }
 
@@ -2541,7 +2483,6 @@ pub const Scratch = struct {
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
-        self.err = null;
     }
 
     // helpers //
@@ -2702,10 +2643,6 @@ pub const Scratch = struct {
     /// Exposed for tests
     pub fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
         return try self.gathered_tags.appendSlice(self.gpa, fields);
-    }
-
-    fn setUnifyErr(self: *Self, err: UnifyErrCtx) void {
-        self.err = err;
     }
 };
 

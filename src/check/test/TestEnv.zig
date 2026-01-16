@@ -595,7 +595,7 @@ pub fn assertAnyTypeMismatchDetail(self: *TestEnv, expected_detail_tag: std.meta
     try testing.expect(self.checker.problems.problems.items.len >= 1);
 
     // Search through all problems to find one with the expected detail
-    for (self.checker.problems.problems.items, 0..) |problem, i| {
+    for (self.checker.problems.problems.items) |problem| {
         switch (problem) {
             .type_mismatch => |mismatch| {
                 if (mismatch.detail) |detail| {
@@ -606,7 +606,6 @@ pub fn assertAnyTypeMismatchDetail(self: *TestEnv, expected_detail_tag: std.meta
             },
             else => {},
         }
-        _ = i;
     }
 
     // Didn't find the expected detail - print all problems for debugging

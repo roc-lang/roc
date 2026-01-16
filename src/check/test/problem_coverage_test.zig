@@ -620,4 +620,3 @@ test "unsupported where clause - old ability syntax" {
 
     try test_env.assertFirstTypeError("UNSUPPORTED WHERE CLAUSE");
 }
-
