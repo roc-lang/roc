@@ -41,6 +41,8 @@ zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for ze
 def_data: collections.SafeList(DefData), // Typed storage for definitions
 import_data: collections.SafeList(ImportData), // Typed storage for import statements
 type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type annotation apply
+pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
+index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A pair of u32 values representing a span (start index and length).
@@ -123,6 +125,17 @@ pub const TypeApplyData = extern struct {
     base_tag: u32, // LocalOrExternal.Tag
     value1: u32, // builtin_type, decl_idx, or module_idx
     value2: u32, // target_node_idx for external, 0 otherwise
+};
+
+/// Pattern list data.
+/// Stores patterns span and optional rest pattern info.
+pub const PatternListData = extern struct {
+    patterns_start: u32,
+    patterns_len: u32,
+    has_rest: u32, // 0 or 1
+    rest_index: u32, // only valid if has_rest=1
+    has_pattern: u32, // only valid if has_rest=1, 0 or 1
+    pattern_idx: u32, // only valid if has_rest=1 and has_pattern=1
 };
 
 const Scratch = struct {
@@ -210,6 +223,8 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8),
         .import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16),
         .type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16),
+        .pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16),
+        .index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -229,6 +244,8 @@ pub fn deinit(store: *NodeStore) void {
     store.def_data.deinit(store.gpa);
     store.import_data.deinit(store.gpa);
     store.type_apply_data.deinit(store.gpa);
+    store.pattern_list_data.deinit(store.gpa);
+    store.index_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -250,6 +267,8 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.def_data.relocate(offset);
     store.import_data.relocate(offset);
     store.type_apply_data.relocate(offset);
+    store.pattern_list_data.relocate(offset);
+    store.index_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -1002,15 +1021,15 @@ pub fn replaceExprWithTuple(
 ) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    // Store element indices in extra_data
-    const extra_data_start = store.extra_data.len();
+    // Store element indices in index_data
+    const index_data_start = store.index_data.len();
     for (elem_indices) |elem_idx| {
-        _ = try store.extra_data.append(store.gpa, @intFromEnum(elem_idx));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(elem_idx));
     }
 
     var node = Node.init(.expr_tuple);
     node.setPayload(.{ .expr_tuple = .{
-        .elems_start = @intCast(extra_data_start),
+        .elems_start = @intCast(index_data_start),
         .elems_len = @intCast(elem_indices.len),
         ._unused = 0,
     } });
@@ -1030,16 +1049,16 @@ pub fn replaceExprWithTag(
 ) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
 
-    // Store argument indices in extra_data
-    const extra_data_start = store.extra_data.len();
+    // Store argument indices in index_data
+    const index_data_start = store.index_data.len();
     for (arg_indices) |arg_idx| {
-        _ = try store.extra_data.append(store.gpa, @intFromEnum(arg_idx));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(arg_idx));
     }
 
     var node = Node.init(.expr_tag);
     node.setPayload(.{ .expr_tag = .{
         .name = @bitCast(name),
-        .args_start = @intCast(extra_data_start),
+        .args_start = @intCast(index_data_start),
         .args_len = @intCast(arg_indices.len),
     } });
     store.nodes.set(node_idx, node);
@@ -1098,7 +1117,7 @@ pub fn getMatchBranchPattern(store: *const NodeStore, branch_pat: CIR.Expr.Match
 
 /// Returns a slice of match branches from the given span.
 pub fn matchBranchSlice(store: *const NodeStore, span: CIR.Expr.Match.Branch.Span) []CIR.Expr.Match.Branch.Idx {
-    const slice = store.extra_data.items.items[span.span.start..(span.span.start + span.span.len)];
+    const slice = store.index_data.items.items[span.span.start..(span.span.start + span.span.len)];
     const result: []CIR.Expr.Match.Branch.Idx = @ptrCast(@alignCast(slice));
     return result;
 }
@@ -1249,29 +1268,22 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_list => {
             const p = payload.pattern_list;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
+            const list_data = store.pattern_list_data.items.items[p.pattern_list_data_idx];
 
-            const patterns_start = extra_data[0];
-            const patterns_len = extra_data[1];
-
-            // Load rest_info
-            const has_rest_info = extra_data[2] != 0;
-            const rest_info = if (has_rest_info) blk: {
-                const rest_index = extra_data[3];
-                const has_pattern = extra_data[4] != 0;
-                const rest_pattern = if (has_pattern)
-                    @as(CIR.Pattern.Idx, @enumFromInt(extra_data[5]))
+            const rest_info = if (list_data.has_rest != 0) blk: {
+                const rest_pattern = if (list_data.has_pattern != 0)
+                    @as(CIR.Pattern.Idx, @enumFromInt(list_data.pattern_idx))
                 else
                     null;
                 break :blk @as(@TypeOf(@as(CIR.Pattern, undefined).list.rest_info), .{
-                    .index = rest_index,
+                    .index = list_data.rest_index,
                     .pattern = rest_pattern,
                 });
             } else null;
 
             return CIR.Pattern{
                 .list = .{
-                    .patterns = DataSpan.init(patterns_start, patterns_len).as(CIR.Pattern.Span),
+                    .patterns = DataSpan.init(list_data.patterns_start, list_data.patterns_len).as(CIR.Pattern.Span),
                     .rest_info = rest_info,
                 },
             };
@@ -2423,25 +2435,26 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         },
         .list => |p| {
             node.tag = .pattern_list;
-            const extra_data_start: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.start);
-            _ = try store.extra_data.append(store.gpa, p.patterns.span.len);
-
-            if (p.rest_info) |rest| {
-                _ = try store.extra_data.append(store.gpa, 1);
-                _ = try store.extra_data.append(store.gpa, rest.index);
-                if (rest.pattern) |pattern_idx| {
-                    _ = try store.extra_data.append(store.gpa, 1);
-                    _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-                } else {
-                    _ = try store.extra_data.append(store.gpa, 0);
-                }
-            } else {
-                _ = try store.extra_data.append(store.gpa, 0);
-            }
+            const pattern_list_data_idx: u32 = @intCast(store.pattern_list_data.len());
+            const list_data: PatternListData = if (p.rest_info) |rest| .{
+                .patterns_start = p.patterns.span.start,
+                .patterns_len = p.patterns.span.len,
+                .has_rest = 1,
+                .rest_index = rest.index,
+                .has_pattern = if (rest.pattern != null) 1 else 0,
+                .pattern_idx = if (rest.pattern) |pattern_idx| @intFromEnum(pattern_idx) else 0,
+            } else .{
+                .patterns_start = p.patterns.span.start,
+                .patterns_len = p.patterns.span.len,
+                .has_rest = 0,
+                .rest_index = 0,
+                .has_pattern = 0,
+                .pattern_idx = 0,
+            };
+            _ = try store.pattern_list_data.append(store.gpa, list_data);
 
             node.setPayload(.{ .pattern_list = .{
-                .extra_data_idx = extra_data_start,
+                .pattern_list_data_idx = pattern_list_data_idx,
                 ._unused1 = 0,
                 ._unused2 = 0,
             } });
@@ -2916,13 +2929,13 @@ pub fn spanFrom(store: *NodeStore, comptime field_name: []const u8, comptime Spa
     const end = scratch_field.top();
     defer scratch_field.clearFrom(start);
     var i = @as(usize, @intCast(start));
-    const ed_start = store.extra_data.len();
+    const index_start = store.index_data.len();
     std.debug.assert(end >= i);
     while (i < end) {
-        _ = try store.extra_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
+        _ = try store.index_data.append(store.gpa, @intFromEnum(scratch_field.items.items[i]));
         i += 1;
     }
-    return .{ .span = .{ .start = @intCast(ed_start), .len = @as(u32, @intCast(end)) - start } };
+    return .{ .span = .{ .start = @intCast(index_start), .len = @as(u32, @intCast(end)) - start } };
 }
 
 /// Returns the top of the scratch expressions buffer.
@@ -3113,7 +3126,7 @@ pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
 
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
-    return @ptrCast(store.extra_data.items.items[span.start..][0..span.len]);
+    return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
 }
 
 /// Returns a slice of definitions from the store.
@@ -3163,12 +3176,12 @@ pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.Br
 
 /// Creates a slice corresponding to a span.
 pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start]));
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start]));
 }
 
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @enumFromInt(store.extra_data.items.items[span.start + span.len - 1]));
+    return @as(T, @enumFromInt(store.index_data.items.items[span.start + span.len - 1]));
 }
 
 /// Retrieve a slice of IfBranch Idx's from a span
@@ -4071,6 +4084,8 @@ pub const Serialized = extern struct {
     def_data: collections.SafeList(DefData).Serialized,
     import_data: collections.SafeList(ImportData).Serialized,
     type_apply_data: collections.SafeList(TypeApplyData).Serialized,
+    pattern_list_data: collections.SafeList(PatternListData).Serialized,
+    index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4106,6 +4121,10 @@ pub const Serialized = extern struct {
         try self.import_data.serialize(&store.import_data, allocator, writer);
         // Serialize type_apply_data
         try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
+        // Serialize pattern_list_data
+        try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
+        // Serialize index_data
+        try self.index_data.serialize(&store.index_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4117,6 +4136,8 @@ pub const Serialized = extern struct {
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order (last to first)
+        const deserialized_index_data = self.index_data.deserialize(base_addr).*;
+        const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
         const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
         const deserialized_import_data = self.import_data.deserialize(base_addr).*;
         const deserialized_def_data = self.def_data.deserialize(base_addr).*;
@@ -4149,6 +4170,8 @@ pub const Serialized = extern struct {
             .def_data = deserialized_def_data,
             .import_data = deserialized_import_data,
             .type_apply_data = deserialized_type_apply_data,
+            .pattern_list_data = deserialized_pattern_list_data,
+            .index_data = deserialized_index_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 

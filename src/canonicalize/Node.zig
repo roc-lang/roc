@@ -730,7 +730,7 @@ pub const Payload = extern union {
     };
 
     pub const PatternList = extern struct {
-        extra_data_idx: u32,
+        pattern_list_data_idx: u32, // Index into pattern_list_data list
         _unused1: u32,
         _unused2: u32,
     };
