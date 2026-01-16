@@ -19,7 +19,6 @@ const check = @import("check");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
 const backend = @import("backend");
-const layout_mod = @import("layout");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -31,8 +30,6 @@ const comptime_value = eval_mod.comptime_value;
 const ComptimeHeap = comptime_value.ComptimeHeap;
 const ComptimeValue = comptime_value.ComptimeValue;
 const ComptimeEnv = comptime_value.ComptimeEnv;
-const LayoutStore = layout_mod.Store;
-const LayoutIdx = layout_mod.Idx;
 
 /// Dev backend-based evaluator for Roc expressions
 pub const DevEvaluator = struct {
@@ -176,10 +173,6 @@ pub const DevEvaluator = struct {
         cv.set(i64, value);
         return cv;
     }
-
-    // ============================================================================
-    // Code Generation - Generates machine code for expressions
-    // ============================================================================
 
     /// Generate native code for a CIR expression
     /// Returns the generated code and result type
@@ -1052,12 +1045,6 @@ pub const DevEvaluator = struct {
         return self.generateReturnI64Code(0, result_type);
     }
 
-    /// Generate code for empty record {}
-    fn generateEmptyRecordCode(self: *DevEvaluator, result_type: ResultType) Error![]const u8 {
-        // Empty record is a unit type, represented as 0
-        return self.generateReturnI64Code(0, result_type);
-    }
-
     /// Generate code for tuple expressions
     fn generateTupleCode(self: *DevEvaluator, module_env: *ModuleEnv, tuple: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
         const elems = module_env.store.sliceExpr(tuple.elems);
@@ -1607,13 +1594,11 @@ pub const DevEvaluator = struct {
                     const type_anno = module_env.store.getTypeAnno(ta.anno);
                     switch (type_anno) {
                         .apply => |apply| {
-                            const name = module_env.getIdent(apply.name);
-                            const result_type = self.resultTypeFromName(name);
+                            const result_type = resultTypeFromLocalOrExternal(apply.base);
                             type_annos.put(ta.name, result_type) catch {};
                         },
                         .lookup => |lookup| {
-                            const name = module_env.getIdent(lookup.name);
-                            const result_type = self.resultTypeFromName(name);
+                            const result_type = resultTypeFromLocalOrExternal(lookup.base);
                             type_annos.put(ta.name, result_type) catch {};
                         },
                         else => {},
@@ -1673,62 +1658,61 @@ pub const DevEvaluator = struct {
     }
 
     /// Get the result type from an annotation
-    fn getAnnotationResultType(self: *DevEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) ResultType {
+    fn getAnnotationResultType(_: *DevEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) ResultType {
         const anno = module_env.store.getAnnotation(anno_idx);
         // Get the TypeAnno from the annotation
         const type_anno = module_env.store.getTypeAnno(anno.anno);
         switch (type_anno) {
             .apply => |apply| {
                 // Type application like List(Str)
-                const name = module_env.getIdent(apply.name);
-                return self.resultTypeFromName(name);
+                return resultTypeFromLocalOrExternal(apply.base);
             },
             .lookup => |lookup| {
                 // Basic type like U64, Str, Bool
-                const name = module_env.getIdent(lookup.name);
-                return self.resultTypeFromName(name);
+                return resultTypeFromLocalOrExternal(lookup.base);
             },
             else => return .i64,
         }
     }
 
-    /// Convert a type name string to ResultType
-    fn resultTypeFromName(_: *DevEvaluator, name: []const u8) ResultType {
-        if (std.mem.eql(u8, name, "U8") or
-            std.mem.eql(u8, name, "U16") or
-            std.mem.eql(u8, name, "U32") or
-            std.mem.eql(u8, name, "U64"))
-        {
-            return .u64;
-        } else if (std.mem.eql(u8, name, "U128")) {
-            return .u128;
-        } else if (std.mem.eql(u8, name, "I128")) {
-            return .i128;
-        } else if (std.mem.eql(u8, name, "F32") or std.mem.eql(u8, name, "F64")) {
-            return .f64;
-        } else if (std.mem.eql(u8, name, "Dec")) {
-            return .dec;
+    /// Convert a LocalOrExternal to ResultType by checking if it's a builtin numeric type
+    fn resultTypeFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) ResultType {
+        switch (loe) {
+            .builtin => |b| return resultTypeFromBuiltin(b),
+            .local, .external => return .i64,
         }
-        return .i64;
+    }
+
+    /// Convert a Builtin type enum to ResultType
+    fn resultTypeFromBuiltin(b: CIR.TypeAnno.Builtin) ResultType {
+        return switch (b) {
+            .u8, .u16, .u32, .u64 => .u64,
+            .u128 => .u128,
+            .i128 => .i128,
+            .f32, .f64 => .f64,
+            .dec => .dec,
+            else => .i64,
+        };
     }
 
     /// Get the result type for a typed integer based on its type name
-    fn getTypedIntResultType(self: *DevEvaluator, module_env: *ModuleEnv, type_name: base.Ident.Idx) ResultType {
-        _ = self;
-        const name = module_env.getIdent(type_name);
-        if (std.mem.eql(u8, name, "U8") or
-            std.mem.eql(u8, name, "U16") or
-            std.mem.eql(u8, name, "U32") or
-            std.mem.eql(u8, name, "U64"))
+    fn getTypedIntResultType(_: *DevEvaluator, module_env: *ModuleEnv, type_name: base.Ident.Idx) ResultType {
+        // For typed integers, we need to look up the type by name
+        // Since we don't have LocalOrExternal info here, fall back to identifier comparison
+        const idents = &module_env.idents;
+        if (type_name == idents.u8_type or
+            type_name == idents.u16_type or
+            type_name == idents.u32_type or
+            type_name == idents.u64_type)
         {
             return .u64;
-        } else if (std.mem.eql(u8, name, "U128")) {
+        } else if (type_name == idents.u128_type) {
             return .u128;
-        } else if (std.mem.eql(u8, name, "I128")) {
+        } else if (type_name == idents.i128_type) {
             return .i128;
-        } else if (std.mem.eql(u8, name, "F32") or std.mem.eql(u8, name, "F64")) {
+        } else if (type_name == idents.f32_type or type_name == idents.f64_type) {
             return .f64;
-        } else if (std.mem.eql(u8, name, "Dec")) {
+        } else if (type_name == idents.dec_type) {
             return .dec;
         }
         return .i64;
@@ -1792,8 +1776,10 @@ pub const DevEvaluator = struct {
 test "dev evaluator initialization" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
         // It's OK if builtin loading fails in tests (missing compiled builtins)
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 }
@@ -1806,8 +1792,10 @@ test "result type ordinals match llvm evaluator" {
 test "generate i64 code" {
     // Test direct code generation for i64 values
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
@@ -1825,8 +1813,10 @@ test "generate i64 code" {
 
 test "generate i64 code large value" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
@@ -1844,8 +1834,10 @@ test "generate i64 code large value" {
 
 test "generate f64 code" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
@@ -1861,17 +1853,19 @@ test "generate f64 code" {
 
 test "evaluate addition" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("1 + 2") catch |err| {
         // Skip if parsing/canonicalization fails (expected in unit test environment)
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 3 }, result);
@@ -1879,16 +1873,18 @@ test "evaluate addition" {
 
 test "evaluate subtraction" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("10 - 3") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
@@ -1896,16 +1892,18 @@ test "evaluate subtraction" {
 
 test "evaluate multiplication" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("6 * 7") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -1913,16 +1911,18 @@ test "evaluate multiplication" {
 
 test "evaluate unary minus" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("-42") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = -42 }, result);
@@ -1930,16 +1930,18 @@ test "evaluate unary minus" {
 
 test "evaluate if true branch" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("if 1 > 0 42 else 0") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -1947,16 +1949,18 @@ test "evaluate if true branch" {
 
 test "evaluate if false branch" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("if 0 > 1 42 else 99") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 99 }, result);
@@ -1964,16 +1968,18 @@ test "evaluate if false branch" {
 
 test "evaluate nested if" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("if 1 > 0 (if 2 > 1 100 else 50) else 0") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
@@ -1981,17 +1987,19 @@ test "evaluate nested if" {
 
 test "evaluate simple lambda application" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (\x -> x + 1) 5 should equal 6
     const result = evaluator.evaluate("(\\x -> x + 1) 5") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 6 }, result);
@@ -1999,17 +2007,19 @@ test "evaluate simple lambda application" {
 
 test "evaluate lambda identity" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (\x -> x) 42 should equal 42
     const result = evaluator.evaluate("(\\x -> x) 42") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -2017,17 +2027,19 @@ test "evaluate lambda identity" {
 
 test "evaluate lambda with arithmetic in body" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (\x -> x * 2 + 10) 5 should equal 20
     const result = evaluator.evaluate("(\\x -> x * 2 + 10) 5") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
@@ -2035,17 +2047,19 @@ test "evaluate lambda with arithmetic in body" {
 
 test "evaluate lambda with if in body" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (\x -> if x > 0 then x else -x) 5 should equal 5
     const result = evaluator.evaluate("(\\x -> if x > 0 then x else -x) 5") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 5 }, result);
@@ -2053,17 +2067,19 @@ test "evaluate lambda with if in body" {
 
 test "evaluate block expression" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { x = 5; x + 1 } should equal 6
     const result = evaluator.evaluate("{ x = 5; x + 1 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 6 }, result);
@@ -2071,17 +2087,19 @@ test "evaluate block expression" {
 
 test "evaluate block with multiple declarations" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { x = 3; y = 4; x + y } should equal 7
     const result = evaluator.evaluate("{ x = 3; y = 4; x + y }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
@@ -2089,16 +2107,18 @@ test "evaluate block with multiple declarations" {
 
 test "evaluate True tag" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("True") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2106,16 +2126,18 @@ test "evaluate True tag" {
 
 test "evaluate False tag" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     const result = evaluator.evaluate("False") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
@@ -2123,17 +2145,19 @@ test "evaluate False tag" {
 
 test "evaluate comparison greater than" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 5 > 3 should return 1 (true)
     const result = evaluator.evaluate("5 > 3") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2141,17 +2165,19 @@ test "evaluate comparison greater than" {
 
 test "evaluate comparison less than" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 3 < 5 should return 1 (true)
     const result = evaluator.evaluate("3 < 5") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2159,17 +2185,19 @@ test "evaluate comparison less than" {
 
 test "evaluate comparison equal" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 42 == 42 should return 1 (true)
     const result = evaluator.evaluate("42 == 42") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2177,17 +2205,19 @@ test "evaluate comparison equal" {
 
 test "evaluate comparison not equal" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 1 != 2 should return 1 (true)
     const result = evaluator.evaluate("1 != 2") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2195,17 +2225,19 @@ test "evaluate comparison not equal" {
 
 test "evaluate integer division" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 10 // 3 should return 3 (integer division)
     const result = evaluator.evaluate("10 // 3") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 3 }, result);
@@ -2213,17 +2245,19 @@ test "evaluate integer division" {
 
 test "evaluate modulo" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // 10 % 3 should return 1
     const result = evaluator.evaluate("10 % 3") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2231,17 +2265,19 @@ test "evaluate modulo" {
 
 test "evaluate boolean and" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // True and True should return 1
     const result = evaluator.evaluate("True and True") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2249,17 +2285,19 @@ test "evaluate boolean and" {
 
 test "evaluate boolean or" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // False or True should return 1
     const result = evaluator.evaluate("False or True") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2267,17 +2305,19 @@ test "evaluate boolean or" {
 
 test "evaluate multi-parameter lambda" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // Lambda with two parameters
     const result = evaluator.evaluate("(|x, y| x + y)(3, 4)") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 7 }, result);
@@ -2285,17 +2325,19 @@ test "evaluate multi-parameter lambda" {
 
 test "evaluate complex arithmetic expression" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // Complex expression: (5 + 3) * 2 - 10 // 2
     const result = evaluator.evaluate("(5 + 3) * 2 - 10 // 2") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     // (5 + 3) * 2 - 10 // 2 = 8 * 2 - 5 = 16 - 5 = 11
@@ -2304,17 +2346,19 @@ test "evaluate complex arithmetic expression" {
 
 test "evaluate boolean and short circuit semantics" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // False and True should return 0 (False)
     const result = evaluator.evaluate("False and True") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
@@ -2322,17 +2366,19 @@ test "evaluate boolean and short circuit semantics" {
 
 test "evaluate boolean or short circuit semantics" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // True or False should return 1 (True)
     const result = evaluator.evaluate("True or False") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2340,17 +2386,19 @@ test "evaluate boolean or short circuit semantics" {
 
 test "evaluate nested boolean expression" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (True and True) or False should return 1
     const result = evaluator.evaluate("(True and True) or False") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2358,17 +2406,19 @@ test "evaluate nested boolean expression" {
 
 test "evaluate comparison with booleans in if" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // if True and True 100 else 0 should return 100
     const result = evaluator.evaluate("if True and True 100 else 0") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 100 }, result);
@@ -2376,17 +2426,19 @@ test "evaluate comparison with booleans in if" {
 
 test "evaluate record field access" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // {foo: 42}.foo should return 42
     const result = evaluator.evaluate("{foo: 42}.foo") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -2394,17 +2446,19 @@ test "evaluate record field access" {
 
 test "evaluate record field access multi-field" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // {x: 10, y: 20}.y should return 20
     const result = evaluator.evaluate("{x: 10, y: 20}.y") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
@@ -2412,17 +2466,19 @@ test "evaluate record field access multi-field" {
 
 test "evaluate tuple access" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // (10, 20) returns first element (simplified representation)
     const result = evaluator.evaluate("(10, 20)") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 10 }, result);
@@ -2430,17 +2486,19 @@ test "evaluate tuple access" {
 
 test "evaluate block with binding" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // Block with local binding
     const result = evaluator.evaluate("{ x = 5\n x * 2 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 10 }, result);
@@ -2448,17 +2506,19 @@ test "evaluate block with binding" {
 
 test "evaluate unary not" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // !True should return 0 (False)
     const result = evaluator.evaluate("!True") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 0 }, result);
@@ -2466,17 +2526,19 @@ test "evaluate unary not" {
 
 test "evaluate unary not false" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // !False should return 1 (True)
     const result = evaluator.evaluate("!False") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 1 }, result);
@@ -2484,17 +2546,19 @@ test "evaluate unary not false" {
 
 test "evaluate stored lambda" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { f = \x -> x + 1; f 5 } should equal 6
     const result = evaluator.evaluate("{ f = \\x -> x + 1; f 5 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 6 }, result);
@@ -2502,17 +2566,19 @@ test "evaluate stored lambda" {
 
 test "evaluate stored lambda with multiple uses" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { double = \x -> x * 2; double 5 + double 3 } should equal 16
     const result = evaluator.evaluate("{ double = \\x -> x * 2; double 5 + double 3 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 16 }, result);
@@ -2520,18 +2586,20 @@ test "evaluate stored lambda with multiple uses" {
 
 test "evaluate stored lambda with value binding" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { x = 10; f = \y -> y * 2; f x } should equal 20
     // This tests storing both a value and a closure in the same block
     const result = evaluator.evaluate("{ x = 10; f = \\y -> y * 2; f x }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 20 }, result);
@@ -2539,18 +2607,20 @@ test "evaluate stored lambda with value binding" {
 
 test "evaluate closure with capture" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { y = 10; f = \x -> x + y; f 5 } should equal 15
     // The closure f captures y from the enclosing scope
     const result = evaluator.evaluate("{ y = 10; f = \\x -> x + y; f 5 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 15 }, result);
@@ -2558,18 +2628,20 @@ test "evaluate closure with capture" {
 
 test "evaluate closure capturing multiple values" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { a = 3; b = 7; f = \x -> x + a + b; f 5 } should equal 15
     // The closure f captures both a and b
     const result = evaluator.evaluate("{ a = 3; b = 7; f = \\x -> x + a + b; f 5 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 15 }, result);
@@ -2577,17 +2649,19 @@ test "evaluate closure capturing multiple values" {
 
 test "evaluate higher-order function apply" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { apply = \f, x -> f x; double = \n -> n * 2; apply double 21 } should equal 42
     const result = evaluator.evaluate("{ apply = \\f, x -> f x; double = \\n -> n * 2; apply double 21 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -2595,17 +2669,19 @@ test "evaluate higher-order function apply" {
 
 test "evaluate higher-order function with inline lambda" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { apply = \f, x -> f x; apply (\n -> n + 10) 32 } should equal 42
     const result = evaluator.evaluate("{ apply = \\f, x -> f x; apply (\\n -> n + 10) 32 }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 42 }, result);
@@ -2613,17 +2689,19 @@ test "evaluate higher-order function with inline lambda" {
 
 test "evaluate compose functions" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
-        if (err == error.OutOfMemory) return error.SkipZigTest;
-        return err;
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
     };
     defer evaluator.deinit();
 
     // { double = \x -> x * 2; addOne = \x -> x + 1; double (addOne 5) } should equal 12
     const result = evaluator.evaluate("{ double = \\x -> x * 2; addOne = \\x -> x + 1; double (addOne 5) }") catch |err| {
-        if (err == error.ParseError or err == error.CanonicalizeError or err == error.TypeError or err == error.UnsupportedExpression) {
-            return error.SkipZigTest;
-        }
-        return err;
+        return switch (err) {
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
+            else => err,
+        };
     };
 
     try std.testing.expectEqual(DevEvaluator.EvalResult{ .i64_val = 12 }, result);

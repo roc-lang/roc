@@ -12,7 +12,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const Allocator = std.mem.Allocator;
 
 /// Executable memory region containing JIT-compiled code.
 /// The code can be called as a function using the `call*` methods.

@@ -9,7 +9,6 @@
 const std = @import("std");
 const layout_mod = @import("layout");
 const can = @import("can");
-const Layout = layout_mod.Layout;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
 const CIR = can.CIR;

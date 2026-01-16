@@ -832,11 +832,6 @@ test "condition invert" {
     try std.testing.expectEqual(Condition.less, Condition.greater_or_equal.invert());
 }
 
-// ============================================================================
-// Comprehensive Instruction Encoding Tests
-// Ported from the Rust dev backend test suite to verify byte-level correctness
-// ============================================================================
-
 const ALL_GENERAL_REGS = [_]GeneralReg{
     .RAX, .RCX, .RDX, .RBX, .RSP, .RBP, .RSI, .RDI,
     .R8,  .R9,  .R10, .R11, .R12, .R13, .R14, .R15,

@@ -24,7 +24,6 @@ const COFF = struct {
     // Symbol storage class
     const IMAGE_SYM_CLASS_EXTERNAL = 2;
     const IMAGE_SYM_CLASS_STATIC = 3;
-    const IMAGE_SYM_CLASS_LABEL = 6;
 
     // Symbol type
     const IMAGE_SYM_TYPE_NULL = 0;
