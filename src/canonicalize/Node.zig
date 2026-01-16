@@ -877,7 +877,7 @@ pub const Payload = extern union {
     pub const RecordDestruct = extern struct {
         label: u32,
         ident: u32,
-        extra_data_idx: u32,
+        kind_span2_idx: u32, // Index into span2_data: (kind_tag, pattern_idx)
     };
 
     pub const MatchBranch = extern struct {

@@ -2269,25 +2269,20 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
 /// IMPORTANT: You should not use this function directly! Instead, use it's
 /// corresponding function in `ModuleEnv`.
 pub fn addRecordDestruct(store: *NodeStore, record_destruct: CIR.Pattern.RecordDestruct, region: base.Region) Allocator.Error!CIR.Pattern.RecordDestruct.Idx {
-    const extra_data_start: u32 = @intCast(store.extra_data.len());
+    const kind_span2_idx: u32 = @intCast(store.span2_data.len());
 
-    // Store kind in extra_data
-    switch (record_destruct.kind) {
-        .Required => |pattern_idx| {
-            _ = try store.extra_data.append(store.gpa, 0);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-        },
-        .SubPattern => |pattern_idx| {
-            _ = try store.extra_data.append(store.gpa, 1);
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(pattern_idx));
-        },
-    }
+    // Store kind in span2_data: (kind_tag, pattern_idx)
+    const kind_data: Span2 = switch (record_destruct.kind) {
+        .Required => |pattern_idx| .{ .start = 0, .len = @intFromEnum(pattern_idx) },
+        .SubPattern => |pattern_idx| .{ .start = 1, .len = @intFromEnum(pattern_idx) },
+    };
+    _ = try store.span2_data.append(store.gpa, kind_data);
 
     var node = Node.init(.record_destruct);
     node.setPayload(.{ .record_destruct = .{
         .label = @bitCast(record_destruct.label),
         .ident = @bitCast(record_destruct.ident),
-        .extra_data_idx = extra_data_start,
+        .kind_span2_idx = kind_span2_idx,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2883,13 +2878,12 @@ pub fn getRecordDestruct(store: *const NodeStore, idx: CIR.Pattern.RecordDestruc
     std.debug.assert(node.tag == .record_destruct);
 
     const payload = node.getPayload();
-    const extra_start = payload.record_destruct.extra_data_idx;
-    const extra_data = store.extra_data.items.items[extra_start..][0..2];
-    const kind_tag = extra_data[0];
+    // Retrieve kind from span2_data
+    const kind_data = store.span2_data.items.items[payload.record_destruct.kind_span2_idx];
 
-    const kind = switch (kind_tag) {
-        0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(extra_data[1]) },
-        1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(extra_data[1]) },
+    const kind = switch (kind_data.start) {
+        0 => CIR.Pattern.RecordDestruct.Kind{ .Required = @enumFromInt(kind_data.len) },
+        1 => CIR.Pattern.RecordDestruct.Kind{ .SubPattern = @enumFromInt(kind_data.len) },
         else => unreachable,
     };
 
