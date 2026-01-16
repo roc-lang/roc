@@ -4,21 +4,16 @@ import pf.Stdout
 
 # Test to verify record builder syntax works correctly
 # Syntax: { field1: value1, field2: value2 }.TypeName
-# Desugars to: TypeName.mapN(value1, value2, |field1, field2| { field1, field2 })
+# Desugars to chained map2 calls:
+# - 2 fields: TypeName.map2(v1, v2, |f1, f2| { f1, f2 })
+# - 3 fields: TypeName.map2(v1, TypeName.map2(v2, v3, |f2, f3| (f2, f3)), |f1, (f2, f3)| { f1, f2, f3 })
 
-# A simple Applicative type with map and map2 methods
+# A simple Applicative type with ONLY map2 method
+# The record builder chains map2 for 3+ fields
+# map2 must be polymorphic to support chaining with tuple intermediates
 Applicative := {}.{
-    # Single field builder (map for 1 field)
-    map : I64, (I64 -> a) -> a
-    map = |v, f| f(v)
-
-    # Two field builder (map2 for 2 fields)
-    map2 : I64, I64, (I64, I64 -> a) -> a
+    map2 : a, b, (a, b -> c) -> c
     map2 = |v1, v2, f| f(v1, v2)
-
-    # Three field builder (map3 for 3 fields)
-    map3 : I64, I64, I64, (I64, I64, I64 -> a) -> a
-    map3 = |v1, v2, v3, f| f(v1, v2, v3)
 }
 
 main! = || {
@@ -32,17 +27,17 @@ main! = || {
     Stdout.line!("  Result: ${Str.inspect(result1)}")
     Stdout.line!("")
 
-    # Test 2: Single field record builder
-    Stdout.line!("Test 2: Single field record builder")
-    result2 = { value: 42 }.Applicative
-    Stdout.line!("  { value: 42 }.Applicative")
+    # Test 2: Three field record builder (chains map2)
+    Stdout.line!("Test 2: Three field record builder (chains map2)")
+    result2 = { a: 1, b: 2, c: 3 }.Applicative
+    Stdout.line!("  { a: 1, b: 2, c: 3 }.Applicative")
     Stdout.line!("  Result: ${Str.inspect(result2)}")
     Stdout.line!("")
 
-    # Test 3: Three field record builder
-    Stdout.line!("Test 3: Three field record builder")
-    result3 = { a: 1, b: 2, c: 3 }.Applicative
-    Stdout.line!("  { a: 1, b: 2, c: 3 }.Applicative")
+    # Test 3: Four field record builder (chains map2 twice)
+    Stdout.line!("Test 3: Four field record builder (chains map2 twice)")
+    result3 = { w: 10, x: 20, y: 30, z: 40 }.Applicative
+    Stdout.line!("  { w: 10, x: 20, y: 30, z: 40 }.Applicative")
     Stdout.line!("  Result: ${Str.inspect(result3)}")
     Stdout.line!("")
 

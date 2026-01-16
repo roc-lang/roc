@@ -285,8 +285,8 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/record_builder_cli_parser.roc",
-        .io_spec = "1>=== Record Builder Syntax Tests ===|1>|1>Test 1: Two field record builder|1>  { x: 10, y: 20 }.Applicative|1>  Result: { x: 10, y: 20 }|1>|1>Test 2: Single field record builder|1>  { value: 42 }.Applicative|1>  Result: { value: 42 }|1>|1>Test 3: Three field record builder|1>  { a: 1, b: 2, c: 3 }.Applicative|1>  Result: { a: 1, b: 2, c: 3 }|1>|1>Test 4: Using variables in field values|1>  x = 100, y = 200|1>  { first: x, second: y }.Applicative|1>  Result: { first: 100, second: 200 }|1>|1>Test 5: Equivalence with direct call|1>  Record builder: { p: 5, q: 10 }|1>  Direct call:    { p: 5, q: 10 }|1>|1>=== All tests completed! ===",
-        .description = "Record builder suffix syntax: { a: v1, b: v2 }.Type desugars to Type.map2(v1, v2, |a, b| { a, b })",
+        .io_spec = "1>=== Record Builder Syntax Tests ===|1>|1>Test 1: Two field record builder|1>  { x: 10, y: 20 }.Applicative|1>  Result: { x: 10, y: 20 }|1>|1>Test 2: Three field record builder (chains map2)|1>  { a: 1, b: 2, c: 3 }.Applicative|1>  Result: { a: 1, b: 2, c: 3 }|1>|1>Test 3: Four field record builder (chains map2 twice)|1>  { w: 10, x: 20, y: 30, z: 40 }.Applicative|1>  Result: { w: 10, x: 20, y: 30, z: 40 }|1>|1>Test 4: Using variables in field values|1>  x = 100, y = 200|1>  { first: x, second: y }.Applicative|1>  Result: { first: 100, second: 200 }|1>|1>Test 5: Equivalence with direct call|1>  Record builder: { p: 5, q: 10 }|1>  Direct call:    { p: 5, q: 10 }|1>|1>=== All tests completed! ===",
+        .description = "Record builder suffix syntax: { a: v1, b: v2 }.Type desugars to chained map2 calls",
     },
 };
 
