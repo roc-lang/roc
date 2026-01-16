@@ -8,7 +8,8 @@ type=expr
 A?
 ~~~
 # EXPECTED
-EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
+TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
+INCOMPATIBLE MATCH PATTERNS - try_undefined_tag.md:1:1:1:1
 # PROBLEMS
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
@@ -20,20 +21,23 @@ A?
 ^^
 
 
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
+**INCOMPATIBLE MATCH PATTERNS**
+The first pattern in this `match` is incompatible:
 **try_undefined_tag.md:1:1:**
 ```roc
 A?
 ```
-^
+^^
 
-This expression has type:
+The first pattern has the type:
 
-_[A, Ok(Error), Err(_a), .._others]_
+    Try(ok, err)
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+But the expression between the `match` parenthesis has the type:
+
+    [A, .._others]
+
+These two types can never match!
 
 # TOKENS
 ~~~zig
@@ -59,14 +63,16 @@ NO CHANGE
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-lookup-local
 						(p-assign (ident "#ok")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~

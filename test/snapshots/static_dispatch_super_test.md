@@ -10,6 +10,10 @@ some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_f
 # EXPECTED
 UNDEFINED VARIABLE - static_dispatch_super_test.md:1:1:1:8
 UNDEFINED VARIABLE - static_dispatch_super_test.md:1:9:1:13
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:15
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:41
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:72
+TRY OPERATOR OUTSIDE FUNCTION - static_dispatch_super_test.md:1:1:1:86
 # PROBLEMS
 **UNDEFINED VARIABLE**
 Nothing is named `some_fn` in this scope.
@@ -127,14 +131,16 @@ NO CHANGE
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)
-																					(p-applied-tag)))
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
 																			(value
 																				(e-lookup-local
 																					(p-assign (ident "#ok")))))
 																		(branch
 																			(patterns
 																				(pattern (degenerate false)
-																					(p-applied-tag)))
+																					(p-nominal-external (builtin)
+																						(p-applied-tag))))
 																			(value
 																				(e-runtime-error (tag "return_outside_fn"))))))))
 														(args)))
@@ -142,14 +148,16 @@ NO CHANGE
 													(branch
 														(patterns
 															(pattern (degenerate false)
-																(p-applied-tag)))
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
 														(value
 															(e-lookup-local
 																(p-assign (ident "#ok")))))
 													(branch
 														(patterns
 															(pattern (degenerate false)
-																(p-applied-tag)))
+																(p-nominal-external (builtin)
+																	(p-applied-tag))))
 														(value
 															(e-runtime-error (tag "return_outside_fn"))))))))
 									(args)))
@@ -157,28 +165,32 @@ NO CHANGE
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag)))
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
 									(value
 										(e-lookup-local
 											(p-assign (ident "#ok")))))
 								(branch
 									(patterns
 										(pattern (degenerate false)
-											(p-applied-tag)))
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
 									(value
 										(e-runtime-error (tag "return_outside_fn"))))))))))
 		(branches
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-lookup-local
 						(p-assign (ident "#ok")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
-						(p-applied-tag)))
+						(p-nominal-external (builtin)
+							(p-applied-tag))))
 				(value
 					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
