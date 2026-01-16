@@ -11,14 +11,10 @@ type=expr
 }.Foo
 ~~~
 # EXPECTED
-DOES NOT EXIST - record_builder_suffix.md:1:1:4:6
+RECORD BUILDER NOT SUPPORTED - record_builder_suffix.md:1:1:4:6
 # PROBLEMS
-**DOES NOT EXIST**
-`Foo.map2` does not exist.
-
-`Foo` is in scope, but it has no associated `map2`.
-
-It's referenced here:
+**RECORD BUILDER NOT SUPPORTED**
+The type `Foo` is used in a record builder expression, but does not implement `map2`:
 **record_builder_suffix.md:1:1:4:6:**
 ```roc
 {
@@ -27,6 +23,7 @@ It's referenced here:
 }.Foo
 ```
 
+Hint: To use `Foo` as a record builder, add a `map2` method to its type module.
 
 # TOKENS
 ~~~zig
@@ -54,7 +51,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "nested_value_not_found"))
+(e-runtime-error (tag "record_builder_map2_not_found"))
 ~~~
 # TYPES
 ~~~clojure
