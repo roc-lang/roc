@@ -285,7 +285,9 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/record_builder_cli_parser.roc",
-        .io_spec = "1>=== True Applicative Record Builder ===|1>|1>Test 1: Two-field record builder|1>  Result: host=localhost, port=8080|1>|1>Test 2: Three-field record builder|1>  Result: name=world, count=1, verbose=0|1>|1>Test 3: Four-field record builder|1>  Result: w=10, x=20, y=30, z=40|1>|1>Test 4: Combined help text|1>  Help:|1>  --input <value>  --output <value>|1>Test 5: Equivalence with direct map2|1>  Builder: a=1, b=2|1>  Direct:  a=1, b=2|1>|1>=== All tests passed! ===",
+        // Multi-line strings (\\) create strings with embedded \n - use \n in spec for these
+        // Note: Str.inspect(Bool.False) outputs "0" not "Bool.False"
+        .io_spec = "1>=== True Applicative Record Builder ===|1>|1>Test 1: Two-field record builder\n  Result: host=localhost, port=8080\n|1>Test 2: Three-field record builder|1>  Result: name=world, count=1, verbose=0|1>|1>Test 3: Four-field record builder|1>  Result: w=10, x=20, y=30, z=40|1>|1>Test 4: Combined help text|1>  Help:|1>  --input <value>  --output <value>|1>Test 5: Equivalence with direct map2|1>  Builder: a=1, b=2|1>  Direct:  a=1, b=2|1>|1>=== All tests passed! ===",
         .description = "True applicative record builder: { a: Cli.option(...), b: Cli.flag(...) }.Cli with parameterized Cli(a) type",
     },
 };

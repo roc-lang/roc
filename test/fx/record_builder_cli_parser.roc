@@ -55,9 +55,12 @@ main! = || {
 	port_parser = Cli.option({ long: "port", default: "8080" })
 	parser1 = { host: host_parser, port: port_parser }.Cli
 	config1 = Cli.run(parser1)
-	Stdout.line!("Test 1: Two-field record builder")
-	Stdout.line!("  Result: host=${config1.host}, port=${config1.port}")
-	Stdout.line!("")
+	msg1 =
+		\\Test 1: Two-field record builder
+		\\  Result: host=${config1.host}, port=${config1.port}
+		\\
+
+	Stdout.line!(msg1)
 
 	# Test 2: Three-field record builder (chains map2)
 	# Desugars to: Cli.map2(a, Cli.map2(b, c, |b,c| (b,c)), |a,(b,c)| {a,b,c})
