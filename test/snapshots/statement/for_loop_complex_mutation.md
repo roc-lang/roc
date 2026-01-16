@@ -7,17 +7,17 @@ type=snippet
 ~~~roc
 countEvens : U64
 countEvens = {
-	var count_ = 0
-	var sum_ = 0
+	var $count = 0
+	var $sum = 0
 	for n in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
 		if n % 2 == 0 {
-			count_ = count_ + 1
-			sum_ = sum_ + n
+			$count = $count + 1
+			$sum = $sum + n
 		} else {
 			{}
 		}
 	}
-	count_ * sum_
+	$count * $sum
 }
 
 expect countEvens == 150
@@ -56,9 +56,9 @@ EndOfFile,
 			(p-ident (raw "countEvens"))
 			(e-block
 				(statements
-					(s-var (name "count_")
+					(s-var (name "$count")
 						(e-int (raw "0")))
-					(s-var (name "sum_")
+					(s-var (name "$sum")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "n"))
@@ -84,21 +84,21 @@ EndOfFile,
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "count_"))
+												(p-ident (raw "$count"))
 												(e-binop (op "+")
-													(e-ident (raw "count_"))
+													(e-ident (raw "$count"))
 													(e-int (raw "1"))))
 											(s-decl
-												(p-ident (raw "sum_"))
+												(p-ident (raw "$sum"))
 												(e-binop (op "+")
-													(e-ident (raw "sum_"))
+													(e-ident (raw "$sum"))
 													(e-ident (raw "n"))))))
 									(e-block
 										(statements
 											(e-record)))))))
 					(e-binop (op "*")
-						(e-ident (raw "count_"))
-						(e-ident (raw "sum_"))))))
+						(e-ident (raw "$count"))
+						(e-ident (raw "$sum"))))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "countEvens"))
@@ -115,10 +115,10 @@ NO CHANGE
 		(p-assign (ident "countEvens"))
 		(e-block
 			(s-var
-				(p-assign (ident "count_"))
+				(p-assign (ident "$count"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "sum_"))
+				(p-assign (ident "$sum"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -146,16 +146,16 @@ NO CHANGE
 									(e-num (value "0")))
 								(e-block
 									(s-reassign
-										(p-assign (ident "count_"))
+										(p-assign (ident "$count"))
 										(e-binop (op "add")
 											(e-lookup-local
-												(p-assign (ident "count_")))
+												(p-assign (ident "$count")))
 											(e-num (value "1"))))
 									(s-reassign
-										(p-assign (ident "sum_"))
+										(p-assign (ident "$sum"))
 										(e-binop (op "add")
 											(e-lookup-local
-												(p-assign (ident "sum_")))
+												(p-assign (ident "$sum")))
 											(e-lookup-local
 												(p-assign (ident "n")))))
 									(e-empty_record))))
@@ -164,9 +164,9 @@ NO CHANGE
 								(e-empty_record))))))
 			(e-binop (op "mul")
 				(e-lookup-local
-					(p-assign (ident "count_")))
+					(p-assign (ident "$count")))
 				(e-lookup-local
-					(p-assign (ident "sum_")))))
+					(p-assign (ident "$sum")))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

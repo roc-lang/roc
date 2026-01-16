@@ -7,17 +7,17 @@ type=snippet
 ~~~roc
 result : U64
 result = {
-	var sum_ = 0
-	var max_ = 0
+	var $sum = 0
+	var $max = 0
 	for n in [3, 7, 2, 9, 1] {
-		sum_ = sum_ + n
-		if n > max_ {
-			max_ = n
+		$sum = $sum + n
+		if n > $max {
+			$max = n
 		} else {
 			{}
 		}
 	}
-	sum_ + max_
+	$sum + $max
 }
 
 expect result == 31
@@ -56,9 +56,9 @@ EndOfFile,
 			(p-ident (raw "result"))
 			(e-block
 				(statements
-					(s-var (name "sum_")
+					(s-var (name "$sum")
 						(e-int (raw "0")))
-					(s-var (name "max_")
+					(s-var (name "$max")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "n"))
@@ -71,25 +71,25 @@ EndOfFile,
 						(e-block
 							(statements
 								(s-decl
-									(p-ident (raw "sum_"))
+									(p-ident (raw "$sum"))
 									(e-binop (op "+")
-										(e-ident (raw "sum_"))
+										(e-ident (raw "$sum"))
 										(e-ident (raw "n"))))
 								(e-if-then-else
 									(e-binop (op ">")
 										(e-ident (raw "n"))
-										(e-ident (raw "max_")))
+										(e-ident (raw "$max")))
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "max_"))
+												(p-ident (raw "$max"))
 												(e-ident (raw "n")))))
 									(e-block
 										(statements
 											(e-record)))))))
 					(e-binop (op "+")
-						(e-ident (raw "sum_"))
-						(e-ident (raw "max_"))))))
+						(e-ident (raw "$sum"))
+						(e-ident (raw "$max"))))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "result"))
@@ -106,10 +106,10 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "sum_"))
+				(p-assign (ident "$sum"))
 				(e-num (value "0")))
 			(s-var
-				(p-assign (ident "max_"))
+				(p-assign (ident "$max"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "n"))
@@ -122,10 +122,10 @@ NO CHANGE
 						(e-num (value "1"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "sum_"))
+						(p-assign (ident "$sum"))
 						(e-binop (op "add")
 							(e-lookup-local
-								(p-assign (ident "sum_")))
+								(p-assign (ident "$sum")))
 							(e-lookup-local
 								(p-assign (ident "n")))))
 					(e-if
@@ -135,10 +135,10 @@ NO CHANGE
 									(e-lookup-local
 										(p-assign (ident "n")))
 									(e-lookup-local
-										(p-assign (ident "max_"))))
+										(p-assign (ident "$max"))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "max_"))
+										(p-assign (ident "$max"))
 										(e-lookup-local
 											(p-assign (ident "n"))))
 									(e-empty_record))))
@@ -147,9 +147,9 @@ NO CHANGE
 								(e-empty_record))))))
 			(e-binop (op "add")
 				(e-lookup-local
-					(p-assign (ident "sum_")))
+					(p-assign (ident "$sum")))
 				(e-lookup-local
-					(p-assign (ident "max_")))))
+					(p-assign (ident "$max")))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

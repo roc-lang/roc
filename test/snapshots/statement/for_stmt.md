@@ -7,11 +7,11 @@ type=snippet
 ~~~roc
 foo : U64
 foo = {
-	var result = 0
+	var $result = 0
 	for x in [1, 2, 3] {
-	  result = result + x
-	} 
-	result
+	  $result = $result + x
+	}
+	$result
 }
 ~~~
 # EXPECTED
@@ -41,7 +41,7 @@ EndOfFile,
 			(p-ident (raw "foo"))
 			(e-block
 				(statements
-					(s-var (name "result")
+					(s-var (name "$result")
 						(e-int (raw "0")))
 					(s-for
 						(p-ident (raw "x"))
@@ -52,21 +52,21 @@ EndOfFile,
 						(e-block
 							(statements
 								(s-decl
-									(p-ident (raw "result"))
+									(p-ident (raw "$result"))
 									(e-binop (op "+")
-										(e-ident (raw "result"))
+										(e-ident (raw "$result"))
 										(e-ident (raw "x")))))))
-					(e-ident (raw "result")))))))
+					(e-ident (raw "$result")))))))
 ~~~
 # FORMATTED
 ~~~roc
 foo : U64
 foo = {
-	var result = 0
+	var $result = 0
 	for x in [1, 2, 3] {
-		result = result + x
+		$result = $result + x
 	}
-	result
+	$result
 }
 ~~~
 # CANONICALIZE
@@ -76,7 +76,7 @@ foo = {
 		(p-assign (ident "foo"))
 		(e-block
 			(s-var
-				(p-assign (ident "result"))
+				(p-assign (ident "$result"))
 				(e-num (value "0")))
 			(s-for
 				(p-assign (ident "x"))
@@ -87,15 +87,15 @@ foo = {
 						(e-num (value "3"))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "result"))
+						(p-assign (ident "$result"))
 						(e-binop (op "add")
 							(e-lookup-local
-								(p-assign (ident "result")))
+								(p-assign (ident "$result")))
 							(e-lookup-local
 								(p-assign (ident "x")))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "result"))))
+				(p-assign (ident "$result"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

@@ -7,11 +7,11 @@ type=snippet
 ~~~roc
 count : U64
 count = {
-	var counter_ = 0
+	var $counter = 0
 	for _ in ["hello", "world", "test"] {
-		counter_ = counter_ + 1
+		$counter = $counter + 1
 	}
-	counter_
+	$counter
 }
 
 expect count == 3
@@ -44,7 +44,7 @@ EndOfFile,
 			(p-ident (raw "count"))
 			(e-block
 				(statements
-					(s-var (name "counter_")
+					(s-var (name "$counter")
 						(e-int (raw "0")))
 					(s-for
 						(p-underscore)
@@ -58,11 +58,11 @@ EndOfFile,
 						(e-block
 							(statements
 								(s-decl
-									(p-ident (raw "counter_"))
+									(p-ident (raw "$counter"))
 									(e-binop (op "+")
-										(e-ident (raw "counter_"))
+										(e-ident (raw "$counter"))
 										(e-int (raw "1")))))))
-					(e-ident (raw "counter_")))))
+					(e-ident (raw "$counter")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "count"))
@@ -79,7 +79,7 @@ NO CHANGE
 		(p-assign (ident "count"))
 		(e-block
 			(s-var
-				(p-assign (ident "counter_"))
+				(p-assign (ident "$counter"))
 				(e-num (value "0")))
 			(s-for
 				(p-underscore)
@@ -93,14 +93,14 @@ NO CHANGE
 							(e-literal (string "test")))))
 				(e-block
 					(s-reassign
-						(p-assign (ident "counter_"))
+						(p-assign (ident "$counter"))
 						(e-binop (op "add")
 							(e-lookup-local
-								(p-assign (ident "counter_")))
+								(p-assign (ident "$counter")))
 							(e-num (value "1"))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "counter_"))))
+				(p-assign (ident "$counter"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect

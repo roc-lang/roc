@@ -1359,6 +1359,46 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .var_without_dollar_prefix => |data| blk: {
+            const var_name = self.getIdent(data.name);
+            const suggested_name = self.getIdent(data.suggested_name);
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "VAR WITHOUT $ PREFIX", .warning);
+            const owned_var_name = try report.addOwnedString(var_name);
+            const owned_suggested = try report.addOwnedString(suggested_name);
+
+            try report.document.addReflowingText("This ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" is named ");
+            try report.document.addUnqualifiedSymbol(owned_var_name);
+            try report.document.addReflowingText(" but variables declared with ");
+            try report.document.addKeyword("var");
+            try report.document.addReflowingText(" should start with ");
+            try report.document.addUnqualifiedSymbol("$");
+            try report.document.addReflowingText(" to indicate they are mutable.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Suggestion: rename ");
+            try report.document.addUnqualifiedSymbol(owned_var_name);
+            try report.document.addReflowingText(" to ");
+            try report.document.addUnqualifiedSymbol(owned_suggested);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .warning_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .tuple_elem_not_canonicalized => blk: {
             var report = Report.init(allocator, "INVALID TUPLE ELEMENT", .runtime_error);
             try report.document.addReflowingText("This tuple element is malformed or contains invalid syntax.");

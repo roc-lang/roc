@@ -215,6 +215,7 @@ pub const Tag = enum {
     diag_unused_type_var_name,
     diag_type_var_marked_unused,
     diag_type_var_starting_with_dollar,
+    diag_var_without_dollar_prefix,
     diag_underscore_in_type_declaration,
     diagnostic_exposed_but_not_implemented,
     diag_redundant_exposed,

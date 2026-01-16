@@ -9452,6 +9452,23 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                 break :blk;
             };
 
+            // Check if var name starts with $ (reassignable attribute)
+            if (!var_name.attributes.reassignable) {
+                // Create suggested name with $ prefix
+                const original_name = self.env.getIdent(var_name);
+                var suggested_buf: [256]u8 = undefined;
+                suggested_buf[0] = '$';
+                const suggested_len = @min(original_name.len, suggested_buf.len - 1);
+                @memcpy(suggested_buf[1 .. suggested_len + 1], original_name[0..suggested_len]);
+                const suggested_name = try self.env.insertIdent(Ident.for_text(suggested_buf[0 .. suggested_len + 1]));
+
+                try self.env.pushDiagnostic(Diagnostic{ .var_without_dollar_prefix = .{
+                    .name = var_name,
+                    .suggested_name = suggested_name,
+                    .region = region,
+                } });
+            }
+
             // Canonicalize the initial value
             const expr = try self.canonicalizeExprOrMalformed(v.body);
 
