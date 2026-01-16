@@ -30,7 +30,7 @@ const NodeStore = @This();
 gpa: Allocator,
 nodes: Node.List,
 regions: Region.List,
-int128_values: collections.SafeList(i128), // Typed storage for large numeric literals
+int128_values: collections.SafeList(Int128Storage), // Typed storage for large numeric literals (8-byte aligned for serialization)
 span2_data: collections.SafeList(Span2), // Typed storage for (start, len) span pairs
 span_with_node_data: collections.SafeList(SpanWithNode), // Typed storage for (start, len, node) triples
 match_data: collections.SafeList(MatchData), // Typed storage for match expression data
@@ -43,6 +43,27 @@ type_apply_data: collections.SafeList(TypeApplyData), // Typed storage for type 
 pattern_list_data: collections.SafeList(PatternListData), // Typed storage for pattern lists
 index_data: collections.SafeList(u32), // Storage for variable-length index arrays (tuple elems, tag args, scratch spans)
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
+
+/// Storage wrapper for 128-bit values that uses 8-byte alignment for serialization compatibility.
+/// i128 requires 16-byte alignment which can cause deserialization failures when data isn't aligned.
+pub const Int128Storage = extern struct {
+    low: u64,
+    high: u64,
+
+    pub fn fromI128(val: i128) Int128Storage {
+        const unsigned: u128 = @bitCast(val);
+        return .{
+            .low = @truncate(unsigned),
+            .high = @truncate(unsigned >> 64),
+        };
+    }
+
+    pub fn toI128(self: Int128Storage) i128 {
+        const low: u128 = self.low;
+        const high: u128 = @as(u128, self.high) << 64;
+        return @bitCast(low | high);
+    }
+};
 
 /// A pair of u32 values representing a span (start index and length).
 /// Used for storing argument lists, field lists, branch lists, etc.
@@ -211,7 +232,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .gpa = gpa,
         .nodes = try Node.List.initCapacity(gpa, capacity),
         .regions = try Region.List.initCapacity(gpa, capacity),
-        .int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8),
+        .int128_values = try collections.SafeList(Int128Storage).initCapacity(gpa, capacity / 8),
         .span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4),
         .span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4),
         .match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8),
@@ -568,7 +589,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_num;
             const kind: CIR.NumKind = @enumFromInt(p.kind);
             const val_kind: CIR.IntValue.IntKind = @enumFromInt(p.val_kind);
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
 
             return CIR.Expr{
                 .e_num = .{
@@ -624,7 +645,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_dec => {
             const p = payload.expr_dec;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
 
             return CIR.Expr{
                 .e_dec = .{
@@ -651,7 +672,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_typed_int => {
             const p = payload.expr_typed_int;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
             return CIR.Expr{
                 .e_typed_int = .{
                     .value = .{
@@ -664,7 +685,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         },
         .expr_typed_frac => {
             const p = payload.expr_typed_frac;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
             return CIR.Expr{
                 .e_typed_frac = .{
                     .value = .{
@@ -963,7 +984,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 pub fn replaceExprWithNum(store: *NodeStore, expr_idx: CIR.Expr.Idx, value: CIR.IntValue, num_kind: CIR.NumKind) !void {
     const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
     const int128_idx: u32 = @intCast(store.int128_values.len());
-    _ = try store.int128_values.append(store.gpa, @bitCast(value.bytes));
+    _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(@bitCast(value.bytes)));
 
     var node = Node.init(.expr_num);
     node.setPayload(.{ .expr_num = .{
@@ -1294,7 +1315,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_num_literal => {
             const p = payload.pattern_num_literal;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
 
             return CIR.Pattern{
                 .num_literal = .{
@@ -1319,7 +1340,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
         },
         .pattern_dec_literal => {
             const p = payload.pattern_dec_literal;
-            const value = store.int128_values.items.items[p.int128_idx];
+            const value = store.int128_values.items.items[p.int128_idx].toI128();
 
             return CIR.Pattern{
                 .dec_literal = .{
@@ -1818,7 +1839,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_num => |e| {
             node.tag = .expr_num;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(@bitCast(e.value.bytes)));
             node.setPayload(.{ .expr_num = .{
                 .kind = @intFromEnum(e.kind),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -1864,7 +1885,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_dec => |e| {
             node.tag = .expr_dec;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, e.value.num);
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(e.value.num));
             node.setPayload(.{ .expr_dec = .{
                 .int128_idx = int128_idx,
                 .has_suffix = @intFromBool(e.has_suffix),
@@ -1884,7 +1905,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_int => |e| {
             node.tag = .expr_typed_int;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(@bitCast(e.value.bytes)));
             node.setPayload(.{ .expr_typed_int = .{
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -1894,7 +1915,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_typed_frac => |e| {
             node.tag = .expr_typed_frac;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, @bitCast(e.value.bytes));
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(@bitCast(e.value.bytes)));
             node.setPayload(.{ .expr_typed_frac = .{
                 .type_name = @bitCast(e.type_name),
                 .val_kind = @intFromEnum(e.value.kind),
@@ -2466,7 +2487,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .num_literal => |p| {
             node.tag = .pattern_num_literal;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, @bitCast(p.value.bytes));
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(@bitCast(p.value.bytes)));
             node.setPayload(.{ .pattern_num_literal = .{
                 .kind = @intFromEnum(p.kind),
                 .value_kind = @intFromEnum(p.value.kind),
@@ -2484,7 +2505,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
         .dec_literal => |p| {
             node.tag = .pattern_dec_literal;
             const int128_idx: u32 = @intCast(store.int128_values.len());
-            _ = try store.int128_values.append(store.gpa, p.value.num);
+            _ = try store.int128_values.append(store.gpa, Int128Storage.fromI128(p.value.num));
             node.setPayload(.{ .pattern_dec_literal = .{
                 .int128_idx = int128_idx,
                 .has_suffix = @intFromBool(p.has_suffix),
@@ -4069,7 +4090,7 @@ pub const Serialized = extern struct {
     gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
-    int128_values: collections.SafeList(i128).Serialized,
+    int128_values: collections.SafeList(Int128Storage).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
@@ -4223,7 +4244,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Add integer value to int128_values
     const value: i128 = 42;
-    const int128_idx = try original.int128_values.append(gpa, value);
+    const int128_idx = try original.int128_values.append(gpa, Int128Storage.fromI128(value));
 
     // Add a numeric expression node using the int128 value
     var node1 = Node.init(.expr_num);
@@ -4280,7 +4301,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Verify int128_values
     try testing.expectEqual(@as(usize, 1), deserialized.int128_values.len());
-    const retrieved_value = deserialized.int128_values.items.items[0];
+    const retrieved_value = deserialized.int128_values.items.items[0].toI128();
     try testing.expectEqual(@as(i128, 42), retrieved_value);
 
     // Verify regions
