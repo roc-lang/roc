@@ -29,7 +29,6 @@ const check = @import("check");
 const layout = @import("layout");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
-const builtins = @import("builtins");
 
 // LLVM Builder from Zig's standard library (for IR generation)
 const LlvmBuilder = std.zig.llvm.Builder;
@@ -40,7 +39,6 @@ const CIR = can.CIR;
 const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
-const RocStr = builtins.str.RocStr;
 
 /// Get the LLVM target triple for the current platform.
 /// This must match the triple that LLVM's GetDefaultTargetTriple() returns,
@@ -252,8 +250,6 @@ pub const LlvmEvaluator = struct {
             try ctx.emitListToPtr(top_expr, out_ptr);
         } else if (is_record_expr or is_record_result) {
             // Handle record output - emit field values to output buffer
-            const record_expr = if (is_record_result) @as(CIR.Expr, undefined) else top_expr;
-            _ = record_expr;
             record_field_names = try ctx.emitRecordToPtr(top_expr, out_ptr, self.allocator);
         } else if (output_layout == .str) {
             // Special handling for string output - write RocStr struct directly
@@ -430,32 +426,33 @@ pub const LlvmEvaluator = struct {
         /// Emit a typed integer literal (e.g., 42.U32, 100.I64)
         fn emitTypedInt(ctx: *ExprContext, typed_int: anytype) ExprError!LlvmBuilder.Value {
             const int_value = typed_int.value.toI128();
-            const type_name = ctx.module_env.getIdentText(typed_int.type_name);
+            const type_ident = typed_int.type_name;
+            const idents = ctx.module_env.idents;
 
             // Handle Dec type - scale integer to Dec representation
-            if (std.mem.eql(u8, type_name, "Dec")) {
+            if (type_ident == idents.dec) {
                 const dec_value = int_value * 1000000000000000000; // * 10^18
                 return (ctx.builder.intConst(.i128, dec_value) catch return error.CompilationFailed).toValue();
             }
 
             // Handle float types
-            if (std.mem.eql(u8, type_name, "F32")) {
+            if (type_ident == idents.f32) {
                 return (ctx.builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
             }
-            if (std.mem.eql(u8, type_name, "F64")) {
+            if (type_ident == idents.f64) {
                 return (ctx.builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
             }
 
-            // Determine LLVM type from the type name
-            const llvm_type: LlvmBuilder.Type = if (std.mem.eql(u8, type_name, "I8") or std.mem.eql(u8, type_name, "U8"))
+            // Determine LLVM type from the type ident
+            const llvm_type: LlvmBuilder.Type = if (type_ident == idents.i8 or type_ident == idents.u8)
                 .i8
-            else if (std.mem.eql(u8, type_name, "I16") or std.mem.eql(u8, type_name, "U16"))
+            else if (type_ident == idents.i16 or type_ident == idents.u16)
                 .i16
-            else if (std.mem.eql(u8, type_name, "I32") or std.mem.eql(u8, type_name, "U32"))
+            else if (type_ident == idents.i32 or type_ident == idents.u32)
                 .i32
-            else if (std.mem.eql(u8, type_name, "I64") or std.mem.eql(u8, type_name, "U64"))
+            else if (type_ident == idents.i64 or type_ident == idents.u64)
                 .i64
-            else if (std.mem.eql(u8, type_name, "I128") or std.mem.eql(u8, type_name, "U128"))
+            else if (type_ident == idents.i128 or type_ident == idents.u128)
                 .i128
             else
                 return error.UnsupportedType;
@@ -465,17 +462,18 @@ pub const LlvmEvaluator = struct {
 
         /// Emit a typed fractional literal (e.g., 3.14.Dec, 2.0.F64)
         fn emitTypedFrac(ctx: *ExprContext, typed_frac: anytype) ExprError!LlvmBuilder.Value {
-            const type_name = ctx.module_env.getIdentText(typed_frac.type_name);
+            const type_ident = typed_frac.type_name;
+            const idents = ctx.module_env.idents;
             const int_value = typed_frac.value.toI128();
 
-            if (std.mem.eql(u8, type_name, "Dec")) {
+            if (type_ident == idents.dec) {
                 // Dec values are stored as scaled i128 (like e_dec)
                 return (ctx.builder.intConst(.i128, int_value) catch return error.CompilationFailed).toValue();
-            } else if (std.mem.eql(u8, type_name, "F32")) {
+            } else if (type_ident == idents.f32) {
                 // The value is stored as Dec-scaled (int * 10^18), need to convert to float
                 const float_val: f32 = @as(f32, @floatFromInt(int_value)) / 1e18;
                 return (ctx.builder.floatConst(float_val) catch return error.CompilationFailed).toValue();
-            } else if (std.mem.eql(u8, type_name, "F64")) {
+            } else if (type_ident == idents.f64) {
                 // The value is stored as Dec-scaled (int * 10^18), need to convert to float
                 const float_val: f64 = @as(f64, @floatFromInt(int_value)) / 1e18;
                 return (ctx.builder.doubleConst(float_val) catch return error.CompilationFailed).toValue();
@@ -667,11 +665,8 @@ pub const LlvmEvaluator = struct {
 
         /// Emit a zero-argument tag (like True, False)
         fn emitZeroArgTag(ctx: *ExprContext, tag: anytype) ExprError!LlvmBuilder.Value {
-            // Look up the tag name to determine the value
-            const tag_name = ctx.module_env.getIdentText(tag.name);
-
             // For Bool tags, True is 1 and False is 0
-            const value: i128 = if (std.mem.eql(u8, tag_name, "True")) 1 else 0;
+            const value: i128 = if (tag.name == ctx.module_env.idents.true_tag) 1 else 0;
             return (ctx.builder.intConst(.i8, value) catch return error.CompilationFailed).toValue();
         }
 
@@ -681,10 +676,8 @@ pub const LlvmEvaluator = struct {
             const args = ctx.module_env.store.sliceExpr(tag.args);
             if (args.len == 0) {
                 // Zero-argument tag - handle like e_zero_argument_tag
-                const tag_name = ctx.module_env.getIdentText(tag.name);
-
                 // For Bool tags, True is 1 and False is 0
-                const value: i128 = if (std.mem.eql(u8, tag_name, "True")) 1 else 0;
+                const value: i128 = if (tag.name == ctx.module_env.idents.true_tag) 1 else 0;
                 return (ctx.builder.intConst(.i8, value) catch return error.CompilationFailed).toValue();
             }
 
@@ -723,34 +716,30 @@ pub const LlvmEvaluator = struct {
         }
 
         /// Emit a function call
-        /// Currently supports specific builtin functions as inline implementations
+        /// Supports builtin functions that have corresponding idents in CommonIdents
         fn emitCall(ctx: *ExprContext, call: anytype) ExprError!LlvmBuilder.Value {
-            // Check if this is a call to a known builtin function
             const func_expr = ctx.module_env.store.getExpr(call.func);
 
             // Handle e_lookup_external for builtin functions
             if (func_expr == .e_lookup_external) {
                 const lookup = func_expr.e_lookup_external;
-                const func_name = ctx.module_env.getIdentText(lookup.ident_idx);
+                const func_ident = lookup.ident_idx;
+                const idents = ctx.module_env.idents;
                 const args = ctx.module_env.store.sliceExpr(call.args);
 
-                // Handle Bool.not specially - just emit a not operation
-                if (std.mem.eql(u8, func_name, "not") and args.len == 1) {
+                // Handle Bool.not - XOR with 1 to flip the boolean
+                if (func_ident == idents.not and args.len == 1) {
                     const arg_val = try ctx.emitExpr(args[0]);
-                    // XOR with 1 to flip the boolean (use i8 since Bool is stored as i8)
                     const one = (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
                     return ctx.wip.bin(.xor, arg_val, one, "") catch return error.CompilationFailed;
                 }
 
                 // Handle Num.abs - absolute value
-                if (std.mem.eql(u8, func_name, "abs") and args.len == 1) {
+                if (func_ident == idents.abs and args.len == 1) {
                     const arg_val = try ctx.emitExpr(args[0]);
                     const arg_expr = ctx.module_env.store.getExpr(args[0]);
-
-                    // Get the type info to determine signedness and type
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, arg_expr) catch return error.CompilationFailed;
 
-                    // For floats, use fneg and select
                     if (ctx.isFloatExpr(arg_expr)) {
                         const neg_val = ctx.wip.un(.fneg, arg_val, "") catch return error.CompilationFailed;
                         const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
@@ -758,15 +747,14 @@ pub const LlvmEvaluator = struct {
                         return ctx.wip.select(.normal, is_neg, neg_val, arg_val, "") catch return error.CompilationFailed;
                     }
 
-                    // For integers, use sub and select
                     const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                     const neg_val = ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
                     const is_neg = ctx.wip.icmp(.slt, arg_val, zero, "") catch return error.CompilationFailed;
                     return ctx.wip.select(.normal, is_neg, neg_val, arg_val, "") catch return error.CompilationFailed;
                 }
 
-                // Handle Num.neg - negation (same as unary minus)
-                if (std.mem.eql(u8, func_name, "neg") and args.len == 1) {
+                // Handle Num.negate - negation
+                if (func_ident == idents.negate and args.len == 1) {
                     const arg_val = try ctx.emitExpr(args[0]);
                     const arg_expr = ctx.module_env.store.getExpr(args[0]);
 
@@ -779,96 +767,17 @@ pub const LlvmEvaluator = struct {
                     return ctx.wip.bin(.sub, zero, arg_val, "") catch return error.CompilationFailed;
                 }
 
-                // Handle Str.count_utf8_bytes - return string byte length
-                if (std.mem.eql(u8, func_name, "count_utf8_bytes") and args.len == 1) {
-                    const arg_expr = ctx.module_env.store.getExpr(args[0]);
-                    const str_content = ctx.getStringContent(arg_expr) orelse return error.UnsupportedType;
-                    return (ctx.builder.intConst(.i64, @as(i128, @intCast(str_content.len))) catch return error.CompilationFailed).toValue();
-                }
-
-                // Handle Str.starts_with - check if string starts with prefix
-                if (std.mem.eql(u8, func_name, "starts_with") and args.len == 2) {
-                    const str_expr = ctx.module_env.store.getExpr(args[0]);
-                    const prefix_expr = ctx.module_env.store.getExpr(args[1]);
-                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
-                    const prefix_content = ctx.getStringContent(prefix_expr) orelse return error.UnsupportedType;
-                    const result: i128 = if (std.mem.startsWith(u8, str_content, prefix_content)) 1 else 0;
-                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
-                }
-
-                // Handle Str.ends_with - check if string ends with suffix
-                if (std.mem.eql(u8, func_name, "ends_with") and args.len == 2) {
-                    const str_expr = ctx.module_env.store.getExpr(args[0]);
-                    const suffix_expr = ctx.module_env.store.getExpr(args[1]);
-                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
-                    const suffix_content = ctx.getStringContent(suffix_expr) orelse return error.UnsupportedType;
-                    const result: i128 = if (std.mem.endsWith(u8, str_content, suffix_content)) 1 else 0;
-                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
-                }
-
-                // Handle Str.contains - check if string contains substring
-                if (std.mem.eql(u8, func_name, "contains") and args.len == 2) {
-                    const str_expr = ctx.module_env.store.getExpr(args[0]);
-                    const substr_expr = ctx.module_env.store.getExpr(args[1]);
-                    const str_content = ctx.getStringContent(str_expr) orelse return error.UnsupportedType;
-                    const substr_content = ctx.getStringContent(substr_expr) orelse return error.UnsupportedType;
-                    const result: i128 = if (std.mem.indexOf(u8, str_content, substr_content) != null) 1 else 0;
-                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
-                }
-
-                // Handle Str.is_empty - check if string is empty
-                if (std.mem.eql(u8, func_name, "is_empty") and args.len == 1) {
-                    const arg_expr = ctx.module_env.store.getExpr(args[0]);
-                    const str_content = ctx.getStringContent(arg_expr) orelse return error.UnsupportedType;
-                    const result: i128 = if (str_content.len == 0) 1 else 0;
-                    return (ctx.builder.intConst(.i8, result) catch return error.CompilationFailed).toValue();
-                }
-
-                // Handle Num.mod_by - modulo operation (Roc semantics)
-                // Roc's mod_by returns a result with the same sign as the divisor
-                // This differs from C's % which uses truncated division
-                if (std.mem.eql(u8, func_name, "mod_by") and args.len == 2) {
-                    const lhs_val = try ctx.emitExpr(args[0]);
-                    const rhs_val = try ctx.emitExpr(args[1]);
-                    const lhs_expr = ctx.module_env.store.getExpr(args[0]);
-                    const is_signed = ctx.isSignedExpr(lhs_expr);
-
-                    if (!is_signed) {
-                        // Unsigned: simple remainder
-                        return ctx.wip.bin(.urem, lhs_val, rhs_val, "") catch return error.CompilationFailed;
-                    }
-
-                    // Signed: implement Roc semantics (floored division modulo)
-                    // result = lhs - (floor(lhs/rhs) * rhs)
-                    // If remainder and divisor have different signs, adjust by adding divisor
-                    const rem = ctx.wip.bin(.srem, lhs_val, rhs_val, "") catch return error.CompilationFailed;
-                    const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
-                    const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
-
-                    // Check if remainder != 0 and (remainder ^ divisor) < 0 (different signs)
-                    const rem_ne_zero = ctx.wip.icmp(.ne, rem, zero, "") catch return error.CompilationFailed;
-                    const xor_result = ctx.wip.bin(.xor, rem, rhs_val, "") catch return error.CompilationFailed;
-                    const different_signs = ctx.wip.icmp(.slt, xor_result, zero, "") catch return error.CompilationFailed;
-                    const need_adjust = ctx.wip.bin(.@"and", rem_ne_zero, different_signs, "") catch return error.CompilationFailed;
-
-                    // If need_adjust, add divisor to remainder
-                    const adjusted = ctx.wip.bin(.add, rem, rhs_val, "") catch return error.CompilationFailed;
-                    return ctx.wip.select(.normal, need_adjust, adjusted, rem, "") catch return error.CompilationFailed;
-                }
-
                 // Handle Num.abs_diff - absolute difference |a - b|
-                if (std.mem.eql(u8, func_name, "abs_diff") and args.len == 2) {
+                if (func_ident == idents.abs_diff and args.len == 2) {
                     const lhs_val = try ctx.emitExpr(args[0]);
                     const rhs_val = try ctx.emitExpr(args[1]);
                     const lhs_expr = ctx.module_env.store.getExpr(args[0]);
 
-                    // Compute a - b
                     const diff = if (ctx.isFloatExpr(lhs_expr))
                         ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
                     else
                         ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
 
-                    // Then take abs of the result
                     if (ctx.isFloatExpr(lhs_expr)) {
                         const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
                         const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
@@ -876,7 +785,6 @@ pub const LlvmEvaluator = struct {
                         return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
                     }
 
-                    // For integers: abs(diff)
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
                     const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                     const neg_diff = ctx.wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
@@ -884,7 +792,6 @@ pub const LlvmEvaluator = struct {
                     const is_neg = if (is_signed)
                         ctx.wip.icmp(.slt, diff, zero, "") catch return error.CompilationFailed
                     else
-                        // For unsigned, diff is negative if lhs < rhs (would wrap)
                         ctx.wip.icmp(.ult, lhs_val, rhs_val, "") catch return error.CompilationFailed;
                     return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
                 }
@@ -893,17 +800,16 @@ pub const LlvmEvaluator = struct {
             // Handle method calls on values (e.g., (3.5).abs_diff(1.2))
             if (func_expr == .e_dot_access) {
                 const dot = func_expr.e_dot_access;
-                const method_name = ctx.module_env.getIdentText(dot.field_name);
+                const method_ident = dot.field_name;
+                const idents = ctx.module_env.idents;
                 const args = ctx.module_env.store.sliceExpr(call.args);
 
-                if (std.mem.eql(u8, method_name, "abs_diff") and args.len == 1) {
-                    // abs_diff(other) computes |self - other|
+                if (method_ident == idents.abs_diff and args.len == 1) {
                     const lhs_expr = ctx.module_env.store.getExpr(dot.receiver);
                     const rhs_expr = ctx.module_env.store.getExpr(args[0]);
 
-                    // For Dec literals, we can compute at compile time
+                    // For Dec literals, compute at compile time
                     if (ctx.isDecExpr(lhs_expr) and ctx.isDecExpr(rhs_expr)) {
-                        // Get Dec values and compute difference
                         const lhs_dec = ctx.getDecValue(lhs_expr) orelse return error.UnsupportedType;
                         const rhs_dec = ctx.getDecValue(rhs_expr) orelse return error.UnsupportedType;
                         const diff = if (lhs_dec >= rhs_dec) lhs_dec - rhs_dec else rhs_dec - lhs_dec;
@@ -913,13 +819,11 @@ pub const LlvmEvaluator = struct {
                     const lhs_val = try ctx.emitExpr(dot.receiver);
                     const rhs_val = try ctx.emitExpr(args[0]);
 
-                    // Compute a - b
                     const diff = if (ctx.isFloatExpr(lhs_expr))
                         ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
                     else
                         ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
 
-                    // Then take abs of the result
                     if (ctx.isFloatExpr(lhs_expr)) {
                         const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
                         const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
@@ -927,7 +831,6 @@ pub const LlvmEvaluator = struct {
                         return ctx.wip.select(.normal, is_neg, neg_diff, diff, "") catch return error.CompilationFailed;
                     }
 
-                    // For integers: abs(diff)
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, lhs_expr) catch return error.CompilationFailed;
                     const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                     const neg_diff = ctx.wip.bin(.sub, zero, diff, "") catch return error.CompilationFailed;
@@ -1110,12 +1013,11 @@ pub const LlvmEvaluator = struct {
                     const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
                     if (receiver_expr != .e_record) return error.UnsupportedType;
                     const record = receiver_expr.e_record;
-                    const field_name = ctx.module_env.getIdentText(dot.field_name);
+                    const field_ident = dot.field_name;
                     const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
                     for (field_indices) |field_idx| {
                         const field = ctx.module_env.store.getRecordField(field_idx);
-                        const this_field_name = ctx.module_env.getIdentText(field.name);
-                        if (std.mem.eql(u8, this_field_name, field_name)) {
+                        if (field.name == field_ident) {
                             // Found the field - get its string content
                             const field_expr = ctx.module_env.store.getExpr(field.value);
                             break :blk ctx.getStringContent(field_expr) orelse return error.UnsupportedType;
@@ -1282,12 +1184,11 @@ pub const LlvmEvaluator = struct {
 
         /// Emit a record field access (e.g., record.field)
         fn emitDotAccess(ctx: *ExprContext, dot: anytype) ExprError!LlvmBuilder.Value {
-            // Get the field/method name
-            const field_name = ctx.module_env.getIdentText(dot.field_name);
+            const field_ident = dot.field_name;
+            const idents = ctx.module_env.idents;
 
             // Handle instance method calls like (-3.14).abs()
-            if (std.mem.eql(u8, field_name, "abs")) {
-                // abs() takes no extra args - the receiver is the value
+            if (field_ident == idents.abs) {
                 const receiver_val = try ctx.emitExpr(dot.receiver);
                 const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
 
@@ -1298,7 +1199,6 @@ pub const LlvmEvaluator = struct {
                     return ctx.wip.select(.normal, is_neg, neg_val, receiver_val, "") catch return error.CompilationFailed;
                 }
 
-                // For integers
                 const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, receiver_expr) catch return error.CompilationFailed;
                 const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
                 const neg_val = ctx.wip.bin(.sub, zero, receiver_val, "") catch return error.CompilationFailed;
@@ -1306,7 +1206,7 @@ pub const LlvmEvaluator = struct {
                 return ctx.wip.select(.normal, is_neg, neg_val, receiver_val, "") catch return error.CompilationFailed;
             }
 
-            if (std.mem.eql(u8, field_name, "neg")) {
+            if (field_ident == idents.negate) {
                 const receiver_val = try ctx.emitExpr(dot.receiver);
                 const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
 
@@ -1320,7 +1220,7 @@ pub const LlvmEvaluator = struct {
             }
 
             // Handle abs_diff method call: (3.5).abs_diff(1.2)
-            if (std.mem.eql(u8, field_name, "abs_diff")) {
+            if (field_ident == idents.abs_diff) {
                 if (dot.args) |args_span| {
                     const args = ctx.module_env.store.sliceExpr(args_span);
                     if (args.len == 1) {
@@ -1338,13 +1238,11 @@ pub const LlvmEvaluator = struct {
                         const lhs_val = try ctx.emitExpr(dot.receiver);
                         const rhs_val = try ctx.emitExpr(args[0]);
 
-                        // Compute a - b
                         const diff = if (ctx.isFloatExpr(lhs_expr))
                             ctx.wip.bin(.fsub, lhs_val, rhs_val, "") catch return error.CompilationFailed
                         else
                             ctx.wip.bin(.sub, lhs_val, rhs_val, "") catch return error.CompilationFailed;
 
-                        // Then take abs
                         if (ctx.isFloatExpr(lhs_expr)) {
                             const neg_diff = ctx.wip.un(.fneg, diff, "") catch return error.CompilationFailed;
                             const zero = (ctx.builder.floatConst(0.0) catch return error.CompilationFailed).toValue();
@@ -1366,19 +1264,15 @@ pub const LlvmEvaluator = struct {
             }
 
             // Handle type annotations via dot access (e.g., 3.14.F64, 42.I32)
-            if (std.mem.eql(u8, field_name, "F32") or std.mem.eql(u8, field_name, "F64") or std.mem.eql(u8, field_name, "Dec")) {
-                // Float types - emit the receiver and convert if needed
+            if (field_ident == idents.f32 or field_ident == idents.f64 or field_ident == idents.dec) {
                 const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
 
-                // If the receiver is already a float, just return it
                 if (ctx.isFloatExpr(receiver_expr)) {
                     return try ctx.emitExpr(dot.receiver);
                 }
 
-                // If the receiver is a decimal/int, we need to convert
                 if (receiver_expr == .e_dec_small) {
                     const dec = receiver_expr.e_dec_small;
-                    // Convert from decimal representation to float
                     const value: f64 = @as(f64, @floatFromInt(dec.value.numerator)) / std.math.pow(f64, 10.0, @as(f64, @floatFromInt(dec.value.denominator_power_of_ten)));
                     return (ctx.builder.doubleConst(value) catch return error.CompilationFailed).toValue();
                 }
@@ -1386,13 +1280,12 @@ pub const LlvmEvaluator = struct {
                 return try ctx.emitExpr(dot.receiver);
             }
 
-            if (std.mem.eql(u8, field_name, "I8") or std.mem.eql(u8, field_name, "U8") or
-                std.mem.eql(u8, field_name, "I16") or std.mem.eql(u8, field_name, "U16") or
-                std.mem.eql(u8, field_name, "I32") or std.mem.eql(u8, field_name, "U32") or
-                std.mem.eql(u8, field_name, "I64") or std.mem.eql(u8, field_name, "U64") or
-                std.mem.eql(u8, field_name, "I128") or std.mem.eql(u8, field_name, "U128"))
+            if (field_ident == idents.i8 or field_ident == idents.u8 or
+                field_ident == idents.i16 or field_ident == idents.u16 or
+                field_ident == idents.i32 or field_ident == idents.u32 or
+                field_ident == idents.i64 or field_ident == idents.u64 or
+                field_ident == idents.i128 or field_ident == idents.u128)
             {
-                // Integer types - just emit the receiver
                 return try ctx.emitExpr(dot.receiver);
             }
 
@@ -1403,17 +1296,13 @@ pub const LlvmEvaluator = struct {
                 const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
                 for (field_indices) |field_idx| {
                     const field = ctx.module_env.store.getRecordField(field_idx);
-                    const this_field_name = ctx.module_env.getIdentText(field.name);
-                    if (std.mem.eql(u8, this_field_name, field_name)) {
-                        // Found the field - emit its value
+                    if (field.name == field_ident) {
                         return ctx.emitExpr(field.value);
                     }
                 }
-                // Field not found in record - this would be a type error
                 return error.UnsupportedType;
             }
 
-            // Record field access on non-literal requires runtime evaluation
             return error.UnsupportedType;
         }
 
@@ -1434,7 +1323,7 @@ pub const LlvmEvaluator = struct {
             return switch (expr) {
                 .e_dec, .e_dec_small => true,
                 .e_num => |num| num.kind == .dec,
-                .e_typed_frac => |typed_frac| std.mem.eql(u8, ctx.module_env.getIdentText(typed_frac.type_name), "Dec"),
+                .e_typed_frac => |typed_frac| typed_frac.type_name == ctx.module_env.idents.dec,
                 .e_binop => |binop| ctx.isDecExpr(ctx.module_env.store.getExpr(binop.lhs)),
                 .e_unary_minus => |unary| ctx.isDecExpr(ctx.module_env.store.getExpr(unary.expr)),
                 else => false,
@@ -1464,26 +1353,9 @@ pub const LlvmEvaluator = struct {
         }
 
         /// Emit string comparison operation
-        /// For small strings, we can compare the bytes directly
-        fn emitStringComparison(ctx: *ExprContext, binop: CIR.Expr.Binop, lhs_expr: CIR.Expr, rhs_expr: CIR.Expr) ExprError!LlvmBuilder.Value {
-            // Get the string contents at compile time if possible
-            const lhs_content = ctx.getStringContent(lhs_expr) orelse return error.UnsupportedType;
-            const rhs_content = ctx.getStringContent(rhs_expr) orelse return error.UnsupportedType;
-
-            // For compile-time known strings, we can evaluate the comparison directly
-            const result: bool = switch (binop.op) {
-                .eq => std.mem.eql(u8, lhs_content, rhs_content),
-                .ne => !std.mem.eql(u8, lhs_content, rhs_content),
-                .lt => std.mem.order(u8, lhs_content, rhs_content) == .lt,
-                .le => std.mem.order(u8, lhs_content, rhs_content) != .gt,
-                .gt => std.mem.order(u8, lhs_content, rhs_content) == .gt,
-                .ge => std.mem.order(u8, lhs_content, rhs_content) != .lt,
-                else => return error.UnsupportedType, // Other string ops not yet supported
-            };
-
-            // Return a boolean constant (i8 for Bool)
-            const bool_val: i128 = if (result) 1 else 0;
-            return (ctx.builder.intConst(.i8, bool_val) catch return error.CompilationFailed).toValue();
+        /// String comparisons are not supported in the LLVM evaluator - use interpreter instead
+        fn emitStringComparison(_: *ExprContext, _: CIR.Expr.Binop, _: CIR.Expr, _: CIR.Expr) ExprError!LlvmBuilder.Value {
+            return error.UnsupportedType;
         }
 
         /// Get Dec value as scaled i128 from a Dec expression (if compile-time known)
@@ -1496,8 +1368,7 @@ pub const LlvmEvaluator = struct {
                     break :blk @as(i128, dec.value.numerator) * scale_factor;
                 },
                 .e_typed_frac => |typed_frac| blk: {
-                    const type_name = ctx.module_env.getIdentText(typed_frac.type_name);
-                    if (!std.mem.eql(u8, type_name, "Dec")) break :blk null;
+                    if (typed_frac.type_name != ctx.module_env.idents.dec) break :blk null;
                     break :blk typed_frac.value.toI128();
                 },
                 else => null,
@@ -1596,16 +1467,6 @@ pub const LlvmEvaluator = struct {
         return self.generateBitcode(&module_env, final_expr_idx);
     }
 
-    /// Try to resolve what expression a call will return (unused for now)
-    /// Used to detect if a lambda call returns a record
-    fn resolveCallResultExpr(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) ?CIR.Expr {
-        _ = self;
-        _ = module_env;
-        _ = expr;
-        // Disabled - record result detection is complex when records are inside lambda bodies
-        return null;
-    }
-
     /// Get the output layout for JIT execution from a CIR expression index
     /// This captures signedness which LLVM types don't distinguish
     fn getExprOutputLayout(self: *LlvmEvaluator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) layout.Idx {
@@ -1635,27 +1496,29 @@ pub const LlvmEvaluator = struct {
             .e_frac_f64 => .f64,
             .e_dec, .e_dec_small => .dec,
             .e_typed_int => |typed_int| {
-                const type_name = module_env.getIdentText(typed_int.type_name);
-                if (std.mem.eql(u8, type_name, "I8")) return .i8;
-                if (std.mem.eql(u8, type_name, "U8")) return .u8;
-                if (std.mem.eql(u8, type_name, "I16")) return .i16;
-                if (std.mem.eql(u8, type_name, "U16")) return .u16;
-                if (std.mem.eql(u8, type_name, "I32")) return .i32;
-                if (std.mem.eql(u8, type_name, "U32")) return .u32;
-                if (std.mem.eql(u8, type_name, "I64")) return .i64;
-                if (std.mem.eql(u8, type_name, "U64")) return .u64;
-                if (std.mem.eql(u8, type_name, "I128")) return .i128;
-                if (std.mem.eql(u8, type_name, "U128")) return .u128;
-                if (std.mem.eql(u8, type_name, "Dec")) return .dec;
-                if (std.mem.eql(u8, type_name, "F32")) return .f32;
-                if (std.mem.eql(u8, type_name, "F64")) return .f64;
+                const type_ident = typed_int.type_name;
+                const idents = module_env.idents;
+                if (type_ident == idents.i8) return .i8;
+                if (type_ident == idents.u8) return .u8;
+                if (type_ident == idents.i16) return .i16;
+                if (type_ident == idents.u16) return .u16;
+                if (type_ident == idents.i32) return .i32;
+                if (type_ident == idents.u32) return .u32;
+                if (type_ident == idents.i64) return .i64;
+                if (type_ident == idents.u64) return .u64;
+                if (type_ident == idents.i128) return .i128;
+                if (type_ident == idents.u128) return .u128;
+                if (type_ident == idents.dec) return .dec;
+                if (type_ident == idents.f32) return .f32;
+                if (type_ident == idents.f64) return .f64;
                 return .i64;
             },
             .e_typed_frac => |typed_frac| {
-                const type_name = module_env.getIdentText(typed_frac.type_name);
-                if (std.mem.eql(u8, type_name, "Dec")) return .dec;
-                if (std.mem.eql(u8, type_name, "F32")) return .f32;
-                if (std.mem.eql(u8, type_name, "F64")) return .f64;
+                const type_ident = typed_frac.type_name;
+                const idents = module_env.idents;
+                if (type_ident == idents.dec) return .dec;
+                if (type_ident == idents.f32) return .f32;
+                if (type_ident == idents.f64) return .f64;
                 return .f64;
             },
             .e_binop => |binop| switch (binop.op) {
@@ -1685,25 +1548,17 @@ pub const LlvmEvaluator = struct {
             .e_lookup_local => .i64, // Would need type info for proper layout
             .e_str_segment, .e_str => .str,
             .e_call => |call| {
-                // Try to determine output type from the called function
                 const func_expr = module_env.store.getExpr(call.func);
                 if (func_expr == .e_lookup_external) {
                     const lookup = func_expr.e_lookup_external;
-                    const func_name = module_env.getIdentText(lookup.ident_idx);
+                    const func_ident = lookup.ident_idx;
+                    const idents = module_env.idents;
                     // Bool.not returns Bool
-                    if (std.mem.eql(u8, func_name, "not")) {
+                    if (func_ident == idents.not) {
                         return .bool;
                     }
-                    // String predicate functions return Bool
-                    if (std.mem.eql(u8, func_name, "starts_with") or
-                        std.mem.eql(u8, func_name, "ends_with") or
-                        std.mem.eql(u8, func_name, "contains") or
-                        std.mem.eql(u8, func_name, "is_empty"))
-                    {
-                        return .bool;
-                    }
-                    // Num.abs and Num.neg return the same type as their argument
-                    if (std.mem.eql(u8, func_name, "abs") or std.mem.eql(u8, func_name, "neg")) {
+                    // Num.abs and Num.negate return the same type as their argument
+                    if (func_ident == idents.abs or func_ident == idents.negate) {
                         const args = module_env.store.sliceExpr(call.args);
                         if (args.len == 1) {
                             return self.getExprOutputLayout(module_env, args[0]);
@@ -1714,8 +1569,6 @@ pub const LlvmEvaluator = struct {
                 if (func_expr == .e_lambda) {
                     const lambda = func_expr.e_lambda;
                     const body_expr = module_env.store.getExpr(lambda.body);
-                    // If the body is a local lookup (identity lambda), check if it's a parameter
-                    // and return the corresponding argument's layout
                     if (body_expr == .e_lookup_local) {
                         const lookup = body_expr.e_lookup_local;
                         const params = module_env.store.slicePatterns(lambda.args);
@@ -1728,28 +1581,29 @@ pub const LlvmEvaluator = struct {
                     }
                     return self.getExprOutputLayout(module_env, lambda.body);
                 }
-                return .i64; // Default for unknown calls
+                return .i64;
             },
             .e_dot_access => |dot| {
+                const field_ident = dot.field_name;
+                const idents = module_env.idents;
                 // Method calls like (-3.14).abs() return the same type as the receiver
-                const field_name = module_env.getIdentText(dot.field_name);
-                if (std.mem.eql(u8, field_name, "abs") or std.mem.eql(u8, field_name, "neg") or std.mem.eql(u8, field_name, "abs_diff")) {
+                if (field_ident == idents.abs or field_ident == idents.negate or field_ident == idents.abs_diff) {
                     return self.getExprOutputLayout(module_env, dot.receiver);
                 }
-                // Type annotations via dot access like 3.14.F64, 42.I32
-                if (std.mem.eql(u8, field_name, "I8")) return .i8;
-                if (std.mem.eql(u8, field_name, "U8")) return .u8;
-                if (std.mem.eql(u8, field_name, "I16")) return .i16;
-                if (std.mem.eql(u8, field_name, "U16")) return .u16;
-                if (std.mem.eql(u8, field_name, "I32")) return .i32;
-                if (std.mem.eql(u8, field_name, "U32")) return .u32;
-                if (std.mem.eql(u8, field_name, "I64")) return .i64;
-                if (std.mem.eql(u8, field_name, "U64")) return .u64;
-                if (std.mem.eql(u8, field_name, "I128")) return .i128;
-                if (std.mem.eql(u8, field_name, "U128")) return .u128;
-                if (std.mem.eql(u8, field_name, "F32")) return .f32;
-                if (std.mem.eql(u8, field_name, "F64")) return .f64;
-                if (std.mem.eql(u8, field_name, "Dec")) return .dec;
+                // Type annotations via dot access
+                if (field_ident == idents.i8) return .i8;
+                if (field_ident == idents.u8) return .u8;
+                if (field_ident == idents.i16) return .i16;
+                if (field_ident == idents.u16) return .u16;
+                if (field_ident == idents.i32) return .i32;
+                if (field_ident == idents.u32) return .u32;
+                if (field_ident == idents.i64) return .i64;
+                if (field_ident == idents.u64) return .u64;
+                if (field_ident == idents.i128) return .i128;
+                if (field_ident == idents.u128) return .u128;
+                if (field_ident == idents.f32) return .f32;
+                if (field_ident == idents.f64) return .f64;
+                if (field_ident == idents.dec) return .dec;
                 // Try record field access - get layout from the field value
                 const receiver_expr = module_env.store.getExpr(dot.receiver);
                 if (receiver_expr == .e_record) {
@@ -1757,13 +1611,12 @@ pub const LlvmEvaluator = struct {
                     const field_indices = module_env.store.sliceRecordFields(record.fields);
                     for (field_indices) |field_idx| {
                         const field = module_env.store.getRecordField(field_idx);
-                        const this_field_name = module_env.getIdentText(field.name);
-                        if (std.mem.eql(u8, this_field_name, field_name)) {
+                        if (field.name == field_ident) {
                             return self.getExprOutputLayout(module_env, field.value);
                         }
                     }
                 }
-                return .i64; // Default for record field access
+                return .i64;
             },
             .e_nominal_external => |nominal| {
                 // Get layout from the backing expression (e.g., Bool.True -> True tag)
