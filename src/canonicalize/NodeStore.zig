@@ -839,6 +839,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{ .e_return = .{
                 .expr = @enumFromInt(p.expr),
                 .lambda = @enumFromInt(p.lambda),
+                .context = @enumFromInt(p.context),
             } };
         },
         .expr_type_var_dispatch => {
@@ -1952,6 +1953,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_return = .{
                 .expr = @intFromEnum(ret.expr),
                 .lambda = @intFromEnum(ret.lambda),
+                .context = @intFromEnum(ret.context),
             } });
         },
         .e_type_var_dispatch => |tvd| {

@@ -410,6 +410,15 @@ pub const Expr = union(enum) {
         expr: Expr.Idx,
         /// The lambda this return belongs to (for type unification).
         lambda: Expr.Idx,
+        /// Context indicating where this return came from.
+        context: ReturnContext,
+
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` expression
+            return_expr,
+            /// `?` suffix operator (try operator) desugaring
+            try_suffix,
+        };
     },
 
     /// Type variable dispatch expression for calling methods on type variable aliases.

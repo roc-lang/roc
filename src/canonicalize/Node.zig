@@ -673,7 +673,7 @@ pub const Payload = extern union {
     pub const ExprReturn = extern struct {
         expr: u32,
         lambda: u32,
-        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+        context: u32,
     };
 
     /// expr_type_var_dispatch: type variable method dispatch

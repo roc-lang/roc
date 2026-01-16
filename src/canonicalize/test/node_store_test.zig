@@ -421,6 +421,7 @@ test "NodeStore round trip - Expressions" {
         .e_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
             .lambda = rand_idx(CIR.Expr.Idx),
+            .context = .return_expr,
         },
     });
     try expressions.append(gpa, CIR.Expr{

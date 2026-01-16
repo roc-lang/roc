@@ -5724,6 +5724,7 @@ pub fn canonicalizeExpr(
                         try self.env.addExpr(CIR.Expr{ .e_return = .{
                             .expr = err_tag_expr_idx,
                             .lambda = lambda_idx,
+                            .context = .try_suffix,
                         } }, region)
                     else
                         try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
@@ -9742,6 +9743,7 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                         try self.env.addExpr(Expr{ .e_return = .{
                             .expr = inner_expr.idx,
                             .lambda = lambda_idx,
+                            .context = .return_expr,
                         } }, return_region)
                     else
                         try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
