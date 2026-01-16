@@ -6295,31 +6295,34 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
         return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
     }
 
+    // Step 1: Extract the type name from the mapper
+    // The mapper should be a tag expression representing the type name (e.g., Applicative in { x: 10, y: 20 }.Applicative)
+    const mapper_expr = self.parse_ir.store.getExpr(rb.mapper);
+    const type_name: Ident.Idx = switch (mapper_expr) {
+        .tag => |tag| self.parse_ir.tokens.resolveIdentifier(tag.token) orelse {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        },
+        else => {
+            // Non-tag mapper - not supported yet
+            const feature = try self.env.insertString("record builder with non-type mapper");
+            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+                .feature = feature,
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+        },
+    };
+
     // Use scratch_captures to collect free vars from field values
     const captures_top = self.scratch_captures.top();
     defer self.scratch_captures.clearFrom(captures_top);
 
-    // Step 1: Canonicalize the mapper expression (e.g., the tag Foo)
-    const can_mapper = try self.canonicalizeExpr(rb.mapper) orelse {
-        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-            .region = region,
-        } });
-        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-    };
-
-    // Collect free vars from mapper
-    const mapper_free_vars = self.scratch_free_vars.sliceFromSpan(can_mapper.free_vars);
-    for (mapper_free_vars) |fv| {
-        if (!self.scratch_captures.contains(fv)) {
-            try self.scratch_captures.append(fv);
-        }
-    }
-
     // Step 2: Canonicalize field values and collect field names
     // We need to store field names and their canonicalized values
     const field_values_start = self.env.store.scratchExprTop();
-    const free_vars_temp_start = self.scratch_free_vars.top();
-    defer self.scratch_free_vars.clearFrom(free_vars_temp_start);
 
     // Collect field names (as idents) in a local array
     var field_names: [64]Ident.Idx = undefined; // Support up to 64 fields
@@ -6471,8 +6474,8 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
 
     const method_name = try self.env.insertIdent(Ident.for_text(method_name_text));
 
-    // Step 7: Create the dot access: mapper.mapN
-    // Pass the field values and lambda as arguments
+    // Step 7: Create the call: TypeName.mapN(field_values..., lambda)
+    // Build arguments: field values + lambda
     const call_args_start = self.env.store.scratchExprTop();
 
     // Add all field values as arguments first
@@ -6485,25 +6488,115 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
 
     const call_args_span = try self.env.store.exprSpanFrom(call_args_start);
 
-    // Create the dot access + call expression
-    const dot_access_expr = try self.env.addExpr(CIR.Expr{
-        .e_dot_access = .{
-            .receiver = can_mapper.idx,
-            .field_name = method_name,
-            .field_name_region = region,
-            .args = call_args_span,
+    // Step 8: Look up the qualified method name in local scope
+    // This is how TypeName.method lookups work for locally defined types
+    // Build the qualified method name (e.g., "Applicative.map2")
+    const type_name_text = self.env.getIdent(type_name);
+    const qualified_method_name = try self.env.insertQualifiedIdent(type_name_text, method_name_text);
+
+    // Look up the qualified method in local scope
+    switch (self.scopeLookup(.ident, qualified_method_name)) {
+        .found => |found_pattern_idx| {
+            // Mark this pattern as used for unused variable checking
+            try self.used_patterns.put(self.env.gpa, found_pattern_idx, {});
+
+            // Create the function lookup expression
+            const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_local = .{
+                .pattern_idx = found_pattern_idx,
+            } }, region);
+
+            // Create the call expression
+            const call_expr_idx = try self.env.addExpr(CIR.Expr{
+                .e_call = .{
+                    .func = func_expr_idx,
+                    .args = call_args_span,
+                    .called_via = CalledVia.apply,
+                },
+            }, region);
+
+            // Collect all free variables
+            const free_vars_start = self.scratch_free_vars.top();
+            const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+            for (captures_slice) |fv| {
+                try self.scratch_free_vars.append(fv);
+            }
+            // Add the function pattern as a free var
+            try self.scratch_free_vars.append(found_pattern_idx);
+            const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+
+            return CanonicalizedExpr{ .idx = call_expr_idx, .free_vars = free_vars_span };
         },
-    }, region);
+        .not_found => {
+            // Try looking up in module_envs for imported types
+            if (self.module_envs) |envs_map| {
+                if (envs_map.get(type_name)) |auto_imported_type| {
+                    if (auto_imported_type.statement_idx != null) {
+                        // This is an imported type module (like I32, etc.)
+                        // Build the fully qualified method name
+                        const module_env = auto_imported_type.env;
+                        const module_name_text = module_env.module_name;
+                        const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-    // Collect all free variables
-    const free_vars_start = self.scratch_free_vars.top();
-    const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
-    for (captures_slice) |fv| {
-        try self.scratch_free_vars.append(fv);
+                        const qualified_type_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
+                        const full_qualified_method_name = try self.env.insertQualifiedIdent(qualified_type_text, method_name_text);
+                        const qualified_text = self.env.getIdent(full_qualified_method_name);
+
+                        // Look up the qualified method in the module's exposed items
+                        if (module_env.common.findIdent(qualified_text)) |method_ident_idx| {
+                            if (module_env.getExposedNodeIndexById(method_ident_idx)) |method_node_idx| {
+                                // Found the method! Create e_lookup_external + e_call
+                                const func_expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
+                                    .module_idx = auto_import_idx,
+                                    .target_node_idx = method_node_idx,
+                                    .ident_idx = full_qualified_method_name,
+                                    .region = region,
+                                } }, region);
+
+                                // Create the call expression
+                                const call_expr_idx = try self.env.addExpr(CIR.Expr{
+                                    .e_call = .{
+                                        .func = func_expr_idx,
+                                        .args = call_args_span,
+                                        .called_via = CalledVia.apply,
+                                    },
+                                }, region);
+
+                                // Collect all free variables
+                                const free_vars_start = self.scratch_free_vars.top();
+                                const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+                                for (captures_slice) |fv| {
+                                    try self.scratch_free_vars.append(fv);
+                                }
+                                const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+
+                                return CanonicalizedExpr{ .idx = call_expr_idx, .free_vars = free_vars_span };
+                            }
+                        }
+
+                        // Method not found in module - generate error
+                        return CanonicalizedExpr{
+                            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
+                                .parent_name = type_name,
+                                .nested_name = method_name,
+                                .region = region,
+                            } }),
+                            .free_vars = DataSpan.empty(),
+                        };
+                    }
+                }
+            }
+
+            // Method not found - generate error
+            return CanonicalizedExpr{
+                .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
+                    .parent_name = type_name,
+                    .nested_name = method_name,
+                    .region = region,
+                } }),
+                .free_vars = DataSpan.empty(),
+            };
+        },
     }
-    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
-
-    return CanonicalizedExpr{ .idx = dot_access_expr, .free_vars = free_vars_span };
 }
 
 // Canonicalize a tag expr

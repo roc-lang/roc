@@ -11,10 +11,14 @@ type=expr
 }.Foo
 ~~~
 # EXPECTED
-MISSING METHOD - record_builder_suffix.md:1:1:4:6
+DOES NOT EXIST - record_builder_suffix.md:1:1:4:6
 # PROBLEMS
-**MISSING METHOD**
-This **map2** method is being called on a value whose type doesn't have that method:
+**DOES NOT EXIST**
+`Foo.map2` does not exist.
+
+`Foo` is in scope, but it has no associated `map2`.
+
+It's referenced here:
 **record_builder_suffix.md:1:1:4:6:**
 ```roc
 {
@@ -23,9 +27,6 @@ This **map2** method is being called on a value whose type doesn't have that met
 }.Foo
 ```
 
-The value's type, which does not have a method named **map2**, is:
-
-    [Foo, .._others]
 
 # TOKENS
 ~~~zig
@@ -53,24 +54,7 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-dot-access (field "map2")
-	(receiver
-		(e-tag (name "Foo")))
-	(args
-		(e-num (value "5"))
-		(e-num (value "0"))
-		(e-lambda
-			(args
-				(p-assign (ident "x"))
-				(p-assign (ident "y")))
-			(e-record
-				(fields
-					(field (name "x")
-						(e-lookup-local
-							(p-assign (ident "x"))))
-					(field (name "y")
-						(e-lookup-local
-							(p-assign (ident "y")))))))))
+(e-runtime-error (tag "nested_value_not_found"))
 ~~~
 # TYPES
 ~~~clojure
