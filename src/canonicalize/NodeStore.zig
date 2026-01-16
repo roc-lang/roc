@@ -281,7 +281,7 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         .statement_break => return CIR.Statement{ .s_break = .{} },
         .statement_return => return CIR.Statement{ .s_return = .{
             .expr = @enumFromInt(node.data_1),
-            .lambda = if (node.data_2 == 0) null else @as(?CIR.Expr.Idx, @enumFromInt(node.data_2 - 1)),
+            .lambda = @enumFromInt(node.data_2),
         } },
         .statement_import => {
             const extra_start = node.data_2;
@@ -588,18 +588,10 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             };
         },
         .expr_lambda => {
-            // Retrieve lambda data from extra_data
-            const extra_start = node.data_1;
-            const extra_data = store.extra_data.items.items[extra_start..];
-
-            const args_start = extra_data[0];
-            const args_len = extra_data[1];
-            const body_idx = extra_data[2];
-
             return CIR.Expr{
                 .e_lambda = .{
-                    .args = .{ .span = .{ .start = args_start, .len = args_len } },
-                    .body = @enumFromInt(body_idx),
+                    .args = .{ .span = .{ .start = node.data_1, .len = node.data_2 } },
+                    .body = @enumFromInt(node.data_3),
                 },
             };
         },
@@ -714,6 +706,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
         .expr_return => {
             return CIR.Expr{ .e_return = .{
                 .expr = @enumFromInt(node.data_1),
+                .lambda = @enumFromInt(node.data_2),
             } };
         },
         .expr_type_var_dispatch => {
@@ -934,6 +927,17 @@ pub fn replaceExprWithTag(
         .data_2 = @intCast(extra_data_start),
         .data_3 = @intCast(arg_indices.len),
     });
+}
+
+/// Updates the body of an e_lambda expression.
+/// Used when the lambda was created with a placeholder body and needs to be updated
+/// after the actual body is canonicalized.
+pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: CIR.Expr.Idx) void {
+    const node_idx: Node.Idx = @enumFromInt(@intFromEnum(lambda_idx));
+    var node = store.nodes.get(node_idx);
+    std.debug.assert(node.tag == .expr_lambda);
+    node.data_3 = @intFromEnum(body_idx);
+    store.nodes.set(node_idx, node);
 }
 
 /// Get the more-specific expr index. Used to make error messages nicer.
@@ -1538,8 +1542,7 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_return => |s| {
             node.tag = .statement_return;
             node.data_1 = @intFromEnum(s.expr);
-            // Store lambda as data_2, using 0 for null and idx+1 for valid indices
-            node.data_2 = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0;
+            node.data_2 = @intFromEnum(s.lambda);
         },
         .s_import => |s| {
             node.tag = .statement_import;
@@ -1822,6 +1825,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         .e_return => |ret| {
             node.tag = .expr_return;
             node.data_1 = @intFromEnum(ret.expr);
+            node.data_2 = @intFromEnum(ret.lambda);
         },
         .e_type_var_dispatch => |tvd| {
             node.tag = .expr_type_var_dispatch;
@@ -1956,18 +1960,9 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         },
         .e_lambda => |e| {
             node.tag = .expr_lambda;
-
-            // Store lambda data in extra_data
-            const extra_data_start = store.extra_data.len();
-
-            // Store args span start
-            _ = try store.extra_data.append(store.gpa, e.args.span.start);
-            // Store args span length
-            _ = try store.extra_data.append(store.gpa, e.args.span.len);
-            // Store body index
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(e.body));
-
-            node.data_1 = @intCast(extra_data_start);
+            node.data_1 = e.args.span.start;
+            node.data_2 = e.args.span.len;
+            node.data_3 = @intFromEnum(e.body);
         },
         .e_binop => |e| {
             node.tag = .expr_bin_op;
@@ -3353,6 +3348,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.tag = .diag_break_outside_loop;
             region = r.region;
         },
+        .return_outside_fn => |r| {
+            node.tag = .diag_return_outside_fn;
+            region = r.region;
+            node.data_1 = @intFromEnum(r.context);
+        },
         .mutually_recursive_type_aliases => |r| {
             node.tag = .diag_mutually_recursive_type_aliases;
             region = r.region;
@@ -3704,6 +3704,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
             .region = store.getRegionAt(node_idx),
+        } },
+        .diag_return_outside_fn => return CIR.Diagnostic{ .return_outside_fn = .{
+            .region = store.getRegionAt(node_idx),
+            .context = @enumFromInt(node.data_1),
         } },
         .diag_mutually_recursive_type_aliases => {
             const extra_data = store.extra_data.items.items[node.data_3..];

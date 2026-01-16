@@ -2035,6 +2035,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .return_outside_fn => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.context) {
+                .try_suffix => r: {
+                    var r = Report.init(allocator, "TRY OPERATOR OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("?", .inline_code);
+                    try r.document.addReflowingText(" operator can only be used inside function bodies because it can cause an early return.");
+                    break :r r;
+                },
+                .return_statement, .return_expr => r: {
+                    var r = Report.init(allocator, "RETURN OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("return", .inline_code);
+                    try r.document.addReflowingText(" keyword can only be used inside function bodies.");
+                    break :r r;
+                },
+            };
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
         .mutually_recursive_type_aliases => |data| blk: {
             const type_name = self.getIdent(data.name);
             const other_type_name = self.getIdent(data.other_name);

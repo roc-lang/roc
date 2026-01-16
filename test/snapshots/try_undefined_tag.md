@@ -10,6 +10,16 @@ A?
 # EXPECTED
 EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
 # PROBLEMS
+**TRY OPERATOR OUTSIDE FUNCTION**
+The `?` operator can only be used inside function bodies because it can cause an early return.
+
+**try_undefined_tag.md:1:1:1:3:**
+```roc
+A?
+```
+^^
+
+
 **EXPECTED TRY TYPE**
 The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
 but I found:
@@ -21,7 +31,7 @@ A?
 
 This expression has type:
 
-_[A, Ok(_a), Err(_b), .._others]_
+_[A, Ok(Error), Err(_a), .._others]_
 
 Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
 
@@ -58,13 +68,9 @@ NO CHANGE
 					(pattern (degenerate false)
 						(p-applied-tag)))
 				(value
-					(e-return
-						(e-tag (name "Err")
-							(args
-								(e-lookup-local
-									(p-assign (ident "#err")))))))))))
+					(e-runtime-error (tag "return_outside_fn")))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_a"))
+(expr (type "Error"))
 ~~~

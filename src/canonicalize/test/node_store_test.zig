@@ -420,6 +420,7 @@ test "NodeStore round trip - Expressions" {
     try expressions.append(gpa, CIR.Expr{
         .e_return = .{
             .expr = rand_idx(CIR.Expr.Idx),
+            .lambda = rand_idx(CIR.Expr.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -891,6 +892,13 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .break_outside_loop = .{
             .region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .return_outside_fn = .{
+            .region = rand_region(),
+            .context = .return_statement,
         },
     });
 

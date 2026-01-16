@@ -2387,7 +2387,7 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_return => |ret| {
             const new_expr = try self.transformExpr(ret.expr);
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda },
             }, base.Region.zero());
         },
         .e_match => |match| {
