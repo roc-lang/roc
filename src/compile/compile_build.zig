@@ -710,6 +710,7 @@ pub const BuildEnv = struct {
                 app_root_env,
                 app_root_env,
                 &checker.snapshots,
+                &checker.problems,
                 app_root_module.path,
                 &.{},
                 &checker.import_mapping,

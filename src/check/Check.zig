@@ -35,7 +35,6 @@ const Instantiator = types_mod.instantiate.Instantiator;
 const Generalizer = types_mod.generalize.Generalizer;
 const VarPool = types_mod.generalize.VarPool;
 const SnapshotStore = snapshot_mod.Store;
-const ExtraStringIdx = snapshot_mod.ExtraStringIdx;
 const ProblemStore = @import("problem.zig").Store;
 
 /// Deferred numeric literal for compile-time validation
@@ -89,6 +88,8 @@ env_pool: EnvPool,
 generalizer: Generalizer,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
+/// A map from one var to another. Used in instantiation and var copying
+var_set: std.AutoHashMap(Var, void),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// scratch vars used to build up intermediate lists, used for various things
@@ -99,6 +100,8 @@ scratch_tags: base.Scratch(types_mod.Tag),
 scratch_record_fields: base.Scratch(types_mod.RecordField),
 /// scratch static dispatch constraints used to build up intermediate lists, used for various things
 scratch_static_dispatch_constraints: base.Scratch(ScratchStaticDispatchConstraint),
+/// scratch deferred static dispatch constraints
+scratch_deferred_static_dispatch_constraints: base.Scratch(DeferredConstraintCheck),
 /// Stack of type variables currently being constraint-checked, used to detect recursive constraints
 /// When a var appears in this stack while we're checking its constraints, we've detected recursion
 constraint_check_stack: std.ArrayList(Var),
@@ -196,11 +199,13 @@ pub fn init(
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
         .scratch_tags = try base.Scratch(types_mod.Tag).init(gpa),
         .scratch_record_fields = try base.Scratch(types_mod.RecordField).init(gpa),
         .scratch_static_dispatch_constraints = try base.Scratch(ScratchStaticDispatchConstraint).init(gpa),
+        .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
         .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
@@ -233,11 +238,13 @@ pub fn deinit(self: *Self) void {
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit();
     self.scratch_tags.deinit();
     self.scratch_record_fields.deinit();
     self.scratch_static_dispatch_constraints.deinit();
+    self.scratch_deferred_static_dispatch_constraints.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
     self.constraint_origins.deinit();
@@ -1215,6 +1222,11 @@ pub fn checkPlatformRequirements(
 ) std.mem.Allocator.Error!void {
     const trace = tracy.trace(@src());
     defer trace.end();
+
+    // Ensure the type store is filled to match the number of regions.
+    // This is necessary because checkPlatformRequirements may be called with a
+    // fresh Check instance that hasn't had checkFile() called on it.
+    try ensureTypeStoreIsFilled(self);
 
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
@@ -3360,8 +3372,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized), so the code below will
-                        // unify directly with it, which is the correct behavior.
+                        // top_level rank (not generalized).
+                        //
+                        // If the def has a type annotation, we need to instantiate it
+                        // to avoid polluting the pattern variable's rank. Without this,
+                        // unifying directly would pull the annotation's rigid vars down
+                        // to the pattern's rank, preventing proper generalization.
+                        // This fixes GitHub issue #8994.
+                        const def = self.cir.store.getDef(processing_def.def_idx);
+                        if (def.annotation) |annotation_idx| {
+                            const anno_var = ModuleEnv.varFrom(annotation_idx);
+                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
+                            _ = try self.unify(expr_var, instantiated, env);
+                            return does_fx;
+                        }
+                        // Otherwise, fall through to unify directly with pat_var
                     },
                     .processed => {},
                 }
@@ -4079,11 +4104,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         // For example, if the annotation is `I64 -> Str` and the expression has
         // an error in the return type (making it `I64 -> Error`), the pattern
         // should still get `I64 -> Str` from the annotation.
-        //
-        // TODO: Move this allocation to root and reuse across runs
-        var visited = std.AutoHashMap(Var, void).init(self.gpa);
-        defer visited.deinit();
-        if (self.varContainsError(expr_var, &visited)) {
+        self.var_set.clearRetainingCapacity();
+        if (self.varContainsError(expr_var, &self.var_set)) {
             // If there was an annotation AND the expr contains errors, then unify the
             // raw expr var against the annotation
             _ = try self.unify(expr_var_raw, anno_vars.anno_var_backup, env);
@@ -4752,20 +4774,24 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         if (!result.is_exhaustive) {
             const condition_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, cond_var);
 
-            // Format missing patterns and store in snapshot store for lifecycle management
-            // NOTE: We use self.gpa here (not self.cir.gpa) because snapshots.deinit() uses self.gpa
-            // to free the extra strings. Using different allocators would cause invalid free.
-            var missing_indices: std.ArrayList(ExtraStringIdx) = .empty;
+            // Format missing patterns and store in problems store for lifecycle management
+            // Track the start position for the missing patterns range
+            const missing_patterns_start = self.problems.missing_patterns_backing.items.len;
+
             for (result.missing_patterns) |pattern| {
-                const formatted = try exhaustive.formatPattern(self.gpa, &self.cir.common.idents, &self.cir.common.strings, pattern);
-                const idx = try self.snapshots.storeExtraString(formatted);
-                try missing_indices.append(self.gpa, idx);
+                const idx = try exhaustive.formatPattern(&self.problems.extra_strings_backing, &self.cir.common.idents, &self.cir.common.strings, pattern);
+                try self.problems.missing_patterns_backing.append(idx);
             }
+
+            const missing_patterns_range = problem.MissingPatternsRange{
+                .start = missing_patterns_start,
+                .count = self.problems.missing_patterns_backing.items.len - missing_patterns_start,
+            };
 
             _ = try self.problems.appendProblem(self.gpa, .{ .non_exhaustive_match = .{
                 .match_expr = expr_idx,
                 .condition_snapshot = condition_snapshot,
-                .missing_patterns = try missing_indices.toOwnedSlice(self.gpa),
+                .missing_patterns = missing_patterns_range,
             } });
         }
 
@@ -5360,8 +5386,10 @@ fn checkNominalTypeUsage(
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
 fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    var next_deferred = try DeferredConstraintCheck.SafeList.initCapacity(self.gpa, 8);
-    defer next_deferred.deinit(self.gpa);
+    // During this pass, we want to hold onto any flex vars we encounter and
+    // check them again later, when maybe they've been resolved
+    const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
+    defer self.scratch_deferred_static_dispatch_constraints.clearFrom(scratch_deferred_top);
 
     var deferred_constraint_index: usize = 0;
     while (deferred_constraint_index < env.deferred_static_dispatch_constraints.items.items.len) : (deferred_constraint_index += 1) {
@@ -5651,7 +5679,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         );
                     }
                 } else {
-                    // Other methods are not supported on anonymous types
+                    // Structural types (other than is_eq) cannot have methods called on them.
+                    // The user must explicitly wrap the value in a nominal type.
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -5663,7 +5692,7 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
         } else if (dispatcher_content == .flex) {
             // If the thing we're dispatching is a flex, then hold onto the
             // constraint so we can try again later.
-            _ = try next_deferred.append(self.gpa, deferred_constraint);
+            _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
             // This handles function types, which do not support any methods
@@ -5699,7 +5728,12 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
 
     // Now that we've processed all constraints, reset the array
     env.deferred_static_dispatch_constraints.items.clearRetainingCapacity();
-    try env.deferred_static_dispatch_constraints.items.appendSlice(self.gpa, next_deferred.items.items);
+
+    // Copy any flex constraints to try again later
+    try env.deferred_static_dispatch_constraints.items.appendSlice(
+        self.gpa,
+        self.scratch_deferred_static_dispatch_constraints.sliceFromStart(scratch_deferred_top),
+    );
 }
 
 /// Check if a structural type supports is_eq.
@@ -6011,50 +6045,51 @@ pub fn createImportMapping(
                     // Skip invalid statement indices (index 0 is typically invalid/sentinel)
                     if (@intFromEnum(stmt_idx) != 0) {
                         const stmt = builtin_env.store.getStatement(stmt_idx);
-                        switch (stmt) {
-                            .s_nominal_decl => |decl| {
-                                const header = builtin_env.store.getTypeHeader(decl.header);
-                                const qualified_name = builtin_env.getIdentText(header.name);
-                                const relative_name = builtin_env.getIdentText(header.relative_name);
+                        const header_idx = switch (stmt) {
+                            .s_nominal_decl => |decl| decl.header,
+                            .s_alias_decl => |alias| alias.header,
+                            else => null,
+                        };
+                        if (header_idx) |hdr_idx| {
+                            const header = builtin_env.store.getTypeHeader(hdr_idx);
+                            const qualified_name = builtin_env.getIdentText(header.name);
+                            const relative_name = builtin_env.getIdentText(header.relative_name);
 
-                                // Extract display name (last component after dots)
-                                const display_name = blk: {
-                                    var last_dot: usize = 0;
-                                    for (qualified_name, 0..) |c, i| {
-                                        if (c == '.') last_dot = i + 1;
-                                    }
-                                    break :blk qualified_name[last_dot..];
-                                };
+                            // Extract display name (last component after dots)
+                            const display_name = blk: {
+                                var last_dot: usize = 0;
+                                for (qualified_name, 0..) |c, i| {
+                                    if (c == '.') last_dot = i + 1;
+                                }
+                                break :blk qualified_name[last_dot..];
+                            };
 
-                                const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                                const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
-                                const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                            const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                            const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                            const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                                // Add mapping for qualified_name -> display_name
-                                if (mapping.get(qualified_ident)) |existing_ident| {
-                                    const existing_name = idents.getText(existing_ident);
-                                    if (displayNameIsBetter(display_name, existing_name)) {
-                                        try mapping.put(qualified_ident, display_ident);
-                                    }
-                                } else {
+                            // Add mapping for qualified_name -> display_name
+                            if (mapping.get(qualified_ident)) |existing_ident| {
+                                const existing_name = idents.getText(existing_ident);
+                                if (displayNameIsBetter(display_name, existing_name)) {
                                     try mapping.put(qualified_ident, display_ident);
                                 }
+                            } else {
+                                try mapping.put(qualified_ident, display_ident);
+                            }
 
-                                // Also add mapping for relative_name -> display_name
-                                // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
-                                if (mapping.get(relative_ident)) |existing_ident| {
-                                    const existing_name = idents.getText(existing_ident);
-                                    if (displayNameIsBetter(display_name, existing_name)) {
-                                        try mapping.put(relative_ident, display_ident);
-                                    }
-                                } else {
+                            // Also add mapping for relative_name -> display_name
+                            // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                            if (mapping.get(relative_ident)) |existing_ident| {
+                                const existing_name = idents.getText(existing_ident);
+                                if (displayNameIsBetter(display_name, existing_name)) {
                                     try mapping.put(relative_ident, display_ident);
                                 }
-                            },
-                            else => {
-                                // Skip non-nominal statements (e.g., nested types that aren't directly importable)
-                            },
+                            } else {
+                                try mapping.put(relative_ident, display_ident);
+                            }
                         }
+                        // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                     }
                 }
             }

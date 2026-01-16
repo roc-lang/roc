@@ -56,6 +56,25 @@ fn isNativeishOrMusl(target: ResolvedTarget) bool {
         (target.query.isNativeAbi() or target.result.abi.isMusl());
 }
 
+/// Returns the optimal target query for release builds on the current host.
+/// - Linux: Uses musl for fully static binaries
+/// - x86_64: Uses x86_64_v3 for modern CPU features (AVX2, BMI2, etc.)
+fn getReleaseTargetQuery() std.Target.Query {
+    var query: std.Target.Query = .{};
+
+    // Use musl on Linux for static linking
+    if (builtin.target.os.tag == .linux) {
+        query.abi = .musl;
+    }
+
+    // Use x86_64_v3 CPU model for x86_64 (enables AVX2, BMI2, etc.)
+    if (builtin.target.cpu.arch == .x86_64) {
+        query.cpu_model = .{ .explicit = &std.Target.x86.cpu.x86_64_v3 };
+    }
+
+    return query;
+}
+
 const TestsSummaryStep = struct {
     step: Step,
     has_filters: bool,
@@ -2029,6 +2048,7 @@ pub fn build(b: *std.Build) void {
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
     const test_platforms_step = b.step("test-platforms", "Build test platform host libraries");
     const coverage_step = b.step("coverage", "Run parser tests with kcov code coverage");
+    const release_step = b.step("release", "Build optimized release binary for distribution");
 
     // general configuration
     const target = blk: {
@@ -2222,6 +2242,38 @@ pub fn build(b: *std.Build) void {
     const clear_cache_step = createClearCacheStep(b);
     roc_step.dependOn(clear_cache_step);
     b.getInstallStep().dependOn(clear_cache_step);
+
+    // Release build with platform-optimal settings
+    {
+        const release_target = b.resolveTargetQuery(getReleaseTargetQuery());
+        // Create a release-specific zstd dependency with release settings
+        const release_zstd = b.dependency("zstd", .{
+            .target = release_target,
+            .optimize = .ReleaseFast,
+        });
+        const release_exe = addMainExe(
+            b,
+            roc_modules,
+            release_target,
+            .ReleaseFast, // Always ReleaseFast for release
+            true, // Always strip for release
+            null, // Default frame pointer handling
+            use_system_llvm,
+            user_llvm_path,
+            null, // No tracy for release
+            release_zstd,
+            compiled_builtins_module,
+            write_compiled_builtins,
+            null, // No tracy
+        );
+        if (release_exe) |exe| {
+            roc_modules.addAll(exe);
+            exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+            exe.step.dependOn(&write_compiled_builtins.step);
+            const install = b.addInstallArtifact(exe, .{});
+            release_step.dependOn(&install.step);
+        }
+    }
 
     // Unified test platform runner (replaces fx_cross_runner and int_cross_runner)
     const test_runner_exe = b.addExecutable(.{

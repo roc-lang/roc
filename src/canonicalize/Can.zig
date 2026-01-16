@@ -4327,8 +4327,12 @@ pub fn canonicalizeExpr(
                                     if (self.module_envs.?.get(module_alias)) |auto_imported_type_env| {
                                         const module_env = auto_imported_type_env.env;
 
-                                        // Get the qualified name of the method (e.g., "Str.is_empty")
-                                        const qualified_text = self.env.getIdent(type_qualified_idx);
+                                        // Build the FULLY qualified method name using qualified_type_ident
+                                        // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
+                                        // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                        const qualified_type_text = self.env.getIdent(auto_imported_type_env.qualified_type_ident);
+                                        const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_type_text, field_text);
+                                        const qualified_text = self.env.getIdent(fully_qualified_idx);
 
                                         // Try to find the method in the Builtin module's exposed items
                                         if (module_env.common.findIdent(qualified_text)) |qname_ident| {
@@ -11705,9 +11709,22 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
     const left_ident = left_expr.ident;
     const module_alias = self.parse_ir.tokens.resolveIdentifier(left_ident.token) orelse return null;
 
-    // Check if this is a module alias
-    const module_info = self.scopeLookupModule(module_alias) orelse return null;
-    const module_name = module_info.module_name;
+    // Check if this is a module alias OR an auto-imported type
+    // Auto-imported types (like I32, Bool, Str) can have static methods called on them
+    const module_info = self.scopeLookupModule(module_alias);
+    const module_name = if (module_info) |info|
+        info.module_name
+    else blk: {
+        // Not a module alias - check if it's an auto-imported type in module_envs
+        if (self.module_envs) |envs_map| {
+            if (envs_map.contains(module_alias)) {
+                // This IS an auto-imported type - use the alias as the module_name
+                break :blk module_alias;
+            }
+        }
+        // Not a module alias and not an auto-imported type
+        return null;
+    };
     const module_text = self.env.getIdent(module_name);
 
     // Check if this module is imported in the current scope
@@ -11761,16 +11778,18 @@ fn tryModuleQualifiedLookup(self: *Self, field_access: AST.BinOp) std.mem.Alloca
         if (self.module_envs) |envs_map| {
             if (envs_map.get(module_name)) |auto_imported_type| {
                 if (auto_imported_type.statement_idx != null) {
-                    // This is an imported type module (like Stdout)
-                    // Look up the qualified method name (e.g., "Stdout.line!") in the module's exposed items
+                    // This is an imported type module (like Stdout, I32, etc.)
+                    // Look up the qualified method name (e.g., "Builtin.Num.I32.decode") in the module's exposed items
                     const module_env = auto_imported_type.env;
                     const module_name_text = module_env.module_name;
                     const auto_import_idx = try self.getOrCreateAutoImport(module_name_text);
 
-                    // Build the qualified method name: "TypeName.method_name"
-                    const type_name_text = self.env.getIdent(module_name);
+                    // Build the FULLY qualified method name using qualified_type_ident
+                    // e.g., for I32.decode: "Builtin.Num.I32" + "decode" -> "Builtin.Num.I32.decode"
+                    // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                    const qualified_type_text = self.env.getIdent(auto_imported_type.qualified_type_ident);
                     const method_name_text = self.env.getIdent(method_name);
-                    const qualified_method_name = try self.env.insertQualifiedIdent(type_name_text, method_name_text);
+                    const qualified_method_name = try self.env.insertQualifiedIdent(qualified_type_text, method_name_text);
                     const qualified_text = self.env.getIdent(qualified_method_name);
 
                     // Look up the qualified method in the module's exposed items

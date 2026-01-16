@@ -308,6 +308,7 @@ fn renderTypeProblems(
         module_env,
         module_env,
         &checker.snapshots,
+        &checker.problems,
         filename,
         &.{},
         &checker.import_mapping,
@@ -984,10 +985,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
     const app_dir = std.fs.path.dirname(args.path) orelse ".";
     const platform_paths = try resolvePlatformSpecToPaths(ctx, platform_spec, app_dir);
 
-    // Use native detection for shim generation to match embedded shim library
-    const shim_target = builder.RocTarget.detectNative();
-
-    // Validate platform header and get link spec for native target
+    // Validate platform header and get link spec
     var link_spec: ?roc_target.TargetLinkSpec = null;
     var targets_config: ?roc_target.TargetsConfig = null;
     if (platform_paths.platform_source_path) |platform_source| {
@@ -1003,26 +1001,46 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
                 return error.UnsupportedTarget;
             }
 
-            // Validate that the native target is supported
-            platform_validation.validateTargetSupported(validation.config, shim_target, .exe) catch |err| {
-                switch (err) {
-                    error.UnsupportedTarget => {
-                        // Create a nice formatted error report
-                        const result = platform_validation.createUnsupportedTargetResult(
-                            platform_source,
-                            shim_target,
-                            .exe,
-                            validation.config,
-                        );
-                        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-                        return error.UnsupportedTarget;
-                    },
-                    else => {},
-                }
-            };
+            // Select target: if --target is provided, use that; otherwise try native then fallback
+            if (args.target) |target_str| {
+                // User explicitly specified a target
+                const parsed_target = roc_target.RocTarget.fromString(target_str) orelse {
+                    const result = platform_validation.targets_validator.ValidationResult{
+                        .invalid_target = .{ .target_str = target_str },
+                    };
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.InvalidTarget;
+                };
 
-            // Get the link spec for native target
-            link_spec = validation.config.getLinkSpec(shim_target, .exe);
+                if (validation.config.getLinkSpec(parsed_target, .exe)) |spec| {
+                    link_spec = spec;
+                } else {
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        parsed_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            } else {
+                // No --target provided: use the first compatible exe target from the platform
+                if (validation.config.getDefaultTarget(.exe)) |compatible_target| {
+                    link_spec = validation.config.getLinkSpec(compatible_target, .exe);
+                } else {
+                    // No compatible exe target found
+                    const native_target = builder.RocTarget.detectNative();
+                    const result = platform_validation.createUnsupportedTargetResult(
+                        platform_source,
+                        native_target,
+                        .exe,
+                        validation.config,
+                    );
+                    _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
+                    return error.UnsupportedTarget;
+                }
+            }
         } else |err| {
             switch (err) {
                 error.MissingTargetsSection => {
@@ -1038,9 +1056,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
     }
 
-    // All platforms must have a targets section with a link spec for the native target
+    // All platforms must have a targets section with a link spec for a compatible target
     const validated_link_spec = link_spec orelse {
-        ctx.io.stderr().print("Error: Platform does not support the native target.\n\n", .{}) catch {};
+        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n\n", .{}) catch {};
         ctx.io.stderr().print("The platform's targets section must specify files to link for\n", .{}) catch {};
         ctx.io.stderr().print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
         return error.PlatformNotSupported;
@@ -1095,8 +1113,9 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
 
         // Always extract to temp dir (unique per process, no race condition)
-        // For roc run, we always use the native shim (null target)
-        extractReadRocFilePathShimLibrary(ctx, shim_path, null) catch |err| {
+        // Use the selected target's shim (which may differ from native if falling back to a compatible target)
+        const selected_target = validated_link_spec.target;
+        extractReadRocFilePathShimLibrary(ctx, shim_path, selected_target) catch |err| {
             return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
         };
 
@@ -1104,7 +1123,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         // Use temp dir to avoid race conditions when multiple processes run in parallel
         // Pass null for serialized_module since roc run uses IPC mode
         // Auto-enable debug when roc is built in debug mode (no explicit --debug flag for roc run)
-        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, shim_target, null, builtin.mode == .Debug);
+        const platform_shim_path = try generatePlatformHostShim(ctx, temp_dir_path, entrypoints.items, selected_target, null, builtin.mode == .Debug);
 
         // Link the host.a with our shim to create the interpreter executable using our linker
         // Try LLD first, fallback to clang if LLVM is not available
@@ -1173,11 +1192,16 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         }
 
         // Determine ABI from target (for musl detection)
-        const target_abi: ?linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else null;
+        const target_abi: linker.TargetAbi = if (validated_link_spec.target.isStatic()) .musl else .gnu;
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
         const empty_files: []const []const u8 = &.{};
+
+        // Build full path to platform files directory for sysroot lookup
+        const platform_files_dir = std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir }) catch {
+            return error.OutOfMemory;
+        };
 
         const link_config = linker.LinkConfig{
             .target_abi = target_abi,
@@ -1188,6 +1212,7 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
             .extra_args = extra_args.items,
             .can_exit_early = false,
             .disable_output = false,
+            .platform_files_dir = platform_files_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -1722,12 +1747,13 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Module count = 1 (app) + number of platform modules + number of sibling modules
-    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling
+    // Module count = 1 (app) + number of platform modules + number of sibling modules + package modules
+    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling/package
     // imports AFTER parsing the app (to avoid parsing twice). The actual count is set later.
     const platform_module_count: u32 = @intCast(exposed_modules.items.len);
     const max_sibling_modules: u32 = 64; // Reasonable max for sibling modules
-    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules;
+    const max_package_modules: u32 = 64; // Reasonable max for package modules
+    const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules + max_package_modules;
 
     // Allocate array for module env offsets (over-allocated, actual count set later)
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
@@ -1982,9 +2008,68 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
     }
 
+    // Extract platform qualifier from app header (e.g., "rr" from { rr: platform "..." })
+    // This is needed to register modules with the correct qualified name for import validation
+    const parsed_file = app_parse_ast.store.getFile();
+    const app_header = app_parse_ast.store.getHeader(parsed_file.header);
+    const platform_qualifier: []const u8 = blk: {
+        if (app_header == .app) {
+            const platform_field = app_parse_ast.store.getRecordField(app_header.app.platform_idx);
+            const key_region = app_parse_ast.tokens.resolve(platform_field.name);
+            break :blk app_source[key_region.start.offset..key_region.end.offset];
+        }
+        // Not an app header - report error
+        return ctx.fail(.{ .invalid_app_header = .{ .app_path = roc_file_path } });
+    };
+
+    // Extract non-platform package shorthands from app header (e.g., { fx: platform "...", hlp: "./helper_pkg/main.roc" })
+    // These are packages that can be imported via qualified imports like "import hlp.Helper"
+    var package_shorthands = std.StringHashMap([]const u8).init(ctx.gpa);
+    defer {
+        var iter = package_shorthands.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
+        }
+        package_shorthands.deinit();
+    }
+
+    if (app_header == .app) {
+        const packages_coll = app_parse_ast.store.getCollection(app_header.app.packages);
+        const packages_fields = app_parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
+        for (packages_fields) |field_idx| {
+            const field = app_parse_ast.store.getRecordField(field_idx);
+            const key_region = app_parse_ast.tokens.resolve(field.name);
+            const shorthand = app_source[key_region.start.offset..key_region.end.offset];
+
+            // Skip if this is the platform field
+            if (std.mem.eql(u8, shorthand, platform_qualifier)) continue;
+
+            // Get the package path from the field value
+            if (field.value) |value_idx| {
+                const value_node = app_parse_ast.store.getExpr(value_idx);
+                switch (value_node) {
+                    .string => |str| {
+                        // Use the region to get the full string (token points only to opening quote)
+                        const str_region = app_parse_ast.tokenizedRegionToRegion(str.region);
+                        // Remove quotes from the string
+                        const raw_path = app_source[str_region.start.offset..str_region.end.offset];
+                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
+                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
+                            // Make absolute path relative to app directory
+                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            try package_shorthands.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
+                        }
+                    },
+                    else => {},
+                }
+            }
+        }
+    }
+
     // Add platform modules to the module envs map for canonicalization
     // Two keys are needed for each platform module:
-    // 1. "pf.Stdout" - used during import validation (import pf.Stdout)
+    // 1. "{qualifier}.Stdout" - used during import validation (import rr.Stdout)
     // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
     // Also set statement_idx to the actual type node index, which is needed for
     // creating e_nominal_external and e_lookup_external expressions.
@@ -2017,8 +2102,8 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             .qualified_type_ident = type_qualified_ident,
         };
 
-        // Add with qualified name key (for import validation: "pf.Stdout")
-        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "pf.{s}", .{module_name});
+        // Add with qualified name key (for import validation: e.g., "rr.Stdout")
+        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ platform_qualifier, module_name });
         defer ctx.gpa.free(qualified_name);
         const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
         try app_module_envs_map.put(qualified_ident, auto_type);
@@ -2028,12 +2113,133 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         try app_module_envs_map.put(module_ident, auto_type);
 
         // Add with resolved module name key (for after alias resolution: "Stdout.roc")
-        // The import system resolves "pf.Stdout" to "Stdout.roc", so scopeLookupModule
+        // The import system resolves "{qualifier}.Stdout" to "Stdout.roc", so scopeLookupModule
         // returns "Stdout.roc" which is then used to look up in module_envs
         const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
         defer ctx.gpa.free(module_name_with_roc);
         const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
         try app_module_envs_map.put(resolved_ident, auto_type);
+    }
+
+    // Load package modules from non-platform packages declared in app header
+    // For each qualified import like "import hlp.Helper", we need to:
+    // 1. Check if the qualifier matches a package shorthand
+    // 2. Find the module file within that package
+    // 3. Compile it and register in app_module_envs_map
+    var package_env_ptrs = std.ArrayList(*ModuleEnv).empty;
+    defer package_env_ptrs.deinit(ctx.gpa);
+
+    if (package_shorthands.count() > 0) {
+        // Extract qualified imports from app AST (imports with qualifier_tok set)
+        const file_stmts = app_parse_ast.store.statementSlice(parsed_file.statements);
+        for (file_stmts) |stmt_idx| {
+            const stmt = app_parse_ast.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .import => |import_stmt| {
+                    // Only process qualified imports (e.g., "import hlp.Helper")
+                    if (import_stmt.qualifier_tok) |qual_tok| {
+                        const qualifier = app_parse_ast.resolve(qual_tok);
+                        const module_name_raw = app_parse_ast.resolve(import_stmt.module_name_tok);
+
+                        // Strip leading dot if present
+                        const module_name = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
+                            module_name_raw[1..]
+                        else
+                            module_name_raw;
+
+                        // Skip platform imports
+                        if (std.mem.eql(u8, qualifier, platform_qualifier)) continue;
+
+                        // Check if qualifier matches a package shorthand
+                        if (package_shorthands.get(qualifier)) |pkg_path| {
+                            // Determine the package directory (dirname of main.roc)
+                            const pkg_dir = std.fs.path.dirname(pkg_path) orelse ".";
+
+                            // Find the module file within the package
+                            const module_file_path = try moduleNameToFilePath(module_name, pkg_dir, ctx.gpa) orelse {
+                                // Module file not found in package
+                                std.log.warn("Package module not found: {s}.{s}", .{ qualifier, module_name });
+                                continue;
+                            };
+                            defer ctx.gpa.free(module_file_path);
+
+                            // Compile the package module
+                            const pkg_module_env = try compileModuleToSharedMemory(
+                                ctx,
+                                module_file_path,
+                                module_name,
+                                shm_allocator,
+                                &builtin_modules,
+                                package_env_ptrs.items,
+                            );
+                            try package_env_ptrs.append(ctx.gpa, pkg_module_env);
+
+                            // Register with qualified name (e.g., "hlp.Helper")
+                            const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ qualifier, module_name });
+                            defer ctx.gpa.free(qualified_name);
+                            const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
+
+                            // Check if this module exposes a type with the same name
+                            const type_ident_in_module = pkg_module_env.common.findIdent(module_name);
+                            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
+                                pkg_module_env.getExposedNodeIndexById(ident)
+                            else
+                                null;
+
+                            const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(qualified_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with resolved name (e.g., "Helper" without qualifier)
+                            // This is needed for expression canonicalization after import resolution
+                            const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(module_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+
+                            // Also register with ".roc" suffix (e.g., "Helper.roc")
+                            // The import system resolves to this format after alias resolution
+                            const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
+                            defer ctx.gpa.free(module_name_with_roc);
+                            const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
+                            if (type_node_idx) |node_idx| {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .statement_idx = @enumFromInt(node_idx),
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            } else {
+                                try app_module_envs_map.put(resolved_ident, .{
+                                    .env = pkg_module_env,
+                                    .qualified_type_ident = type_qualified_ident,
+                                });
+                            }
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
     }
 
     // Compile sibling .roc files BEFORE app canonicalization.
@@ -2132,8 +2338,15 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
         actual_sibling_count = @intCast(sorted_siblings.len);
     }
 
-    // Set the actual module count now that we know how many siblings were compiled
-    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count;
+    // Store package module offsets (after sibling modules)
+    const package_count: u32 = @intCast(package_env_ptrs.items.len);
+    for (package_env_ptrs.items, 0..) |pkg_env, i| {
+        const pkg_offset_idx = platform_module_count + actual_sibling_count + @as(u32, @intCast(i));
+        module_env_offsets_ptr[pkg_offset_idx] = @intFromPtr(pkg_env) - @intFromPtr(shm.base_ptr);
+    }
+
+    // Set the actual module count now that we know how many siblings and packages were compiled
+    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count + package_count;
     header_ptr.module_count = total_module_count;
 
     var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
@@ -2199,6 +2412,10 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Add sibling modules for type checking
     for (sibling_env_ptrs.items) |senv| {
         try app_imported_envs.append(ctx.gpa, senv);
+    }
+    // Add package modules for type checking
+    for (package_env_ptrs.items) |penv| {
+        try app_imported_envs.append(ctx.gpa, penv);
     }
 
     // Resolve imports - map each import to its index in app_imported_envs
@@ -3032,6 +3249,7 @@ fn compileModuleForSerialization(
         &env,
         &env,
         &checker.snapshots,
+        &checker.problems,
         file_path,
         &.{},
         &checker.import_mapping,
@@ -4589,6 +4807,10 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     const linker_mod = @import("linker.zig");
     const target_abi = if (target.isStatic()) linker_mod.TargetAbi.musl else linker_mod.TargetAbi.gnu;
+
+    // Build full path to platform files directory for sysroot lookup
+    const platform_files_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir });
+
     const link_config = linker_mod.LinkConfig{
         .target_format = linker_mod.TargetFormat.detectFromOs(target.toOsTag()),
         .object_files = object_files.items,
@@ -4601,6 +4823,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
         .target_arch = target.toCpuArch(),
         .wasm_initial_memory = args.wasm_memory orelse linker_mod.DEFAULT_WASM_INITIAL_MEMORY,
         .wasm_stack_size = args.wasm_stack_size orelse linker_mod.DEFAULT_WASM_STACK_SIZE,
+        .platform_files_dir = platform_files_dir,
     };
 
     // Dump linker inputs to temp directory if requested
@@ -4917,6 +5140,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
             &env,
             &env,
             &checker.snapshots,
+            &checker.problems,
             args.path,
             &.{},
             &checker.import_mapping,
