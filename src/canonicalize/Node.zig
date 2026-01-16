@@ -419,7 +419,7 @@ pub const Payload = extern union {
     /// statement_import: module_name_tok + extra_data_idx
     pub const StatementImport = extern struct {
         module_name_tok: u32,
-        extra_data_idx: u32,
+        import_data_idx: u32, // Index into import_data list
         _unused: u32,
     };
 
@@ -434,14 +434,14 @@ pub const Payload = extern union {
     pub const StatementNominalDecl = extern struct {
         header: u32,
         anno: u32,
-        extra_data_idx: u32,
+        is_opaque: u32, // 0 or 1
     };
 
     /// statement_type_anno: extra_data_idx contains all fields
     pub const StatementTypeAnno = extern struct {
-        extra_data_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
+        anno: u32,
+        name: u32,
+        where_span2_idx_plus_one: u32, // 0 means no where clause, else index+1 into span2_data
     };
 
     /// statement_type_var_alias: alias_name + type_var_name + type_var_anno

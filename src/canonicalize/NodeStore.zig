@@ -39,6 +39,7 @@ match_branch_data: collections.SafeList(MatchBranchData), // Typed storage for m
 closure_data: collections.SafeList(ClosureData), // Typed storage for closure expressions
 zero_arg_tag_data: collections.SafeList(ZeroArgTagData), // Typed storage for zero-argument tags
 def_data: collections.SafeList(DefData), // Typed storage for definitions
+import_data: collections.SafeList(ImportData), // Typed storage for import statements
 scratch: ?*Scratch, // Nullable because when we deserialize a NodeStore, we don't bother to reinitialize scratch.
 
 /// A pair of u32 values representing a span (start index and length).
@@ -102,6 +103,16 @@ pub const DefData = extern struct {
     kind_0: u32,
     kind_1: u32,
     anno_idx: u32, // 0 if no annotation
+};
+
+/// Import statement data.
+/// Stores alias_tok, qualifier_tok, flags, and exposes span.
+pub const ImportData = extern struct {
+    alias_tok: u32, // @bitCast(Ident.Idx) or 0
+    qualifier_tok: u32, // @bitCast(Ident.Idx) or 0
+    flags: u32, // bit 0 = has_alias, bit 1 = has_qualifier
+    exposes_start: u32,
+    exposes_len: u32,
 };
 
 const Scratch = struct {
@@ -187,6 +198,7 @@ pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
         .closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16),
         .zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16),
         .def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8),
+        .import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16),
         .scratch = try Scratch.init(gpa),
     };
 }
@@ -204,6 +216,7 @@ pub fn deinit(store: *NodeStore) void {
     store.closure_data.deinit(store.gpa);
     store.zero_arg_tag_data.deinit(store.gpa);
     store.def_data.deinit(store.gpa);
+    store.import_data.deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
@@ -223,6 +236,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
     store.closure_data.relocate(offset);
     store.zero_arg_tag_data.relocate(offset);
     store.def_data.relocate(offset);
+    store.import_data.relocate(offset);
     // scratch is null for deserialized NodeStores, no need to relocate
 }
 
@@ -419,23 +433,17 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         },
         .statement_import => {
             const p = payload.statement_import;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
+            const import = store.import_data.items.items[p.import_data_idx];
 
-            const alias_data = extra_data[0];
-            const qualifier_data = extra_data[1];
-            const flags = extra_data[2];
-            const exposes_start = extra_data[3];
-            const exposes_len = extra_data[4];
-
-            const alias_tok = if (flags & 1 != 0) @as(?Ident.Idx, @bitCast(alias_data)) else null;
-            const qualifier_tok = if (flags & 2 != 0) @as(?Ident.Idx, @bitCast(qualifier_data)) else null;
+            const alias_tok = if (import.flags & 1 != 0) @as(?Ident.Idx, @bitCast(import.alias_tok)) else null;
+            const qualifier_tok = if (import.flags & 2 != 0) @as(?Ident.Idx, @bitCast(import.qualifier_tok)) else null;
 
             return CIR.Statement{
                 .s_import = .{
                     .module_name_tok = @bitCast(p.module_name_tok),
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
-                    .exposes = DataSpan.init(exposes_start, exposes_len).as(CIR.ExposedItem.Span),
+                    .exposes = DataSpan.init(import.exposes_start, import.exposes_len).as(CIR.ExposedItem.Span),
                 },
             };
         },
@@ -450,34 +458,26 @@ pub fn getStatement(store: *const NodeStore, statement: CIR.Statement.Idx) CIR.S
         },
         .statement_nominal_decl => {
             const p = payload.statement_nominal_decl;
-            // Get is_opaque from extra_data
-            const is_opaque = store.extra_data.items.items[p.extra_data_idx] != 0;
             return CIR.Statement{
                 .s_nominal_decl = .{
                     .header = @enumFromInt(p.header),
                     .anno = @enumFromInt(p.anno),
-                    .is_opaque = is_opaque,
+                    .is_opaque = p.is_opaque != 0,
                 },
             };
         },
         .statement_type_anno => {
             const p = payload.statement_type_anno;
-            const extra_data = store.extra_data.items.items[p.extra_data_idx..];
 
-            const anno: CIR.TypeAnno.Idx = @enumFromInt(extra_data[0]);
-            const name: Ident.Idx = @bitCast(extra_data[1]);
-            const where_flag = extra_data[2];
-
-            const where_clause = if (where_flag == 1) blk: {
-                const where_start = extra_data[3];
-                const where_len = extra_data[4];
-                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_start, where_len) };
+            const where_clause = if (p.where_span2_idx_plus_one != 0) blk: {
+                const where_data = store.span2_data.items.items[p.where_span2_idx_plus_one - 1];
+                break :blk CIR.WhereClause.Span{ .span = DataSpan.init(where_data.start, where_data.len) };
             } else null;
 
             return CIR.Statement{
                 .s_type_anno = .{
-                    .name = name,
-                    .anno = anno,
+                    .name = @bitCast(p.name),
+                    .anno = @enumFromInt(p.anno),
                     .where = where_clause,
                 },
             };
@@ -1701,32 +1701,24 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         .s_import => |s| {
             node.tag = .statement_import;
 
-            // Store optional fields in extra_data
-            const extra_start: u32 = @intCast(store.extra_data.len());
-
-            // Store alias_tok (nullable)
-            const alias_data = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0;
-            _ = try store.extra_data.append(store.gpa, alias_data);
-
-            // Store qualifier_tok (nullable)
-            const qualifier_data = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0;
-            _ = try store.extra_data.append(store.gpa, qualifier_data);
-
-            // Store flags indicating which fields are present
+            // Build flags indicating which optional fields are present
             var flags: u32 = 0;
             if (s.alias_tok != null) flags |= 1;
             if (s.qualifier_tok != null) flags |= 2;
-            _ = try store.extra_data.append(store.gpa, flags);
 
-            // Store extra_start in one of the remaining data fields
-            // We need to reorganize data storage since all 3 data fields are used
-            // Let's put extra_start where exposes span is, and move span to extra_data
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.start);
-            _ = try store.extra_data.append(store.gpa, s.exposes.span.len);
+            // Store import data in typed list
+            const import_data_idx: u32 = @intCast(store.import_data.len());
+            _ = try store.import_data.append(store.gpa, .{
+                .alias_tok = if (s.alias_tok) |alias| @as(u32, @bitCast(alias)) else 0,
+                .qualifier_tok = if (s.qualifier_tok) |qualifier| @as(u32, @bitCast(qualifier)) else 0,
+                .flags = flags,
+                .exposes_start = s.exposes.span.start,
+                .exposes_len = s.exposes.span.len,
+            });
 
             node.setPayload(.{ .statement_import = .{
                 .module_name_tok = @bitCast(s.module_name_tok),
-                .extra_data_idx = extra_start,
+                .import_data_idx = import_data_idx,
                 ._unused = 0,
             } });
         },
@@ -1740,42 +1732,28 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
         },
         .s_nominal_decl => |s| {
             node.tag = .statement_nominal_decl;
-            // Store is_opaque in extra_data
-            const extra_idx: u32 = @intCast(store.extra_data.len());
-            _ = try store.extra_data.append(store.gpa, if (s.is_opaque) 1 else 0);
             node.setPayload(.{ .statement_nominal_decl = .{
                 .header = @intFromEnum(s.header),
                 .anno = @intFromEnum(s.anno),
-                .extra_data_idx = extra_idx,
+                .is_opaque = if (s.is_opaque) 1 else 0,
             } });
         },
         .s_type_anno => |s| {
             node.tag = .statement_type_anno;
 
-            // Store type_anno data in extra_data
-            const extra_start = store.extra_data.len();
+            const where_span2_idx_plus_one: u32 = if (s.where) |where_clause| blk: {
+                const idx: u32 = @intCast(store.span2_data.len());
+                _ = try store.span2_data.append(store.gpa, .{
+                    .start = where_clause.span.start,
+                    .len = where_clause.span.len,
+                });
+                break :blk idx + 1;
+            } else 0;
 
-            // Store anno idx
-            _ = try store.extra_data.append(store.gpa, @intFromEnum(s.anno));
-            // Store name
-            _ = try store.extra_data.append(store.gpa, @bitCast(s.name));
-            // Store where clause information
-            if (s.where) |where_clause| {
-                // Store flag indicating where clause is present
-                _ = try store.extra_data.append(store.gpa, 1);
-                // Store where clause span start and len
-                _ = try store.extra_data.append(store.gpa, where_clause.span.start);
-                _ = try store.extra_data.append(store.gpa, where_clause.span.len);
-            } else {
-                // Store flag indicating where clause is not present
-                _ = try store.extra_data.append(store.gpa, 0);
-            }
-
-            // Store the extra data start position in the node
             node.setPayload(.{ .statement_type_anno = .{
-                .extra_data_idx = @intCast(extra_start),
-                ._unused1 = 0,
-                ._unused2 = 0,
+                .anno = @intFromEnum(s.anno),
+                .name = @bitCast(s.name),
+                .where_span2_idx_plus_one = where_span2_idx_plus_one,
             } });
         },
         .s_type_var_alias => |s| {
@@ -4085,6 +4063,7 @@ pub const Serialized = extern struct {
     closure_data: collections.SafeList(ClosureData).Serialized,
     zero_arg_tag_data: collections.SafeList(ZeroArgTagData).Serialized,
     def_data: collections.SafeList(DefData).Serialized,
+    import_data: collections.SafeList(ImportData).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
@@ -4116,6 +4095,8 @@ pub const Serialized = extern struct {
         try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
         // Serialize def_data
         try self.def_data.serialize(&store.def_data, allocator, writer);
+        // Serialize import_data
+        try self.import_data.serialize(&store.import_data, allocator, writer);
     }
 
     /// Deserialize this Serialized struct into a NodeStore
@@ -4127,6 +4108,7 @@ pub const Serialized = extern struct {
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
         // Deserialize in reverse order (last to first)
+        const deserialized_import_data = self.import_data.deserialize(base_addr).*;
         const deserialized_def_data = self.def_data.deserialize(base_addr).*;
         const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
         const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
@@ -4155,6 +4137,7 @@ pub const Serialized = extern struct {
             .closure_data = deserialized_closure_data,
             .zero_arg_tag_data = deserialized_zero_arg_tag_data,
             .def_data = deserialized_def_data,
+            .import_data = deserialized_import_data,
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
 
