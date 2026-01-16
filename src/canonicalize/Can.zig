@@ -6148,13 +6148,7 @@ pub fn canonicalizeExpr(
             return CanonicalizedExpr{ .idx = dbg_expr, .free_vars = can_inner.free_vars };
         },
         .record_builder => |rb| {
-            const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
-            const feature = try self.env.insertString("canonicalize record_builder expression");
-            const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                .feature = feature,
-                .region = region,
-            } });
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            return try self.canonicalizeRecordBuilder(rb);
         },
         .ellipsis => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -6280,6 +6274,236 @@ fn canonicalizeForLoop(
         .body = body.idx,
         .free_vars = free_vars,
     };
+}
+
+/// Canonicalize a record builder expression: `{ a: fa, b: fb }.T`
+/// Desugars to: `T.mapN(fa, fb, |a, b| { a, b })`
+fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).record_builder)) std.mem.Allocator.Error!CanonicalizedExpr {
+    const region = self.parse_ir.tokenizedRegionToRegion(rb.region);
+
+    // Get the fields from the record builder
+    const fields_slice = self.parse_ir.store.recordFieldSlice(rb.fields);
+    const field_count = fields_slice.len;
+
+    if (field_count == 0) {
+        // Empty record builder: { }.T - this is likely an error, but for now return empty record
+        const feature = try self.env.insertString("empty record builder expression");
+        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    }
+
+    // Use scratch_captures to collect free vars from field values
+    const captures_top = self.scratch_captures.top();
+    defer self.scratch_captures.clearFrom(captures_top);
+
+    // Step 1: Canonicalize the mapper expression (e.g., the tag Foo)
+    const can_mapper = try self.canonicalizeExpr(rb.mapper) orelse {
+        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+    };
+
+    // Collect free vars from mapper
+    const mapper_free_vars = self.scratch_free_vars.sliceFromSpan(can_mapper.free_vars);
+    for (mapper_free_vars) |fv| {
+        if (!self.scratch_captures.contains(fv)) {
+            try self.scratch_captures.append(fv);
+        }
+    }
+
+    // Step 2: Canonicalize field values and collect field names
+    // We need to store field names and their canonicalized values
+    const field_values_start = self.env.store.scratchExprTop();
+    const free_vars_temp_start = self.scratch_free_vars.top();
+    defer self.scratch_free_vars.clearFrom(free_vars_temp_start);
+
+    // Collect field names (as idents) in a local array
+    var field_names: [64]Ident.Idx = undefined; // Support up to 64 fields
+    if (field_count > 64) {
+        const feature = try self.env.insertString("record builder with more than 64 fields");
+        const expr_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
+            .feature = feature,
+            .region = region,
+        } });
+        return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    }
+
+    for (fields_slice, 0..) |field_idx, i| {
+        const field = self.parse_ir.store.getRecordField(field_idx);
+
+        // Get field name
+        const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
+            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                .region = region,
+            } });
+            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+        };
+        field_names[i] = field_name;
+
+        // Canonicalize field value
+        if (field.value) |value_idx| {
+            if (try self.canonicalizeExpr(value_idx)) |can_value| {
+                try self.env.store.addScratchExpr(can_value.idx);
+
+                // Collect free vars from field value
+                const value_free_vars = self.scratch_free_vars.sliceFromSpan(can_value.free_vars);
+                for (value_free_vars) |fv| {
+                    if (!self.scratch_captures.contains(fv)) {
+                        try self.scratch_captures.append(fv);
+                    }
+                }
+            } else {
+                // Failed to canonicalize value - add malformed
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
+                    .region = region,
+                } });
+                try self.env.store.addScratchExpr(malformed_idx);
+            }
+        } else {
+            // Shorthand: { foo } means { foo: foo }
+            // Create a lookup for the field name
+            if (self.scopeContains(.ident, field_name)) |pattern_idx| {
+                const lookup_idx = try self.env.addExpr(CIR.Expr{
+                    .e_lookup_local = .{ .pattern_idx = pattern_idx },
+                }, region);
+                try self.env.store.addScratchExpr(lookup_idx);
+
+                // Add the pattern as a free var
+                if (!self.scratch_captures.contains(pattern_idx)) {
+                    try self.scratch_captures.append(pattern_idx);
+                }
+            } else {
+                // Identifier not found
+                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .ident_not_in_scope = .{
+                    .ident = field_name,
+                    .region = region,
+                } });
+                try self.env.store.addScratchExpr(malformed_idx);
+            }
+        }
+    }
+
+    const field_values_span = try self.env.store.exprSpanFrom(field_values_start);
+
+    // Step 3: Create the synthetic lambda |a, b, ...| { a, b, ... }
+    // Enter a new function scope for the lambda
+    try self.enterFunction(region);
+    defer self.exitFunction();
+    try self.scopeEnter(self.env.gpa, true); // true = is_function_boundary
+    defer self.scopeExit(self.env.gpa) catch {};
+
+    // Create patterns for lambda parameters and introduce them into scope
+    const patterns_start = self.env.store.scratch.?.patterns.top();
+
+    for (0..field_count) |i| {
+        const param_name = field_names[i];
+
+        // Create an assign pattern for this parameter
+        const param_pattern_idx = try self.env.addPattern(Pattern{
+            .assign = .{ .ident = param_name },
+        }, region);
+
+        // Introduce it into scope
+        _ = try self.scopeIntroduceInternal(self.env.gpa, .ident, param_name, param_pattern_idx, false, true);
+
+        try self.env.store.scratch.?.patterns.append(param_pattern_idx);
+    }
+
+    const lambda_args_span = try self.env.store.patternSpanFrom(patterns_start);
+
+    // Step 4: Create the lambda body: { a: a, b: b, ... }
+    // This is a record with each field being a lookup of the parameter
+    const record_fields_start = self.env.store.scratch.?.record_fields.top();
+
+    for (0..field_count) |i| {
+        const param_name = field_names[i];
+
+        // Look up the parameter we just introduced
+        if (self.scopeContains(.ident, param_name)) |param_pattern_idx| {
+            // Mark this pattern as used for unused variable checking
+            try self.used_patterns.put(self.env.gpa, param_pattern_idx, {});
+
+            // Create a lookup expression for this parameter
+            const lookup_idx = try self.env.addExpr(CIR.Expr{
+                .e_lookup_local = .{ .pattern_idx = param_pattern_idx },
+            }, region);
+
+            // Create a record field: name: lookup
+            const record_field_idx = try self.env.addRecordField(CIR.RecordField{
+                .name = param_name,
+                .value = lookup_idx,
+            }, region);
+
+            try self.env.store.scratch.?.record_fields.append(record_field_idx);
+        }
+    }
+
+    const record_fields_span = try self.env.store.recordFieldSpanFrom(record_fields_start);
+
+    // Create the record expression for the lambda body
+    const lambda_body_idx = try self.env.addExpr(CIR.Expr{
+        .e_record = .{
+            .fields = record_fields_span,
+            .ext = null,
+        },
+    }, region);
+
+    // Step 5: Create the lambda expression
+    // The lambda has no captures from external scope because all its variables
+    // are bound by its parameters
+    const lambda_idx = try self.env.addExpr(CIR.Expr{
+        .e_lambda = .{
+            .args = lambda_args_span,
+            .body = lambda_body_idx,
+        },
+    }, region);
+
+    // Step 6: Generate the method name (map, map2, map3, ...)
+    var method_name_buf: [16]u8 = undefined;
+    const method_name_text = if (field_count == 1)
+        "map"
+    else
+        std.fmt.bufPrint(&method_name_buf, "map{d}", .{field_count}) catch "map";
+
+    const method_name = try self.env.insertIdent(Ident.for_text(method_name_text));
+
+    // Step 7: Create the dot access: mapper.mapN
+    // Pass the field values and lambda as arguments
+    const call_args_start = self.env.store.scratchExprTop();
+
+    // Add all field values as arguments first
+    for (self.env.store.exprSlice(field_values_span)) |field_value_idx| {
+        try self.env.store.addScratchExpr(field_value_idx);
+    }
+
+    // Add the lambda as the last argument
+    try self.env.store.addScratchExpr(lambda_idx);
+
+    const call_args_span = try self.env.store.exprSpanFrom(call_args_start);
+
+    // Create the dot access + call expression
+    const dot_access_expr = try self.env.addExpr(CIR.Expr{
+        .e_dot_access = .{
+            .receiver = can_mapper.idx,
+            .field_name = method_name,
+            .field_name_region = region,
+            .args = call_args_span,
+        },
+    }, region);
+
+    // Collect all free variables
+    const free_vars_start = self.scratch_free_vars.top();
+    const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
+    for (captures_slice) |fv| {
+        try self.scratch_free_vars.append(fv);
+    }
+    const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
+
+    return CanonicalizedExpr{ .idx = dot_access_expr, .free_vars = free_vars_span };
 }
 
 // Canonicalize a tag expr

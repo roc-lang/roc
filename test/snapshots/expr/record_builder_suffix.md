@@ -11,11 +11,10 @@ type=expr
 }.Foo
 ~~~
 # EXPECTED
-NOT IMPLEMENTED - record_builder_suffix.md:1:1:4:6
+MISSING METHOD - record_builder_suffix.md:1:1:4:6
 # PROBLEMS
-**NOT IMPLEMENTED**
-This feature is not yet implemented: canonicalize record_builder expression
-
+**MISSING METHOD**
+This **map2** method is being called on a value whose type doesn't have that method:
 **record_builder_suffix.md:1:1:4:6:**
 ```roc
 {
@@ -24,8 +23,9 @@ This feature is not yet implemented: canonicalize record_builder expression
 }.Foo
 ```
 
-This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!
+The value's type, which does not have a method named **map2**, is:
 
+    [Foo, .._others]
 
 # TOKENS
 ~~~zig
@@ -53,7 +53,24 @@ EndOfFile,
 ~~~
 # CANONICALIZE
 ~~~clojure
-(e-runtime-error (tag "not_implemented"))
+(e-dot-access (field "map2")
+	(receiver
+		(e-tag (name "Foo")))
+	(args
+		(e-num (value "5"))
+		(e-num (value "0"))
+		(e-lambda
+			(args
+				(p-assign (ident "x"))
+				(p-assign (ident "y")))
+			(e-record
+				(fields
+					(field (name "x")
+						(e-lookup-local
+							(p-assign (ident "x"))))
+					(field (name "y")
+						(e-lookup-local
+							(p-assign (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure
