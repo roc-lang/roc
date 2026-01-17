@@ -984,35 +984,49 @@ pub const PackageEnv = struct {
         // Add additional known modules (e.g., from platform exposes for URL platforms)
         // Use the resolver to get the ACTUAL module env if available
         for (additional_known_modules) |km| {
-            const module_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
-            // Extract base module name for qualified_type_ident (e.g., "Stdout" from "pf.Stdout")
-            // This is used for looking up methods in the module's exposed_items
+            // Extract base module name (e.g., "Stdout" from "pf.Stdout")
             const base_module_name = if (std.mem.lastIndexOfScalar(u8, km.qualified_name, '.')) |dot_idx|
                 km.qualified_name[dot_idx + 1 ..]
             else
                 km.qualified_name;
-            const qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
-            if (!module_envs_map.contains(module_ident)) {
-                // Try to get the actual module env using the resolver
-                const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
-                    if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
-                        break :blk mod_env;
-                    }
-                    break :blk builtin_module_env;
-                } else builtin_module_env;
-                // For platform type modules, set statement_idx so method lookups work correctly
-                const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
-                    // Look up the type in the module's exposed_items to get the actual node index
-                    const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
-                    const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
-                    break :stmt_blk @enumFromInt(type_node_idx);
-                } else null;
-                try module_envs_map.put(module_ident, .{
-                    .env = actual_env,
-                    .statement_idx = statement_idx,
-                    .qualified_type_ident = qualified_ident,
-                    .is_package_qualified = true,
-                });
+
+            // Create identifiers for both the unqualified name and the qualified name
+            const base_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
+
+            // Try to get the actual module env using the resolver
+            const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
+                if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
+                    break :blk mod_env;
+                }
+                break :blk builtin_module_env;
+            } else builtin_module_env;
+
+            // For platform type modules, set statement_idx so method lookups work correctly
+            const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
+                // Look up the type in the module's exposed_items to get the actual node index
+                const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
+                const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
+                break :stmt_blk @enumFromInt(type_node_idx);
+            } else null;
+
+            const entry = Can.AutoImportedType{
+                .env = actual_env,
+                .statement_idx = statement_idx,
+                .qualified_type_ident = base_ident,
+                .is_package_qualified = true,
+            };
+
+            // Add entry for the UNQUALIFIED name (e.g., "Stdout", "Builder")
+            // This is used for type annotations like `my_var : Builder`
+            if (!module_envs_map.contains(base_ident)) {
+                try module_envs_map.put(base_ident, entry);
+            }
+
+            // Also add entry for the QUALIFIED name (e.g., "pf.Stdout", "pf.Builder")
+            // This is used when scopeLookupModule returns the qualified module name
+            if (!module_envs_map.contains(qualified_ident)) {
+                try module_envs_map.put(qualified_ident, entry);
             }
         }
 
