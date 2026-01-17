@@ -67,6 +67,11 @@ fn workerThread(comptime T: type, ctx: WorkerContext(T)) void {
     }
 }
 
+/// Get a millisecond timestamp for debug logging
+fn getTimestampMs() i64 {
+    return std.time.milliTimestamp();
+}
+
 /// Process work items in parallel across multiple threads
 ///
 /// Generic function that:
@@ -123,6 +128,9 @@ pub fn process(
             work_item_count,
         );
 
+        const start_ts = getTimestampMs();
+        std.debug.print("[DEBUG parallel.zig] [{d}ms] Starting parallel processing: {d} work items, {d} threads\n", .{ start_ts, work_item_count, thread_count });
+
         var index = AtomicUsize.init(0);
         const fixed_stack_thread_count: usize = 16;
         var threads: [fixed_stack_thread_count]Thread = undefined;
@@ -142,23 +150,31 @@ pub fn process(
                 .base_allocator = allocator,
                 .options = options,
             };
+            std.debug.print("[DEBUG parallel.zig] [{d}ms] Spawning thread {d}/{d}\n", .{ getTimestampMs(), i + 1, thread_count });
             if (i < threads.len) {
                 threads[i] = try Thread.spawn(.{}, workerThread, .{ T, ctx });
             } else {
                 try extra_threads.append(try Thread.spawn(.{}, workerThread, .{ T, ctx }));
             }
         }
+        std.debug.print("[DEBUG parallel.zig] [{d}ms] All {d} threads spawned, waiting for completion\n", .{ getTimestampMs(), thread_count });
 
         // Wait for all threads to complete
-        for (threads[0..@min(thread_count, fixed_stack_thread_count)]) |thread| {
+        for (threads[0..@min(thread_count, fixed_stack_thread_count)], 0..) |thread, i| {
+            std.debug.print("[DEBUG parallel.zig] [{d}ms] Joining thread {d}/{d}...\n", .{ getTimestampMs(), i + 1, thread_count });
             thread.join();
+            std.debug.print("[DEBUG parallel.zig] [{d}ms] Thread {d}/{d} joined\n", .{ getTimestampMs(), i + 1, thread_count });
         }
         if (thread_count > fixed_stack_thread_count) {
-            for (extra_threads.items) |thread| {
+            for (extra_threads.items, 0..) |thread, i| {
+                const extra_idx = fixed_stack_thread_count + i;
+                std.debug.print("[DEBUG parallel.zig] [{d}ms] Joining extra thread {d}/{d}...\n", .{ getTimestampMs(), extra_idx + 1, thread_count });
                 thread.join();
+                std.debug.print("[DEBUG parallel.zig] [{d}ms] Extra thread {d}/{d} joined\n", .{ getTimestampMs(), extra_idx + 1, thread_count });
             }
             extra_threads.deinit();
         }
+        std.debug.print("[DEBUG parallel.zig] [{d}ms] All threads completed (elapsed: {d}ms)\n", .{ getTimestampMs(), getTimestampMs() - start_ts });
     }
 }
 
