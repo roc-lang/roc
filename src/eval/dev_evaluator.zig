@@ -983,6 +983,62 @@ pub const DevEvaluator = struct {
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
                 return self.tryEvalConstantI64WithEnvMap(module_env, backing_expr, env);
             },
+            .e_dot_access => |dot| {
+                // Method calls not supported
+                if (dot.args != null) return null;
+                // Resolve the dot access chain to get the target expression
+                const target_expr = self.resolveDotAccess(module_env, dot) orelse return null;
+                return self.tryEvalConstantI64WithEnvMap(module_env, target_expr, env);
+            },
+            else => null,
+        };
+    }
+
+    /// Resolve a chain of dot accesses to the final field expression.
+    /// For example, `{outer: {inner: 42}}.outer.inner` resolves to `e_num(42)`.
+    fn resolveDotAccess(self: *DevEvaluator, module_env: *ModuleEnv, dot: anytype) ?CIR.Expr {
+        // Method calls not supported
+        if (dot.args != null) return null;
+
+        // First resolve the receiver to a record expression
+        const receiver_expr = module_env.store.getExpr(dot.receiver);
+        const record_expr = self.resolveToRecord(module_env, receiver_expr) orelse return null;
+
+        // Now find the field in the record
+        switch (record_expr) {
+            .e_record => |rec| {
+                if (rec.ext != null) return null; // Record extensions not supported
+                const fields = module_env.store.sliceRecordFields(rec.fields);
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (field.name == dot.field_name) {
+                        return module_env.store.getExpr(field.value);
+                    }
+                }
+                return null; // Field not found
+            },
+            else => return null,
+        }
+    }
+
+    /// Resolve an expression to a record expression, following dot access chains.
+    fn resolveToRecord(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) ?CIR.Expr {
+        return switch (expr) {
+            .e_record => expr,
+            .e_dot_access => |dot| {
+                // Resolve the dot access to get the field value
+                const field_expr = self.resolveDotAccess(module_env, dot) orelse return null;
+                // The field value might be a record or another dot access
+                return self.resolveToRecord(module_env, field_expr);
+            },
+            .e_nominal => |nom| {
+                const backing = module_env.store.getExpr(nom.backing_expr);
+                return self.resolveToRecord(module_env, backing);
+            },
+            .e_nominal_external => |nom| {
+                const backing = module_env.store.getExpr(nom.backing_expr);
+                return self.resolveToRecord(module_env, backing);
+            },
             else => null,
         };
     }
@@ -1371,35 +1427,14 @@ pub const DevEvaluator = struct {
             return error.UnsupportedExpression;
         }
 
-        // Get the receiver expression
-        const receiver_expr = module_env.store.getExpr(dot.receiver);
+        // Resolve the dot access chain to get the target expression
+        const target_expr = self.resolveDotAccess(module_env, dot) orelse return error.UnsupportedExpression;
 
-        // Only support direct record literal access for now
-        switch (receiver_expr) {
-            .e_record => |rec| {
-                // Records with extension not supported
-                if (rec.ext != null) {
-                    return error.UnsupportedExpression;
-                }
+        // Evaluate the target expression
+        const field_val = self.tryEvalConstantI64WithEnvMap(module_env, target_expr, env) orelse
+            return error.UnsupportedExpression;
 
-                const fields = module_env.store.sliceRecordFields(rec.fields);
-
-                // Find the field with matching name
-                for (fields) |field_idx| {
-                    const field = module_env.store.getRecordField(field_idx);
-                    if (field.name == dot.field_name) {
-                        const field_expr = module_env.store.getExpr(field.value);
-                        const field_val = self.tryEvalConstantI64WithEnvMap(module_env, field_expr, env) orelse
-                            return error.UnsupportedExpression;
-                        return self.generateReturnI64Code(field_val, result_layout);
-                    }
-                }
-
-                // Field not found
-                return error.UnsupportedExpression;
-            },
-            else => return error.UnsupportedExpression,
-        }
+        return self.generateReturnI64Code(field_val, result_layout);
     }
 
     /// Generate code that returns an i64/u64 value.
