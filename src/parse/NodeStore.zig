@@ -784,8 +784,12 @@ pub fn addExpr(store: *NodeStore, expr: AST.Expr) std.mem.Allocator.Error!AST.Ex
         .record_builder => |rb| {
             node.tag = .record_builder;
             node.region = rb.region;
-            node.data.lhs = @intFromEnum(rb.mapper);
-            node.data.rhs = @intFromEnum(rb.fields);
+            // Store [fields.span.start, fields.span.len, mapper] in extra_data
+            const data_start = @as(u32, @intCast(store.extra_data.items.len));
+            try store.extra_data.append(store.gpa, rb.fields.span.start);
+            try store.extra_data.append(store.gpa, rb.fields.span.len);
+            try store.extra_data.append(store.gpa, @intFromEnum(rb.mapper));
+            node.data.lhs = data_start;
         },
         .block => |body| {
             node.tag = .block;
@@ -1824,9 +1828,16 @@ pub fn getExpr(store: *const NodeStore, expr_idx: AST.Expr.Idx) AST.Expr {
             } };
         },
         .record_builder => {
+            const extra_data_pos = node.data.lhs;
+            const fields_start = store.extra_data.items[extra_data_pos];
+            const fields_len = store.extra_data.items[extra_data_pos + 1];
+            const mapper_value = store.extra_data.items[extra_data_pos + 2];
             return .{ .record_builder = .{
-                .mapper = @enumFromInt(node.data.lhs),
-                .fields = @enumFromInt(node.data.rhs),
+                .mapper = @enumFromInt(mapper_value),
+                .fields = .{ .span = .{
+                    .start = fields_start,
+                    .len = fields_len,
+                } },
                 .region = node.region,
             } };
         },

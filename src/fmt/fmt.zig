@@ -1365,6 +1365,77 @@ const Formatter = struct {
             .ellipsis => |_| {
                 try fmt.pushAll("...");
             },
+            .record_builder => |rb| {
+                // Format record builder: { field: value, ... }.TypeName
+                const fields = fmt.ast.store.recordFieldSlice(rb.fields);
+
+                try fmt.push('{');
+
+                // Format fields like a regular record
+                if (multiline and fields.len > 0) {
+                    fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsAfter(rb.region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+
+                for (fields, 0..) |field_idx, i| {
+                    if (!multiline) {
+                        try fmt.push(' ');
+                    }
+                    const field_region = try fmt.formatRecordField(field_idx);
+
+                    if (i < fields.len - 1) {
+                        try fmt.push(',');
+                        if (multiline) {
+                            _ = try fmt.flushCommentsAfter(field_region.end);
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                    } else if (multiline) {
+                        try fmt.push(',');
+                        _ = try fmt.flushCommentsAfter(field_region.end);
+                        fmt.curr_indent -= 1;
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
+                }
+
+                if (fields.len > 0 and !multiline) {
+                    try fmt.push(' ');
+                }
+                try fmt.push('}');
+
+                // Format the type suffix (mapper)
+                const mapper_expr = fmt.ast.store.getExpr(rb.mapper);
+                switch (mapper_expr) {
+                    .tag => |t| {
+                        try fmt.push('.');
+                        // Format qualifiers if any
+                        const qualifiers = fmt.ast.store.tokenSlice(t.qualifiers);
+                        for (qualifiers) |qual_tok| {
+                            try fmt.pushTokenText(qual_tok);
+                            try fmt.push('.');
+                        }
+                        try fmt.pushTokenText(t.token);
+                    },
+                    .ident => |id| {
+                        try fmt.push('.');
+                        // Format qualifiers if any
+                        const qualifiers = fmt.ast.store.tokenSlice(id.qualifiers);
+                        for (qualifiers) |qual_tok| {
+                            try fmt.pushTokenText(qual_tok);
+                            try fmt.push('.');
+                        }
+                        try fmt.pushTokenText(id.token);
+                    },
+                    else => {
+                        // Fallback - shouldn't happen for valid record builders
+                        try fmt.push('.');
+                        _ = try fmt.formatExpr(rb.mapper);
+                    },
+                }
+            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -2514,6 +2585,9 @@ const Formatter = struct {
                         }
 
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
+                    },
+                    .record_builder => |rb| {
+                        return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields));
                     },
                     .suffix_single_question => |s| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);

@@ -135,7 +135,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 63;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 64;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 42;
 /// Count of the statement nodes in the ModuleEnv
@@ -3292,6 +3292,11 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
             node.data_1 = @as(u32, @bitCast(r.parent_name));
             node.data_2 = @as(u32, @bitCast(r.nested_name));
         },
+        .record_builder_map2_not_found => |r| {
+            node.tag = .diag_record_builder_map2_not_found;
+            region = r.region;
+            node.data_1 = @as(u32, @bitCast(r.type_name));
+        },
         .too_many_exports => |r| {
             node.tag = .diag_too_many_exports;
             region = r.region;
@@ -3582,6 +3587,10 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_nested_value_not_found => return CIR.Diagnostic{ .nested_value_not_found = .{
             .parent_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .nested_name = @as(base.Ident.Idx, @bitCast(node.data_2)),
+            .region = store.getRegionAt(node_idx),
+        } },
+        .diag_record_builder_map2_not_found => return CIR.Diagnostic{ .record_builder_map2_not_found = .{
+            .type_name = @as(base.Ident.Idx, @bitCast(node.data_1)),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_too_many_exports => return CIR.Diagnostic{ .too_many_exports = .{
