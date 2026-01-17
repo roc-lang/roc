@@ -895,7 +895,6 @@ pub const SyntaxChecker = struct {
     fn getStatementParts(stmt: CIR.Statement) StatementParts {
         return switch (stmt) {
             .s_decl => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
-            .s_decl_gen => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
             .s_var => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
             .s_reassign => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
             .s_expr => |e| .{ .pattern = null, .expr = e.expr, .expr2 = null },

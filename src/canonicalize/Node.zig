@@ -23,7 +23,6 @@ pub const Idx = List.Idx;
 pub const Tag = enum {
     // Statements
     statement_decl,
-    statement_decl_gen,
     statement_var,
     statement_reassign,
     statement_crash,
@@ -221,6 +220,7 @@ pub const Tag = enum {
     diag_redundant_exposed,
     diag_if_expr_without_else,
     diag_break_outside_loop,
+    diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
 };

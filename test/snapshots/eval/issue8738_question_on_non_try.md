@@ -33,7 +33,7 @@ but I found:
 
 This expression has type:
 
-_[Exit(a), Ok(_b), Err(_c), .._others]
+_[Exit(a), .._others]
   where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]_
 
 Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
@@ -163,20 +163,24 @@ NO CHANGE
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-lookup-local
 												(p-assign (ident "#ok")))))
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-return
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "#err")))))))))))))
 					(e-tag (name "Ok")
 						(args
 							(e-empty_record)))))))
@@ -191,10 +195,10 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
-		(patt (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(patt (type "[Err(_a), Ok({}), .._others]")))
+		(patt (type "({}) -> Try({}, err)"))
+		(patt (type "[Ok({}), .._others]")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
-		(expr (type "({}) -> [Err(_a), Ok({}), .._others]"))
-		(expr (type "[Err(_a), Ok({}), .._others]"))))
+		(expr (type "({}) -> Try({}, err)"))
+		(expr (type "[Ok({}), .._others]"))))
 ~~~
