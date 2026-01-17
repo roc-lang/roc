@@ -28,10 +28,106 @@ const Can = can.Can;
 const Check = check.Check;
 const builtin_loading = eval_mod.builtin_loading;
 const comptime_value = eval_mod.comptime_value;
-const ComptimeHeap = comptime_value.ComptimeHeap;
-const ComptimeValue = comptime_value.ComptimeValue;
-const ComptimeEnv = comptime_value.ComptimeEnv;
 const TopLevelBindings = comptime_value.TopLevelBindings;
+
+/// Simple heap for allocating memory during evaluation.
+/// Uses an arena so everything can be freed at once.
+const ComptimeHeap = struct {
+    arena: std.heap.ArenaAllocator,
+
+    fn init(backing_allocator: Allocator) ComptimeHeap {
+        return .{
+            .arena = std.heap.ArenaAllocator.init(backing_allocator),
+        };
+    }
+
+    fn alloc(self: *ComptimeHeap, size: usize, comptime log2_alignment: u8) ![]u8 {
+        const alignment: std.mem.Alignment = @enumFromInt(log2_alignment);
+        return self.arena.allocator().alignedAlloc(u8, alignment, size);
+    }
+
+    fn allocator(self: *ComptimeHeap) Allocator {
+        return self.arena.allocator();
+    }
+
+    fn deinit(self: *ComptimeHeap) void {
+        self.arena.deinit();
+    }
+};
+
+/// Simple wrapper for a pointer to bytes.
+/// Used for storing intermediate values during evaluation.
+const ComptimeValue = struct {
+    bytes: [*]u8,
+    size: usize,
+
+    fn fromBytes(bytes_slice: []u8) ComptimeValue {
+        return .{
+            .bytes = bytes_slice.ptr,
+            .size = bytes_slice.len,
+        };
+    }
+
+    fn as(self: ComptimeValue, comptime T: type) T {
+        std.debug.assert(self.size >= @sizeOf(T));
+        return @as(*const T, @ptrCast(@alignCast(self.bytes))).*;
+    }
+
+    fn set(self: ComptimeValue, comptime T: type, value: T) void {
+        std.debug.assert(self.size >= @sizeOf(T));
+        @as(*T, @ptrCast(@alignCast(self.bytes))).* = value;
+    }
+};
+
+/// Environment mapping pattern indices to values during evaluation.
+const ComptimeEnv = struct {
+    heap: *ComptimeHeap,
+    bindings: std.AutoHashMap(u32, ComptimeValue),
+    closure_refs: std.AutoHashMap(u32, CIR.Expr.Idx),
+
+    fn init(heap: *ComptimeHeap) ComptimeEnv {
+        return .{
+            .heap = heap,
+            .bindings = std.AutoHashMap(u32, ComptimeValue).init(heap.allocator()),
+            .closure_refs = std.AutoHashMap(u32, CIR.Expr.Idx).init(heap.allocator()),
+        };
+    }
+
+    fn bind(self: *ComptimeEnv, pattern_idx: u32, value: ComptimeValue) !void {
+        try self.bindings.put(pattern_idx, value);
+    }
+
+    fn bindClosure(self: *ComptimeEnv, pattern_idx: u32, expr_idx: CIR.Expr.Idx) !void {
+        try self.closure_refs.put(pattern_idx, expr_idx);
+    }
+
+    fn lookup(self: *const ComptimeEnv, pattern_idx: u32) ?ComptimeValue {
+        return self.bindings.get(pattern_idx);
+    }
+
+    fn lookupClosure(self: *const ComptimeEnv, pattern_idx: u32) ?CIR.Expr.Idx {
+        return self.closure_refs.get(pattern_idx);
+    }
+
+    /// Create a child environment that inherits bindings from parent.
+    fn child(self: *const ComptimeEnv) !ComptimeEnv {
+        var new_env = ComptimeEnv.init(self.heap);
+        var iter = self.bindings.iterator();
+        while (iter.next()) |entry| {
+            try new_env.bindings.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        var closure_iter = self.closure_refs.iterator();
+        while (closure_iter.next()) |entry| {
+            try new_env.closure_refs.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+        return new_env;
+    }
+
+    fn deinit(self: *ComptimeEnv) void {
+        self.bindings.deinit();
+        self.closure_refs.deinit();
+    }
+};
 
 /// Dev backend-based evaluator for Roc expressions
 pub const DevEvaluator = struct {
@@ -195,14 +291,13 @@ pub const DevEvaluator = struct {
 
     /// Create an empty ComptimeEnv using the evaluator's heap
     fn createEnv(self: *DevEvaluator) ComptimeEnv {
-        return ComptimeEnv.init(&self.comptime_heap, null);
+        return ComptimeEnv.init(&self.comptime_heap);
     }
 
     /// Create a ComptimeValue holding an i64
     fn createI64Value(self: *DevEvaluator, value: i64) Error!ComptimeValue {
         const bytes = self.comptime_heap.alloc(8, 3) catch return error.OutOfMemory;
-        // layout_idx is undefined - will be set properly when we have LayoutStore integration
-        const cv = ComptimeValue.fromBytes(bytes, undefined);
+        const cv = ComptimeValue.fromBytes(bytes);
         cv.set(i64, value);
         return cv;
     }

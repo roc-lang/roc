@@ -43,39 +43,44 @@ const TraceWriter = struct {
     }
 };
 
-/// Try to evaluate an expression using the DevEvaluator and return the result as a string.
-/// Returns null if DevEvaluator can't handle this expression (unsupported, JIT unavailable, etc.)
-fn tryDevEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?[]const u8 {
+/// Evaluate an expression using the DevEvaluator and return the result as a string.
+fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) []const u8 {
     // Initialize DevEvaluator
-    var dev_eval = DevEvaluator.init(allocator) catch return null;
+    var dev_eval = DevEvaluator.init(allocator) catch |err| {
+        std.debug.panic("DevEvaluator.init failed: {}", .{err});
+    };
     defer dev_eval.deinit();
 
     // Get the expression from the index
     const expr = module_env.store.getExpr(expr_idx);
 
-    // Try to generate code
-    var code_result = dev_eval.generateCode(module_env, expr) catch return null;
+    // Generate code
+    var code_result = dev_eval.generateCode(module_env, expr) catch |err| {
+        std.debug.panic("DevEvaluator.generateCode failed: {}", .{err});
+    };
     defer code_result.deinit();
 
-    // Try to JIT execute the code
-    var jit = backend.JitCode.init(code_result.code) catch return null;
+    // JIT execute the code
+    var jit = backend.JitCode.init(code_result.code) catch |err| {
+        std.debug.panic("JitCode.init failed: {}", .{err});
+    };
     defer jit.deinit();
 
     // Execute and format result as string based on layout
     const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnU64()}) catch null,
-        layout_mod.Idx.f64, layout_mod.Idx.f32 => std.fmt.allocPrint(allocator, "{d}", .{jit.callReturnF64()}) catch null,
-        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
-        else => null, // Unsupported layout for now
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch @panic("allocPrint failed"),
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnU64()}) catch @panic("allocPrint failed"),
+        layout_mod.Idx.f64, layout_mod.Idx.f32 => std.fmt.allocPrint(allocator, "{d}", .{jit.callReturnF64()}) catch @panic("allocPrint failed"),
+        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch @panic("allocPrint failed"),
+        else => std.debug.panic("Unsupported layout: {}", .{code_result.result_layout}),
     };
 }
 
 /// Compare Interpreter result string with DevEvaluator result string.
-/// Fails the test if both succeed but produce different strings.
+/// Fails the test if they produce different strings.
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
-    const dev_str = tryDevEvaluatorStr(allocator, module_env, expr_idx) orelse return; // Skip if unsupported
+    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
     defer allocator.free(dev_str);
 
     if (!std.mem.eql(u8, interpreter_str, dev_str)) {
