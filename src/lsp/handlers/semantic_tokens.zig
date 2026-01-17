@@ -1,7 +1,8 @@
 //! Handler for the LSP `textDocument/semanticTokens/full` request.
 //!
-//! This handler extracts semantic tokens from a document and returns them
-//! in the LSP delta-encoded format for syntax highlighting.
+//! This handler extracts semantic tokens from a document using the Canonicalized IR
+//! for richer context-aware syntax highlighting (functions, parameters, etc.)
+//! and returns them in the LSP delta-encoded format.
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
@@ -37,8 +38,8 @@ pub fn handler(comptime ServerType: type) type {
             };
             defer info.deinit();
 
-            // Extract semantic tokens
-            const tokens = semantic_tokens.extractSemanticTokens(self.allocator, doc.text, &info) catch {
+            // Extract semantic tokens using CIR for richer context
+            const tokens = semantic_tokens.extractSemanticTokensWithCIR(self.allocator, doc.text, &info) catch {
                 return try ServerType.sendError(self, id, .internal_error, "failed to extract tokens");
             };
             defer self.allocator.free(tokens);

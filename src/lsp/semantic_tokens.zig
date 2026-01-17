@@ -2,9 +2,15 @@
 //!
 //! This module provides functionality to extract semantic tokens from Roc source code
 //! and encode them in the LSP delta-encoded format for syntax highlighting.
+//!
+//! Two extraction modes are available:
+//! - Token-based: Fast, uses only tokenizer output (fallback)
+//! - CIR-based: Richer semantics from canonicalized IR (function/parameter detection)
 
 const std = @import("std");
 const tokenize = @import("parse").tokenize;
+const parse = @import("parse");
+const can = @import("can");
 const base = @import("base");
 const line_info = @import("line_info.zig");
 
@@ -12,6 +18,9 @@ const Token = tokenize.Token;
 const Tokenizer = tokenize.Tokenizer;
 const CommonEnv = base.CommonEnv;
 const LineInfo = line_info.LineInfo;
+const CIR = can.CIR;
+const ModuleEnv = can.ModuleEnv;
+const Region = base.Region;
 
 /// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
 pub const SemanticType = enum(u32) {
@@ -36,6 +45,12 @@ pub const SemanticToken = struct {
     length: u32,
     token_type: u32,
     modifiers: u32 = 0,
+
+    /// Comparison function for sorting tokens by position.
+    pub fn lessThan(_: void, a: SemanticToken, b: SemanticToken) bool {
+        if (a.line != b.line) return a.line < b.line;
+        return a.start_char < b.start_char;
+    }
 };
 
 /// Maps a Roc Token.Tag to an LSP semantic type index.
@@ -242,6 +257,288 @@ pub fn extractSemanticTokens(
 
     return tokens.toOwnedSlice(allocator);
 }
+
+/// Extracts semantic tokens using the Canonicalized IR for richer semantic information.
+/// Falls back to token-only extraction on canonicalization errors.
+pub fn extractSemanticTokensWithCIR(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    info: *const LineInfo,
+) ![]SemanticToken {
+    // Create ModuleEnv with source
+    var module_env = ModuleEnv.init(allocator, source) catch {
+        // Fall back to token-only extraction on error
+        return extractSemanticTokens(allocator, source, info);
+    };
+    defer module_env.deinit();
+
+    // Parse the source
+    var parse_ast = parse.parse(&module_env.common, allocator) catch {
+        // Fall back to token-only extraction on parse error
+        return extractSemanticTokens(allocator, source, info);
+    };
+    defer parse_ast.deinit(allocator);
+
+    // Initialize CIR fields
+    module_env.initCIRFields("semantic-tokens") catch {
+        return extractSemanticTokens(allocator, source, info);
+    };
+
+    // Create canonicalizer and run
+    var canonicalizer = can.Can.init(&module_env, &parse_ast, null) catch {
+        return extractSemanticTokens(allocator, source, info);
+    };
+    defer canonicalizer.deinit();
+
+    canonicalizer.canonicalizeFile() catch {
+        // Fall back to token-only on canonicalization error
+        return extractSemanticTokens(allocator, source, info);
+    };
+
+    // Create a semantic collector to walk the CIR
+    var collector = SemanticCollector{
+        .allocator = allocator,
+        .tokens = std.ArrayListUnmanaged(SemanticToken){},
+        .module_env = &module_env,
+        .info = info,
+        .source = source,
+    };
+    errdefer collector.tokens.deinit(allocator);
+
+    // Walk CIR statements for semantic information
+    collector.walkStatements() catch {
+        // Fall back on error
+        collector.tokens.deinit(allocator);
+        return extractSemanticTokens(allocator, source, info);
+    };
+
+    // Also extract tokens from the tokenizer that weren't covered by CIR
+    // (keywords, operators, and identifiers as fallback)
+    try collector.addTokensFromTokenizer(&parse_ast);
+
+    // Sort tokens by position (line, then character)
+    std.mem.sort(SemanticToken, collector.tokens.items, {}, SemanticToken.lessThan);
+
+    return collector.tokens.toOwnedSlice(allocator);
+}
+
+/// Collector for walking CIR and extracting semantic tokens.
+const SemanticCollector = struct {
+    allocator: std.mem.Allocator,
+    tokens: std.ArrayListUnmanaged(SemanticToken),
+    module_env: *const ModuleEnv,
+    info: *const LineInfo,
+    source: []const u8,
+
+    /// Walk all top-level statements in the module.
+    fn walkStatements(self: *SemanticCollector) !void {
+        const span = self.module_env.all_statements.span;
+        var i: u32 = 0;
+        while (i < span.len) : (i += 1) {
+            const stmt_idx: CIR.Statement.Idx = @enumFromInt(span.start + i);
+            try self.visitStatement(stmt_idx);
+        }
+    }
+
+    /// Visit a single statement and extract semantic tokens.
+    fn visitStatement(self: *SemanticCollector, stmt_idx: CIR.Statement.Idx) !void {
+        const stmt = self.module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_decl => |d| try self.visitDecl(d.pattern, d.expr),
+            .s_decl_gen => |d| try self.visitDecl(d.pattern, d.expr),
+            .s_var => |v| try self.visitDecl(v.pattern_idx, v.expr),
+            .s_expr => |e| try self.visitExpr(e.expr),
+            // Type declarations and imports don't need special handling
+            // since they're covered by the tokenizer
+            else => {},
+        }
+    }
+
+    /// Visit a declaration (s_decl, s_decl_gen, s_var).
+    fn visitDecl(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx, expr_idx: CIR.Expr.Idx) !void {
+        // Check if RHS is a lambda/closure (then LHS is a function name)
+        const expr = self.module_env.store.getExpr(expr_idx);
+        const is_function = switch (expr) {
+            .e_closure, .e_lambda, .e_hosted_lambda => true,
+            else => false,
+        };
+
+        // Add token for pattern with appropriate type
+        const pattern_region = self.module_env.store.getPatternRegion(pattern_idx);
+        const pattern_type: SemanticType = if (is_function) .function else .variable;
+        try self.addToken(pattern_region, pattern_type);
+
+        // If it's a function, visit lambda parameters
+        if (is_function) {
+            try self.visitLambdaParams(expr_idx);
+        }
+
+        // Visit the expression
+        try self.visitExpr(expr_idx);
+    }
+
+    /// Visit lambda parameters and mark them as parameters.
+    fn visitLambdaParams(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) !void {
+        const expr = self.module_env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_closure => |c| {
+                // Closure wraps a lambda - get the inner lambda's args
+                const lambda = self.module_env.store.getExpr(c.lambda_idx);
+                switch (lambda) {
+                    .e_lambda => |l| {
+                        var i: u32 = 0;
+                        while (i < l.args.span.len) : (i += 1) {
+                            const param_idx: CIR.Pattern.Idx = @enumFromInt(l.args.span.start + i);
+                            try self.visitPatternAsParameter(param_idx);
+                        }
+                    },
+                    else => {},
+                }
+            },
+            .e_lambda => |l| {
+                // Pure lambda - visit each parameter pattern
+                var i: u32 = 0;
+                while (i < l.args.span.len) : (i += 1) {
+                    const param_idx: CIR.Pattern.Idx = @enumFromInt(l.args.span.start + i);
+                    try self.visitPatternAsParameter(param_idx);
+                }
+            },
+            .e_hosted_lambda => |h| {
+                // Hosted lambda has args directly
+                var i: u32 = 0;
+                while (i < h.args.span.len) : (i += 1) {
+                    const param_idx: CIR.Pattern.Idx = @enumFromInt(h.args.span.start + i);
+                    try self.visitPatternAsParameter(param_idx);
+                }
+            },
+            else => {},
+        }
+    }
+
+    /// Visit a pattern and mark it as a parameter.
+    fn visitPatternAsParameter(self: *SemanticCollector, pattern_idx: CIR.Pattern.Idx) !void {
+        const pattern = self.module_env.store.getPattern(pattern_idx);
+        switch (pattern) {
+            .assign => {
+                // Simple identifier pattern
+                const region = self.module_env.store.getPatternRegion(pattern_idx);
+                try self.addToken(region, .parameter);
+            },
+            .as => |a| {
+                // The "as" pattern: pattern as name
+                // Visit the inner pattern
+                try self.visitPatternAsParameter(a.pattern);
+            },
+            .record_destructure => |r| {
+                // Visit each destructured field's pattern
+                var i: u32 = 0;
+                while (i < r.destructs.span.len) : (i += 1) {
+                    const destruct_idx: CIR.Pattern.RecordDestruct.Idx = @enumFromInt(r.destructs.span.start + i);
+                    const destruct = self.module_env.store.getRecordDestruct(destruct_idx);
+                    // Get the pattern from the kind union
+                    const field_pattern = destruct.kind.toPatternIdx();
+                    try self.visitPatternAsParameter(field_pattern);
+                }
+            },
+            .tuple => |t| {
+                var i: u32 = 0;
+                while (i < t.patterns.span.len) : (i += 1) {
+                    const elem_idx: CIR.Pattern.Idx = @enumFromInt(t.patterns.span.start + i);
+                    try self.visitPatternAsParameter(elem_idx);
+                }
+            },
+            .list => |l| {
+                var i: u32 = 0;
+                while (i < l.patterns.span.len) : (i += 1) {
+                    const elem_idx: CIR.Pattern.Idx = @enumFromInt(l.patterns.span.start + i);
+                    try self.visitPatternAsParameter(elem_idx);
+                }
+            },
+            .underscore => {
+                // Underscores are still highlighted as parameters
+                const region = self.module_env.store.getPatternRegion(pattern_idx);
+                try self.addToken(region, .parameter);
+            },
+            else => {},
+        }
+    }
+
+    /// Visit an expression and extract any relevant tokens.
+    fn visitExpr(self: *SemanticCollector, expr_idx: CIR.Expr.Idx) !void {
+        const expr = self.module_env.store.getExpr(expr_idx);
+        switch (expr) {
+            .e_tag => {
+                // Tags are enum members
+                const region = self.module_env.store.getExprRegion(expr_idx);
+                try self.addToken(region, .enumMember);
+            },
+            .e_closure => |c| {
+                // Closure wraps a lambda - visit the inner lambda
+                try self.visitExpr(c.lambda_idx);
+            },
+            .e_lambda => |l| {
+                // Visit lambda body
+                try self.visitExpr(l.body);
+            },
+            else => {},
+        }
+    }
+
+    /// Add tokens from the tokenizer that weren't covered by CIR.
+    /// This includes keywords, operators, literals, and identifiers as fallback.
+    fn addTokensFromTokenizer(self: *SemanticCollector, ast: *const parse.AST) !void {
+        const tags = ast.tokens.tokens.items(.tag);
+        const regions = ast.tokens.tokens.items(.region);
+
+        for (tags, regions) |tag, region| {
+            const semantic_type = tokenTagToSemanticType(tag) orelse continue;
+
+            const start_offset = region.start.offset;
+            const end_offset = region.end.offset;
+            const length = end_offset - start_offset;
+
+            if (length == 0) continue;
+
+            const pos = self.info.positionFromOffset(start_offset) orelse continue;
+
+            // Check if we already have a token at this position (from CIR)
+            const already_exists = for (self.tokens.items) |existing| {
+                if (existing.line == pos.line and existing.start_char == pos.character) {
+                    break true;
+                }
+            } else false;
+
+            if (already_exists) continue;
+
+            try self.tokens.append(self.allocator, .{
+                .line = pos.line,
+                .start_char = pos.character,
+                .length = length,
+                .token_type = semantic_type,
+                .modifiers = 0,
+            });
+        }
+    }
+
+    /// Add a token at the given region with the given semantic type.
+    fn addToken(self: *SemanticCollector, region: Region, semantic_type: SemanticType) !void {
+        const start_offset = region.start.offset;
+        const end_offset = region.end.offset;
+        const length = end_offset - start_offset;
+
+        if (length == 0) return;
+
+        const pos = self.info.positionFromOffset(start_offset) orelse return;
+
+        try self.tokens.append(self.allocator, .{
+            .line = pos.line,
+            .start_char = pos.character,
+            .length = length,
+            .token_type = @intFromEnum(semantic_type),
+            .modifiers = 0,
+        });
+    }
+};
 
 /// Delta-encodes a list of semantic tokens into the LSP format.
 /// The LSP format uses 5 integers per token: [deltaLine, deltaStartChar, length, tokenType, tokenModifiers]
