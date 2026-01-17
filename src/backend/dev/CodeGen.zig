@@ -44,7 +44,6 @@ pub const NumKind = enum {
     f32,
     f64,
     dec,
-    numeral,
 
     pub fn isFloat(self: NumKind) bool {
         return self == .f32 or self == .f64;
@@ -54,7 +53,7 @@ pub const NumKind = enum {
         return switch (self) {
             .i8, .i16, .i32, .i64, .i128 => true,
             .u8, .u16, .u32, .u64, .u128 => false,
-            .f32, .f64, .dec, .numeral => true, // floats are signed
+            .f32, .f64, .dec => true, // floats are signed
         };
     }
 
@@ -63,38 +62,9 @@ pub const NumKind = enum {
             .u8, .i8 => 1,
             .u16, .i16 => 2,
             .u32, .i32, .f32 => 4,
-            .u64, .i64, .f64, .numeral => 8,
+            .u64, .i64, .f64 => 8,
             .u128, .i128, .dec => 16,
         };
-    }
-};
-
-/// Binary operation types
-pub const BinOp = enum {
-    add,
-    sub,
-    mul,
-    div,
-    rem,
-    div_trunc,
-    lt,
-    gt,
-    le,
-    ge,
-    eq,
-    ne,
-    @"and",
-    @"or",
-
-    pub fn isComparison(self: BinOp) bool {
-        return switch (self) {
-            .lt, .gt, .le, .ge, .eq, .ne => true,
-            else => false,
-        };
-    }
-
-    pub fn isLogical(self: BinOp) bool {
-        return self == .@"and" or self == .@"or";
     }
 };
 
@@ -250,14 +220,4 @@ test "NumKind properties" {
     try std.testing.expectEqual(@as(u8, 4), NumKind.i32.byteSize());
     try std.testing.expectEqual(@as(u8, 8), NumKind.i64.byteSize());
     try std.testing.expectEqual(@as(u8, 16), NumKind.i128.byteSize());
-}
-
-test "BinOp properties" {
-    try std.testing.expect(BinOp.lt.isComparison());
-    try std.testing.expect(BinOp.eq.isComparison());
-    try std.testing.expect(!BinOp.add.isComparison());
-
-    try std.testing.expect(BinOp.@"and".isLogical());
-    try std.testing.expect(BinOp.@"or".isLogical());
-    try std.testing.expect(!BinOp.add.isLogical());
 }
