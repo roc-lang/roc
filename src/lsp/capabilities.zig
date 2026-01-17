@@ -30,6 +30,7 @@ pub const ServerCapabilities = struct {
     documentFormattingProvider: bool = false,
     documentSymbolProvider: bool = false,
     foldingRangeProvider: bool = false,
+    selectionRangeProvider: bool = false,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -73,5 +74,6 @@ pub fn buildCapabilities() ServerCapabilities {
         .documentFormattingProvider = true,
         .documentSymbolProvider = true,
         .foldingRangeProvider = true,
+        .selectionRangeProvider = true,
     };
 }
