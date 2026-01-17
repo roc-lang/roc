@@ -26,6 +26,7 @@ const hover_handler_mod = @import("handlers/hover.zig");
 const definition_handler_mod = @import("handlers/definition.zig");
 const formatting_handler_mod = @import("handlers/formatting.zig");
 const document_symbol_handler_mod = @import("handlers/document_symbol.zig");
+const folding_range_handler_mod = @import("handlers/folding_range.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -45,6 +46,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         const DefinitionHandler = definition_handler_mod.handler(Self);
         const FormattingHandler = formatting_handler_mod.handler(Self);
         const DocumentSymbolHandler = document_symbol_handler_mod.handler(Self);
+        const FoldingRangeHandler = folding_range_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
@@ -53,6 +55,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             .{ "textDocument/definition", &DefinitionHandler.call },
             .{ "textDocument/formatting", &FormattingHandler.call },
             .{ "textDocument/documentSymbol", &DocumentSymbolHandler.call },
+            .{ "textDocument/foldingRange", &FoldingRangeHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
