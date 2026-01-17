@@ -27,6 +27,7 @@ pub const ServerCapabilities = struct {
     semanticTokensProvider: ?SemanticTokensOptions = null,
     hoverProvider: bool = false,
     definitionProvider: bool = false,
+    documentFormattingProvider: bool = false,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -67,5 +68,6 @@ pub fn buildCapabilities() ServerCapabilities {
         },
         .hoverProvider = true,
         .definitionProvider = true,
+        .documentFormattingProvider = true,
     };
 }
