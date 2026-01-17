@@ -633,6 +633,12 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
             }
             // Mismatch - must allocate a copy of the message since the RocStr may be freed
             const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
+            // Free previous actual_value if any (to avoid leak on multiple failures)
+            if (host.test_state.failure_info) |info| {
+                if (info.actual_value.len > 0) {
+                    host.gpa.allocator().free(info.actual_value);
+                }
+            }
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = entry.effect_type,
@@ -653,6 +659,12 @@ fn hostedStderrLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
         } else {
             // Extra output not in spec - must allocate a copy of the message
             const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
+            // Free previous actual_value if any (to avoid leak on multiple failures)
+            if (host.test_state.failure_info) |info| {
+                if (info.actual_value.len > 0) {
+                    host.gpa.allocator().free(info.actual_value);
+                }
+            }
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = .stderr_expect, // We expected nothing
@@ -801,6 +813,12 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
             }
             // Mismatch - must allocate a copy of the message since the RocStr may be freed
             const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
+            // Free previous actual_value if any (to avoid leak on multiple failures)
+            if (host.test_state.failure_info) |info| {
+                if (info.actual_value.len > 0) {
+                    host.gpa.allocator().free(info.actual_value);
+                }
+            }
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = entry.effect_type,
@@ -821,6 +839,12 @@ fn hostedStdoutLine(ops: *builtins.host_abi.RocOps, ret_ptr: *anyopaque, args_pt
         } else {
             // Extra output not in spec - must allocate a copy of the message
             const actual_copy = host.gpa.allocator().dupe(u8, message) catch "";
+            // Free previous actual_value if any (to avoid leak on multiple failures)
+            if (host.test_state.failure_info) |info| {
+                if (info.actual_value.len > 0) {
+                    host.gpa.allocator().free(info.actual_value);
+                }
+            }
             host.test_state.failed = true;
             host.test_state.failure_info = .{
                 .expected_type = .stdout_expect, // We expected nothing
