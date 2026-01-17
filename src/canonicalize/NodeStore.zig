@@ -4065,11 +4065,13 @@ pub fn matchBranchPatternSpanFrom(store: *NodeStore, start: u32) Allocator.Error
 
 /// Serialized representation of NodeStore
 /// Uses extern struct to guarantee consistent field layout across optimization levels.
+/// IMPORTANT: int128_values is placed first (after gpa) to ensure 16-byte alignment
+/// since i128 requires 16-byte alignment and the buffer start is well-aligned.
 pub const Serialized = extern struct {
-    gpa: [2]u64, // Reserve enough space for 2 64-bit pointers
+    gpa: [2]u64, // Reserve enough space for 2 64-bit pointers (16 bytes total)
+    int128_values: collections.SafeList(i128).Serialized, // Must be first data field for 16-byte alignment
     nodes: Node.List.Serialized,
     regions: Region.List.Serialized,
-    int128_values: collections.SafeList(i128).Serialized,
     span2_data: collections.SafeList(Span2).Serialized,
     span_with_node_data: collections.SafeList(SpanWithNode).Serialized,
     match_data: collections.SafeList(MatchData).Serialized,
@@ -4090,12 +4092,12 @@ pub const Serialized = extern struct {
         allocator: Allocator,
         writer: *CompactWriter,
     ) Allocator.Error!void {
+        // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
+        try self.int128_values.serialize(&store.int128_values, allocator, writer);
         // Serialize nodes
         try self.nodes.serialize(&store.nodes, allocator, writer);
         // Serialize regions
         try self.regions.serialize(&store.regions, allocator, writer);
-        // Serialize int128_values
-        try self.int128_values.serialize(&store.int128_values, allocator, writer);
         // Serialize span2_data
         try self.span2_data.serialize(&store.span2_data, allocator, writer);
         // Serialize span_with_node_data
@@ -4128,7 +4130,8 @@ pub const Serialized = extern struct {
         // fields. We must deserialize in REVERSE order (last to first)
         // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
 
-        // Deserialize in reverse order (last to first)
+        // Deserialize in reverse order (last serialized to first serialized)
+        // int128_values is serialized FIRST (for alignment), so it's deserialized LAST
         const deserialized_index_data = self.index_data.deserialize(base_addr).*;
         const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
         const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
@@ -4140,9 +4143,9 @@ pub const Serialized = extern struct {
         const deserialized_match_data = self.match_data.deserialize(base_addr).*;
         const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
         const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
-        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
         const deserialized_regions = self.regions.deserialize(base_addr).*;
         const deserialized_nodes = self.nodes.deserialize(base_addr).*;
+        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
 
         // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
         const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
