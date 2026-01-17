@@ -610,7 +610,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.expr_frac_f32;
             return CIR.Expr{ .e_frac_f32 = .{
                 .value = @bitCast(p.value),
-                .has_suffix = p.has_suffix != 0,
+                .has_suffix = p.has_suffix,
             } };
         },
         .expr_frac_f64 => {
@@ -619,7 +619,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
             return CIR.Expr{ .e_frac_f64 = .{
                 .value = @bitCast(raw),
-                .has_suffix = p.has_suffix != 0,
+                .has_suffix = p.has_suffix,
             } };
         },
         .expr_dec => {
@@ -629,7 +629,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             return CIR.Expr{
                 .e_dec = .{
                     .value = RocDec{ .num = value },
-                    .has_suffix = p.has_suffix != 0,
+                    .has_suffix = p.has_suffix,
                 },
             };
         },
@@ -645,7 +645,7 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
                         .numerator = numerator,
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
-                    .has_suffix = p.has_suffix != 0,
+                    .has_suffix = p.has_suffix,
                 },
             };
         },
@@ -1324,7 +1324,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
             return CIR.Pattern{
                 .dec_literal = .{
                     .value = RocDec{ .num = value },
-                    .has_suffix = p.has_suffix != 0,
+                    .has_suffix = p.has_suffix,
                 },
             };
         },
@@ -1340,7 +1340,7 @@ pub fn getPattern(store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) CIR.Pat
                         .numerator = numerator,
                         .denominator_power_of_ten = denominator_power_of_ten,
                     },
-                    .has_suffix = p.has_suffix != 0,
+                    .has_suffix = p.has_suffix,
                 },
             };
         },
@@ -1848,8 +1848,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = Node.Tag.expr_frac_f32;
             node.setPayload(.{ .expr_frac_f32 = .{
                 .value = @bitCast(e.value),
-                .has_suffix = @intFromBool(e.has_suffix),
-                ._unused = 0,
+                .has_suffix = e.has_suffix,
             } });
         },
         .e_frac_f64 => |e| {
@@ -1858,7 +1857,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_frac_f64 = .{
                 .value_lo = raw[0],
                 .value_hi = raw[1],
-                .has_suffix = @intFromBool(e.has_suffix),
+                .has_suffix = e.has_suffix,
             } });
         },
         .e_dec => |e| {
@@ -1867,8 +1866,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             _ = try store.int128_values.append(store.gpa, e.value.num);
             node.setPayload(.{ .expr_dec = .{
                 .int128_idx = int128_idx,
-                .has_suffix = @intFromBool(e.has_suffix),
-                ._unused = 0,
+                .has_suffix = e.has_suffix,
             } });
         },
         .e_dec_small => |e| {
@@ -1878,7 +1876,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_dec_small = .{
                 .numerator = @as(u32, @bitCast(@as(i32, e.value.numerator))),
                 .denom_power = @as(u32, e.value.denominator_power_of_ten),
-                .has_suffix = @intFromBool(e.has_suffix),
+                .has_suffix = e.has_suffix,
             } });
         },
         .e_typed_int => |e| {
@@ -2478,7 +2476,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.setPayload(.{ .pattern_small_dec_literal = .{
                 .numerator = @bitCast(@as(i32, p.value.numerator)),
                 .denominator_power = @as(u32, p.value.denominator_power_of_ten),
-                .has_suffix = @intFromBool(p.has_suffix),
+                .has_suffix = p.has_suffix,
             } });
         },
         .dec_literal => |p| {
@@ -2487,8 +2485,7 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             _ = try store.int128_values.append(store.gpa, p.value.num);
             node.setPayload(.{ .pattern_dec_literal = .{
                 .int128_idx = int128_idx,
-                .has_suffix = @intFromBool(p.has_suffix),
-                ._unused = 0,
+                .has_suffix = p.has_suffix,
             } });
         },
         .str_literal => |p| {
@@ -4337,7 +4334,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     float_node.setPayload(.{ .expr_frac_f64 = .{
         .value_lo = float_lo,
         .value_hi = float_hi,
-        .has_suffix = 0,
+        .has_suffix = false,
     } });
     const float_node_idx = try original.nodes.append(gpa, float_node);
 

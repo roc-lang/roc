@@ -669,8 +669,7 @@ fn rewriteNumericLiteralExpr(
         var node = CIR.Node.init(.expr_frac_f32);
         node.setPayload(.{ .expr_frac_f32 = .{
             .value = @bitCast(f32_value),
-            .has_suffix = 1,
-            ._unused = 0,
+            .has_suffix = true,
         } });
         env.store.nodes.set(node_idx, node);
     } else if (std.mem.eql(u8, type_name, "F64")) {
@@ -683,7 +682,7 @@ fn rewriteNumericLiteralExpr(
         node.setPayload(.{ .expr_frac_f64 = .{
             .value_lo = low,
             .value_hi = high,
-            .has_suffix = 1,
+            .has_suffix = true,
         } });
         env.store.nodes.set(node_idx, node);
     } else if (!num_lit_info.is_fractional) {

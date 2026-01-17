@@ -477,7 +477,8 @@ pub const Payload = extern union {
     pub const ExprDecSmall = extern struct {
         numerator: u32,
         denom_power: u32,
-        has_suffix: u32,
+        has_suffix: bool,
+        _padding: [3]u8 = .{ 0, 0, 0 },
     };
 
     pub const ExprTuple = extern struct {
@@ -554,14 +555,15 @@ pub const Payload = extern union {
 
     pub const ExprFracF32 = extern struct {
         value: u32,
-        has_suffix: u32,
-        _unused: u32,
+        has_suffix: bool,
+        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprFracF64 = extern struct {
         value_lo: u32,
         value_hi: u32,
-        has_suffix: u32,
+        has_suffix: bool,
+        _padding: [3]u8 = .{ 0, 0, 0 },
     };
 
     /// expr_num: numeric literal with kind and value in int128_values
@@ -574,8 +576,8 @@ pub const Payload = extern union {
     /// expr_dec: decimal literal with value in int128_values
     pub const ExprDec = extern struct {
         int128_idx: u32,
-        has_suffix: u32,
-        _unused: u32,
+        has_suffix: bool,
+        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprString = extern struct {
@@ -756,14 +758,15 @@ pub const Payload = extern union {
     pub const PatternSmallDecLiteral = extern struct {
         numerator: u32,
         denominator_power: u32,
-        has_suffix: u32,
+        has_suffix: bool,
+        _padding: [3]u8 = .{ 0, 0, 0 },
     };
 
     /// pattern_dec_literal: decimal pattern with value in int128_values
     pub const PatternDecLiteral = extern struct {
         int128_idx: u32,
-        has_suffix: u32,
-        _unused: u32,
+        has_suffix: bool,
+        _padding: [7]u8 = .{ 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const PatternStrLiteral = extern struct {

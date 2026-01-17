@@ -436,8 +436,7 @@ pub const ComptimeEvaluator = struct {
                         var node = CIR.Node.init(.expr_frac_f32);
                         node.setPayload(.{ .expr_frac_f32 = .{
                             .value = @bitCast(f32_value),
-                            .has_suffix = 1,
-                            ._unused = 0,
+                            .has_suffix = true,
                         } });
                         self.env.store.nodes.set(node_idx, node);
                     },
@@ -452,7 +451,7 @@ pub const ComptimeEvaluator = struct {
                         node.setPayload(.{ .expr_frac_f64 = .{
                             .value_lo = low,
                             .value_hi = high,
-                            .has_suffix = 1,
+                            .has_suffix = true,
                         } });
                         self.env.store.nodes.set(node_idx, node);
                     },
@@ -1491,8 +1490,7 @@ pub const ComptimeEvaluator = struct {
                 var node = CIR.Node.init(.expr_frac_f32);
                 node.setPayload(.{ .expr_frac_f32 = .{
                     .value = @bitCast(f32_value),
-                    .has_suffix = 1,
-                    ._unused = 0,
+                    .has_suffix = true,
                 } });
                 self.env.store.nodes.set(node_idx, node);
             },
@@ -1506,7 +1504,7 @@ pub const ComptimeEvaluator = struct {
                 node.setPayload(.{ .expr_frac_f64 = .{
                     .value_lo = low,
                     .value_hi = high,
-                    .has_suffix = 1,
+                    .has_suffix = true,
                 } });
                 self.env.store.nodes.set(node_idx, node);
             },
