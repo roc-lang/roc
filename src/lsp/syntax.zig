@@ -1291,4 +1291,308 @@ pub const SyntaxChecker = struct {
     fn regionContainsOffset(region: Region, offset: u32) bool {
         return offset >= region.start.offset and offset < region.end.offset;
     }
+
+    /// Result of finding highlights for a symbol
+    pub const HighlightResult = struct {
+        regions: []LspRange,
+
+        pub fn deinit(self: HighlightResult, allocator: std.mem.Allocator) void {
+            allocator.free(self.regions);
+        }
+    };
+
+    /// Get all occurrences of the symbol at the given position.
+    /// Uses CIR to properly handle scoped variables (shadowing).
+    pub fn getHighlightsAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+    ) !?HighlightResult {
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
+        defer self.allocator.free(absolute_path);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var env = try self.resetBuildEnv();
+
+        var provider_state = OverrideProvider{
+            .override_path = absolute_path,
+            .override_text = override_text,
+        };
+        const provider: ?FileProvider = if (override_text != null) .{
+            .ctx = &provider_state,
+            .read = OverrideProvider.read,
+        } else null;
+        env.setFileProvider(provider);
+        defer env.setFileProvider(null);
+
+        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
+        const dir_owned = try self.allocator.dupe(u8, dir_slice);
+        defer self.allocator.free(dir_owned);
+        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
+        defer if (prev_cwd) |cwd| {
+            std.process.changeCurDir(cwd) catch {};
+            self.allocator.free(cwd);
+        };
+        std.process.changeCurDir(dir_owned) catch {};
+
+        self.logDebug(.build, "highlights: building {s}", .{absolute_path});
+        env.build(absolute_path) catch |err| {
+            self.logDebug(.build, "highlights: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+            return null;
+        };
+
+        // Drain reports but ignore them
+        const drained = env.drainReports() catch return null;
+        defer self.freeDrained(drained);
+
+        // Get any available scheduler and find the root module
+        const app_sched = env.schedulers.get("app") orelse blk: {
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env != null) {
+                        break :blk sched;
+                    }
+                }
+            }
+            return null;
+        };
+        const root_module = app_sched.getRootModule() orelse return null;
+        const module_env = if (root_module.env) |*e| e else return null;
+
+        // Convert LSP position to byte offset
+        const target_offset = positionToOffset(module_env, line, character) orelse return null;
+
+        // Find the pattern_idx at this position
+        const target_pattern = self.findPatternAtOffset(module_env, target_offset) orelse return null;
+
+        // Collect all references to this pattern
+        var regions = std.ArrayList(LspRange){};
+        errdefer regions.deinit(self.allocator);
+
+        // Add the definition itself
+        const def_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(target_pattern));
+        const def_region = module_env.store.getRegionAt(def_node_idx);
+        if (regionToRange(module_env, def_region)) |range| {
+            try regions.append(self.allocator, range);
+        }
+
+        // Find all lookups that reference this pattern
+        try self.collectLookupReferences(module_env, target_pattern, &regions);
+
+        return HighlightResult{
+            .regions = try regions.toOwnedSlice(self.allocator),
+        };
+    }
+
+    /// Find the pattern_idx at the given offset.
+    /// Returns the pattern being defined or referenced at that position.
+    fn findPatternAtOffset(self: *SyntaxChecker, module_env: *ModuleEnv, target_offset: u32) ?CIR.Pattern.Idx {
+        // First, check if we're on a lookup expression
+        var best_expr: ?CIR.Expr.Idx = null;
+        var best_size: u32 = std.math.maxInt(u32);
+
+        // Check definitions
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+
+            // Check if cursor is on the pattern (definition site)
+            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
+            const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
+            if (regionContainsOffset(pattern_region, target_offset)) {
+                const size = pattern_region.end.offset - pattern_region.start.offset;
+                if (size < best_size) {
+                    return def.pattern; // Return the pattern directly
+                }
+            }
+
+            // Check if cursor is on a lookup within this expression
+            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.expr));
+            const expr_region = module_env.store.getRegionAt(expr_node_idx);
+            if (regionContainsOffset(expr_region, target_offset)) {
+                if (self.findLookupAtOffset(module_env, def.expr, target_offset, &best_size)) |found| {
+                    best_expr = found;
+                }
+            }
+        }
+
+        // Check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+
+            // Check if cursor is on a pattern in a statement
+            if (stmt_parts.pattern) |pattern_idx| {
+                const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(pattern_idx));
+                const pattern_region = module_env.store.getRegionAt(pattern_node_idx);
+                if (regionContainsOffset(pattern_region, target_offset)) {
+                    const size = pattern_region.end.offset - pattern_region.start.offset;
+                    if (size < best_size) {
+                        return pattern_idx;
+                    }
+                }
+            }
+
+            // Check expressions in the statement
+            if (stmt_parts.expr) |expr_idx| {
+                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_region = module_env.store.getRegionAt(expr_node_idx);
+                if (regionContainsOffset(expr_region, target_offset)) {
+                    if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
+                        best_expr = found;
+                    }
+                }
+            }
+
+            if (stmt_parts.expr2) |expr_idx| {
+                const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                const expr_region = module_env.store.getRegionAt(expr_node_idx);
+                if (regionContainsOffset(expr_region, target_offset)) {
+                    if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
+                        best_expr = found;
+                    }
+                }
+            }
+        }
+
+        // If we found a lookup, extract the pattern it references
+        if (best_expr) |expr_idx| {
+            const expr = module_env.store.getExpr(expr_idx);
+            switch (expr) {
+                .e_lookup_local => |lookup| return lookup.pattern_idx,
+                else => {},
+            }
+        }
+
+        return null;
+    }
+
+    /// Collect all e_lookup_local expressions that reference the given pattern.
+    fn collectLookupReferences(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        target_pattern: CIR.Pattern.Idx,
+        regions: *std.ArrayList(LspRange),
+    ) !void {
+        // Check all definitions
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            try self.collectLookupsInExpr(module_env, def.expr, target_pattern, regions);
+        }
+
+        // Check all statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+
+            if (stmt_parts.expr) |expr_idx| {
+                try self.collectLookupsInExpr(module_env, expr_idx, target_pattern, regions);
+            }
+            if (stmt_parts.expr2) |expr_idx| {
+                try self.collectLookupsInExpr(module_env, expr_idx, target_pattern, regions);
+            }
+        }
+    }
+
+    /// Recursively collect lookups to target_pattern within an expression.
+    fn collectLookupsInExpr(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        target_pattern: CIR.Pattern.Idx,
+        regions: *std.ArrayList(LspRange),
+    ) !void {
+        const expr = module_env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_lookup_local => |lookup| {
+                if (@intFromEnum(lookup.pattern_idx) == @intFromEnum(target_pattern)) {
+                    const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+                    const region = module_env.store.getRegionAt(node_idx);
+                    if (regionToRange(module_env, region)) |range| {
+                        try regions.append(self.allocator, range);
+                    }
+                }
+            },
+            .e_closure => |closure| {
+                try self.collectLookupsInExpr(module_env, closure.lambda_idx, target_pattern, regions);
+            },
+            .e_lambda => |lambda| {
+                try self.collectLookupsInExpr(module_env, lambda.body, target_pattern, regions);
+            },
+            .e_call => |call| {
+                try self.collectLookupsInExpr(module_env, call.func, target_pattern, regions);
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    try self.collectLookupsInExpr(module_env, arg, target_pattern, regions);
+                }
+            },
+            .e_block => |block| {
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt_parts = getStatementParts(stmt);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        try self.collectLookupsInExpr(module_env, stmt_expr, target_pattern, regions);
+                    }
+                    if (stmt_parts.expr2) |stmt_expr| {
+                        try self.collectLookupsInExpr(module_env, stmt_expr, target_pattern, regions);
+                    }
+                }
+                try self.collectLookupsInExpr(module_env, block.final_expr, target_pattern, regions);
+            },
+            .e_if => |if_expr| {
+                const branches = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    try self.collectLookupsInExpr(module_env, branch.cond, target_pattern, regions);
+                    try self.collectLookupsInExpr(module_env, branch.body, target_pattern, regions);
+                }
+                try self.collectLookupsInExpr(module_env, if_expr.final_else, target_pattern, regions);
+            },
+            .e_match => |match_expr| {
+                try self.collectLookupsInExpr(module_env, match_expr.cond, target_pattern, regions);
+                const branches = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    try self.collectLookupsInExpr(module_env, branch.value, target_pattern, regions);
+                    if (branch.guard) |guard| {
+                        try self.collectLookupsInExpr(module_env, guard, target_pattern, regions);
+                    }
+                }
+            },
+            .e_list => |list| {
+                const elems = module_env.store.sliceExpr(list.elems);
+                for (elems) |elem| {
+                    try self.collectLookupsInExpr(module_env, elem, target_pattern, regions);
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem| {
+                    try self.collectLookupsInExpr(module_env, elem, target_pattern, regions);
+                }
+            },
+            .e_record => |rec| {
+                const fields = module_env.store.sliceRecordFields(rec.fields);
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    try self.collectLookupsInExpr(module_env, field.value, target_pattern, regions);
+                }
+            },
+            else => {},
+        }
+    }
 };
