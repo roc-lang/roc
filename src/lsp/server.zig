@@ -25,6 +25,7 @@ const semantic_tokens_handler_mod = @import("handlers/semantic_tokens.zig");
 const hover_handler_mod = @import("handlers/hover.zig");
 const definition_handler_mod = @import("handlers/definition.zig");
 const formatting_handler_mod = @import("handlers/formatting.zig");
+const document_symbol_handler_mod = @import("handlers/document_symbol.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -43,6 +44,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         const HoverHandler = hover_handler_mod.handler(Self);
         const DefinitionHandler = definition_handler_mod.handler(Self);
         const FormattingHandler = formatting_handler_mod.handler(Self);
+        const DocumentSymbolHandler = document_symbol_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
@@ -50,6 +52,7 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
             .{ "textDocument/hover", &HoverHandler.call },
             .{ "textDocument/definition", &DefinitionHandler.call },
             .{ "textDocument/formatting", &FormattingHandler.call },
+            .{ "textDocument/documentSymbol", &DocumentSymbolHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
