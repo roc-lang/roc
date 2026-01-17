@@ -610,6 +610,46 @@ pub const SyntaxChecker = struct {
                         .range = range,
                     };
                 },
+                .e_lookup_external => |lookup| {
+                    // External lookup - resolve to the module file
+                    // Get the module name from the imports store
+                    const import_idx = @intFromEnum(lookup.module_idx);
+                    if (import_idx >= module_env.imports.imports.items.items.len) return null;
+                    const string_idx = module_env.imports.imports.items.items[import_idx];
+                    const import_name = module_env.common.getString(string_idx);
+
+                    // Try to find the module path from BuildEnv schedulers
+                    const env = self.build_env orelse return null;
+
+                    // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
+                    const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
+                        import_name[dot_pos + 1 ..]
+                    else
+                        import_name;
+
+                    // Search all schedulers for a module matching this name
+                    var sched_it = env.schedulers.iterator();
+                    while (sched_it.next()) |entry| {
+                        const sched = entry.value_ptr.*;
+                        // Look for module by name
+                        if (sched.getModuleState(base_name)) |mod_state| {
+                            // Found the module - convert its path to a URI
+                            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch return null;
+                            // Return definition at start of file (line 0, char 0)
+                            // TODO: Use target_node_idx to navigate to specific definition
+                            return DefinitionResult{
+                                .uri = module_uri,
+                                .range = .{
+                                    .start_line = 0,
+                                    .start_col = 0,
+                                    .end_line = 0,
+                                    .end_col = 0,
+                                },
+                            };
+                        }
+                    }
+                    return null;
+                },
                 else => return null,
             }
         }
@@ -754,6 +794,44 @@ pub const SyntaxChecker = struct {
                     }
                 }
             },
+            .e_str => |str| {
+                // String with interpolation - search through all segments
+                // Interpolated segments contain expressions that may have lookups
+                const segments = module_env.store.sliceExpr(str.span);
+                for (segments) |segment| {
+                    if (self.findLookupAtOffset(module_env, segment, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+            },
+            .e_list => |list| {
+                // Check list elements for lookups
+                const elems = module_env.store.sliceExpr(list.elems);
+                for (elems) |elem| {
+                    if (self.findLookupAtOffset(module_env, elem, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+            },
+            .e_tuple => |tuple| {
+                // Check tuple elements for lookups
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem| {
+                    if (self.findLookupAtOffset(module_env, elem, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+            },
+            .e_record => |rec| {
+                // Check record field values for lookups
+                const fields = module_env.store.sliceRecordFields(rec.fields);
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (self.findLookupAtOffset(module_env, field.value, target_offset, best_size)) |found| {
+                        result = found;
+                    }
+                }
+            },
             else => {},
         }
 
@@ -810,6 +888,34 @@ pub const SyntaxChecker = struct {
                         .type_var = ModuleEnv.varFrom(pattern_idx),
                         .region = pattern_region,
                     };
+                }
+            }
+
+            // Check if cursor is in the annotation's TypeAnno region (for defs with type annotations)
+            if (def.annotation) |anno_idx| {
+                const annotation = module_env.store.getAnnotation(anno_idx);
+                const type_anno_region = module_env.store.getTypeAnnoRegion(annotation.anno);
+                if (regionContainsOffset(type_anno_region, target_offset)) {
+                    const size = type_anno_region.end.offset - type_anno_region.start.offset;
+                    if (size < best_size) {
+                        best_size = size;
+                        best_result = .{
+                            .type_var = ModuleEnv.varFrom(pattern_idx),
+                            .region = type_anno_region,
+                        };
+                    }
+                }
+                // Also check the Annotation's region (the identifier part like "myFunc" in "myFunc : T")
+                const anno_region = module_env.store.getAnnotationRegion(anno_idx);
+                if (regionContainsOffset(anno_region, target_offset)) {
+                    const size = anno_region.end.offset - anno_region.start.offset;
+                    if (size < best_size) {
+                        best_size = size;
+                        best_result = .{
+                            .type_var = ModuleEnv.varFrom(pattern_idx),
+                            .region = anno_region,
+                        };
+                    }
                 }
             }
         }
@@ -875,6 +981,110 @@ pub const SyntaxChecker = struct {
                             .type_var = ModuleEnv.varFrom(pattern_idx),
                             .region = pattern_region,
                         };
+                    }
+                }
+            }
+
+            // For declarations with annotations, check if cursor is in the TypeAnno region
+            // The TypeAnno region covers the actual type annotation (e.g., "Animal" in "dog : Animal")
+            const stmt_anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
+                .s_decl => |d| d.anno,
+                .s_decl_gen => |d| d.anno,
+                else => null,
+            };
+            if (stmt_anno_idx) |actual_anno_idx| {
+                // Get the TypeAnno's region directly - this covers the type on the annotation line
+                const annotation = module_env.store.getAnnotation(actual_anno_idx);
+                const type_anno_region = module_env.store.getTypeAnnoRegion(annotation.anno);
+                if (regionContainsOffset(type_anno_region, target_offset)) {
+                    if (stmt_parts.pattern) |pattern_idx| {
+                        const size = type_anno_region.end.offset - type_anno_region.start.offset;
+                        if (size < best_size) {
+                            best_size = size;
+                            best_result = .{
+                                .type_var = ModuleEnv.varFrom(pattern_idx),
+                                .region = type_anno_region,
+                            };
+                        }
+                    }
+                }
+                // Also check the Annotation's region (covers the identifier like "dog" in "dog : Animal")
+                const anno_region = module_env.store.getAnnotationRegion(actual_anno_idx);
+                if (regionContainsOffset(anno_region, target_offset)) {
+                    if (stmt_parts.pattern) |pattern_idx| {
+                        const size = anno_region.end.offset - anno_region.start.offset;
+                        if (size < best_size) {
+                            best_size = size;
+                            best_result = .{
+                                .type_var = ModuleEnv.varFrom(pattern_idx),
+                                .region = anno_region,
+                            };
+                        }
+                    }
+                }
+            }
+
+            // Handle type annotation statements specially (orphaned annotations without matching declarations)
+            // When hovering on a type annotation like "dog : Animal", find the corresponding declaration
+            if (stmt == .s_type_anno) {
+                const type_anno = stmt.s_type_anno;
+                const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+
+                if (regionContainsOffset(stmt_region, target_offset)) {
+                    const anno_ident = type_anno.name;
+
+                    // Search through all statements for a matching declaration
+                    for (statements_slice) |other_stmt_idx| {
+                        const other_stmt = module_env.store.getStatement(other_stmt_idx);
+                        const pattern_idx = switch (other_stmt) {
+                            .s_decl => |d| d.pattern,
+                            .s_decl_gen => |d| d.pattern,
+                            .s_var => |v| v.pattern_idx,
+                            else => continue,
+                        };
+
+                        const pattern = module_env.store.getPattern(pattern_idx);
+                        const pattern_ident = switch (pattern) {
+                            .assign => |a| a.ident,
+                            else => continue,
+                        };
+
+                        // Compare identifier indices
+                        if (pattern_ident.idx == anno_ident.idx) {
+                            // Found matching declaration - return the pattern's type
+                            const size = stmt_region.end.offset - stmt_region.start.offset;
+                            if (size < best_size) {
+                                best_size = size;
+                                best_result = .{
+                                    .type_var = ModuleEnv.varFrom(pattern_idx),
+                                    .region = stmt_region,
+                                };
+                            }
+                            break;
+                        }
+                    }
+
+                    // Also check definitions (modules use defs, apps use statements)
+                    const anno_defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+                    for (anno_defs_slice) |def_idx| {
+                        const def = module_env.store.getDef(def_idx);
+                        const pattern = module_env.store.getPattern(def.pattern);
+                        const pattern_ident = switch (pattern) {
+                            .assign => |a| a.ident,
+                            else => continue,
+                        };
+
+                        if (pattern_ident.idx == anno_ident.idx) {
+                            const size = stmt_region.end.offset - stmt_region.start.offset;
+                            if (size < best_size) {
+                                best_size = size;
+                                best_result = .{
+                                    .type_var = ModuleEnv.varFrom(def.pattern),
+                                    .region = stmt_region,
+                                };
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -964,6 +1174,83 @@ pub const SyntaxChecker = struct {
                                     .type_var = ModuleEnv.varFrom(pattern_idx),
                                     .region = pattern_region,
                                 };
+                            }
+                        }
+                    }
+
+                    // For declarations with annotations, check if cursor is in the TypeAnno region
+                    // The TypeAnno region covers the actual type annotation (e.g., "Animal" in "dog : Animal")
+                    const block_anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
+                        .s_decl => |d| d.anno,
+                        .s_decl_gen => |d| d.anno,
+                        else => null,
+                    };
+                    if (block_anno_idx) |anno_idx| {
+                        // Get the TypeAnno's region directly - this covers the type on the annotation line
+                        const annotation = module_env.store.getAnnotation(anno_idx);
+                        const type_anno_region = module_env.store.getTypeAnnoRegion(annotation.anno);
+                        if (regionContainsOffset(type_anno_region, target_offset)) {
+                            if (stmt_parts.pattern) |pattern_idx| {
+                                const size = type_anno_region.end.offset - type_anno_region.start.offset;
+                                if (size < best_size.*) {
+                                    best_size.* = size;
+                                    result = .{
+                                        .type_var = ModuleEnv.varFrom(pattern_idx),
+                                        .region = type_anno_region,
+                                    };
+                                }
+                            }
+                        }
+                        // Also check the Annotation's region (covers the identifier like "dog" in "dog : Animal")
+                        const anno_region = module_env.store.getAnnotationRegion(anno_idx);
+                        if (regionContainsOffset(anno_region, target_offset)) {
+                            if (stmt_parts.pattern) |pattern_idx| {
+                                const size = anno_region.end.offset - anno_region.start.offset;
+                                if (size < best_size.*) {
+                                    best_size.* = size;
+                                    result = .{
+                                        .type_var = ModuleEnv.varFrom(pattern_idx),
+                                        .region = anno_region,
+                                    };
+                                }
+                            }
+                        }
+                    }
+
+                    // Handle type annotation statements in blocks (orphaned annotations)
+                    if (stmt == .s_type_anno) {
+                        const type_anno = stmt.s_type_anno;
+                        const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+                        if (regionContainsOffset(stmt_region, target_offset)) {
+                            const anno_ident = type_anno.name;
+
+                            // Search through block statements for matching declaration
+                            for (stmts) |other_stmt_idx| {
+                                const other_stmt = module_env.store.getStatement(other_stmt_idx);
+                                const pattern_idx = switch (other_stmt) {
+                                    .s_decl => |d| d.pattern,
+                                    .s_decl_gen => |d| d.pattern,
+                                    .s_var => |v| v.pattern_idx,
+                                    else => continue,
+                                };
+
+                                const pattern = module_env.store.getPattern(pattern_idx);
+                                const pattern_ident = switch (pattern) {
+                                    .assign => |a| a.ident,
+                                    else => continue,
+                                };
+
+                                if (pattern_ident.idx == anno_ident.idx) {
+                                    const size = stmt_region.end.offset - stmt_region.start.offset;
+                                    if (size < best_size.*) {
+                                        best_size.* = size;
+                                        result = .{
+                                            .type_var = ModuleEnv.varFrom(pattern_idx),
+                                            .region = stmt_region,
+                                        };
+                                    }
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1089,6 +1376,30 @@ pub const SyntaxChecker = struct {
             .e_unary_not => |unary| {
                 if (self.checkExprAndRecurse(module_env, unary.expr, target_offset, best_size)) |r| {
                     result = r;
+                }
+            },
+            .e_str => |str| {
+                // String with interpolation - check all segments
+                const segments = module_env.store.sliceExpr(str.span);
+                for (segments) |segment| {
+                    if (self.checkExprAndRecurse(module_env, segment, target_offset, best_size)) |r| {
+                        result = r;
+                    }
+                }
+            },
+            .e_dot_access => |dot| {
+                // Check the receiver
+                if (self.checkExprAndRecurse(module_env, dot.receiver, target_offset, best_size)) |r| {
+                    result = r;
+                }
+                // Check the arguments if present
+                if (dot.args) |args_span| {
+                    const args = module_env.store.sliceExpr(args_span);
+                    for (args) |arg| {
+                        if (self.checkExprAndRecurse(module_env, arg, target_offset, best_size)) |r| {
+                            result = r;
+                        }
+                    }
                 }
             },
             else => {
