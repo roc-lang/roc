@@ -21,11 +21,7 @@ const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
-/// Backend for code evaluation
-pub const Backend = enum {
-    interpreter,
-    dev,
-};
+pub const Backend = @import("backend").EvalBackend;
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {

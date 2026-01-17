@@ -10,8 +10,7 @@ const Repl = repl_mod.Repl;
 
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
-const cli_args = @import("cli_args.zig");
-const Backend = cli_args.Backend;
+const Backend = @import("backend").EvalBackend;
 
 /// An implementation of RocOps for the CLI REPL.
 const ReplOps = struct {
@@ -173,13 +172,7 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
     var repl_ops = ReplOps.init(ctx.gpa);
     defer repl_ops.deinit();
 
-    // Convert CLI backend to REPL backend
-    const repl_backend: repl_mod.Backend = switch (backend) {
-        .interpreter => .interpreter,
-        .dev => .dev,
-    };
-
-    var repl_instance = Repl.initWithBackend(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr(), repl_backend) catch |err| {
+    var repl_instance = Repl.initWithBackend(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr(), backend) catch |err| {
         ctx.io.stderr().print("Failed to initialize REPL: {}\n", .{err}) catch {};
         return error.NotImplemented;
     };

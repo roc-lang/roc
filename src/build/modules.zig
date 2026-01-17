@@ -321,7 +321,7 @@ pub const ModuleType = enum {
             .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
@@ -476,6 +476,7 @@ pub const RocModules = struct {
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
+        step.root_module.addImport("backend", self.backend);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {

@@ -3,6 +3,8 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
+pub const Backend = @import("backend").EvalBackend;
+
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
 /// but defining a struct per command means that we can easily take that type and pass it into the function that implements each command.
@@ -138,20 +140,6 @@ pub const ExperimentalLspArgs = struct {
     debug_build: bool = false,
     debug_syntax: bool = false,
     debug_server: bool = false,
-};
-
-/// Backend selection for code evaluation
-pub const Backend = enum {
-    interpreter,
-    dev,
-    // llvm, // Future: LLVM backend
-
-    pub fn fromString(s: []const u8) ?Backend {
-        if (mem.eql(u8, s, "interpreter")) return .interpreter;
-        if (mem.eql(u8, s, "dev")) return .dev;
-        // if (mem.eql(u8, s, "llvm")) return .llvm;
-        return null;
-    }
 };
 
 /// Arguments for `roc repl`

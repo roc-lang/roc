@@ -201,6 +201,23 @@ pub const ElfWriter = struct {
         try self.text.appendSlice(self.allocator, code);
     }
 
+    /// Allocate space in the rodata section for a constant value.
+    /// Returns the offset within rodata and a pointer to write the value.
+    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
+        // Align current position
+        const current_len = self.rodata.items.len;
+        const aligned_offset = std.mem.alignForward(usize, current_len, alignment);
+        const padding = aligned_offset - current_len;
+
+        // Add padding and space for the value
+        try self.rodata.appendNTimes(self.allocator, 0, padding + size);
+
+        return .{
+            .offset = aligned_offset,
+            .ptr = self.rodata.items.ptr + aligned_offset,
+        };
+    }
+
     /// Add a symbol to the object file
     pub fn addSymbol(self: *Self, symbol: Symbol) !u32 {
         const idx: u32 = @intCast(self.symbols.items.len);
@@ -541,3 +558,4 @@ test "elf with external symbol" {
     // Should produce valid ELF
     try std.testing.expectEqualSlices(u8, "\x7fELF", output.items[0..4]);
 }
+

@@ -31,6 +31,8 @@ const comptime_value = eval_mod.comptime_value;
 const ComptimeHeap = comptime_value.ComptimeHeap;
 const ComptimeValue = comptime_value.ComptimeValue;
 const ComptimeEnv = comptime_value.ComptimeEnv;
+const TopLevelBindings = comptime_value.TopLevelBindings;
+const DependencyGraph = can.DependencyGraph;
 
 /// Dev backend-based evaluator for Roc expressions
 pub const DevEvaluator = struct {
@@ -136,6 +138,60 @@ pub const DevEvaluator = struct {
             self.allocator.free(msg);
             self.crash_message = null;
         }
+    }
+
+    /// Evaluate all top-level constants in a module.
+    ///
+    /// Processes definitions in dependency order (using SCC ordering from canonicalization).
+    /// For each non-function constant:
+    /// 1. Allocates a landing pad in rodata
+    /// 2. Generates JIT code that computes the value
+    /// 3. Executes the code, writing directly to the landing pad
+    /// 4. Records the address in TopLevelBindings
+    ///
+    /// Returns bindings mapping pattern indices to their evaluated addresses.
+    pub fn evaluateTopLevelConstants(
+        self: *DevEvaluator,
+        module_env: *ModuleEnv,
+        _: *layout.Store, // layout_store - will be used for size/alignment
+    ) Error!TopLevelBindings {
+        var bindings = TopLevelBindings.init(self.allocator);
+        errdefer bindings.deinit();
+
+        const eval_order = module_env.evaluation_order orelse return bindings;
+
+        for (eval_order.sccs) |scc| {
+            // Non-function recursive constants should have been rejected by canonicalization
+            if (scc.is_recursive) {
+                // For now, skip recursive SCCs (these would be mutual recursion)
+                continue;
+            }
+
+            for (scc.defs) |def_idx| {
+                const def = module_env.store.getDef(def_idx);
+                const expr = module_env.store.getExpr(def.expr);
+
+                // Skip functions - they don't need landing pads
+                if (isTopLevelFunction(expr)) continue;
+
+                // TODO: Full implementation:
+                // 1. Get layout for size/alignment from def
+                // 2. Allocate landing pad in rodata
+                // 3. Generate code that writes result to landing pad
+                // 4. JIT execute the code
+                // 5. Record binding: bindings.bind(@intFromEnum(def.pattern), landing_pad_ptr)
+            }
+        }
+
+        return bindings;
+    }
+
+    /// Check if an expression is a top-level function (lambda, closure, etc.)
+    fn isTopLevelFunction(expr: CIR.Expr) bool {
+        return switch (expr) {
+            .e_lambda, .e_closure, .e_low_level_lambda, .e_hosted_lambda => true,
+            else => false,
+        };
     }
 
     /// Create an empty ComptimeEnv using the evaluator's heap
@@ -1252,76 +1308,108 @@ pub const DevEvaluator = struct {
         }
     }
 
-    /// Generate code that returns an i64/u64 value
+    /// Generate code that returns an i64/u64 value.
+    /// The generated code:
+    /// 1. Loads the value into a register (rax on x86_64, x1 on aarch64)
+    /// 2. Stores it to the result pointer (passed in rdi on x86_64, x0 on aarch64)
+    /// 3. Returns (with value also in rax/x0 for compatibility)
     fn generateReturnI64Code(self: *DevEvaluator, value: i64, _: LayoutIdx) Error![]const u8 {
         switch (builtin.cpu.arch) {
             .x86_64 => {
                 // x86_64 code:
-                // movabs rax, <value>  ; 48 B8 <8 bytes>
+                // movabs rax, <value>  ; 48 B8 <8 bytes> - load value into rax
+                // mov [rdi], rax       ; 48 89 07       - store to result pointer
                 // ret                  ; C3
-                var code = self.allocator.alloc(u8, 11) catch return error.OutOfMemory;
+                var code = self.allocator.alloc(u8, 14) catch return error.OutOfMemory;
 
                 // movabs rax, imm64
                 code[0] = 0x48; // REX.W
                 code[1] = 0xB8; // MOV RAX, imm64
                 @memcpy(code[2..10], std.mem.asBytes(&value));
-                code[10] = 0xC3; // RET
+
+                // mov [rdi], rax (store to result pointer)
+                code[10] = 0x48; // REX.W
+                code[11] = 0x89; // MOV r/m64, r64
+                code[12] = 0x07; // ModR/M: [rdi], rax
+
+                code[13] = 0xC3; // RET
 
                 return code;
             },
             .aarch64 => {
-                // aarch64 code: need to load 64-bit value into x0 and return
-                // For simplicity, we'll handle values that fit in various sizes
+                // aarch64 code:
+                // x0 contains result pointer on entry
+                // Load value into x1, store to [x0], move to x0 for return
                 const uvalue: u64 = @bitCast(value);
 
                 if (uvalue <= 0xFFFF) {
-                    // mov x0, #<imm16>  ; 4 bytes
-                    // ret              ; 4 bytes
-                    var code = self.allocator.alloc(u8, 8) catch return error.OutOfMemory;
+                    // mov x1, #<imm16>  ; 4 bytes - load into x1
+                    // str x1, [x0]      ; 4 bytes - store to result pointer
+                    // mov x0, x1        ; 4 bytes - copy to x0 for return value
+                    // ret               ; 4 bytes
+                    var code = self.allocator.alloc(u8, 16) catch return error.OutOfMemory;
 
-                    // MOV X0, #imm16
+                    // MOV X1, #imm16
                     const imm16: u16 = @truncate(uvalue);
-                    const mov_inst: u32 = 0xD2800000 | (@as(u32, imm16) << 5);
+                    const mov_inst: u32 = 0xD2800001 | (@as(u32, imm16) << 5); // X1 instead of X0
                     @memcpy(code[0..4], std.mem.asBytes(&mov_inst));
+
+                    // STR X1, [X0]
+                    const str_inst: u32 = 0xF9000001; // STR X1, [X0]
+                    @memcpy(code[4..8], std.mem.asBytes(&str_inst));
+
+                    // MOV X0, X1 (ORR X0, XZR, X1)
+                    const mov_x0_x1: u32 = 0xAA0103E0;
+                    @memcpy(code[8..12], std.mem.asBytes(&mov_x0_x1));
 
                     // RET
                     const ret_inst: u32 = 0xD65F03C0;
-                    @memcpy(code[4..8], std.mem.asBytes(&ret_inst));
+                    @memcpy(code[12..16], std.mem.asBytes(&ret_inst));
 
                     return code;
                 } else {
-                    // For larger values, we need multiple MOV/MOVK instructions
-                    // mov x0, #<low16>
-                    // movk x0, #<high16>, lsl #16
-                    // movk x0, #<high32>, lsl #32
-                    // movk x0, #<high48>, lsl #48
+                    // For larger values, use x1 for the value
+                    // mov x1, #<low16>
+                    // movk x1, #<high16>, lsl #16
+                    // movk x1, #<high32>, lsl #32
+                    // movk x1, #<high48>, lsl #48
+                    // str x1, [x0]      - store to result pointer
+                    // mov x0, x1        - copy to x0 for return
                     // ret
-                    var code = self.allocator.alloc(u8, 20) catch return error.OutOfMemory;
+                    var code = self.allocator.alloc(u8, 28) catch return error.OutOfMemory;
 
                     const imm0: u16 = @truncate(uvalue);
                     const imm1: u16 = @truncate(uvalue >> 16);
                     const imm2: u16 = @truncate(uvalue >> 32);
                     const imm3: u16 = @truncate(uvalue >> 48);
 
-                    // MOV X0, #imm0
-                    const mov_inst: u32 = 0xD2800000 | (@as(u32, imm0) << 5);
+                    // MOV X1, #imm0
+                    const mov_inst: u32 = 0xD2800001 | (@as(u32, imm0) << 5); // X1
                     @memcpy(code[0..4], std.mem.asBytes(&mov_inst));
 
-                    // MOVK X0, #imm1, LSL #16
-                    const movk1_inst: u32 = 0xF2A00000 | (@as(u32, imm1) << 5);
+                    // MOVK X1, #imm1, LSL #16
+                    const movk1_inst: u32 = 0xF2A00001 | (@as(u32, imm1) << 5); // X1
                     @memcpy(code[4..8], std.mem.asBytes(&movk1_inst));
 
-                    // MOVK X0, #imm2, LSL #32
-                    const movk2_inst: u32 = 0xF2C00000 | (@as(u32, imm2) << 5);
+                    // MOVK X1, #imm2, LSL #32
+                    const movk2_inst: u32 = 0xF2C00001 | (@as(u32, imm2) << 5); // X1
                     @memcpy(code[8..12], std.mem.asBytes(&movk2_inst));
 
-                    // MOVK X0, #imm3, LSL #48
-                    const movk3_inst: u32 = 0xF2E00000 | (@as(u32, imm3) << 5);
+                    // MOVK X1, #imm3, LSL #48
+                    const movk3_inst: u32 = 0xF2E00001 | (@as(u32, imm3) << 5); // X1
                     @memcpy(code[12..16], std.mem.asBytes(&movk3_inst));
+
+                    // STR X1, [X0]
+                    const str_inst: u32 = 0xF9000001;
+                    @memcpy(code[16..20], std.mem.asBytes(&str_inst));
+
+                    // MOV X0, X1 (ORR X0, XZR, X1)
+                    const mov_x0_x1: u32 = 0xAA0103E0;
+                    @memcpy(code[20..24], std.mem.asBytes(&mov_x0_x1));
 
                     // RET
                     const ret_inst: u32 = 0xD65F03C0;
-                    @memcpy(code[16..20], std.mem.asBytes(&ret_inst));
+                    @memcpy(code[24..28], std.mem.asBytes(&ret_inst));
 
                     return code;
                 }
@@ -1330,92 +1418,109 @@ pub const DevEvaluator = struct {
         }
     }
 
-    /// Generate code that returns an f64 value
+    /// Generate code that returns an f64 value.
+    /// Stores to result pointer (rdi on x86_64, x0 on aarch64) and also
+    /// returns in xmm0/d0 for compatibility.
     fn generateReturnF64Code(self: *DevEvaluator, value: f64) Error![]const u8 {
         const bits: u64 = @bitCast(value);
 
         switch (builtin.cpu.arch) {
             .x86_64 => {
                 // x86_64 code:
-                // movabs rax, <bits>   ; 48 B8 <8 bytes>
-                // movq xmm0, rax       ; 66 48 0F 6E C0
+                // movabs rax, <bits>   ; 48 B8 <8 bytes> - load bits into rax
+                // mov [rdi], rax       ; 48 89 07       - store to result pointer
+                // movq xmm0, rax       ; 66 48 0F 6E C0 - move to xmm0 for float return
                 // ret                  ; C3
-                var code = self.allocator.alloc(u8, 16) catch return error.OutOfMemory;
+                var code = self.allocator.alloc(u8, 19) catch return error.OutOfMemory;
 
                 // movabs rax, imm64
                 code[0] = 0x48; // REX.W
                 code[1] = 0xB8; // MOV RAX, imm64
                 @memcpy(code[2..10], std.mem.asBytes(&bits));
 
+                // mov [rdi], rax (store to result pointer)
+                code[10] = 0x48; // REX.W
+                code[11] = 0x89; // MOV r/m64, r64
+                code[12] = 0x07; // ModR/M: [rdi], rax
+
                 // movq xmm0, rax
-                code[10] = 0x66;
-                code[11] = 0x48;
-                code[12] = 0x0F;
-                code[13] = 0x6E;
-                code[14] = 0xC0;
+                code[13] = 0x66;
+                code[14] = 0x48;
+                code[15] = 0x0F;
+                code[16] = 0x6E;
+                code[17] = 0xC0;
 
                 // ret
-                code[15] = 0xC3;
+                code[18] = 0xC3;
 
                 return code;
             },
             .aarch64 => {
                 // aarch64 code:
-                // Load 64-bit value into x0, then move to d0
-                // For floating point, return value is in d0/v0
+                // x0 contains result pointer on entry
+                // Load value into x1, store to [x0], move to d0
                 const uvalue = bits;
 
                 if (uvalue <= 0xFFFF) {
-                    // mov x0, #<imm16>
-                    // fmov d0, x0
+                    // mov x1, #<imm16>  ; load into x1
+                    // str x1, [x0]      ; store to result pointer
+                    // fmov d0, x1       ; move to d0 for float return
                     // ret
-                    var code = self.allocator.alloc(u8, 12) catch return error.OutOfMemory;
+                    var code = self.allocator.alloc(u8, 16) catch return error.OutOfMemory;
 
                     const imm16: u16 = @truncate(uvalue);
-                    const mov_inst: u32 = 0xD2800000 | (@as(u32, imm16) << 5);
+                    const mov_inst: u32 = 0xD2800001 | (@as(u32, imm16) << 5); // X1
                     @memcpy(code[0..4], std.mem.asBytes(&mov_inst));
 
-                    // FMOV D0, X0
-                    const fmov_inst: u32 = 0x9E670000;
-                    @memcpy(code[4..8], std.mem.asBytes(&fmov_inst));
+                    // STR X1, [X0]
+                    const str_inst: u32 = 0xF9000001;
+                    @memcpy(code[4..8], std.mem.asBytes(&str_inst));
+
+                    // FMOV D0, X1
+                    const fmov_inst: u32 = 0x9E670020; // FMOV D0, X1
+                    @memcpy(code[8..12], std.mem.asBytes(&fmov_inst));
 
                     // RET
                     const ret_inst: u32 = 0xD65F03C0;
-                    @memcpy(code[8..12], std.mem.asBytes(&ret_inst));
+                    @memcpy(code[12..16], std.mem.asBytes(&ret_inst));
 
                     return code;
                 } else {
-                    // Full 64-bit load
-                    var code = self.allocator.alloc(u8, 24) catch return error.OutOfMemory;
+                    // Full 64-bit load into x1
+                    var code = self.allocator.alloc(u8, 28) catch return error.OutOfMemory;
 
                     const imm0: u16 = @truncate(uvalue);
                     const imm1: u16 = @truncate(uvalue >> 16);
                     const imm2: u16 = @truncate(uvalue >> 32);
                     const imm3: u16 = @truncate(uvalue >> 48);
 
-                    // MOV X0, #imm0
-                    const mov_inst: u32 = 0xD2800000 | (@as(u32, imm0) << 5);
+                    // MOV X1, #imm0
+                    const mov_inst: u32 = 0xD2800001 | (@as(u32, imm0) << 5); // X1
                     @memcpy(code[0..4], std.mem.asBytes(&mov_inst));
 
-                    // MOVK X0, #imm1, LSL #16
-                    const movk1_inst: u32 = 0xF2A00000 | (@as(u32, imm1) << 5);
+                    // MOVK X1, #imm1, LSL #16
+                    const movk1_inst: u32 = 0xF2A00001 | (@as(u32, imm1) << 5); // X1
                     @memcpy(code[4..8], std.mem.asBytes(&movk1_inst));
 
-                    // MOVK X0, #imm2, LSL #32
-                    const movk2_inst: u32 = 0xF2C00000 | (@as(u32, imm2) << 5);
+                    // MOVK X1, #imm2, LSL #32
+                    const movk2_inst: u32 = 0xF2C00001 | (@as(u32, imm2) << 5); // X1
                     @memcpy(code[8..12], std.mem.asBytes(&movk2_inst));
 
-                    // MOVK X0, #imm3, LSL #48
-                    const movk3_inst: u32 = 0xF2E00000 | (@as(u32, imm3) << 5);
+                    // MOVK X1, #imm3, LSL #48
+                    const movk3_inst: u32 = 0xF2E00001 | (@as(u32, imm3) << 5); // X1
                     @memcpy(code[12..16], std.mem.asBytes(&movk3_inst));
 
-                    // FMOV D0, X0
-                    const fmov_inst: u32 = 0x9E670000;
-                    @memcpy(code[16..20], std.mem.asBytes(&fmov_inst));
+                    // STR X1, [X0]
+                    const str_inst: u32 = 0xF9000001;
+                    @memcpy(code[16..20], std.mem.asBytes(&str_inst));
+
+                    // FMOV D0, X1
+                    const fmov_inst: u32 = 0x9E670020; // FMOV D0, X1
+                    @memcpy(code[20..24], std.mem.asBytes(&fmov_inst));
 
                     // RET
                     const ret_inst: u32 = 0xD65F03C0;
-                    @memcpy(code[20..24], std.mem.asBytes(&ret_inst));
+                    @memcpy(code[24..28], std.mem.asBytes(&ret_inst));
 
                     return code;
                 }
@@ -1823,6 +1928,218 @@ test "generate f64 code" {
 
     const result = jit.callReturnF64();
     try std.testing.expectApproxEqRel(@as(f64, 3.14159), result, 0.0001);
+}
+
+// =============================================================================
+// Result pointer tests - verify code writes to the landing pad correctly
+// =============================================================================
+
+test "result pointer: i64 value written to memory" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnI64Code(42, .i64);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    // Pre-allocate a landing pad and call with result pointer
+    var result: i64 = 0xBAD;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    // Verify the value was written to our landing pad
+    try std.testing.expectEqual(@as(i64, 42), result);
+}
+
+test "result pointer: negative i64" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnI64Code(-999, .i64);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: i64 = 0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectEqual(@as(i64, -999), result);
+}
+
+test "result pointer: zero" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnI64Code(0, .i64);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: i64 = 0xDEAD;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectEqual(@as(i64, 0), result);
+}
+
+test "result pointer: max i64" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const max_val = std.math.maxInt(i64);
+    const code = try evaluator.generateReturnI64Code(max_val, .i64);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: i64 = 0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectEqual(max_val, result);
+}
+
+test "result pointer: min i64" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const min_val = std.math.minInt(i64);
+    const code = try evaluator.generateReturnI64Code(min_val, .i64);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: i64 = 0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectEqual(min_val, result);
+}
+
+test "result pointer: f64 value written to memory" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnF64Code(3.14159265358979);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: f64 = 0.0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectApproxEqRel(@as(f64, 3.14159265358979), result, 0.0000001);
+}
+
+test "result pointer: negative f64" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnF64Code(-123.456);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: f64 = 0.0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectApproxEqRel(@as(f64, -123.456), result, 0.0001);
+}
+
+test "result pointer: f64 zero" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    const code = try evaluator.generateReturnF64Code(0.0);
+    defer evaluator.allocator.free(code);
+
+    var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+    defer jit.deinit();
+
+    var result: f64 = 999.0;
+    jit.callWithResultPtr(@ptrCast(&result));
+
+    try std.testing.expectEqual(@as(f64, 0.0), result);
+}
+
+test "result pointer: multiple calls reuse same landing pad" {
+    var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
+    defer evaluator.deinit();
+
+    var result: i64 = 0;
+
+    // First call
+    {
+        const code = try evaluator.generateReturnI64Code(100, .i64);
+        defer evaluator.allocator.free(code);
+
+        var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+        defer jit.deinit();
+
+        jit.callWithResultPtr(@ptrCast(&result));
+        try std.testing.expectEqual(@as(i64, 100), result);
+    }
+
+    // Second call overwrites same location
+    {
+        const code = try evaluator.generateReturnI64Code(200, .i64);
+        defer evaluator.allocator.free(code);
+
+        var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
+        defer jit.deinit();
+
+        jit.callWithResultPtr(@ptrCast(&result));
+        try std.testing.expectEqual(@as(i64, 200), result);
+    }
 }
 
 test "evaluate addition" {

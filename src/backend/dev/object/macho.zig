@@ -197,6 +197,9 @@ pub const MachOWriter = struct {
     // Code section
     text: std.ArrayList(u8),
 
+    // Read-only data section
+    rodata: std.ArrayList(u8),
+
     // Symbols and relocations
     symbols: std.ArrayList(Symbol),
     text_relocs: std.ArrayList(TextReloc),
@@ -215,6 +218,7 @@ pub const MachOWriter = struct {
             .allocator = allocator,
             .arch = arch,
             .text = .{},
+            .rodata = .{},
             .symbols = .{},
             .text_relocs = .{},
             .strtab = .{},
@@ -229,6 +233,7 @@ pub const MachOWriter = struct {
 
     pub fn deinit(self: *Self) void {
         self.text.deinit(self.allocator);
+        self.rodata.deinit(self.allocator);
         self.symbols.deinit(self.allocator);
         self.text_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
@@ -238,6 +243,23 @@ pub const MachOWriter = struct {
     pub fn setCode(self: *Self, code: []const u8) !void {
         self.text.clearRetainingCapacity();
         try self.text.appendSlice(self.allocator, code);
+    }
+
+    /// Allocate space in the rodata section for a constant value.
+    /// Returns the offset within rodata and a pointer to write the value.
+    pub fn allocateRodata(self: *Self, size: usize, alignment: usize) !struct { offset: usize, ptr: [*]u8 } {
+        // Align current position
+        const current_len = self.rodata.items.len;
+        const aligned_offset = std.mem.alignForward(usize, current_len, alignment);
+        const padding = aligned_offset - current_len;
+
+        // Add padding and space for the value
+        try self.rodata.appendNTimes(self.allocator, 0, padding + size);
+
+        return .{
+            .offset = aligned_offset,
+            .ptr = self.rodata.items.ptr + aligned_offset,
+        };
     }
 
     /// Add a symbol
@@ -496,3 +518,4 @@ test "macho with external call" {
     const magic = std.mem.readInt(u32, output.items[0..4], .little);
     try std.testing.expectEqual(MachO.MH_MAGIC_64, magic);
 }
+

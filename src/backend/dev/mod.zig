@@ -11,6 +11,20 @@ const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
 
+/// Backend selection for code evaluation
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    // llvm, // Future: LLVM backend
+
+    pub fn fromString(s: []const u8) ?EvalBackend {
+        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
+        if (std.mem.eql(u8, s, "dev")) return .dev;
+        // if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        return null;
+    }
+};
+
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
