@@ -332,10 +332,8 @@ const SemanticCollector = struct {
 
     /// Walk all top-level statements in the module.
     fn walkStatements(self: *SemanticCollector) !void {
-        const span = self.module_env.all_statements.span;
-        var i: u32 = 0;
-        while (i < span.len) : (i += 1) {
-            const stmt_idx: CIR.Statement.Idx = @enumFromInt(span.start + i);
+        const statements_slice = self.module_env.store.sliceStatements(self.module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
             try self.visitStatement(stmt_idx);
         }
     }
