@@ -1201,6 +1201,38 @@ pub const SyntaxChecker = struct {
                                 }
                             }
                         }
+
+                        // Check if cursor is in the statement's region (which now includes the annotation line)
+                        // but NOT in the expression, pattern, or type annotation regions.
+                        // This means cursor is on the identifier part of the annotation line (e.g., "dog" in "dog : Animal")
+                        const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+                        if (regionContainsOffset(stmt_region, target_offset)) {
+                            const in_type_anno = regionContainsOffset(type_anno_region, target_offset);
+                            const in_expr = if (stmt_parts.expr) |check_expr_idx| blk: {
+                                const check_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(check_expr_idx));
+                                break :blk regionContainsOffset(module_env.store.getRegionAt(check_node_idx), target_offset);
+                            } else false;
+                            const in_pattern = if (stmt_parts.pattern) |check_pat_idx| blk: {
+                                const check_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(check_pat_idx));
+                                break :blk regionContainsOffset(module_env.store.getRegionAt(check_node_idx), target_offset);
+                            } else false;
+
+                            // If not in any of those regions, we're on the annotation identifier
+                            if (!in_type_anno and !in_expr and !in_pattern) {
+                                if (stmt_parts.pattern) |pattern_idx| {
+                                    // Use a small size to prefer this match over larger containing regions
+                                    const ident_approx_size: u32 = 10; // Approximate identifier size
+                                    if (ident_approx_size < best_size.*) {
+                                        best_size.* = ident_approx_size;
+                                        result = .{
+                                            .type_var = ModuleEnv.varFrom(pattern_idx),
+                                            .region = stmt_region,
+                                        };
+                                    }
+                                }
+                            }
+                        }
+
                         // Also check the Annotation's region (covers the identifier like "dog" in "dog : Animal")
                         const anno_region = module_env.store.getAnnotationRegion(anno_idx);
                         if (regionContainsOffset(anno_region, target_offset)) {
