@@ -16,4 +16,6 @@ test "lsp tests" {
     std.testing.refAllDecls(@import("test/transport_test.zig"));
     std.testing.refAllDecls(@import("test/document_store_test.zig"));
     std.testing.refAllDecls(@import("test/syntax_test.zig"));
+    std.testing.refAllDecls(@import("test/line_info_test.zig"));
+    std.testing.refAllDecls(@import("test/semantic_tokens_test.zig"));
 }

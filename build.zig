@@ -2905,16 +2905,38 @@ pub fn build(b: *std.Build) void {
         // Copy the fx test platform host library to the source directory
         const copy_test_fx_host = b.addUpdateSourceFiles();
         const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
-        b.getInstallStep().dependOn(&copy_test_fx_host.step);
+        const fx_host_main_path = b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename });
+        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), fx_host_main_path);
 
         // Also copy to the target-specific directory so findHostLibrary finds it
-        if (fx_host_target_dir) |target_dir| {
+        const fx_host_target_path = if (fx_host_target_dir) |target_dir|
+            b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename })
+        else
+            null;
+        if (fx_host_target_path) |target_path| {
             copy_test_fx_host.addCopyFileToSource(
                 test_platform_fx_host_lib.getEmittedBin(),
-                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename }),
+                target_path,
             );
         }
+
+        // Apply archive padding fix for non-Windows targets (Zig bug workaround)
+        // The final_fx_host_step is what tests should depend on to ensure the archive is ready
+        const final_fx_host_step: *Step = if (target.result.os.tag != .windows) blk: {
+            const fix_main = FixArchivePaddingStep.create(b, fx_host_main_path);
+            fix_main.step.dependOn(&copy_test_fx_host.step);
+
+            if (fx_host_target_path) |target_path| {
+                const fix_target = FixArchivePaddingStep.create(b, target_path);
+                fix_target.step.dependOn(&copy_test_fx_host.step);
+                // Make fix_target depend on fix_main so both complete
+                fix_target.step.dependOn(&fix_main.step);
+                break :blk &fix_target.step;
+            }
+            break :blk &fix_main.step;
+        } else &copy_test_fx_host.step;
+
+        b.getInstallStep().dependOn(final_fx_host_step);
 
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
@@ -2930,8 +2952,8 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_fx_platform_test.addArgs(run_args);
         }
-        // Ensure host library is copied before running the test
-        run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        // Ensure host library is copied AND fixed before running the test
+        run_fx_platform_test.step.dependOn(final_fx_host_step);
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);
