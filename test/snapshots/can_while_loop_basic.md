@@ -6,11 +6,11 @@ type=expr
 # SOURCE
 ~~~roc
 {
-    var count_ = 0
-    while count_ < 10 {
-        count_ = count_ + 1
+    var $count = 0
+    while $count < 10 {
+        $count = $count + 1
     }
-    count_
+    $count
 }
 ~~~
 # EXPECTED
@@ -32,52 +32,52 @@ EndOfFile,
 ~~~clojure
 (e-block
 	(statements
-		(s-var (name "count_")
+		(s-var (name "$count")
 			(e-int (raw "0")))
 		(s-while
 			(e-binop (op "<")
-				(e-ident (raw "count_"))
+				(e-ident (raw "$count"))
 				(e-int (raw "10")))
 			(e-block
 				(statements
 					(s-decl
-						(p-ident (raw "count_"))
+						(p-ident (raw "$count"))
 						(e-binop (op "+")
-							(e-ident (raw "count_"))
+							(e-ident (raw "$count"))
 							(e-int (raw "1")))))))
-		(e-ident (raw "count_"))))
+		(e-ident (raw "$count"))))
 ~~~
 # FORMATTED
 ~~~roc
 {
-	var count_ = 0
-	while count_ < 10 {
-		count_ = count_ + 1
+	var $count = 0
+	while $count < 10 {
+		$count = $count + 1
 	}
-	count_
+	$count
 }
 ~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
 	(s-var
-		(p-assign (ident "count_"))
+		(p-assign (ident "$count"))
 		(e-num (value "0")))
 	(s-while
 		(e-binop (op "lt")
 			(e-lookup-local
-				(p-assign (ident "count_")))
+				(p-assign (ident "$count")))
 			(e-num (value "10")))
 		(e-block
 			(s-reassign
-				(p-assign (ident "count_"))
+				(p-assign (ident "$count"))
 				(e-binop (op "add")
 					(e-lookup-local
-						(p-assign (ident "count_")))
+						(p-assign (ident "$count")))
 					(e-num (value "1"))))
 			(e-empty_record)))
 	(e-lookup-local
-		(p-assign (ident "count_"))))
+		(p-assign (ident "$count"))))
 ~~~
 # TYPES
 ~~~clojure
