@@ -6400,12 +6400,10 @@ fn canonicalizeRecordBuilder(self: *Self, rb: @TypeOf(@as(AST.Expr, undefined).r
     };
 
     if (map2_pattern_idx == null) {
-        // map2 not found - generate error
-        const map2_ident = try self.env.insertIdent(Ident.for_text("map2"));
+        // map2 not found - generate record builder specific error
         return CanonicalizedExpr{
-            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
-                .parent_name = type_name,
-                .nested_name = map2_ident,
+            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .record_builder_map2_not_found = .{
+                .type_name = type_name,
                 .region = region,
             } }),
             .free_vars = DataSpan.empty(),
