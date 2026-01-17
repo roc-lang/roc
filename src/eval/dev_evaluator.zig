@@ -32,7 +32,6 @@ const ComptimeHeap = comptime_value.ComptimeHeap;
 const ComptimeValue = comptime_value.ComptimeValue;
 const ComptimeEnv = comptime_value.ComptimeEnv;
 const TopLevelBindings = comptime_value.TopLevelBindings;
-const DependencyGraph = can.DependencyGraph;
 
 /// Dev backend-based evaluator for Roc expressions
 pub const DevEvaluator = struct {
@@ -1929,10 +1928,6 @@ test "generate f64 code" {
     const result = jit.callReturnF64();
     try std.testing.expectApproxEqRel(@as(f64, 3.14159), result, 0.0001);
 }
-
-// =============================================================================
-// Result pointer tests - verify code writes to the landing pad correctly
-// =============================================================================
 
 test "result pointer: i64 value written to memory" {
     var evaluator = DevEvaluator.init(std.testing.allocator) catch |err| {

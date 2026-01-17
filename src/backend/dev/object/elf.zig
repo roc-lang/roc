@@ -558,4 +558,3 @@ test "elf with external symbol" {
     // Should produce valid ELF
     try std.testing.expectEqualSlices(u8, "\x7fELF", output.items[0..4]);
 }
-

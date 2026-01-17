@@ -35,10 +35,8 @@ pub const TopLevelBindings = struct {
     }
 };
 
-// =============================================================================
-// Legacy types for backward compatibility during migration
-// These will be removed once the full refactor is complete
-// =============================================================================
+// Legacy types for backward compatibility during migration.
+// These will be removed once the full refactor is complete.
 
 /// Simple heap for allocating memory during evaluation.
 /// Uses an arena so everything can be freed at once.
@@ -150,10 +148,6 @@ pub const ComptimeEnv = struct {
         self.closure_refs.deinit();
     }
 };
-
-// =============================================================================
-// Tests
-// =============================================================================
 
 test "TopLevelBindings bind and lookup" {
     var bindings = TopLevelBindings.init(std.testing.allocator);

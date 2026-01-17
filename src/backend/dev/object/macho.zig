@@ -518,4 +518,3 @@ test "macho with external call" {
     const magic = std.mem.readInt(u32, output.items[0..4], .little);
     try std.testing.expectEqual(MachO.MH_MAGIC_64, magic);
 }
-
