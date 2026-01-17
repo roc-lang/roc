@@ -402,7 +402,7 @@ pub const SyntaxChecker = struct {
 
         // Convert LSP position (0-based line/col) to byte offset
         // LSP uses 0-based line and UTF-16 code units for character
-        const target_offset = self.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = positionToOffset(module_env, line, character) orelse return null;
 
         // Find the expression at this position
         const result = self.findTypeAtOffset(module_env, target_offset) orelse return null;
@@ -418,7 +418,7 @@ pub const SyntaxChecker = struct {
         const markdown = try std.fmt.allocPrint(self.allocator, "```roc\n{s}\n```", .{type_str});
 
         // Convert the region back to LSP positions
-        const range = self.regionToRange(module_env, result.region);
+        const range = regionToRange(module_env, result.region);
 
         return HoverResult{
             .type_str = markdown,
@@ -494,7 +494,7 @@ pub const SyntaxChecker = struct {
         const module_env = if (root_module.env) |*e| e else return null;
 
         // Convert LSP position to byte offset
-        const target_offset = self.positionToOffset(module_env, line, character) orelse return null;
+        const target_offset = positionToOffset(module_env, line, character) orelse return null;
 
         // Find the definition at this position
         const result = self.findDefinitionAtOffset(module_env, target_offset, uri) orelse return null;
@@ -503,8 +503,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Convert LSP position (line, character) to byte offset in source
-    fn positionToOffset(self: *SyntaxChecker, module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
-        _ = self;
+    fn positionToOffset(module_env: *ModuleEnv, line: u32, character: u32) ?u32 {
         const line_starts = module_env.getLineStartsAll();
         if (line >= line_starts.len) return null;
 
@@ -515,8 +514,7 @@ pub const SyntaxChecker = struct {
     }
 
     /// Convert a Region to LSP range (line/character positions)
-    fn regionToRange(self: *SyntaxChecker, module_env: *ModuleEnv, region: Region) ?LspRange {
-        _ = self;
+    fn regionToRange(module_env: *ModuleEnv, region: Region) ?LspRange {
         const line_starts = module_env.getLineStartsAll();
         if (line_starts.len == 0) return null;
 
@@ -607,7 +605,7 @@ pub const SyntaxChecker = struct {
                     // Get the pattern's region - that's where it's defined
                     const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(lookup.pattern_idx));
                     const def_region = module_env.store.getRegionAt(pattern_node_idx);
-                    const range = self.regionToRange(module_env, def_region) orelse return null;
+                    const range = regionToRange(module_env, def_region) orelse return null;
                     return DefinitionResult{
                         .uri = current_uri,
                         .range = range,
@@ -1018,7 +1016,7 @@ pub const SyntaxChecker = struct {
                                 };
                             }
                             // Also check nested patterns (e.g., Ok(id) -> check id)
-                            if (self.checkPatternAndRecurse(module_env, branch_pattern.pattern, target_offset, best_size)) |r| {
+                            if (checkPatternAndRecurse(module_env, branch_pattern.pattern, target_offset, best_size)) |r| {
                                 result = r;
                             }
                         }
@@ -1138,13 +1136,11 @@ pub const SyntaxChecker = struct {
 
     /// Helper to check if a pattern contains the offset and recurse into nested patterns
     fn checkPatternAndRecurse(
-        self: *SyntaxChecker,
         module_env: *ModuleEnv,
         pattern_idx: CIR.Pattern.Idx,
         target_offset: u32,
         best_size: *u32,
     ) ?TypeAtOffsetResult {
-        _ = self;
         const pattern = module_env.store.getPattern(pattern_idx);
         var result: ?TypeAtOffsetResult = null;
 
