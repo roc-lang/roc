@@ -16,6 +16,7 @@ const base = @import("base");
 const can = @import("can");
 const parse = @import("parse");
 const check = @import("check");
+const layout = @import("layout");
 const compiled_builtins = @import("compiled_builtins");
 const eval_mod = @import("mod.zig");
 const backend = @import("backend");
@@ -63,39 +64,16 @@ pub const DevEvaluator = struct {
         RuntimeError,
     };
 
-    /// Type of the result value for JIT execution.
-    /// Matches the types in llvm_evaluator.ResultType.
-    pub const ResultType = enum {
-        i64,
-        u64,
-        i128,
-        u128,
-        f64,
-        dec,
-
-        pub fn validate() void {
-            comptime {
-                if (@typeInfo(ResultType).@"enum".fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-                if (@intFromEnum(ResultType.i64) != 0) @compileError("ResultType.i64 must be ordinal 0");
-                if (@intFromEnum(ResultType.u64) != 1) @compileError("ResultType.u64 must be ordinal 1");
-                if (@intFromEnum(ResultType.i128) != 2) @compileError("ResultType.i128 must be ordinal 2");
-                if (@intFromEnum(ResultType.u128) != 3) @compileError("ResultType.u128 must be ordinal 3");
-                if (@intFromEnum(ResultType.f64) != 4) @compileError("ResultType.f64 must be ordinal 4");
-                if (@intFromEnum(ResultType.dec) != 5) @compileError("ResultType.dec must be ordinal 5");
-            }
-        }
-    };
-
-    comptime {
-        ResultType.validate();
-    }
+    /// Layout index for result type - uses the layout module's Idx which has
+    /// sentinel values for all builtin scalar types (i64, u64, f64, dec, str, bool, etc.)
+    pub const LayoutIdx = layout.Idx;
 
     /// Result of code generation
     pub const CodeResult = struct {
         /// The native machine code bytes
         code: []const u8,
-        /// The result type for interpreting the return value
-        result_type: ResultType,
+        /// The layout of the result value
+        result_layout: LayoutIdx,
         /// Allocator used for cleanup
         allocator: Allocator,
 
@@ -167,7 +145,7 @@ pub const DevEvaluator = struct {
 
     /// Create a ComptimeValue holding an i64
     fn createI64Value(self: *DevEvaluator, value: i64) Error!ComptimeValue {
-        const bytes = self.comptime_heap.alloc8(8) catch return error.OutOfMemory;
+        const bytes = self.comptime_heap.alloc(8, 3) catch return error.OutOfMemory;
         // layout_idx is undefined - will be set properly when we have LayoutStore integration
         const cv = ComptimeValue.fromBytes(bytes, undefined);
         cv.set(i64, value);
@@ -179,7 +157,7 @@ pub const DevEvaluator = struct {
     /// The caller is responsible for freeing the code via result.deinit()
     pub fn generateCode(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!CodeResult {
         // Get the result type from the expression
-        const result_type = self.getExprResultType(module_env, expr);
+        const result_layout = self.getExprLayout(module_env, expr);
 
         // Generate code based on the expression type
         // For expressions that need environment support, create an empty environment
@@ -188,41 +166,41 @@ pub const DevEvaluator = struct {
 
         const code = switch (expr) {
             // Numeric literals
-            .e_num => |num| try self.generateNumericCode(num, result_type),
+            .e_num => |num| try self.generateNumericCode(num, result_layout),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
-            .e_dec => |dec| try self.generateDecCode(dec, result_type),
-            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_type),
-            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_type),
-            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_type),
+            .e_dec => |dec| try self.generateDecCode(dec, result_layout),
+            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_layout),
+            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_layout),
+            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_layout),
 
             // Operations
-            .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_type),
-            .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_type),
-            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_type, &empty_env),
+            .e_binop => |binop| try self.generateBinopCode(module_env, binop, result_layout),
+            .e_unary_minus => |unary| try self.generateUnaryMinusCode(module_env, unary, result_layout),
+            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_layout, &empty_env),
 
             // Control flow
-            .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_type),
-            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_type, &empty_env),
+            .e_if => |if_expr| try self.generateIfCode(module_env, if_expr, result_layout),
+            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_layout, &empty_env),
 
             // Functions and calls
-            .e_call => |call| try self.generateCallCode(module_env, call, result_type, &empty_env),
+            .e_call => |call| try self.generateCallCode(module_env, call, result_layout, &empty_env),
 
             // Data structures
-            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, &empty_env),
-            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, &empty_env),
-            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, &empty_env),
-            .e_list => |list| try self.generateListCode(module_env, list, result_type, &empty_env),
-            .e_empty_list => try self.generateEmptyListCode(result_type),
-            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, &empty_env),
-            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
-            .e_empty_record => try self.generateReturnI64Code(0, result_type),
+            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_layout, &empty_env),
+            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_layout, &empty_env),
+            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_layout, &empty_env),
+            .e_list => |list| try self.generateListCode(module_env, list, result_layout, &empty_env),
+            .e_empty_list => try self.generateEmptyListCode(result_layout),
+            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_layout, &empty_env),
+            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_layout),
+            .e_empty_record => try self.generateReturnI64Code(0, result_layout),
 
             // Blocks
-            .e_block => |block| try self.generateBlockCode(module_env, block, result_type, &empty_env),
+            .e_block => |block| try self.generateBlockCode(module_env, block, result_layout, &empty_env),
 
             // For loops (always return {} / empty record)
-            .e_for => try self.generateReturnI64Code(0, result_type),
+            .e_for => try self.generateReturnI64Code(0, result_layout),
 
             // Nominal types - evaluate the backing expression
             .e_nominal => |nom| blk: {
@@ -241,14 +219,14 @@ pub const DevEvaluator = struct {
 
         return CodeResult{
             .code = code,
-            .result_type = result_type,
+            .result_layout = result_layout,
             .allocator = self.allocator,
         };
     }
 
     /// Generate code for binary operations
     /// For now, uses constant folding when both operands are literals
-    fn generateBinopCode(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_type: ResultType) Error![]const u8 {
+    fn generateBinopCode(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_layout: LayoutIdx) Error![]const u8 {
         // Get the left and right expressions
         const lhs_expr = module_env.store.getExpr(binop.lhs);
         const rhs_expr = module_env.store.getExpr(binop.rhs);
@@ -276,19 +254,19 @@ pub const DevEvaluator = struct {
             .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
         };
 
-        return self.generateReturnI64Code(result_val, result_type);
+        return self.generateReturnI64Code(result_val, result_layout);
     }
 
     /// Generate code for unary minus
-    fn generateUnaryMinusCode(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_type: ResultType) Error![]const u8 {
+    fn generateUnaryMinusCode(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_layout: LayoutIdx) Error![]const u8 {
         const inner_expr = module_env.store.getExpr(unary.expr);
         const inner_val = self.tryEvalConstantI64(module_env, inner_expr) orelse return error.UnsupportedExpression;
-        return self.generateReturnI64Code(-inner_val, result_type);
+        return self.generateReturnI64Code(-inner_val, result_layout);
     }
 
     /// Generate code for if/else expressions
     /// Uses constant folding - evaluates condition at compile time and generates code for the taken branch
-    fn generateIfCode(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_type: ResultType) Error![]const u8 {
+    fn generateIfCode(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_layout: LayoutIdx) Error![]const u8 {
         // Get the branches
         const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
 
@@ -304,7 +282,7 @@ pub const DevEvaluator = struct {
                 if (val != 0) {
                     // Condition is true - generate code for this branch's body
                     const body_expr = module_env.store.getExpr(branch.body);
-                    return self.generateCodeForExpr(module_env, body_expr, result_type);
+                    return self.generateCodeForExpr(module_env, body_expr, result_layout);
                 }
                 // Condition is false - try next branch
             } else {
@@ -315,45 +293,45 @@ pub const DevEvaluator = struct {
 
         // All conditions were false - use the final else branch
         const else_expr = module_env.store.getExpr(if_expr.final_else);
-        return self.generateCodeForExpr(module_env, else_expr, result_type);
+        return self.generateCodeForExpr(module_env, else_expr, result_layout);
     }
 
     /// Helper to generate code for an expression (recursive)
-    fn generateCodeForExpr(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType) Error![]const u8 {
+    fn generateCodeForExpr(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_layout: LayoutIdx) Error![]const u8 {
         // Use empty environment for non-function context
         var empty_env = self.createEnv();
         defer empty_env.deinit();
-        return self.generateCodeForExprWithEnv(module_env, expr, result_type, &empty_env);
+        return self.generateCodeForExprWithEnv(module_env, expr, result_layout, &empty_env);
     }
 
     /// Helper to generate code for an expression with variable environment (for lambda bodies)
-    fn generateCodeForExprWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateCodeForExprWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         return switch (expr) {
             // Numeric literals
-            .e_num => |num| try self.generateNumericCode(num, result_type),
+            .e_num => |num| try self.generateNumericCode(num, result_layout),
             .e_frac_f64 => |frac| try self.generateFloatCode(frac.value),
             .e_frac_f32 => |frac| try self.generateFloatCode(@floatCast(frac.value)),
-            .e_dec => |dec| try self.generateDecCode(dec, result_type),
-            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_type),
-            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_type),
-            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_type),
+            .e_dec => |dec| try self.generateDecCode(dec, result_layout),
+            .e_dec_small => |dec| try self.generateDecSmallCode(dec, result_layout),
+            .e_typed_int => |ti| try self.generateTypedIntCode(ti, result_layout),
+            .e_typed_frac => |tf| try self.generateTypedFracCode(tf, result_layout),
 
             // Operations
-            .e_binop => |binop| try self.generateBinopCodeWithEnv(module_env, binop, result_type, env),
-            .e_unary_minus => |unary| try self.generateUnaryMinusCodeWithEnv(module_env, unary, result_type, env),
-            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_type, env),
+            .e_binop => |binop| try self.generateBinopCodeWithEnv(module_env, binop, result_layout, env),
+            .e_unary_minus => |unary| try self.generateUnaryMinusCodeWithEnv(module_env, unary, result_layout, env),
+            .e_unary_not => |unary| try self.generateUnaryNotCodeWithEnv(module_env, unary, result_layout, env),
 
             // Control flow
-            .e_if => |if_expr| try self.generateIfCodeWithEnv(module_env, if_expr, result_type, env),
-            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_type, env),
+            .e_if => |if_expr| try self.generateIfCodeWithEnv(module_env, if_expr, result_layout, env),
+            .e_match => |match_expr| try self.generateMatchCode(module_env, match_expr, result_layout, env),
 
             // Functions and calls
-            .e_call => |call| try self.generateCallCode(module_env, call, result_type, env),
+            .e_call => |call| try self.generateCallCode(module_env, call, result_layout, env),
             .e_lambda => return error.UnsupportedExpression, // Lambdas are handled via e_call
             .e_closure => return error.UnsupportedExpression, // Closures are handled via e_call
 
             // Lookups
-            .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_type, env),
+            .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_layout, env),
             .e_lookup_external => {
                 self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
@@ -364,34 +342,34 @@ pub const DevEvaluator = struct {
             },
 
             // Tags
-            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_type),
-            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_type, env),
+            .e_zero_argument_tag => |tag| try self.generateZeroArgTagCode(module_env, tag, result_layout),
+            .e_tag => |tag| try self.generateTagCode(module_env, tag, result_layout, env),
 
             // Data structures
-            .e_empty_list => try self.generateEmptyListCode(result_type),
-            .e_list => |list| try self.generateListCode(module_env, list, result_type, env),
-            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_type, env),
-            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_type, env),
+            .e_empty_list => try self.generateEmptyListCode(result_layout),
+            .e_list => |list| try self.generateListCode(module_env, list, result_layout, env),
+            .e_tuple => |tuple| try self.generateTupleCode(module_env, tuple, result_layout, env),
+            .e_record => |rec| try self.generateRecordCode(module_env, rec, result_layout, env),
             // Note: e_empty_record is handled in "Not yet supported" section due to
             // a canonicalizer bug that incorrectly tags some expressions as e_empty_record
 
             // Blocks and statements
-            .e_block => |block| try self.generateBlockCode(module_env, block, result_type, env),
-            .e_return => |ret| try self.generateReturnExprCode(module_env, ret, result_type, env),
+            .e_block => |block| try self.generateBlockCode(module_env, block, result_layout, env),
+            .e_return => |ret| try self.generateReturnExprCode(module_env, ret, result_layout, env),
 
             // Strings
-            .e_str_segment => |seg| try self.generateStrSegmentCode(module_env, seg, result_type),
-            .e_str => |str| try self.generateStrCode(module_env, str, result_type, env),
+            .e_str_segment => |seg| try self.generateStrSegmentCode(module_env, seg, result_layout),
+            .e_str => |str| try self.generateStrCode(module_env, str, result_layout, env),
 
             // Debug and errors
-            .e_dbg => |dbg| try self.generateDbgCode(module_env, dbg, result_type, env),
+            .e_dbg => |dbg| try self.generateDbgCode(module_env, dbg, result_layout, env),
             .e_crash => |crash| {
                 // Store the crash message and return error
                 const msg = module_env.getString(crash.msg);
                 self.setCrashMessage(msg) catch return error.OutOfMemory;
                 return error.Crash;
             },
-            .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_type, env),
+            .e_expect => |expect| try self.generateExpectCode(module_env, expect, result_layout, env),
             .e_runtime_error => {
                 // Runtime errors are always errors
                 self.setCrashMessage("Runtime error encountered") catch return error.OutOfMemory;
@@ -399,17 +377,17 @@ pub const DevEvaluator = struct {
             },
 
             // Empty record (unit type)
-            .e_empty_record => try self.generateReturnI64Code(0, result_type),
-            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_type, env),
+            .e_empty_record => try self.generateReturnI64Code(0, result_layout),
+            .e_dot_access => |dot| try self.generateDotAccessCode(module_env, dot, result_layout, env),
             .e_nominal => |nom| {
                 // Nominal types wrap a backing expression - evaluate it directly
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_type, env);
+                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_layout, env);
             },
             .e_nominal_external => |nom| {
                 // External nominal types also wrap a backing expression
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_type, env);
+                return self.generateCodeForExprWithEnv(module_env, backing_expr, result_layout, env);
             },
             .e_ellipsis => {
                 self.setCrashMessage("This expression uses `...` as a placeholder. Implementation is required.") catch return error.OutOfMemory;
@@ -423,7 +401,7 @@ pub const DevEvaluator = struct {
                 self.setCrashMessage("Dev evaluator: type variable dispatch not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
             },
-            .e_for => try self.generateReturnI64Code(0, result_type), // For loops always return {} (empty record)
+            .e_for => try self.generateReturnI64Code(0, result_layout), // For loops always return {} (empty record)
             .e_hosted_lambda => {
                 self.setCrashMessage("Dev evaluator: hosted (platform) functions not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
@@ -438,21 +416,21 @@ pub const DevEvaluator = struct {
 
     /// Generate code for function calls
     /// Handles lambda applications with constant arguments, including stored closures
-    fn generateCallCode(self: *DevEvaluator, module_env: *ModuleEnv, call: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateCallCode(self: *DevEvaluator, module_env: *ModuleEnv, call: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Get the function being called
         const func_expr = module_env.store.getExpr(call.func);
 
         // Handle lambda application
         switch (func_expr) {
             .e_lambda => |lambda| {
-                return self.applyLambda(module_env, lambda, call.args, result_type, env);
+                return self.applyLambda(module_env, lambda, call.args, result_layout, env);
             },
             .e_closure => |closure| {
-                return self.applyClosure(module_env, closure, call.args, result_type, env);
+                return self.applyClosure(module_env, closure, call.args, result_layout, env);
             },
             .e_low_level_lambda => |low_level| {
                 // Low-level builtin operations
-                return self.generateLowLevelCallCode(module_env, low_level, call.args, result_type, env);
+                return self.generateLowLevelCallCode(module_env, low_level, call.args, result_layout, env);
             },
             .e_lookup_local => |lookup| {
                 // Function is stored in a variable - look it up in closure_refs
@@ -462,10 +440,10 @@ pub const DevEvaluator = struct {
                     const stored_expr = module_env.store.getExpr(stored_expr_idx);
                     switch (stored_expr) {
                         .e_lambda => |lambda| {
-                            return self.applyLambda(module_env, lambda, call.args, result_type, env);
+                            return self.applyLambda(module_env, lambda, call.args, result_layout, env);
                         },
                         .e_closure => |closure| {
-                            return self.applyClosure(module_env, closure, call.args, result_type, env);
+                            return self.applyClosure(module_env, closure, call.args, result_layout, env);
                         },
                         else => return error.UnsupportedExpression,
                     }
@@ -479,7 +457,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Apply a lambda to arguments
-    fn applyLambda(self: *DevEvaluator, module_env: *ModuleEnv, lambda: CIR.Expr.Lambda, args_span: CIR.Expr.Span, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn applyLambda(self: *DevEvaluator, module_env: *ModuleEnv, lambda: CIR.Expr.Lambda, args_span: CIR.Expr.Span, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const arg_indices = module_env.store.sliceExpr(args_span);
         const param_indices = module_env.store.slicePatterns(lambda.args);
 
@@ -497,7 +475,7 @@ pub const DevEvaluator = struct {
 
         // Evaluate lambda body with new environment
         const body_expr = module_env.store.getExpr(lambda.body);
-        return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, &new_env);
+        return self.generateCodeForExprWithEnv(module_env, body_expr, result_layout, &new_env);
     }
 
     /// Bind an argument expression to a parameter in the new environment
@@ -536,7 +514,7 @@ pub const DevEvaluator = struct {
 
     /// Apply a closure to arguments
     /// Closures have captured values that need to be restored in the environment
-    fn applyClosure(self: *DevEvaluator, module_env: *ModuleEnv, closure: CIR.Expr.Closure, args_span: CIR.Expr.Span, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn applyClosure(self: *DevEvaluator, module_env: *ModuleEnv, closure: CIR.Expr.Closure, args_span: CIR.Expr.Span, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Get the underlying lambda
         const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
         switch (lambda_expr) {
@@ -576,7 +554,7 @@ pub const DevEvaluator = struct {
 
                 // Evaluate lambda body with new environment
                 const body_expr = module_env.store.getExpr(lambda.body);
-                return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, &new_env);
+                return self.generateCodeForExprWithEnv(module_env, body_expr, result_layout, &new_env);
             },
             else => return error.UnsupportedExpression,
         }
@@ -588,7 +566,7 @@ pub const DevEvaluator = struct {
         module_env: *ModuleEnv,
         low_level: anytype,
         args_span: CIR.Expr.Span,
-        result_type: ResultType,
+        result_layout: LayoutIdx,
         env: *ComptimeEnv,
     ) Error![]const u8 {
         const arg_indices = module_env.store.sliceExpr(args_span);
@@ -604,7 +582,7 @@ pub const DevEvaluator = struct {
                 const rhs_val = self.tryEvalConstantI64WithEnvMap(module_env, rhs_expr, env) orelse
                     return error.UnsupportedExpression;
                 const result: i64 = if (lhs_val == rhs_val) 1 else 0;
-                return self.generateReturnI64Code(result, result_type);
+                return self.generateReturnI64Code(result, result_layout);
             },
 
             // String operations - return UnsupportedExpression for now
@@ -659,10 +637,10 @@ pub const DevEvaluator = struct {
                 if (arg_indices.len != 1) return error.UnsupportedExpression;
                 const list_expr = module_env.store.getExpr(arg_indices[0]);
                 switch (list_expr) {
-                    .e_empty_list => return self.generateReturnI64Code(0, result_type),
+                    .e_empty_list => return self.generateReturnI64Code(0, result_layout),
                     .e_list => |list| {
                         const elements = module_env.store.sliceExpr(list.elems);
-                        return self.generateReturnI64Code(@intCast(elements.len), result_type);
+                        return self.generateReturnI64Code(@intCast(elements.len), result_layout);
                     },
                     else => return error.UnsupportedExpression,
                 }
@@ -671,11 +649,11 @@ pub const DevEvaluator = struct {
                 if (arg_indices.len != 1) return error.UnsupportedExpression;
                 const list_expr = module_env.store.getExpr(arg_indices[0]);
                 switch (list_expr) {
-                    .e_empty_list => return self.generateReturnI64Code(1, result_type),
+                    .e_empty_list => return self.generateReturnI64Code(1, result_layout),
                     .e_list => |list| {
                         const elements = module_env.store.sliceExpr(list.elems);
                         const result: i64 = if (elements.len == 0) 1 else 0;
-                        return self.generateReturnI64Code(result, result_type);
+                        return self.generateReturnI64Code(result, result_layout);
                     },
                     else => return error.UnsupportedExpression,
                 }
@@ -701,7 +679,7 @@ pub const DevEvaluator = struct {
                         const elem_expr = module_env.store.getExpr(elements[index]);
                         const elem_val = self.tryEvalConstantI64WithEnvMap(module_env, elem_expr, env) orelse
                             return error.UnsupportedExpression;
-                        return self.generateReturnI64Code(elem_val, result_type);
+                        return self.generateReturnI64Code(elem_val, result_layout);
                     },
                     else => return error.UnsupportedExpression,
                 }
@@ -721,14 +699,14 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for local variable lookup
-    fn generateLookupLocalCode(self: *DevEvaluator, lookup: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateLookupLocalCode(self: *DevEvaluator, lookup: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const pattern_key = @intFromEnum(lookup.pattern_idx);
         const cv = env.lookup(pattern_key) orelse return error.UnsupportedExpression;
-        return self.generateReturnI64Code(cv.as(i64), result_type);
+        return self.generateReturnI64Code(cv.as(i64), result_layout);
     }
 
     /// Binary operation with environment support
-    fn generateBinopCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateBinopCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const lhs_expr = module_env.store.getExpr(binop.lhs);
         const rhs_expr = module_env.store.getExpr(binop.rhs);
 
@@ -752,18 +730,18 @@ pub const DevEvaluator = struct {
             .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i64, 1) else @as(i64, 0),
         };
 
-        return self.generateReturnI64Code(result_val, result_type);
+        return self.generateReturnI64Code(result_val, result_layout);
     }
 
     /// Unary minus with environment support
-    fn generateUnaryMinusCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateUnaryMinusCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const inner_expr = module_env.store.getExpr(unary.expr);
         const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse return error.UnsupportedExpression;
-        return self.generateReturnI64Code(-inner_val, result_type);
+        return self.generateReturnI64Code(-inner_val, result_layout);
     }
 
     /// If/else with environment support
-    fn generateIfCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateIfCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, if_expr: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
 
         for (branch_indices) |branch_idx| {
@@ -774,7 +752,7 @@ pub const DevEvaluator = struct {
             if (cond_val) |val| {
                 if (val != 0) {
                     const body_expr = module_env.store.getExpr(branch.body);
-                    return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, env);
+                    return self.generateCodeForExprWithEnv(module_env, body_expr, result_layout, env);
                 }
             } else {
                 return error.UnsupportedExpression;
@@ -782,7 +760,7 @@ pub const DevEvaluator = struct {
         }
 
         const else_expr = module_env.store.getExpr(if_expr.final_else);
-        return self.generateCodeForExprWithEnv(module_env, else_expr, result_type, env);
+        return self.generateCodeForExprWithEnv(module_env, else_expr, result_layout, env);
     }
 
     /// Try to fold a pure constant expression to an i64 value.
@@ -874,7 +852,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for a numeric literal
-    fn generateNumericCode(self: *DevEvaluator, num: anytype, result_type: ResultType) Error![]const u8 {
+    fn generateNumericCode(self: *DevEvaluator, num: anytype, result_layout: LayoutIdx) Error![]const u8 {
         // Get the value as i64
         // The num has .value (IntValue) and .kind (NumKind) fields
         const value_i128 = num.value.toI128();
@@ -883,7 +861,7 @@ pub const DevEvaluator = struct {
         }
         const value: i64 = @intCast(value_i128);
 
-        return self.generateReturnI64Code(value, result_type);
+        return self.generateReturnI64Code(value, result_layout);
     }
 
     /// Generate code for a floating-point literal
@@ -892,33 +870,33 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for decimal literals
-    fn generateDecCode(self: *DevEvaluator, dec: anytype, result_type: ResultType) Error![]const u8 {
+    fn generateDecCode(self: *DevEvaluator, dec: anytype, result_layout: LayoutIdx) Error![]const u8 {
         // Decimals are stored as i128 internally
         const value_i128 = dec.value.toI128();
         if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
             return error.UnsupportedType;
         }
-        return self.generateReturnI64Code(@intCast(value_i128), result_type);
+        return self.generateReturnI64Code(@intCast(value_i128), result_layout);
     }
 
     /// Generate code for small decimal literals
-    fn generateDecSmallCode(self: *DevEvaluator, dec: anytype, _: ResultType) Error![]const u8 {
+    fn generateDecSmallCode(self: *DevEvaluator, dec: anytype, _: LayoutIdx) Error![]const u8 {
         // Small decimals are stored as numerator/denominator_power - convert to f64
         const f64_val = dec.value.toF64();
         return self.generateReturnF64Code(f64_val);
     }
 
     /// Generate code for typed integer literals
-    fn generateTypedIntCode(self: *DevEvaluator, ti: anytype, result_type: ResultType) Error![]const u8 {
+    fn generateTypedIntCode(self: *DevEvaluator, ti: anytype, result_layout: LayoutIdx) Error![]const u8 {
         const value_i128 = ti.value.toI128();
         if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
             return error.UnsupportedType;
         }
-        return self.generateReturnI64Code(@intCast(value_i128), result_type);
+        return self.generateReturnI64Code(@intCast(value_i128), result_layout);
     }
 
     /// Generate code for typed fraction literals
-    fn generateTypedFracCode(self: *DevEvaluator, tf: anytype, _: ResultType) Error![]const u8 {
+    fn generateTypedFracCode(self: *DevEvaluator, tf: anytype, _: LayoutIdx) Error![]const u8 {
         // typed_frac stores value as IntValue, need to interpret as fractional
         const value_i128 = tf.value.toI128();
         const f64_val: f64 = @floatFromInt(value_i128);
@@ -926,17 +904,17 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for unary not (boolean negation)
-    fn generateUnaryNotCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateUnaryNotCodeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, unary: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const inner_expr = module_env.store.getExpr(unary.expr);
         const inner_val = self.tryEvalConstantI64WithEnvMap(module_env, inner_expr, env) orelse
             return error.UnsupportedExpression;
         // Boolean negation: 0 becomes 1, non-zero becomes 0
         const result = if (inner_val == 0) @as(i64, 1) else @as(i64, 0);
-        return self.generateReturnI64Code(result, result_type);
+        return self.generateReturnI64Code(result, result_layout);
     }
 
     /// Generate code for match expressions
-    fn generateMatchCode(self: *DevEvaluator, module_env: *ModuleEnv, match_expr: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateMatchCode(self: *DevEvaluator, module_env: *ModuleEnv, match_expr: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Get the value being matched (match uses 'cond' field)
         const cond_expr = module_env.store.getExpr(match_expr.cond);
         const cond_val = self.tryEvalConstantI64WithEnvMap(module_env, cond_expr, env) orelse
@@ -957,7 +935,7 @@ pub const DevEvaluator = struct {
 
             if (matches) {
                 const body_expr = module_env.store.getExpr(branch.value);
-                return self.generateCodeForExprWithEnv(module_env, body_expr, result_type, env);
+                return self.generateCodeForExprWithEnv(module_env, body_expr, result_layout, env);
             }
         }
 
@@ -1002,26 +980,26 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for return expressions
-    fn generateReturnExprCode(self: *DevEvaluator, module_env: *ModuleEnv, ret: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateReturnExprCode(self: *DevEvaluator, module_env: *ModuleEnv, ret: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const value_expr = module_env.store.getExpr(ret.expr);
-        return self.generateCodeForExprWithEnv(module_env, value_expr, result_type, env);
+        return self.generateCodeForExprWithEnv(module_env, value_expr, result_layout, env);
     }
 
     /// Generate code for dbg expressions (just evaluate the inner expression)
-    fn generateDbgCode(self: *DevEvaluator, module_env: *ModuleEnv, dbg: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateDbgCode(self: *DevEvaluator, module_env: *ModuleEnv, dbg: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // dbg returns the value of the expression being debugged
         const value_expr = module_env.store.getExpr(dbg.expr);
-        return self.generateCodeForExprWithEnv(module_env, value_expr, result_type, env);
+        return self.generateCodeForExprWithEnv(module_env, value_expr, result_layout, env);
     }
 
     /// Generate code for expect expressions (evaluate inner, return expected value)
-    fn generateExpectCode(self: *DevEvaluator, _: *ModuleEnv, _: anytype, result_type: ResultType, _: *ComptimeEnv) Error![]const u8 {
+    fn generateExpectCode(self: *DevEvaluator, _: *ModuleEnv, _: anytype, result_layout: LayoutIdx, _: *ComptimeEnv) Error![]const u8 {
         // expect returns empty record (unit) - the check happens at runtime
-        return self.generateReturnI64Code(0, result_type);
+        return self.generateReturnI64Code(0, result_layout);
     }
 
     /// Generate code for zero-argument tags (True, False, None, etc.)
-    fn generateZeroArgTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_type: ResultType) Error![]const u8 {
+    fn generateZeroArgTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_layout: LayoutIdx) Error![]const u8 {
         // Compare tag names using interned ident indices (not string comparison)
         // Standard tags: True=1, False=0
         const value: i64 = if (tag.name == module_env.idents.true_tag)
@@ -1036,30 +1014,30 @@ pub const DevEvaluator = struct {
             // For other tags, use 0 as the default discriminant
             0;
 
-        return self.generateReturnI64Code(value, result_type);
+        return self.generateReturnI64Code(value, result_layout);
     }
 
     /// Generate code for empty list []
-    fn generateEmptyListCode(self: *DevEvaluator, result_type: ResultType) Error![]const u8 {
+    fn generateEmptyListCode(self: *DevEvaluator, result_layout: LayoutIdx) Error![]const u8 {
         // Empty list is represented as a null pointer/zero
-        return self.generateReturnI64Code(0, result_type);
+        return self.generateReturnI64Code(0, result_layout);
     }
 
     /// Generate code for tuple expressions
-    fn generateTupleCode(self: *DevEvaluator, module_env: *ModuleEnv, tuple: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateTupleCode(self: *DevEvaluator, module_env: *ModuleEnv, tuple: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const elems = module_env.store.sliceExpr(tuple.elems);
 
         // For simple single-element tuples, just return the element value
         if (elems.len == 1) {
             const elem_expr = module_env.store.getExpr(elems[0]);
-            return self.generateCodeForExprWithEnv(module_env, elem_expr, result_type, env);
+            return self.generateCodeForExprWithEnv(module_env, elem_expr, result_layout, env);
         }
 
         // For multi-element tuples with all constant values, we could pack them
         // For now, only support single-element or all-constant tuples
         if (elems.len == 0) {
             // Empty tuple is unit, return 0
-            return self.generateReturnI64Code(0, result_type);
+            return self.generateReturnI64Code(0, result_layout);
         }
 
         // For tuples, try to evaluate all elements as constants
@@ -1068,16 +1046,16 @@ pub const DevEvaluator = struct {
         const first_val = self.tryEvalConstantI64WithEnvMap(module_env, first_expr, env) orelse
             return error.UnsupportedExpression;
 
-        return self.generateReturnI64Code(first_val, result_type);
+        return self.generateReturnI64Code(first_val, result_layout);
     }
 
     /// Generate code for list expressions
-    fn generateListCode(self: *DevEvaluator, module_env: *ModuleEnv, list: anytype, result_type: ResultType, _: *ComptimeEnv) Error![]const u8 {
+    fn generateListCode(self: *DevEvaluator, module_env: *ModuleEnv, list: anytype, result_layout: LayoutIdx, _: *ComptimeEnv) Error![]const u8 {
         const elems = module_env.store.sliceExpr(list.elems);
 
         // Empty list
         if (elems.len == 0) {
-            return self.generateReturnI64Code(0, result_type);
+            return self.generateReturnI64Code(0, result_layout);
         }
 
         // For single-element lists with constant value, we could do something simple
@@ -1088,7 +1066,7 @@ pub const DevEvaluator = struct {
 
     /// Generate code for block expressions
     /// Blocks contain statements followed by a final expression
-    fn generateBlockCode(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateBlockCode(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Create a new environment for block-local bindings
         var block_env = try env.child();
         defer block_env.deinit();
@@ -1102,7 +1080,7 @@ pub const DevEvaluator = struct {
 
         // Evaluate and return the final expression
         const final_expr = module_env.store.getExpr(block.final_expr);
-        return self.generateCodeForExprWithEnv(module_env, final_expr, result_type, &block_env);
+        return self.generateCodeForExprWithEnv(module_env, final_expr, result_layout, &block_env);
     }
 
     /// Process a statement in a block (e.g., declarations)
@@ -1143,7 +1121,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for a string segment (single literal)
-    fn generateStrSegmentCode(_: *DevEvaluator, module_env: *ModuleEnv, seg: anytype, _: ResultType) Error![]const u8 {
+    fn generateStrSegmentCode(_: *DevEvaluator, module_env: *ModuleEnv, seg: anytype, _: LayoutIdx) Error![]const u8 {
         // Get the string text (for potential future use)
         _ = module_env.getString(seg.literal);
 
@@ -1153,7 +1131,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for a string expression (one or more segments)
-    fn generateStrCode(_: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: ResultType, _: *ComptimeEnv) Error![]const u8 {
+    fn generateStrCode(_: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: LayoutIdx, _: *ComptimeEnv) Error![]const u8 {
         const segments = module_env.store.sliceExpr(str.span);
 
         // For simple single-segment strings, we could potentially handle them
@@ -1172,7 +1150,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for tag expressions with arguments
-    fn generateTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateTagCode(self: *DevEvaluator, module_env: *ModuleEnv, tag: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         const args = module_env.store.sliceExpr(tag.args);
 
         // Tags with no arguments should be handled by e_zero_argument_tag
@@ -1189,7 +1167,7 @@ pub const DevEvaluator = struct {
                 1
             else
                 0;
-            return self.generateReturnI64Code(value, result_type);
+            return self.generateReturnI64Code(value, result_layout);
         }
 
         // For single-argument tags, try to return the argument value
@@ -1197,7 +1175,7 @@ pub const DevEvaluator = struct {
             const arg_expr = module_env.store.getExpr(args[0]);
             const arg_val = self.tryEvalConstantI64WithEnvMap(module_env, arg_expr, env) orelse
                 return error.UnsupportedExpression;
-            return self.generateReturnI64Code(arg_val, result_type);
+            return self.generateReturnI64Code(arg_val, result_layout);
         }
 
         // Multi-argument tags not yet supported
@@ -1205,7 +1183,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for record expressions
-    fn generateRecordCode(self: *DevEvaluator, module_env: *ModuleEnv, rec: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateRecordCode(self: *DevEvaluator, module_env: *ModuleEnv, rec: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Records with extension are more complex
         if (rec.ext != null) {
             return error.UnsupportedExpression;
@@ -1215,7 +1193,7 @@ pub const DevEvaluator = struct {
 
         // Empty record
         if (fields.len == 0) {
-            return self.generateReturnI64Code(0, result_type);
+            return self.generateReturnI64Code(0, result_layout);
         }
 
         // For single-field records, return the field value (simplified representation)
@@ -1224,7 +1202,7 @@ pub const DevEvaluator = struct {
             const field_expr = module_env.store.getExpr(field.value);
             const field_val = self.tryEvalConstantI64WithEnvMap(module_env, field_expr, env) orelse
                 return error.UnsupportedExpression;
-            return self.generateReturnI64Code(field_val, result_type);
+            return self.generateReturnI64Code(field_val, result_layout);
         }
 
         // Multi-field records not yet fully supported
@@ -1233,11 +1211,11 @@ pub const DevEvaluator = struct {
         const first_expr = module_env.store.getExpr(first_field.value);
         const first_val = self.tryEvalConstantI64WithEnvMap(module_env, first_expr, env) orelse
             return error.UnsupportedExpression;
-        return self.generateReturnI64Code(first_val, result_type);
+        return self.generateReturnI64Code(first_val, result_layout);
     }
 
     /// Generate code for dot access (record field access)
-    fn generateDotAccessCode(self: *DevEvaluator, module_env: *ModuleEnv, dot: anytype, result_type: ResultType, env: *ComptimeEnv) Error![]const u8 {
+    fn generateDotAccessCode(self: *DevEvaluator, module_env: *ModuleEnv, dot: anytype, result_layout: LayoutIdx, env: *ComptimeEnv) Error![]const u8 {
         // Only support field access (no method calls)
         if (dot.args != null) {
             return error.UnsupportedExpression;
@@ -1263,7 +1241,7 @@ pub const DevEvaluator = struct {
                         const field_expr = module_env.store.getExpr(field.value);
                         const field_val = self.tryEvalConstantI64WithEnvMap(module_env, field_expr, env) orelse
                             return error.UnsupportedExpression;
-                        return self.generateReturnI64Code(field_val, result_type);
+                        return self.generateReturnI64Code(field_val, result_layout);
                     }
                 }
 
@@ -1275,7 +1253,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code that returns an i64/u64 value
-    fn generateReturnI64Code(self: *DevEvaluator, value: i64, _: ResultType) Error![]const u8 {
+    fn generateReturnI64Code(self: *DevEvaluator, value: i64, _: LayoutIdx) Error![]const u8 {
         switch (builtin.cpu.arch) {
             .x86_64 => {
                 // x86_64 code:
@@ -1526,18 +1504,18 @@ pub const DevEvaluator = struct {
     }
 
     /// Type environment mapping pattern indices to their result types
-    const TypeEnv = std.AutoHashMap(u32, ResultType);
+    const TypeEnv = std.AutoHashMap(u32, LayoutIdx);
 
-    /// Get the ResultType for JIT execution from a CIR expression.
+    /// Get the Layout for JIT execution from a CIR expression.
     /// Recursively determines the type for compound expressions.
-    fn getExprResultType(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) ResultType {
+    fn getExprLayout(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx {
         var type_env = TypeEnv.init(self.allocator);
         defer type_env.deinit();
-        return self.getExprResultTypeWithEnv(module_env, expr, &type_env);
+        return self.getExprLayoutWithEnv(module_env, expr, &type_env);
     }
 
-    /// Get the ResultType with a type environment for tracking variable types through blocks
-    fn getExprResultTypeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *TypeEnv) ResultType {
+    /// Get the Layout with a type environment for tracking variable types through blocks
+    fn getExprLayoutWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *TypeEnv) LayoutIdx {
         return switch (expr) {
             .e_num => |num| switch (num.kind) {
                 .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
@@ -1549,26 +1527,26 @@ pub const DevEvaluator = struct {
             },
             .e_frac_f32, .e_frac_f64 => .f64,
             .e_dec, .e_dec_small => .dec,
-            .e_typed_int => |ti| self.getTypedIntResultType(module_env, ti.type_name),
-            .e_binop => |binop| self.getBinopResultTypeWithEnv(module_env, binop, type_env),
+            .e_typed_int => |ti| self.getTypedIntLayout(module_env, ti.type_name),
+            .e_binop => |binop| self.getBinopLayoutWithEnv(module_env, binop, type_env),
             .e_unary_minus => |unary| blk: {
                 const inner_expr = module_env.store.getExpr(unary.expr);
-                break :blk self.getExprResultTypeWithEnv(module_env, inner_expr, type_env);
+                break :blk self.getExprLayoutWithEnv(module_env, inner_expr, type_env);
             },
             .e_nominal => |nom| blk: {
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk self.getExprResultTypeWithEnv(module_env, backing_expr, type_env);
+                break :blk self.getExprLayoutWithEnv(module_env, backing_expr, type_env);
             },
             .e_nominal_external => |nom| blk: {
                 const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk self.getExprResultTypeWithEnv(module_env, backing_expr, type_env);
+                break :blk self.getExprLayoutWithEnv(module_env, backing_expr, type_env);
             },
             .e_if => |if_expr| blk: {
                 // Get type from final_else branch
                 const else_expr = module_env.store.getExpr(if_expr.final_else);
-                break :blk self.getExprResultTypeWithEnv(module_env, else_expr, type_env);
+                break :blk self.getExprLayoutWithEnv(module_env, else_expr, type_env);
             },
-            .e_block => |block| self.getBlockResultType(module_env, block, type_env),
+            .e_block => |block| self.getBlockLayout(module_env, block, type_env),
             .e_lookup_local => |lookup| blk: {
                 // Look up the type from the type environment
                 const pattern_key = @intFromEnum(lookup.pattern_idx);
@@ -1579,10 +1557,10 @@ pub const DevEvaluator = struct {
     }
 
     /// Get the result type for a block, tracking variable types through declarations
-    fn getBlockResultType(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, type_env: *TypeEnv) ResultType {
+    fn getBlockLayout(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, type_env: *TypeEnv) LayoutIdx {
         // First pass: collect type annotations from s_type_anno statements
         // These are separate statements like `a : U64` that precede the declaration
-        var type_annos = std.AutoHashMap(base.Ident.Idx, ResultType).init(self.allocator);
+        var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(self.allocator);
         defer type_annos.deinit();
 
         const stmts = module_env.store.sliceStatements(block.stmts);
@@ -1594,12 +1572,12 @@ pub const DevEvaluator = struct {
                     const type_anno = module_env.store.getTypeAnno(ta.anno);
                     switch (type_anno) {
                         .apply => |apply| {
-                            const result_type = resultTypeFromLocalOrExternal(apply.base);
-                            type_annos.put(ta.name, result_type) catch {};
+                            const result_layout = layoutFromLocalOrExternal(apply.base);
+                            type_annos.put(ta.name, result_layout) catch {};
                         },
                         .lookup => |lookup| {
-                            const result_type = resultTypeFromLocalOrExternal(lookup.base);
-                            type_annos.put(ta.name, result_type) catch {};
+                            const result_layout = layoutFromLocalOrExternal(lookup.base);
+                            type_annos.put(ta.name, result_layout) catch {};
                         },
                         else => {},
                     }
@@ -1616,15 +1594,15 @@ pub const DevEvaluator = struct {
                     const pattern_key = @intFromEnum(decl.pattern);
                     // Check for inline annotation first
                     if (decl.anno) |anno_idx| {
-                        const result_type = self.getAnnotationResultType(module_env, anno_idx);
-                        type_env.put(pattern_key, result_type) catch {};
+                        const result_layout = self.getAnnotationLayout(module_env, anno_idx);
+                        type_env.put(pattern_key, result_layout) catch {};
                     } else {
                         // Try to find a separate type annotation for this pattern
                         const pattern = module_env.store.getPattern(decl.pattern);
                         switch (pattern) {
                             .assign => |assign| {
-                                if (type_annos.get(assign.ident)) |result_type| {
-                                    type_env.put(pattern_key, result_type) catch {};
+                                if (type_annos.get(assign.ident)) |anno_layout| {
+                                    type_env.put(pattern_key, anno_layout) catch {};
                                 }
                             },
                             else => {},
@@ -1634,14 +1612,14 @@ pub const DevEvaluator = struct {
                 .s_decl_gen => |decl| {
                     const pattern_key = @intFromEnum(decl.pattern);
                     if (decl.anno) |anno_idx| {
-                        const result_type = self.getAnnotationResultType(module_env, anno_idx);
-                        type_env.put(pattern_key, result_type) catch {};
+                        const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
+                        type_env.put(pattern_key, anno_layout) catch {};
                     } else {
                         const pattern = module_env.store.getPattern(decl.pattern);
                         switch (pattern) {
                             .assign => |assign| {
-                                if (type_annos.get(assign.ident)) |result_type| {
-                                    type_env.put(pattern_key, result_type) catch {};
+                                if (type_annos.get(assign.ident)) |anno_layout| {
+                                    type_env.put(pattern_key, anno_layout) catch {};
                                 }
                             },
                             else => {},
@@ -1654,37 +1632,37 @@ pub const DevEvaluator = struct {
 
         // Now get the type of the final expression with the updated environment
         const final_expr = module_env.store.getExpr(block.final_expr);
-        return self.getExprResultTypeWithEnv(module_env, final_expr, type_env);
+        return self.getExprLayoutWithEnv(module_env, final_expr, type_env);
     }
 
     /// Get the result type from an annotation
-    fn getAnnotationResultType(_: *DevEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) ResultType {
+    fn getAnnotationLayout(_: *DevEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
         const anno = module_env.store.getAnnotation(anno_idx);
         // Get the TypeAnno from the annotation
         const type_anno = module_env.store.getTypeAnno(anno.anno);
         switch (type_anno) {
             .apply => |apply| {
                 // Type application like List(Str)
-                return resultTypeFromLocalOrExternal(apply.base);
+                return layoutFromLocalOrExternal(apply.base);
             },
             .lookup => |lookup| {
                 // Basic type like U64, Str, Bool
-                return resultTypeFromLocalOrExternal(lookup.base);
+                return layoutFromLocalOrExternal(lookup.base);
             },
             else => return .i64,
         }
     }
 
-    /// Convert a LocalOrExternal to ResultType by checking if it's a builtin numeric type
-    fn resultTypeFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) ResultType {
+    /// Convert a LocalOrExternal to LayoutIdx by checking if it's a builtin numeric type
+    fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
         switch (loe) {
-            .builtin => |b| return resultTypeFromBuiltin(b),
+            .builtin => |b| return layoutFromBuiltin(b),
             .local, .external => return .i64,
         }
     }
 
-    /// Convert a Builtin type enum to ResultType
-    fn resultTypeFromBuiltin(b: CIR.TypeAnno.Builtin) ResultType {
+    /// Convert a Builtin type enum to LayoutIdx
+    fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
         return switch (b) {
             .u8, .u16, .u32, .u64 => .u64,
             .u128 => .u128,
@@ -1696,7 +1674,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Get the result type for a typed integer based on its type name
-    fn getTypedIntResultType(_: *DevEvaluator, module_env: *ModuleEnv, type_name: base.Ident.Idx) ResultType {
+    fn getTypedIntLayout(_: *DevEvaluator, module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
         // For typed integers, we need to look up the type by name
         // Since we don't have LocalOrExternal info here, fall back to identifier comparison
         const idents = &module_env.idents;
@@ -1719,7 +1697,7 @@ pub const DevEvaluator = struct {
     }
 
     /// Get the result type for a binary operation
-    fn getBinopResultTypeWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *TypeEnv) ResultType {
+    fn getBinopLayoutWithEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *TypeEnv) LayoutIdx {
         // Comparison operators always return boolean (i64 for 0/1)
         switch (binop.op) {
             .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
@@ -1727,7 +1705,7 @@ pub const DevEvaluator = struct {
         }
         // For arithmetic operators, determine type from operands
         const lhs_expr = module_env.store.getExpr(binop.lhs);
-        return self.getExprResultTypeWithEnv(module_env, lhs_expr, type_env);
+        return self.getExprLayoutWithEnv(module_env, lhs_expr, type_env);
     }
 
     /// Result of evaluation
@@ -1759,14 +1737,15 @@ pub const DevEvaluator = struct {
         var jit_code = backend.JitCode.init(code_result.code) catch return error.JitError;
         defer jit_code.deinit();
 
-        // Call and return result based on type
-        return switch (code_result.result_type) {
-            .i64 => EvalResult{ .i64_val = jit_code.callReturnI64() },
-            .u64 => EvalResult{ .u64_val = jit_code.callReturnU64() },
-            .f64 => EvalResult{ .f64_val = jit_code.callReturnF64() },
+        // Call and return result based on layout
+        return switch (code_result.result_layout) {
+            .i64, .i8, .i16, .i32 => EvalResult{ .i64_val = jit_code.callReturnI64() },
+            .u64, .u8, .u16, .u32, .bool => EvalResult{ .u64_val = jit_code.callReturnU64() },
+            .f64, .f32 => EvalResult{ .f64_val = jit_code.callReturnF64() },
             .i128 => EvalResult{ .i128_val = @as(i128, jit_code.callReturnI64()) }, // TODO: proper 128-bit
             .u128 => EvalResult{ .u128_val = @as(u128, jit_code.callReturnU64()) }, // TODO: proper 128-bit
             .dec => EvalResult{ .i128_val = @as(i128, jit_code.callReturnI64()) }, // TODO: proper decimal
+            else => return error.UnsupportedType, // str, list, record, etc. not yet supported
         };
     }
 };
@@ -1782,11 +1761,6 @@ test "dev evaluator initialization" {
         };
     };
     defer evaluator.deinit();
-}
-
-test "result type ordinals match llvm evaluator" {
-    // Validate that our ResultType matches the expected ordinals
-    DevEvaluator.ResultType.validate();
 }
 
 test "generate i64 code" {

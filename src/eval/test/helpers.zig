@@ -61,12 +61,14 @@ fn tryDevEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr
     var jit = backend.JitCode.init(code_result.code) catch return null;
     defer jit.deinit();
 
-    // Execute and format result as string based on type
-    return switch (code_result.result_type) {
-        .i64 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
-        .u64 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnU64()}) catch null,
-        .f64 => std.fmt.allocPrint(allocator, "{d}", .{jit.callReturnF64()}) catch null,
-        .i128, .u128, .dec => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
+    // Execute and format result as string based on layout
+    const layout_mod = @import("layout");
+    return switch (code_result.result_layout) {
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnU64()}) catch null,
+        layout_mod.Idx.f64, layout_mod.Idx.f32 => std.fmt.allocPrint(allocator, "{d}", .{jit.callReturnF64()}) catch null,
+        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch null,
+        else => null, // Unsupported layout for now
     };
 }
 

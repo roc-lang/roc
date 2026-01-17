@@ -2,9 +2,6 @@
 //!
 //! These data structures support compile-time evaluation that produces actual bytes
 //! in memory, which can then be copied into the final binary's readonly section.
-//!
-//! This is independent from the interpreter's StackValue - we intentionally create
-//! our own simple data structures for the dev backend.
 
 const std = @import("std");
 const layout_mod = @import("layout");
@@ -28,19 +25,11 @@ pub const ComptimeHeap = struct {
         };
     }
 
-    /// Allocate bytes with the given size (uses default alignment).
-    pub fn alloc(self: *ComptimeHeap, size: usize) ![]u8 {
-        return self.arena.allocator().alloc(u8, size);
-    }
-
-    /// Allocate bytes with 8-byte alignment (sufficient for i64, f64, pointers).
-    pub fn alloc8(self: *ComptimeHeap, size: usize) ![]align(8) u8 {
-        return self.arena.allocator().alignedAlloc(u8, .@"8", size);
-    }
-
-    /// Allocate bytes with 16-byte alignment (for i128, etc).
-    pub fn alloc16(self: *ComptimeHeap, size: usize) ![]align(16) u8 {
-        return self.arena.allocator().alignedAlloc(u8, .@"16", size);
+    /// Allocate bytes with explicit alignment.
+    /// alignment is log2 of the actual alignment (e.g., 3 for 8-byte alignment).
+    pub fn alloc(self: *ComptimeHeap, size: usize, comptime log2_alignment: u8) ![]u8 {
+        const alignment: std.mem.Alignment = @enumFromInt(log2_alignment);
+        return self.arena.allocator().alignedAlloc(u8, alignment, size);
     }
 
     /// Get the underlying allocator for more complex allocations.
@@ -173,7 +162,7 @@ test "ComptimeHeap basic allocation" {
     var heap = ComptimeHeap.init(std.testing.allocator);
     defer heap.deinit();
 
-    const bytes = try heap.alloc(8);
+    const bytes = try heap.alloc(8, 3); // 8 bytes, 8-byte alignment (log2(8) = 3)
     try std.testing.expectEqual(@as(usize, 8), bytes.len);
 }
 
@@ -181,7 +170,7 @@ test "ComptimeValue read/write i64" {
     var heap = ComptimeHeap.init(std.testing.allocator);
     defer heap.deinit();
 
-    const bytes = try heap.alloc8(8);
+    const bytes = try heap.alloc(8, 3);
     const value = ComptimeValue.fromBytes(bytes, undefined);
 
     value.set(i64, 42);
@@ -195,7 +184,7 @@ test "ComptimeEnv bind and lookup" {
     var env = ComptimeEnv.init(&heap, null);
     defer env.deinit();
 
-    const bytes = try heap.alloc8(8);
+    const bytes = try heap.alloc(8, 3);
     const value = ComptimeValue.fromBytes(bytes, undefined);
     value.set(i64, 123);
 
@@ -213,7 +202,7 @@ test "ComptimeEnv child inherits bindings" {
     var parent = ComptimeEnv.init(&heap, null);
     defer parent.deinit();
 
-    const bytes = try heap.alloc8(8);
+    const bytes = try heap.alloc(8, 3);
     const value = ComptimeValue.fromBytes(bytes, undefined);
     value.set(i64, 999);
     try parent.bind(1, value);
@@ -227,7 +216,7 @@ test "ComptimeEnv child inherits bindings" {
     try std.testing.expectEqual(@as(i64, 999), from_child.?.as(i64));
 
     // Add new binding to child
-    const bytes2 = try heap.alloc8(8);
+    const bytes2 = try heap.alloc(8, 3);
     const value2 = ComptimeValue.fromBytes(bytes2, undefined);
     value2.set(i64, 777);
     try child_env.bind(2, value2);

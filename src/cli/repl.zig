@@ -167,23 +167,19 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
 
     // Print welcome banner
     stdout.print("Roc REPL\n", .{}) catch {};
-
-    // Show backend info
-    switch (backend) {
-        .interpreter => {},
-        .dev => {
-            stdout.print("Using dev backend (native code generation) - EXPERIMENTAL\n", .{}) catch {};
-            stdout.print("Note: Dev backend is not yet fully implemented. Falling back to interpreter.\n", .{}) catch {};
-        },
-    }
-
     stdout.print("Type :help for help, :exit to quit\n\n", .{}) catch {};
 
     // Initialize ReplOps and REPL
     var repl_ops = ReplOps.init(ctx.gpa);
     defer repl_ops.deinit();
 
-    var repl_instance = Repl.init(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr()) catch |err| {
+    // Convert CLI backend to REPL backend
+    const repl_backend: repl_mod.Backend = switch (backend) {
+        .interpreter => .interpreter,
+        .dev => .dev,
+    };
+
+    var repl_instance = Repl.initWithBackend(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr(), repl_backend) catch |err| {
         ctx.io.stderr().print("Failed to initialize REPL: {}\n", .{err}) catch {};
         return error.NotImplemented;
     };
