@@ -84,11 +84,29 @@ pub const SyntaxChecker = struct {
         // This avoids unnecessary rebuilds on focus/blur events
         if (override_text) |text| {
             const new_hash = DependencyGraph.computeContentHash(text);
-            if (!self.dependency_graph.hasContentChanged(absolute_path, new_hash)) {
-                self.logDebug(.build, "skipping rebuild for {s}: content unchanged", .{absolute_path});
-                // Return empty diagnostics array - no changes means no new diagnostics
-                return &[_]Diagnostics.PublishDiagnostics{};
+            const old_hash = self.dependency_graph.getContentHash(absolute_path);
+
+            if (old_hash) |existing| {
+                if (std.mem.eql(u8, &existing, &new_hash)) {
+                    self.logDebug(.build, "[INCREMENTAL] SKIP rebuild for {s}: content hash unchanged ({x}...)", .{
+                        absolute_path,
+                        new_hash[0..4].*,
+                    });
+                    // Return empty diagnostics array - no changes means no new diagnostics
+                    return &[_]Diagnostics.PublishDiagnostics{};
+                }
+                self.logDebug(.build, "[INCREMENTAL] REBUILD {s}: content hash changed ({x}... -> {x}...)", .{
+                    absolute_path,
+                    existing[0..4].*,
+                    new_hash[0..4].*,
+                });
+            } else {
+                self.logDebug(.build, "[INCREMENTAL] INITIAL build for {s}: no previous hash (new hash: {x}...)", .{
+                    absolute_path,
+                    new_hash[0..4].*,
+                });
             }
+
             // Update the content hash for this module
             self.dependency_graph.setContentHash(absolute_path, new_hash);
         }
@@ -291,31 +309,66 @@ pub const SyntaxChecker = struct {
 
     /// Update the dependency graph from a successful build.
     fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) void {
+        self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});
+
         // Clear the old graph and rebuild from current state
         self.dependency_graph.clear();
+
+        var total_modules: usize = 0;
+        var exports_computed: usize = 0;
 
         // Iterate through all schedulers (packages) and build the graph
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
+            const pkg_name = entry.key_ptr.*;
             const sched = entry.value_ptr.*;
+
+            self.logDebug(.build, "[DEPS] Processing package '{s}' with {d} modules", .{ pkg_name, sched.modules.items.len });
+
             self.dependency_graph.buildFromPackageEnv(sched) catch |err| {
-                self.logDebug(.build, "failed to build dependency graph: {s}", .{@errorName(err)});
+                self.logDebug(.build, "[DEPS] Failed to build dependency graph for '{s}': {s}", .{ pkg_name, @errorName(err) });
                 continue;
             };
 
             // Compute and store exports hash for each module with a valid ModuleEnv
             for (sched.modules.items) |*module_state| {
+                total_modules += 1;
+
                 if (module_state.env) |*module_env| {
-                    const exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
-                        self.logDebug(.build, "failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
+                    const new_exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
+                        self.logDebug(.build, "[DEPS] Failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
                         continue;
                     };
-                    self.dependency_graph.setExportsHash(module_state.path, exports_hash);
+
+                    // Check if exports changed (for future smart invalidation)
+                    const old_exports_hash = self.dependency_graph.getExportsHash(module_state.path);
+                    if (old_exports_hash) |existing| {
+                        if (!std.mem.eql(u8, &existing, &new_exports_hash)) {
+                            self.logDebug(.build, "[DEPS] EXPORTS CHANGED for {s}: {x}... -> {x}...", .{
+                                module_state.path,
+                                existing[0..4].*,
+                                new_exports_hash[0..4].*,
+                            });
+                        }
+                    }
+
+                    self.dependency_graph.setExportsHash(module_state.path, new_exports_hash);
+                    exports_computed += 1;
+
+                    // Log module with its dependencies
+                    if (self.dependency_graph.getModule(module_state.path)) |node| {
+                        if (node.imports.items.len > 0) {
+                            self.logDebug(.build, "[DEPS]   {s} imports {d} modules", .{ module_state.name, node.imports.items.len });
+                        }
+                    }
                 }
             }
         }
 
-        self.logDebug(.build, "dependency graph updated: {d} modules", .{self.dependency_graph.count()});
+        self.logDebug(.build, "[DEPS] Graph complete: {d} modules tracked, {d} exports hashes computed", .{
+            self.dependency_graph.count(),
+            exports_computed,
+        });
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) !Diagnostics.Diagnostic {
