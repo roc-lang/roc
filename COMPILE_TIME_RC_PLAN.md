@@ -5,6 +5,8 @@
 1. **DELETE RUNTIME RC FIRST** - Before ANY other work, ALL runtime RC code must be PERMANENTLY deleted
 2. **NEVER RESTORE RUNTIME RC** - Even if tests fail, runtime RC must NEVER be restored. Failing tests mean the project is incomplete.
 3. **This is a COMPILER** - We are rewriting the compiler in Zig. Runtime RC is fundamentally wrong for a compiler.
+4. **COMMIT AS YOU GO** - Make incremental commits as progress is made. Don't wait until everything is done.
+5. **NO NULLABLE LAYOUTS** - Every pattern MUST have a valid layout. If layout computation fails, that's a bug to fix, not a case to handle with optionals. Nullable layouts invite silent bugs and leaks.
 
 ---
 

@@ -1041,9 +1041,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
 
     // Run RC insertion pass to add explicit incref/decref operations to the IR.
     // This enables compile-time reference counting rather than runtime RC.
+    // Use runOnExpr since the test expression isn't wrapped in a def.
     var rc_pass = try rc.InsertPass.init(allocator, module_env);
     defer rc_pass.deinit();
-    try rc_pass.run();
+    const transformed_expr_idx = try rc_pass.runOnExpr(canonical_expr_idx);
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
@@ -1051,7 +1052,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = transformed_expr_idx,  // Use RC-transformed expression
         .bool_stmt = bool_stmt_in_bool_module,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,

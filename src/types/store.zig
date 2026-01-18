@@ -132,6 +132,17 @@ pub const Store = struct {
         try self.slots.backing.items.ensureTotalCapacity(self.gpa, capacity);
     }
 
+    /// Extend the type store to have enough slots for the given variable index.
+    /// Used when creating synthetic patterns after type checking that need type info.
+    /// Fills new slots with flex vars to avoid leaving uninitialized memory.
+    pub fn extendToVar(self: *Self, var_: Var) Allocator.Error!void {
+        const needed_len = @intFromEnum(var_) + 1;
+        while (self.slots.backing.len() < needed_len) {
+            // Create a placeholder flex variable for each new slot
+            _ = try self.fresh();
+        }
+    }
+
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
         // slots & descriptors

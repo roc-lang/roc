@@ -199,7 +199,7 @@ pub const InsertPass = struct {
                 // Parameters are borrowed because the caller owns the arguments
                 const params = self.module_env.store.slicePatterns(lambda.args);
                 for (params) |param_pattern| {
-                    try self.registerPattern(param_pattern, .borrowed);
+                    try self.registerPattern(param_pattern, .borrowed, null);
                 }
                 // Walk lambda body
                 try self.countUsagesInExpr(lambda.body);
@@ -293,7 +293,8 @@ pub const InsertPass = struct {
             },
             .e_for => |for_expr| {
                 // Register the pattern for the loop variable
-                try self.registerPattern(for_expr.patt, .borrowed);
+                // Note: loop variable type comes from iterating over expr, not expr itself
+                try self.registerPattern(for_expr.patt, .borrowed, null);
                 try self.countUsagesInExpr(for_expr.expr);
                 try self.countUsagesInExpr(for_expr.body);
             },
@@ -350,15 +351,16 @@ pub const InsertPass = struct {
         switch (stmt) {
             .s_decl => |decl| {
                 // Register this pattern as a bound symbol
-                try self.registerPattern(decl.pattern, .owned);
+                // Pass the expression so we can get layout from it (needed for synthetic patterns)
+                try self.registerPattern(decl.pattern, .owned, decl.expr);
                 try self.countUsagesInExpr(decl.expr);
             },
             .s_decl_gen => |decl| {
-                try self.registerPattern(decl.pattern, .owned);
+                try self.registerPattern(decl.pattern, .owned, decl.expr);
                 try self.countUsagesInExpr(decl.expr);
             },
             .s_var => |var_decl| {
-                try self.registerPattern(var_decl.pattern_idx, .owned);
+                try self.registerPattern(var_decl.pattern_idx, .owned, var_decl.expr);
                 try self.countUsagesInExpr(var_decl.expr);
             },
             .s_reassign => |reassign| {
@@ -368,7 +370,7 @@ pub const InsertPass = struct {
                 try self.countUsagesInExpr(expr.expr);
             },
             .s_for => |for_stmt| {
-                try self.registerPattern(for_stmt.patt, .borrowed);
+                try self.registerPattern(for_stmt.patt, .borrowed, null);
                 try self.countUsagesInExpr(for_stmt.expr);
                 try self.countUsagesInExpr(for_stmt.body);
             },
@@ -397,16 +399,20 @@ pub const InsertPass = struct {
         }
     }
 
-    /// Register a pattern and its introduced symbols
-    fn registerPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, ownership: Ownership) !void {
+    /// Register a pattern and its introduced symbols.
+    /// When expr_idx is provided (for declarations), the layout is computed from the expression's type.
+    /// This handles synthetic patterns created by the Monomorphizer that don't have direct type mappings.
+    fn registerPattern(self: *Self, pattern_idx: CIR.Pattern.Idx, ownership: Ownership, expr_idx: ?CIR.Expr.Idx) !void {
         // Add to current scope if we have one
         if (self.current_scope) |scope| {
             try scope.introduced_patterns.append(pattern_idx);
         }
 
-        // Compute layout for this pattern by looking it up in the layout store's cache.
-        // Pattern indices map directly to type variables via ModuleEnv.varFrom.
-        const layout_idx = self.getLayoutForPattern(pattern_idx);
+        // Compute layout - prefer expression type (works for synthetic patterns), fall back to pattern type
+        const layout_idx = if (expr_idx) |eidx|
+            self.getLayoutForExpr(eidx) orelse self.getLayoutForPattern(pattern_idx)
+        else
+            self.getLayoutForPattern(pattern_idx);
 
         // Register the symbol state
         try self.symbol_states.put(pattern_idx, SymbolState{
@@ -426,11 +432,12 @@ pub const InsertPass = struct {
         switch (pattern) {
             .assign => {
                 // This is a direct binding - register it
-                try self.registerPattern(pattern_idx, ownership);
+                // No associated expression, so pass null for layout computation
+                try self.registerPattern(pattern_idx, ownership, null);
             },
             .as => |as_pat| {
                 // Register the alias and recurse into the nested pattern
-                try self.registerPattern(pattern_idx, ownership);
+                try self.registerPattern(pattern_idx, ownership, null);
                 try self.registerBindingsFromPattern(as_pat.pattern, ownership);
             },
             .applied_tag => |tag| {
@@ -506,6 +513,22 @@ pub const InsertPass = struct {
         // This will cache the result in layouts_by_var
         // Layout computation can fail for various reasons (unresolved types, etc.)
         // In those cases, we conservatively assume no RC is needed
+        return self.layout_store.addTypeVar(type_var, &self.type_scope) catch null;
+    }
+
+    /// Get the layout index for an expression by computing it from the expression's type.
+    /// This is useful for synthetic patterns where the pattern itself doesn't have type info,
+    /// but the expression being assigned does.
+    fn getLayoutForExpr(self: *Self, expr_idx: CIR.Expr.Idx) ?layout_mod.Idx {
+        // Expression indices map to type variables the same way as patterns
+        const type_var: Var = @enumFromInt(@intFromEnum(expr_idx));
+
+        // First check the cache
+        if (self.layout_store.layouts_by_var.get(type_var)) |cached_idx| {
+            return cached_idx;
+        }
+
+        // Compute the layout from the type variable
         return self.layout_store.addTypeVar(type_var, &self.type_scope) catch null;
     }
 
@@ -688,7 +711,7 @@ pub const InsertPass = struct {
                     const needs_rc = if (state.layout_idx) |layout_idx|
                         self.layoutNeedsRc(layout_idx)
                     else
-                        true;
+                        true;  // Assume RC needed if layout unknown
 
                     if (needs_rc) {
                         any_changed = true;

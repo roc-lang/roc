@@ -1390,6 +1390,16 @@ fn duplicateExpr(
                         base.Region.zero(),
                     );
 
+                    // Set the synthetic pattern's type to match the ORIGINAL expression's type.
+                    // We use arg_idx (original) not new_arg (duplicated) because the original
+                    // has valid type info from type checking, while the duplicate may not.
+                    // Later stages (RC pass, lambda set specialization) need valid type info.
+                    const pattern_var = ModuleEnv.varFrom(pattern_idx);
+                    const expr_var = ModuleEnv.varFrom(arg_idx);
+                    // Extend type store to cover the new pattern index (created after type checking)
+                    try self.module_env.types.extendToVar(pattern_var);
+                    try self.module_env.types.dangerousSetVarRedirect(pattern_var, expr_var);
+
                     // Create the let-binding statement: #argN = complex_expr
                     const decl_stmt = try self.module_env.store.addStatement(
                         .{ .s_decl = .{
