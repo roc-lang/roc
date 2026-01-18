@@ -21,7 +21,6 @@ const FileProvider = compile.package.FileProvider;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
 const Region = base.Region;
-const TypeWriter = types.TypeWriter;
 
 /// Flags allowing granular debugging
 pub const DebugFlags = struct {

@@ -12,11 +12,13 @@ const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
+const DevEvaluator = eval_mod.DevEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
 const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
+const backend = @import("backend");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -40,6 +42,167 @@ const TraceWriter = struct {
         return &self.writer.interface;
     }
 };
+
+/// Check if DevEvaluator can handle this expression type.
+/// Returns false for expressions that require features not yet implemented.
+fn canDevEvaluatorHandle(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) bool {
+    const expr = module_env.store.getExpr(expr_idx);
+    return canHandleExpr(module_env, expr);
+}
+
+fn canHandleExpr(module_env: *ModuleEnv, expr: CIR.Expr) bool {
+    return switch (expr) {
+        // Supported expression types
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+        .e_zero_argument_tag, .e_tag => true,
+        .e_str => true,
+        .e_empty_record, .e_empty_list => true,
+
+        // Compound expressions - check children
+        .e_binop => |binop| {
+            const lhs = module_env.store.getExpr(binop.lhs);
+            const rhs = module_env.store.getExpr(binop.rhs);
+            return canHandleExpr(module_env, lhs) and canHandleExpr(module_env, rhs);
+        },
+        .e_unary_minus => |unary| {
+            const inner = module_env.store.getExpr(unary.expr);
+            return canHandleExpr(module_env, inner);
+        },
+        .e_unary_not => |unary| {
+            const inner = module_env.store.getExpr(unary.expr);
+            return canHandleExpr(module_env, inner);
+        },
+        .e_if => |if_expr| {
+            // Check all branches
+            const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+            for (branch_indices) |branch_idx| {
+                const branch = module_env.store.getIfBranch(branch_idx);
+                const cond = module_env.store.getExpr(branch.cond);
+                const body = module_env.store.getExpr(branch.body);
+                if (!canHandleExpr(module_env, cond) or !canHandleExpr(module_env, body)) {
+                    return false;
+                }
+            }
+            // Check final else
+            const final_else = module_env.store.getExpr(if_expr.final_else);
+            return canHandleExpr(module_env, final_else);
+        },
+        .e_record => |rec| {
+            if (rec.ext != null) return false;
+            const fields = module_env.store.sliceRecordFields(rec.fields);
+            for (fields) |field_idx| {
+                const field = module_env.store.getRecordField(field_idx);
+                const field_expr = module_env.store.getExpr(field.value);
+                if (!canHandleExpr(module_env, field_expr)) return false;
+            }
+            return true;
+        },
+        .e_dot_access => |dot| {
+            if (dot.args != null) return false; // Method calls not supported
+            const receiver = module_env.store.getExpr(dot.receiver);
+            return canHandleExpr(module_env, receiver);
+        },
+        .e_tuple => |tuple| {
+            const elems = module_env.store.sliceExpr(tuple.elems);
+            for (elems) |elem_idx| {
+                const elem = module_env.store.getExpr(elem_idx);
+                if (!canHandleExpr(module_env, elem)) return false;
+            }
+            return true;
+        },
+        .e_nominal => |nom| {
+            const backing = module_env.store.getExpr(nom.backing_expr);
+            return canHandleExpr(module_env, backing);
+        },
+        .e_nominal_external => |nom| {
+            const backing = module_env.store.getExpr(nom.backing_expr);
+            return canHandleExpr(module_env, backing);
+        },
+
+        // Unsupported expression types (lambdas, closures, calls, etc.)
+        .e_lambda, .e_closure, .e_call => false,
+        .e_hosted_lambda, .e_low_level_lambda => false,
+        .e_block => false, // Blocks with let bindings not yet fully supported
+        .e_lookup_local, .e_lookup_external, .e_lookup_required => false, // Variable lookups need environment
+        .e_list => false, // Lists need heap allocation
+        .e_match => false, // Match expressions need pattern matching
+        .e_for => false, // For loops not supported
+        .e_crash, .e_runtime_error => false, // Error expressions
+        .e_dbg, .e_expect => false, // Debug expressions
+        else => false,
+    };
+}
+
+/// Evaluate an expression using the DevEvaluator and return the result as a string.
+fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) []const u8 {
+    // Initialize DevEvaluator
+    var dev_eval = DevEvaluator.init(allocator) catch |err| {
+        std.debug.panic("DevEvaluator.init failed: {}", .{err});
+    };
+    defer dev_eval.deinit();
+
+    // Get the expression from the index
+    const expr = module_env.store.getExpr(expr_idx);
+
+    // Generate code
+    var code_result = dev_eval.generateCode(module_env, expr) catch |err| {
+        std.debug.panic("DevEvaluator.generateCode failed: {}", .{err});
+    };
+    defer code_result.deinit();
+
+    // JIT execute the code
+    var jit = backend.JitCode.init(code_result.code) catch |err| {
+        std.debug.panic("JitCode.init failed: {}", .{err});
+    };
+    defer jit.deinit();
+
+    // Execute with result pointer and format result as string based on layout
+    const layout_mod = @import("layout");
+    return switch (code_result.result_layout) {
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            var result: i64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
+            var result: u64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
+            var result: f64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => blk: {
+            var result: i128 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        else => std.debug.panic("Unsupported layout: {}", .{code_result.result_layout}),
+    };
+}
+
+/// Compare Interpreter result string with DevEvaluator result string.
+/// Only compares for expressions that DevEvaluator can handle.
+/// Fails the test if both can handle it but produce different strings.
+fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
+    // Skip comparison for expressions DevEvaluator can't handle yet
+    if (!canDevEvaluatorHandle(module_env, expr_idx)) {
+        return;
+    }
+
+    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
+    defer allocator.free(dev_str);
+
+    if (!std.mem.eql(u8, interpreter_str, dev_str)) {
+        std.debug.print(
+            "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
+            .{ interpreter_str, dev_str },
+        );
+        return error.EvaluatorMismatch;
+    }
+}
 
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
@@ -106,6 +269,12 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         // Convert Dec to integer by dividing by the decimal scale factor
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
+
+    // Compare with DevEvaluator using string representation
+    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
+    defer test_allocator.free(int_str);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+
     try std.testing.expectEqual(expected_int, int_value);
 }
 
@@ -135,18 +304,24 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer interpreter.cleanupBindings(ops);
 
     // For boolean results, read the underlying byte value
-    if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
+    const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
         // Boolean represented as integer (discriminant)
-        const int_val = result.asI128();
-        const bool_val = int_val != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    } else {
+        const val = result.asI128();
+        break :blk @intCast(val);
+    } else blk: {
         // Try reading as raw byte (for boolean tag values)
         std.debug.assert(result.ptr != null);
         const bool_ptr: *const u8 = @ptrCast(@alignCast(result.ptr.?));
-        const bool_val = bool_ptr.* != 0;
-        try std.testing.expectEqual(expected_bool, bool_val);
-    }
+        break :blk @as(i64, bool_ptr.*);
+    };
+
+    // Compare with DevEvaluator using string representation
+    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+    defer test_allocator.free(int_str);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+
+    const bool_val = int_val != 0;
+    try std.testing.expectEqual(expected_bool, bool_val);
 }
 
 /// Helper function to run an expression and expect an f32 result (with epsilon tolerance).
@@ -175,6 +350,12 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF32();
+
+    // Compare with DevEvaluator using string representation
+    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
+    defer test_allocator.free(float_str);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
     if (diff > epsilon) {
@@ -209,6 +390,12 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer interpreter.cleanupBindings(ops);
 
     const actual = result.asF64();
+
+    // Compare with DevEvaluator using string representation
+    const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
+    defer test_allocator.free(float_str);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
     if (diff > epsilon) {
@@ -247,6 +434,13 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     defer interpreter.cleanupBindings(ops);
 
     const actual_dec = result.asDec(ops);
+
+    // Compare with DevEvaluator using string representation of integer part
+    const int_part = @divTrunc(actual_dec.num, dec_scale);
+    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
+    defer test_allocator.free(int_str);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec, actual_dec.num });
@@ -282,6 +476,13 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer interpreter.cleanupBindings(ops);
 
     const actual_dec = result.asDec(ops);
+
+    // Compare with DevEvaluator using string representation of integer part
+    const int_part = @divTrunc(actual_dec.num, dec_scale);
+    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
+    defer test_allocator.free(int_str);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
         return error.TestExpectedEqual;
