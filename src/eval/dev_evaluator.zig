@@ -30,18 +30,49 @@ const builtin_loading = eval_mod.builtin_loading;
 const comptime_value = eval_mod.comptime_value;
 const TopLevelBindings = comptime_value.TopLevelBindings;
 
+/// Binding value that can hold different types
+const BindingValue = union(enum) {
+    i64_val: i64,
+    i128_val: i128,
+    f64_val: f64,
+    expr_ref: CIR.Expr.Idx, // For deferred evaluation (expressions not yet evaluated)
+
+    fn asI64(self: BindingValue) ?i64 {
+        return switch (self) {
+            .i64_val => |v| v,
+            .i128_val => |v| if (v >= std.math.minInt(i64) and v <= std.math.maxInt(i64)) @as(i64, @intCast(v)) else null,
+            else => null,
+        };
+    }
+
+    fn asI128(self: BindingValue) ?i128 {
+        return switch (self) {
+            .i64_val => |v| @as(i128, v),
+            .i128_val => |v| v,
+            else => null,
+        };
+    }
+
+    fn asF64(self: BindingValue) ?f64 {
+        return switch (self) {
+            .f64_val => |v| v,
+            else => null,
+        };
+    }
+};
+
 /// Scope for tracking variable bindings during evaluation.
 /// Uses parent pointer for O(1) child creation instead of copying all bindings.
 const Scope = struct {
     parent: ?*const Scope,
-    bindings: std.AutoHashMap(u32, i64),
+    bindings: std.AutoHashMap(u32, BindingValue),
     closure_refs: std.AutoHashMap(u32, CIR.Expr.Idx),
     allocator: Allocator,
 
     fn init(allocator: Allocator) Scope {
         return .{
             .parent = null,
-            .bindings = std.AutoHashMap(u32, i64).init(allocator),
+            .bindings = std.AutoHashMap(u32, BindingValue).init(allocator),
             .closure_refs = std.AutoHashMap(u32, CIR.Expr.Idx).init(allocator),
             .allocator = allocator,
         };
@@ -50,14 +81,26 @@ const Scope = struct {
     fn child(self: *const Scope) Scope {
         return .{
             .parent = self,
-            .bindings = std.AutoHashMap(u32, i64).init(self.allocator),
+            .bindings = std.AutoHashMap(u32, BindingValue).init(self.allocator),
             .closure_refs = std.AutoHashMap(u32, CIR.Expr.Idx).init(self.allocator),
             .allocator = self.allocator,
         };
     }
 
     fn bind(self: *Scope, pattern_idx: u32, value: i64) !void {
-        try self.bindings.put(pattern_idx, value);
+        try self.bindings.put(pattern_idx, BindingValue{ .i64_val = value });
+    }
+
+    fn bindI128(self: *Scope, pattern_idx: u32, value: i128) !void {
+        try self.bindings.put(pattern_idx, BindingValue{ .i128_val = value });
+    }
+
+    fn bindF64(self: *Scope, pattern_idx: u32, value: f64) !void {
+        try self.bindings.put(pattern_idx, BindingValue{ .f64_val = value });
+    }
+
+    fn bindExpr(self: *Scope, pattern_idx: u32, expr_idx: CIR.Expr.Idx) !void {
+        try self.bindings.put(pattern_idx, BindingValue{ .expr_ref = expr_idx });
     }
 
     fn bindClosure(self: *Scope, pattern_idx: u32, expr_idx: CIR.Expr.Idx) !void {
@@ -65,8 +108,26 @@ const Scope = struct {
     }
 
     fn lookup(self: *const Scope, pattern_idx: u32) ?i64 {
-        if (self.bindings.get(pattern_idx)) |v| return v;
+        if (self.bindings.get(pattern_idx)) |v| return v.asI64();
         if (self.parent) |p| return p.lookup(pattern_idx);
+        return null;
+    }
+
+    fn lookupI128(self: *const Scope, pattern_idx: u32) ?i128 {
+        if (self.bindings.get(pattern_idx)) |v| return v.asI128();
+        if (self.parent) |p| return p.lookupI128(pattern_idx);
+        return null;
+    }
+
+    fn lookupF64(self: *const Scope, pattern_idx: u32) ?f64 {
+        if (self.bindings.get(pattern_idx)) |v| return v.asF64();
+        if (self.parent) |p| return p.lookupF64(pattern_idx);
+        return null;
+    }
+
+    fn lookupBinding(self: *const Scope, pattern_idx: u32) ?BindingValue {
+        if (self.bindings.get(pattern_idx)) |v| return v;
+        if (self.parent) |p| return p.lookupBinding(pattern_idx);
         return null;
     }
 
@@ -673,6 +734,22 @@ pub const DevEvaluator = struct {
     /// Generate code for local variable lookup
     fn generateLookupLocalCode(self: *DevEvaluator, lookup: anytype, result_layout: LayoutIdx, env: *Scope) Error![]const u8 {
         const pattern_key = @intFromEnum(lookup.pattern_idx);
+
+        // Check if this is a 128-bit type or Dec
+        if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
+            const value = env.lookupI128(pattern_key) orelse return error.UnsupportedExpression;
+            return self.generateReturnI128Code(value);
+        }
+
+        // Check if this is a float type
+        if (result_layout == .f64 or result_layout == .f32) {
+            if (env.lookupF64(pattern_key)) |value| {
+                return self.generateReturnF64Code(value);
+            }
+            // Fall through to try i64 (for integer promotion to float)
+        }
+
+        // Default to i64
         const value = env.lookup(pattern_key) orelse return error.UnsupportedExpression;
         return self.generateReturnI64Code(value, result_layout);
     }
@@ -694,7 +771,32 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Fall back to scalar comparison
+        // Check if this is a 128-bit operation
+        if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
+            const lhs_val = self.evalConstantI128(module_env, lhs_expr, env) orelse return error.UnsupportedExpression;
+            const rhs_val = self.evalConstantI128(module_env, rhs_expr, env) orelse return error.UnsupportedExpression;
+
+            const result_val: i128 = switch (binop.op) {
+                .add => lhs_val +% rhs_val,
+                .sub => lhs_val -% rhs_val,
+                .mul => lhs_val *% rhs_val,
+                .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+                .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else return error.UnsupportedExpression,
+                .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+                .lt => if (lhs_val < rhs_val) @as(i128, 1) else @as(i128, 0),
+                .gt => if (lhs_val > rhs_val) @as(i128, 1) else @as(i128, 0),
+                .le => if (lhs_val <= rhs_val) @as(i128, 1) else @as(i128, 0),
+                .ge => if (lhs_val >= rhs_val) @as(i128, 1) else @as(i128, 0),
+                .eq => if (lhs_val == rhs_val) @as(i128, 1) else @as(i128, 0),
+                .ne => if (lhs_val != rhs_val) @as(i128, 1) else @as(i128, 0),
+                .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i128, 1) else @as(i128, 0),
+                .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i128, 1) else @as(i128, 0),
+            };
+
+            return self.generateReturnI128Code(result_val);
+        }
+
+        // Fall back to i64 scalar operations
         const lhs_val = self.evalConstantI64(module_env, lhs_expr, env) orelse return error.UnsupportedExpression;
         const rhs_val = self.evalConstantI64(module_env, rhs_expr, env) orelse return error.UnsupportedExpression;
 
@@ -856,6 +958,13 @@ pub const DevEvaluator = struct {
     /// Unary minus with environment support
     fn generateUnaryMinusCode(self: *DevEvaluator, module_env: *ModuleEnv, unary: CIR.Expr.UnaryMinus, result_layout: LayoutIdx, env: *Scope) Error![]const u8 {
         const inner_expr = module_env.store.getExpr(unary.expr);
+
+        // Check if this is a 128-bit type
+        if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
+            const inner_val = self.evalConstantI128(module_env, inner_expr, env) orelse return error.UnsupportedExpression;
+            return self.generateReturnI128Code(-inner_val);
+        }
+
         const inner_val = self.evalConstantI64(module_env, inner_expr, env) orelse return error.UnsupportedExpression;
         return self.generateReturnI64Code(-inner_val, result_layout);
     }
@@ -1303,13 +1412,152 @@ pub const DevEvaluator = struct {
             .e_lambda, .e_closure => {
                 try env.bindClosure(pattern_key, expr_idx);
             },
-            // Other expressions are evaluated to values
-            else => {
-                const value = self.evalConstantI64(module_env, expr, env) orelse
+            // Numeric expressions with i128/u128 types
+            .e_num => |num| {
+                switch (num.kind) {
+                    .i128, .u128 => {
+                        const value = num.value.toI128();
+                        try env.bindI128(pattern_key, value);
+                    },
+                    else => {
+                        // Try i64 first, fall back to i128 for large values
+                        if (self.evalConstantI64(module_env, expr, env)) |value| {
+                            try env.bind(pattern_key, value);
+                        } else {
+                            // Value too large for i64, use i128
+                            const value = num.value.toI128();
+                            try env.bindI128(pattern_key, value);
+                        }
+                    },
+                }
+            },
+            // Typed integers may be i128/u128
+            .e_typed_int => |ti| {
+                const value_i128 = ti.value.toI128();
+                // Check if value fits in i64
+                if (value_i128 >= std.math.minInt(i64) and value_i128 <= std.math.maxInt(i64)) {
+                    try env.bind(pattern_key, @intCast(value_i128));
+                } else {
+                    try env.bindI128(pattern_key, value_i128);
+                }
+            },
+            // Dec values are i128
+            .e_dec => |dec| {
+                const value_i128 = dec.value.toI128();
+                try env.bindI128(pattern_key, value_i128);
+            },
+            .e_dec_small => |dec| {
+                const decimal_places: u8 = 18;
+                const numerator: i128 = dec.value.numerator;
+                const denominator_power: u8 = dec.value.denominator_power_of_ten;
+                const scale_power: u8 = if (denominator_power >= decimal_places)
+                    0
+                else
+                    decimal_places - denominator_power;
+                var scale: i128 = 1;
+                for (0..scale_power) |_| {
+                    scale *= 10;
+                }
+                const scaled_value = numerator * scale;
+                try env.bindI128(pattern_key, scaled_value);
+            },
+            // Float values
+            .e_frac_f64 => |frac| {
+                try env.bindF64(pattern_key, frac.value);
+            },
+            .e_frac_f32 => |frac| {
+                try env.bindF64(pattern_key, @floatCast(frac.value));
+            },
+            // Binops may produce i128 results
+            .e_binop => |binop| {
+                // Try i128 first for large values
+                if (self.evalConstantI128(module_env, expr, env)) |value_i128| {
+                    if (value_i128 >= std.math.minInt(i64) and value_i128 <= std.math.maxInt(i64)) {
+                        try env.bind(pattern_key, @intCast(value_i128));
+                    } else {
+                        try env.bindI128(pattern_key, value_i128);
+                    }
+                } else {
+                    // Binop couldn't be evaluated - maybe it involves unsupported operations
+                    _ = binop;
                     return error.UnsupportedExpression;
-                try env.bind(pattern_key, value);
+                }
+            },
+            // Other expressions - try i64 first, then i128
+            else => {
+                if (self.evalConstantI64(module_env, expr, env)) |value| {
+                    try env.bind(pattern_key, value);
+                } else if (self.evalConstantI128(module_env, expr, env)) |value| {
+                    try env.bindI128(pattern_key, value);
+                } else {
+                    return error.UnsupportedExpression;
+                }
             },
         }
+    }
+
+    /// Try to fold a pure constant expression to an i128 value.
+    /// Handles i128/u128 values and expressions that produce them.
+    fn evalConstantI128(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, env: *Scope) ?i128 {
+        return switch (expr) {
+            .e_num => |num| num.value.toI128(),
+            .e_typed_int => |ti| ti.value.toI128(),
+            .e_dec => |dec| dec.value.toI128(),
+            .e_dec_small => |dec| blk: {
+                const decimal_places: u8 = 18;
+                const numerator: i128 = dec.value.numerator;
+                const denominator_power: u8 = dec.value.denominator_power_of_ten;
+                const scale_power: u8 = if (denominator_power >= decimal_places)
+                    0
+                else
+                    decimal_places - denominator_power;
+                var scale: i128 = 1;
+                for (0..scale_power) |_| {
+                    scale *= 10;
+                }
+                break :blk numerator * scale;
+            },
+            .e_lookup_local => |lookup| blk: {
+                const pattern_key = @intFromEnum(lookup.pattern_idx);
+                break :blk env.lookupI128(pattern_key);
+            },
+            .e_binop => |binop| blk: {
+                const lhs_expr = module_env.store.getExpr(binop.lhs);
+                const rhs_expr = module_env.store.getExpr(binop.rhs);
+                const lhs_val = self.evalConstantI128(module_env, lhs_expr, env) orelse break :blk null;
+                const rhs_val = self.evalConstantI128(module_env, rhs_expr, env) orelse break :blk null;
+                break :blk switch (binop.op) {
+                    .add => lhs_val +% rhs_val,
+                    .sub => lhs_val -% rhs_val,
+                    .mul => lhs_val *% rhs_val,
+                    .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else null,
+                    .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else null,
+                    .lt => if (lhs_val < rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .gt => if (lhs_val > rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .le => if (lhs_val <= rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .ge => if (lhs_val >= rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .eq => if (lhs_val == rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .ne => if (lhs_val != rhs_val) @as(i128, 1) else @as(i128, 0),
+                    .@"and" => if (lhs_val != 0 and rhs_val != 0) @as(i128, 1) else @as(i128, 0),
+                    .@"or" => if (lhs_val != 0 or rhs_val != 0) @as(i128, 1) else @as(i128, 0),
+                };
+            },
+            .e_unary_minus => |unary| blk: {
+                const inner_expr = module_env.store.getExpr(unary.expr);
+                const inner_val = self.evalConstantI128(module_env, inner_expr, env) orelse break :blk null;
+                break :blk -inner_val;
+            },
+            .e_nominal => |nom| blk: {
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                break :blk self.evalConstantI128(module_env, backing_expr, env);
+            },
+            .e_nominal_external => |nom| blk: {
+                const backing_expr = module_env.store.getExpr(nom.backing_expr);
+                break :blk self.evalConstantI128(module_env, backing_expr, env);
+            },
+            else => null,
+        };
     }
 
     /// Generate code for a string segment (single literal)
