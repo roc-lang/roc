@@ -24,6 +24,11 @@ const did_change_handler_mod = @import("handlers/did_change.zig");
 const semantic_tokens_handler_mod = @import("handlers/semantic_tokens.zig");
 const hover_handler_mod = @import("handlers/hover.zig");
 const definition_handler_mod = @import("handlers/definition.zig");
+const formatting_handler_mod = @import("handlers/formatting.zig");
+const document_symbol_handler_mod = @import("handlers/document_symbol.zig");
+const folding_range_handler_mod = @import("handlers/folding_range.zig");
+const selection_range_handler_mod = @import("handlers/selection_range.zig");
+const document_highlight_handler_mod = @import("handlers/document_highlight.zig");
 
 const log = std.log.scoped(.roc_lsp_server);
 
@@ -41,12 +46,22 @@ pub fn Server(comptime ReaderType: type, comptime WriterType: type) type {
         const SemanticTokensHandler = semantic_tokens_handler_mod.handler(Self);
         const HoverHandler = hover_handler_mod.handler(Self);
         const DefinitionHandler = definition_handler_mod.handler(Self);
+        const FormattingHandler = formatting_handler_mod.handler(Self);
+        const DocumentSymbolHandler = document_symbol_handler_mod.handler(Self);
+        const FoldingRangeHandler = folding_range_handler_mod.handler(Self);
+        const SelectionRangeHandler = selection_range_handler_mod.handler(Self);
+        const DocumentHighlightHandler = document_highlight_handler_mod.handler(Self);
         const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
             .{ "initialize", &InitializeHandler.call },
             .{ "shutdown", &ShutdownHandler.call },
             .{ "textDocument/semanticTokens/full", &SemanticTokensHandler.call },
             .{ "textDocument/hover", &HoverHandler.call },
             .{ "textDocument/definition", &DefinitionHandler.call },
+            .{ "textDocument/formatting", &FormattingHandler.call },
+            .{ "textDocument/documentSymbol", &DocumentSymbolHandler.call },
+            .{ "textDocument/foldingRange", &FoldingRangeHandler.call },
+            .{ "textDocument/selectionRange", &SelectionRangeHandler.call },
+            .{ "textDocument/documentHighlight", &DocumentHighlightHandler.call },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
