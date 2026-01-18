@@ -636,8 +636,7 @@ pub const LlvmEvaluator = struct {
             return ctx.wip.bin(.xor, operand, one, "") catch return error.CompilationFailed;
         }
 
-        /// Emit if expression using select
-        /// For simple expressions, select is sufficient and avoids complex control flow
+        /// Emit if expression using proper control flow with basic blocks and phi nodes
         fn emitIf(ctx: *ExprContext, if_expr: anytype, _: CIR.Expr.Idx) ExprError!LlvmBuilder.Value {
             const branches = ctx.module_env.store.sliceIfBranches(if_expr.branches);
             if (branches.len == 0) {
@@ -645,22 +644,83 @@ pub const LlvmEvaluator = struct {
                 return ctx.emitExpr(if_expr.final_else);
             }
 
-            // For now, handle only single-branch if-else
-            if (branches.len > 1) {
-                return error.UnsupportedType; // Multi-branch if not yet supported
+            // For single-branch if-else, use standard then/else/merge pattern
+            // For multi-branch, chain the conditions
+            const num_incoming: u32 = @intCast(branches.len + 1); // +1 for final else
+            const merge_block = ctx.wip.block(num_incoming, "if_merge") catch return error.CompilationFailed;
+
+            // We'll collect values and their source blocks for the phi node
+            // Use @TypeOf to get the block index type since it's not publicly exported
+            const BlockIndex = @TypeOf(merge_block);
+            var phi_values: [16]LlvmBuilder.Value = undefined;
+            var phi_blocks: [16]BlockIndex = undefined;
+            if (branches.len + 1 > 16) {
+                return error.UnsupportedType; // Too many branches
             }
 
-            const branch = ctx.module_env.store.getIfBranch(branches[0]);
+            var phi_count: usize = 0;
 
-            // Evaluate condition
-            const cond = try ctx.emitExpr(branch.cond);
+            // Process each branch
+            for (branches, 0..) |branch_idx, i| {
+                const branch = ctx.module_env.store.getIfBranch(branch_idx);
 
-            // Evaluate both branches (select evaluates both)
-            const then_val = try ctx.emitExpr(branch.body);
+                // Evaluate condition - may be i1 (from comparison) or i8 (from bool tag)
+                const cond_val = try ctx.emitExpr(branch.cond);
+                const cond_type = cond_val.typeOfWip(ctx.wip);
+
+                // Convert to i1 if needed (brCond requires i1)
+                const cond_i1 = if (cond_type == .i1)
+                    cond_val
+                else blk: {
+                    // Bool is i8, compare with 0 to get i1
+                    const zero = (ctx.builder.intConst(cond_type.scalarType(ctx.builder), 0) catch return error.CompilationFailed).toValue();
+                    break :blk ctx.wip.icmp(.ne, cond_val, zero, "") catch return error.CompilationFailed;
+                };
+
+                // Create then block and next block (either next condition or final else)
+                const then_block = ctx.wip.block(1, "if_then") catch return error.CompilationFailed;
+                const is_last_branch = (i == branches.len - 1);
+                const else_block = if (is_last_branch)
+                    ctx.wip.block(1, "if_else") catch return error.CompilationFailed
+                else
+                    ctx.wip.block(1, "if_elseif") catch return error.CompilationFailed;
+
+                // Branch based on condition
+                _ = ctx.wip.brCond(cond_i1, then_block, else_block, .none) catch return error.CompilationFailed;
+
+                // Emit then block
+                ctx.wip.cursor = .{ .block = then_block };
+                const then_val = try ctx.emitExpr(branch.body);
+                // Get the current block (may have changed during emitExpr if there were nested ifs)
+                const then_exit_block = ctx.wip.cursor.block;
+                _ = ctx.wip.br(merge_block) catch return error.CompilationFailed;
+
+                phi_values[phi_count] = then_val;
+                phi_blocks[phi_count] = then_exit_block;
+                phi_count += 1;
+
+                // Move to else block for next iteration or final else
+                ctx.wip.cursor = .{ .block = else_block };
+            }
+
+            // Emit final else block (we're already positioned there)
             const else_val = try ctx.emitExpr(if_expr.final_else);
+            const else_exit_block = ctx.wip.cursor.block;
+            _ = ctx.wip.br(merge_block) catch return error.CompilationFailed;
 
-            // Use select to choose between values
-            return ctx.wip.select(.normal, cond, then_val, else_val, "") catch return error.CompilationFailed;
+            phi_values[phi_count] = else_val;
+            phi_blocks[phi_count] = else_exit_block;
+            phi_count += 1;
+
+            // Emit merge block with phi node
+            ctx.wip.cursor = .{ .block = merge_block };
+
+            // Determine the result type from the then value
+            const result_type = phi_values[0].typeOfWip(ctx.wip);
+            const wip_phi = ctx.wip.phi(result_type, "if_result") catch return error.CompilationFailed;
+            wip_phi.finish(phi_values[0..phi_count], phi_blocks[0..phi_count], ctx.wip);
+
+            return wip_phi.toValue();
         }
 
         /// Emit a zero-argument tag (like True, False)
