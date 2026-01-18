@@ -2365,3 +2365,38 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\}
     , 42, .no_trace);
 }
+
+test "issue 8936: recursive list pattern matching with rest operator" {
+    // Regression test for issue #8936: List pattern matching with rest operator
+    // would panic with "assertion failed: list_resolved.desc.content == .structure"
+    // when the list type is polymorphic during recursive calls.
+    //
+    // The bug occurred because when pattern matching in a recursive polymorphic
+    // function, the translated scrutinee type could be polymorphic (flex var),
+    // but the actual value has a concrete type from evaluation. The fix ensures
+    // we use the concrete type from the value when available.
+    try runExpectStr(
+        \\{
+        \\    nth = |l, i|
+        \\        match (l, i) {
+        \\            ([], _) => Err(OutOfBounds)
+        \\            ([e, ..], 0) => Ok(e)
+        \\            ([_, .. as rest], _) => nth(rest, (i - 1))
+        \\        }
+        \\    match nth(["a", "b", "c", "d", "e"], 2) { Ok(v) => v, Err(_) => "error" }
+        \\}
+    , "c", .no_trace);
+
+    // Also test the error case
+    try runExpectStr(
+        \\{
+        \\    nth = |l, i|
+        \\        match (l, i) {
+        \\            ([], _) => Err(OutOfBounds)
+        \\            ([e, ..], 0) => Ok(e)
+        \\            ([_, .. as rest], _) => nth(rest, (i - 1))
+        \\        }
+        \\    match nth(["a"], 2) { Ok(v) => v, Err(_) => "out of bounds" }
+        \\}
+    , "out of bounds", .no_trace);
+}
