@@ -1014,15 +1014,24 @@ pub const DevEvaluator = struct {
 
     /// Generate code for a numeric literal
     fn generateNumericCode(self: *DevEvaluator, num: anytype, result_layout: LayoutIdx) Error![]const u8 {
-        // Get the value as i64
         // The num has .value (IntValue) and .kind (NumKind) fields
         const value_i128 = num.value.toI128();
-        if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
-            return error.UnsupportedType;
-        }
-        const value: i64 = @intCast(value_i128);
 
-        return self.generateReturnI64Code(value, result_layout);
+        // Check if this is a 128-bit type that needs full i128 code generation
+        switch (num.kind) {
+            .i128, .u128 => {
+                // Use full 128-bit code generation
+                return self.generateReturnI128Code(value_i128);
+            },
+            else => {
+                // For other types, check if value fits in i64
+                if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
+                    return error.UnsupportedType;
+                }
+                const value: i64 = @intCast(value_i128);
+                return self.generateReturnI64Code(value, result_layout);
+            },
+        }
     }
 
     /// Generate code for a floating-point literal
@@ -1031,25 +1040,48 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for decimal literals
-    fn generateDecCode(self: *DevEvaluator, dec: anytype, result_layout: LayoutIdx) Error![]const u8 {
-        // Decimals are stored as i128 internally
+    /// Dec is stored as i128 scaled by 10^18 - always use full 128-bit code generation
+    fn generateDecCode(self: *DevEvaluator, dec: anytype, _: LayoutIdx) Error![]const u8 {
+        // Decimals are stored as i128 internally - always output full 128 bits
         const value_i128 = dec.value.toI128();
-        if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
-            return error.UnsupportedType;
-        }
-        return self.generateReturnI64Code(@intCast(value_i128), result_layout);
+        return self.generateReturnI128Code(value_i128);
     }
 
     /// Generate code for small decimal literals
+    /// Converts numerator/denominator_power to scaled i128 (Dec format)
     fn generateDecSmallCode(self: *DevEvaluator, dec: anytype, _: LayoutIdx) Error![]const u8 {
-        // Small decimals are stored as numerator/denominator_power - convert to f64
-        const f64_val = dec.value.toF64();
-        return self.generateReturnF64Code(f64_val);
+        // Small decimals are stored as numerator/denominator_power
+        // Convert to Dec format: i128 scaled by 10^18
+        const decimal_places: u8 = 18; // RocDec.decimal_places
+        const numerator: i128 = dec.value.numerator;
+        const denominator_power: u8 = dec.value.denominator_power_of_ten;
+
+        // Calculate scale factor: 10^(18 - denominator_power)
+        const scale_power: u8 = if (denominator_power >= decimal_places)
+            0
+        else
+            decimal_places - denominator_power;
+
+        // Calculate 10^scale_power
+        var scale: i128 = 1;
+        for (0..scale_power) |_| {
+            scale *= 10;
+        }
+
+        const scaled_value = numerator * scale;
+        return self.generateReturnI128Code(scaled_value);
     }
 
     /// Generate code for typed integer literals
     fn generateTypedIntCode(self: *DevEvaluator, ti: anytype, result_layout: LayoutIdx) Error![]const u8 {
         const value_i128 = ti.value.toI128();
+
+        // Check if this is a 128-bit type
+        if (result_layout == .i128 or result_layout == .u128) {
+            return self.generateReturnI128Code(value_i128);
+        }
+
+        // For other types, check if value fits in i64
         if (value_i128 > std.math.maxInt(i64) or value_i128 < std.math.minInt(i64)) {
             return error.UnsupportedType;
         }
@@ -1609,6 +1641,125 @@ pub const DevEvaluator = struct {
 
                     return code;
                 }
+            },
+            else => return error.UnsupportedType,
+        }
+    }
+
+    /// Generate code that returns an i128 value.
+    /// Stores 128 bits to result pointer (rdi on x86_64, x0 on aarch64).
+    fn generateReturnI128Code(self: *DevEvaluator, value: i128) Error![]const u8 {
+        const bits: u128 = @bitCast(value);
+        const low: u64 = @truncate(bits);
+        const high: u64 = @truncate(bits >> 64);
+
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                // x86_64 code:
+                // movabs rax, <low64>   ; load low 64 bits into rax
+                // mov [rdi], rax        ; store low 64 bits to result pointer
+                // movabs rax, <high64>  ; load high 64 bits into rax
+                // mov [rdi+8], rax      ; store high 64 bits to result pointer+8
+                // ret
+                var code = self.allocator.alloc(u8, 32) catch return error.OutOfMemory;
+
+                // movabs rax, low64
+                code[0] = 0x48; // REX.W
+                code[1] = 0xB8; // MOV RAX, imm64
+                @memcpy(code[2..10], std.mem.asBytes(&low));
+
+                // mov [rdi], rax (or [rcx] on Windows)
+                code[10] = 0x48; // REX.W
+                code[11] = 0x89; // MOV r/m64, r64
+                code[12] = if (builtin.os.tag == .windows) 0x01 else 0x07; // ModR/M: [rcx] or [rdi], rax
+
+                // movabs rax, high64
+                code[13] = 0x48; // REX.W
+                code[14] = 0xB8; // MOV RAX, imm64
+                @memcpy(code[15..23], std.mem.asBytes(&high));
+
+                // mov [rdi+8], rax (or [rcx+8] on Windows)
+                code[23] = 0x48; // REX.W
+                code[24] = 0x89; // MOV r/m64, r64
+                code[25] = if (builtin.os.tag == .windows) 0x41 else 0x47; // ModR/M: [rcx+disp8] or [rdi+disp8], rax
+                code[26] = 0x08; // disp8 = 8
+
+                // ret
+                code[27] = 0xC3;
+
+                // Pad remaining bytes with NOPs for alignment
+                code[28] = 0x90;
+                code[29] = 0x90;
+                code[30] = 0x90;
+                code[31] = 0x90;
+
+                return code;
+            },
+            .aarch64 => {
+                // aarch64 code:
+                // x0 contains result pointer on entry
+                // Load low 64 bits into x1, store to [x0]
+                // Load high 64 bits into x2, store to [x0+8]
+                // ret
+
+                // For simplicity, use full 64-bit loads for both halves
+                var code = self.allocator.alloc(u8, 44) catch return error.OutOfMemory;
+
+                const imm0_lo: u16 = @truncate(low);
+                const imm1_lo: u16 = @truncate(low >> 16);
+                const imm2_lo: u16 = @truncate(low >> 32);
+                const imm3_lo: u16 = @truncate(low >> 48);
+
+                // MOV X1, #imm0_lo
+                var mov_lo: u32 = 0xD2800001 | (@as(u32, imm0_lo) << 5);
+                @memcpy(code[0..4], std.mem.asBytes(&mov_lo));
+
+                // MOVK X1, #imm1_lo, LSL #16
+                var movk1_lo: u32 = 0xF2A00001 | (@as(u32, imm1_lo) << 5);
+                @memcpy(code[4..8], std.mem.asBytes(&movk1_lo));
+
+                // MOVK X1, #imm2_lo, LSL #32
+                var movk2_lo: u32 = 0xF2C00001 | (@as(u32, imm2_lo) << 5);
+                @memcpy(code[8..12], std.mem.asBytes(&movk2_lo));
+
+                // MOVK X1, #imm3_lo, LSL #48
+                var movk3_lo: u32 = 0xF2E00001 | (@as(u32, imm3_lo) << 5);
+                @memcpy(code[12..16], std.mem.asBytes(&movk3_lo));
+
+                // STR X1, [X0]
+                const str_lo: u32 = 0xF9000001;
+                @memcpy(code[16..20], std.mem.asBytes(&str_lo));
+
+                const imm0_hi: u16 = @truncate(high);
+                const imm1_hi: u16 = @truncate(high >> 16);
+                const imm2_hi: u16 = @truncate(high >> 32);
+                const imm3_hi: u16 = @truncate(high >> 48);
+
+                // MOV X2, #imm0_hi
+                var mov_hi: u32 = 0xD2800002 | (@as(u32, imm0_hi) << 5);
+                @memcpy(code[20..24], std.mem.asBytes(&mov_hi));
+
+                // MOVK X2, #imm1_hi, LSL #16
+                var movk1_hi: u32 = 0xF2A00002 | (@as(u32, imm1_hi) << 5);
+                @memcpy(code[24..28], std.mem.asBytes(&movk1_hi));
+
+                // MOVK X2, #imm2_hi, LSL #32
+                var movk2_hi: u32 = 0xF2C00002 | (@as(u32, imm2_hi) << 5);
+                @memcpy(code[28..32], std.mem.asBytes(&movk2_hi));
+
+                // MOVK X2, #imm3_hi, LSL #48
+                var movk3_hi: u32 = 0xF2E00002 | (@as(u32, imm3_hi) << 5);
+                @memcpy(code[32..36], std.mem.asBytes(&movk3_hi));
+
+                // STR X2, [X0, #8]
+                const str_hi: u32 = 0xF9000402; // STR X2, [X0, #8]
+                @memcpy(code[36..40], std.mem.asBytes(&str_hi));
+
+                // RET
+                const ret_inst: u32 = 0xD65F03C0;
+                @memcpy(code[40..44], std.mem.asBytes(&ret_inst));
+
+                return code;
             },
             else => return error.UnsupportedType,
         }
