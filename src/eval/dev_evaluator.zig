@@ -1058,7 +1058,25 @@ pub const DevEvaluator = struct {
             },
             .e_lookup_local => |lookup| {
                 const pattern_key = @intFromEnum(lookup.pattern_idx);
-                return env.lookup(pattern_key);
+                // Check for expr_ref first and evaluate it
+                if (env.lookupBinding(pattern_key)) |binding| {
+                    switch (binding) {
+                        .expr_ref => |expr_idx| {
+                            // Deferred expression - evaluate it now
+                            const deferred_expr = module_env.store.getExpr(expr_idx);
+                            return self.evalConstantI64(module_env, deferred_expr, env);
+                        },
+                        .i64_val => |val| return val,
+                        .i128_val => |val| {
+                            if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
+                                return @intCast(val);
+                            }
+                            return null;
+                        },
+                        .f64_val => return null,
+                    }
+                }
+                return null;
             },
             .e_zero_argument_tag => |tag| {
                 if (tag.name == module_env.idents.true_tag) return 1;
@@ -1119,6 +1137,60 @@ pub const DevEvaluator = struct {
                 // Resolve the dot access chain to get the target expression
                 const target_expr = self.resolveDotAccess(module_env, dot) orelse return null;
                 return self.evalConstantI64(module_env, target_expr, env);
+            },
+            .e_call => |call| {
+                // Evaluate simple lambda calls at constant-folding time
+                const func_expr = module_env.store.getExpr(call.func);
+                switch (func_expr) {
+                    .e_lambda => |lambda| {
+                        // For identity-like lambdas, evaluate the argument
+                        const arg_indices = module_env.store.sliceExpr(call.args);
+                        const param_indices = module_env.store.slicePatterns(lambda.args);
+                        if (arg_indices.len != param_indices.len) return null;
+
+                        // Create a temporary environment with argument bindings
+                        var temp_env = env.child();
+                        defer temp_env.deinit();
+
+                        for (arg_indices, param_indices) |arg_idx, param_idx| {
+                            const arg_expr = module_env.store.getExpr(arg_idx);
+                            const arg_val = self.evalConstantI64(module_env, arg_expr, env) orelse return null;
+                            temp_env.bind(@intFromEnum(param_idx), arg_val) catch return null;
+                        }
+
+                        const body_expr = module_env.store.getExpr(lambda.body);
+                        return self.evalConstantI64(module_env, body_expr, &temp_env);
+                    },
+                    .e_lookup_local => |lookup| {
+                        // Function is stored in a variable
+                        const pattern_key = @intFromEnum(lookup.pattern_idx);
+                        if (env.lookupClosure(pattern_key)) |stored_expr_idx| {
+                            const stored_expr = module_env.store.getExpr(stored_expr_idx);
+                            switch (stored_expr) {
+                                .e_lambda => |lambda| {
+                                    const arg_indices = module_env.store.sliceExpr(call.args);
+                                    const param_indices = module_env.store.slicePatterns(lambda.args);
+                                    if (arg_indices.len != param_indices.len) return null;
+
+                                    var temp_env = env.child();
+                                    defer temp_env.deinit();
+
+                                    for (arg_indices, param_indices) |arg_idx, param_idx| {
+                                        const arg_expr = module_env.store.getExpr(arg_idx);
+                                        const arg_val = self.evalConstantI64(module_env, arg_expr, env) orelse return null;
+                                        temp_env.bind(@intFromEnum(param_idx), arg_val) catch return null;
+                                    }
+
+                                    const body_expr = module_env.store.getExpr(lambda.body);
+                                    return self.evalConstantI64(module_env, body_expr, &temp_env);
+                                },
+                                else => return null,
+                            }
+                        }
+                        return null;
+                    },
+                    else => return null,
+                }
             },
             else => null,
         };
