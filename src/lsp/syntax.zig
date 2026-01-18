@@ -300,7 +300,19 @@ pub const SyntaxChecker = struct {
             const sched = entry.value_ptr.*;
             self.dependency_graph.buildFromPackageEnv(sched) catch |err| {
                 self.logDebug(.build, "failed to build dependency graph: {s}", .{@errorName(err)});
+                continue;
             };
+
+            // Compute and store exports hash for each module with a valid ModuleEnv
+            for (sched.modules.items) |*module_state| {
+                if (module_state.env) |*module_env| {
+                    const exports_hash = DependencyGraph.computeExportsHash(self.allocator, module_env) catch |err| {
+                        self.logDebug(.build, "failed to compute exports hash for {s}: {s}", .{ module_state.path, @errorName(err) });
+                        continue;
+                    };
+                    self.dependency_graph.setExportsHash(module_state.path, exports_hash);
+                }
+            }
         }
 
         self.logDebug(.build, "dependency graph updated: {d} modules", .{self.dependency_graph.count()});

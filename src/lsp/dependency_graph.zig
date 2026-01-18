@@ -21,6 +21,10 @@ pub const ModuleNode = struct {
     name: []const u8,
     /// Blake3 hash of the module's source content
     content_hash: [32]u8,
+    /// Blake3 hash of the module's exported symbols (for dependency-aware invalidation)
+    /// When exports change, dependents need to be rebuilt. When only implementation
+    /// changes (same exports), dependents can keep their cache.
+    exports_hash: [32]u8,
     /// Modules that this module imports (dependencies)
     imports: std.ArrayList([]const u8),
     /// Modules that import this module (reverse dependencies)
@@ -33,6 +37,7 @@ pub const ModuleNode = struct {
             .path = try allocator.dupe(u8, path),
             .name = try allocator.dupe(u8, name),
             .content_hash = std.mem.zeroes([32]u8),
+            .exports_hash = std.mem.zeroes([32]u8),
             .imports = std.ArrayList([]const u8){},
             .dependents = std.ArrayList([]const u8){},
             .depth = std.math.maxInt(u32),
@@ -128,6 +133,35 @@ pub const DependencyGraph = struct {
         return null;
     }
 
+    /// Update the exports hash for a module
+    pub fn setExportsHash(self: *DependencyGraph, path: []const u8, hash: [32]u8) void {
+        if (self.modules.getPtr(path)) |node| {
+            node.exports_hash = hash;
+        }
+    }
+
+    /// Get the exports hash for a module
+    pub fn getExportsHash(self: *const DependencyGraph, path: []const u8) ?[32]u8 {
+        if (self.modules.get(path)) |node| {
+            // Check if hash is non-zero (has been set)
+            const zeroes = std.mem.zeroes([32]u8);
+            if (!std.mem.eql(u8, &node.exports_hash, &zeroes)) {
+                return node.exports_hash;
+            }
+        }
+        return null;
+    }
+
+    /// Check if a module's exports have changed by comparing hashes.
+    /// Returns true if exports changed, meaning dependents need rebuilding.
+    pub fn hasExportsChanged(self: *const DependencyGraph, path: []const u8, new_hash: [32]u8) bool {
+        if (self.getExportsHash(path)) |old_hash| {
+            return !std.mem.eql(u8, &old_hash, &new_hash);
+        }
+        // No previous hash means it's new or changed
+        return true;
+    }
+
     /// Build the dependency graph from a PackageEnv after a successful build.
     /// This extracts module relationships from the compiler's internal state.
     pub fn buildFromPackageEnv(self: *DependencyGraph, pkg_env: *compile.package.PackageEnv) !void {
@@ -204,6 +238,49 @@ pub const DependencyGraph = struct {
     pub fn computeContentHash(content: []const u8) [32]u8 {
         var hasher = std.crypto.hash.Blake3.init(.{});
         hasher.update(content);
+        var hash: [32]u8 = undefined;
+        hasher.final(&hash);
+        return hash;
+    }
+
+    /// Compute a Blake3 hash of a module's exported symbols.
+    /// This hash changes when the module's public interface changes,
+    /// but not when only internal implementation changes.
+    ///
+    /// The hash is computed from sorted export names for stability.
+    pub fn computeExportsHash(allocator: Allocator, module_env: *const @import("can").ModuleEnv) ![32]u8 {
+        // Collect all exported symbol names
+        var export_names = std.ArrayList([]const u8){};
+        defer export_names.deinit(allocator);
+
+        // Iterate through module's exports (definitions)
+        const defs_slice = module_env.store.sliceDefs(module_env.exports);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            // Get the definition name from its pattern
+            const pattern = module_env.store.getPattern(def.pattern);
+            switch (pattern) {
+                .assign => |assign| {
+                    const name = module_env.common.idents.getText(assign.ident);
+                    try export_names.append(allocator, name);
+                },
+                else => {},
+            }
+        }
+
+        // Sort names for stable hash (same exports in different order = same hash)
+        std.mem.sort([]const u8, export_names.items, {}, struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        }.lessThan);
+
+        // Hash all export names
+        var hasher = std.crypto.hash.Blake3.init(.{});
+        for (export_names.items) |name| {
+            hasher.update(name);
+            hasher.update("\x00"); // Separator to avoid collisions
+        }
         var hash: [32]u8 = undefined;
         hasher.final(&hash);
         return hash;
