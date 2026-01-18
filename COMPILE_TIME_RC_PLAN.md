@@ -10,6 +10,22 @@
 
 ---
 
+## Current Status
+
+**Eval Tests**: 999/1032 passed, 19 failed, 74 leaked (down from 174)
+**REPL Tests**: 26/26 passed, 9 leaked (REPL doesn't use RC pass yet)
+
+### Known Issue: Pattern Index Mismatch
+
+The 19 test failures are caused by a mismatch between CIR pattern indices and runtime binding indices:
+- RC pass sees patterns with indices 0, 3, 6, etc.
+- Interpreter creates bindings with indices 31, 34, 35, etc.
+- When `e_decref` executes, it can't find the pattern in bindings
+
+This needs investigation - the pattern indices should match between compile-time CIR and runtime.
+
+---
+
 ## Understanding How crates/ Does It
 
 The Rust implementation in `crates/compiler/mono/src/inc_dec.rs` works as follows:
