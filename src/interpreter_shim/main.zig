@@ -426,11 +426,13 @@ fn initializeOnce(roc_ops: *RocOps) ShimError!void {
     }
 
     // Create the global constant strings arena once (reused by all interpreter instances)
+    // Use page_allocator to bypass GPA tracking - these strings are immortal (refcount=0)
+    // and freed wholesale at shutdown, not individually through rocDealloc
     const arena_ptr = allocator.create(std.heap.ArenaAllocator) catch {
         roc_ops.crash("INTERPRETER SHIM: Failed to allocate constant strings arena");
         return error.OutOfMemory;
     };
-    arena_ptr.* = std.heap.ArenaAllocator.init(allocator);
+    arena_ptr.* = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     global_constant_strings_arena = arena_ptr;
 
     // Mark as initialized (release semantics ensure all writes above are visible)

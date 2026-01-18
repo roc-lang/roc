@@ -1813,9 +1813,28 @@ test "comptime eval - modulo by zero produces error" {
     try testing.expect(errorContains(result.problems, "Division by zero"));
 }
 
-// Note: "division by zero does not halt other defs" test is skipped because
-// the interpreter state after an eval error may not allow continuing evaluation
-// of subsequent definitions that share the same evaluation context.
+test "comptime eval - division by zero does not crash subsequent defs (issue 9001)" {
+    // Regression test for issue #9001: when the first definition causes a
+    // compile-time error (e.g., division by zero), the interpreter's environment
+    // was not being restored, causing subsequent definitions to crash.
+    const src =
+        \\y = 1 % 0
+        \\e = 3
+    ;
+
+    var result = try parseCheckAndEvalModule(src);
+    defer cleanupEvalModule(&result);
+
+    // This should not crash - the bug was that it would panic with
+    // "node is not an expression tag" when evaluating the second def
+    const summary = try result.evaluator.evalAll();
+
+    // Should attempt to evaluate 2 declarations
+    try testing.expectEqual(@as(u32, 2), summary.evaluated);
+
+    // Should have at least 1 problem (division by zero)
+    try testing.expect(result.problems.len() >= 1);
+}
 
 test "comptime eval - recursive nominal: simple IntList Nil" {
     const src =

@@ -32,16 +32,15 @@ pub const NumKind = enum {
     f32,
     f64,
     dec,
-    numeral,
 
     /// Compile-time validation that this enum matches the expected structure.
     pub fn validate() void {
         comptime {
             const fields = @typeInfo(NumKind).@"enum".fields;
-            if (fields.len != 14) @compileError("NumKind must have exactly 14 variants");
+            if (fields.len != 13) @compileError("NumKind must have exactly 13 variants");
             if (!std.mem.eql(u8, fields[0].name, "u8")) @compileError("NumKind[0] must be u8");
             if (!std.mem.eql(u8, fields[1].name, "i8")) @compileError("NumKind[1] must be i8");
-            if (!std.mem.eql(u8, fields[13].name, "numeral")) @compileError("NumKind[13] must be numeral");
+            if (!std.mem.eql(u8, fields[12].name, "dec")) @compileError("NumKind[12] must be dec");
         }
     }
 };
@@ -141,7 +140,6 @@ pub const LlvmEmitter = struct {
             .f32 => .float,
             .f64 => .double,
             .dec => .i128, // Dec is stored as i128
-            .numeral => .i64, // Default unspecialized numeric type
         };
     }
 
