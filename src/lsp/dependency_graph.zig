@@ -135,11 +135,10 @@ pub const DependencyGraph = struct {
         return self.modules.getPtr(path);
     }
 
-    /// Update the content hash for a module
-    pub fn setContentHash(self: *DependencyGraph, path: []const u8, hash: [32]u8) void {
-        if (self.modules.getPtr(path)) |node| {
-            node.content_hash = hash;
-        }
+    /// Update the content hash for a module (creates module if it doesn't exist)
+    pub fn setContentHash(self: *DependencyGraph, path: []const u8, hash: [32]u8) !void {
+        const node = try self.getOrCreateModule(path, std.fs.path.basename(path));
+        node.content_hash = hash;
     }
 
     /// Get the content hash for a module
@@ -329,7 +328,7 @@ test "DependencyGraph basic operations" {
 
     // Set content hash
     const hash = DependencyGraph.computeContentHash("module A\n");
-    graph.setContentHash("/path/to/A.roc", hash);
+    try graph.setContentHash("/path/to/A.roc", hash);
 
     // Check hash retrieval
     const retrieved_hash = graph.getContentHash("/path/to/A.roc");
@@ -342,4 +341,239 @@ test "DependencyGraph basic operations" {
 
     // Both B and A should be stale (A depends on B)
     try std.testing.expectEqual(@as(usize, 2), stale.len);
+}
+
+test "getStaleModules returns transitive dependents" {
+    // Test dependency chain: A -> B -> C (A imports B, B imports C)
+    // When C changes, all three should be stale
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    const node_a = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    const node_b = try graph.getOrCreateModule("/path/to/B.roc", "B");
+    const node_c = try graph.getOrCreateModule("/path/to/C.roc", "C");
+
+    // A imports B
+    try node_a.addImport(allocator, "/path/to/B.roc");
+    try node_b.addDependent(allocator, "/path/to/A.roc");
+
+    // B imports C
+    try node_b.addImport(allocator, "/path/to/C.roc");
+    try node_c.addDependent(allocator, "/path/to/B.roc");
+
+    // When C changes, A, B, and C should all be stale
+    const stale = try graph.getStaleModules("/path/to/C.roc");
+    defer allocator.free(stale);
+
+    try std.testing.expectEqual(@as(usize, 3), stale.len);
+}
+
+test "getStaleModules handles diamond dependency" {
+    // Diamond: A imports B and C, both B and C import D
+    //     A
+    //    / \
+    //   B   C
+    //    \ /
+    //     D
+    // When D changes, all four should be stale (each only once)
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    const node_a = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    const node_b = try graph.getOrCreateModule("/path/to/B.roc", "B");
+    const node_c = try graph.getOrCreateModule("/path/to/C.roc", "C");
+    const node_d = try graph.getOrCreateModule("/path/to/D.roc", "D");
+
+    // A imports B and C
+    try node_a.addImport(allocator, "/path/to/B.roc");
+    try node_a.addImport(allocator, "/path/to/C.roc");
+    try node_b.addDependent(allocator, "/path/to/A.roc");
+    try node_c.addDependent(allocator, "/path/to/A.roc");
+
+    // B and C both import D
+    try node_b.addImport(allocator, "/path/to/D.roc");
+    try node_c.addImport(allocator, "/path/to/D.roc");
+    try node_d.addDependent(allocator, "/path/to/B.roc");
+    try node_d.addDependent(allocator, "/path/to/C.roc");
+
+    // When D changes, all should be stale
+    const stale = try graph.getStaleModules("/path/to/D.roc");
+    defer allocator.free(stale);
+
+    // Should be exactly 4 modules (no duplicates)
+    try std.testing.expectEqual(@as(usize, 4), stale.len);
+}
+
+test "getStaleModules returns only changed module when no dependents" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    _ = try graph.getOrCreateModule("/path/to/B.roc", "B");
+
+    // No dependencies between A and B
+
+    const stale = try graph.getStaleModules("/path/to/A.roc");
+    defer allocator.free(stale);
+
+    // Only A should be stale
+    try std.testing.expectEqual(@as(usize, 1), stale.len);
+    try std.testing.expectEqualStrings("/path/to/A.roc", stale[0]);
+}
+
+test "clearRelationships preserves content and exports hashes" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    const node_a = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    const node_b = try graph.getOrCreateModule("/path/to/B.roc", "B");
+
+    // A imports B
+    try node_a.addImport(allocator, "/path/to/B.roc");
+    try node_b.addDependent(allocator, "/path/to/A.roc");
+
+    // Set content and exports hashes
+    const content_hash = DependencyGraph.computeContentHash("module content");
+    const exports_hash = DependencyGraph.computeContentHash("export foo");
+
+    try graph.setContentHash("/path/to/A.roc", content_hash);
+    graph.setExportsHash("/path/to/A.roc", exports_hash);
+
+    // Verify hashes are set
+    try std.testing.expect(graph.getContentHash("/path/to/A.roc") != null);
+    try std.testing.expect(graph.getExportsHash("/path/to/A.roc") != null);
+
+    // Clear relationships
+    graph.clearRelationships();
+
+    // Hashes should still be present
+    const retrieved_content = graph.getContentHash("/path/to/A.roc");
+    const retrieved_exports = graph.getExportsHash("/path/to/A.roc");
+
+    try std.testing.expect(retrieved_content != null);
+    try std.testing.expect(retrieved_exports != null);
+    try std.testing.expectEqualSlices(u8, &content_hash, &retrieved_content.?);
+    try std.testing.expectEqualSlices(u8, &exports_hash, &retrieved_exports.?);
+
+    // But imports should be cleared
+    const node_a_after = graph.modules.getPtr("/path/to/A.roc").?;
+    try std.testing.expectEqual(@as(usize, 0), node_a_after.imports.items.len);
+}
+
+test "hasContentChanged detects changes" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+
+    const hash1 = DependencyGraph.computeContentHash("version 1");
+    const hash2 = DependencyGraph.computeContentHash("version 2");
+
+    // Initially no hash set, should report changed
+    try std.testing.expect(graph.hasContentChanged("/path/to/A.roc", hash1));
+
+    // Set hash
+    try graph.setContentHash("/path/to/A.roc", hash1);
+
+    // Same hash should not be changed
+    try std.testing.expect(!graph.hasContentChanged("/path/to/A.roc", hash1));
+
+    // Different hash should be changed
+    try std.testing.expect(graph.hasContentChanged("/path/to/A.roc", hash2));
+}
+
+test "hasExportsChanged detects changes" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+
+    const hash1 = DependencyGraph.computeContentHash("exports v1");
+    const hash2 = DependencyGraph.computeContentHash("exports v2");
+
+    // Initially no hash set, should report changed
+    try std.testing.expect(graph.hasExportsChanged("/path/to/A.roc", hash1));
+
+    // Set hash
+    graph.setExportsHash("/path/to/A.roc", hash1);
+
+    // Same hash should not be changed
+    try std.testing.expect(!graph.hasExportsChanged("/path/to/A.roc", hash1));
+
+    // Different hash should be changed
+    try std.testing.expect(graph.hasExportsChanged("/path/to/A.roc", hash2));
+}
+
+test "computeContentHash produces consistent results" {
+    // Same content should always produce same hash
+    const content = "this is some test content\nwith multiple lines\n";
+
+    const hash1 = DependencyGraph.computeContentHash(content);
+    const hash2 = DependencyGraph.computeContentHash(content);
+
+    try std.testing.expectEqualSlices(u8, &hash1, &hash2);
+}
+
+test "computeContentHash produces different results for different content" {
+    const content1 = "version 1";
+    const content2 = "version 2";
+
+    const hash1 = DependencyGraph.computeContentHash(content1);
+    const hash2 = DependencyGraph.computeContentHash(content2);
+
+    try std.testing.expect(!std.mem.eql(u8, &hash1, &hash2));
+}
+
+test "clear removes all modules" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    _ = try graph.getOrCreateModule("/path/to/B.roc", "B");
+
+    try std.testing.expectEqual(@as(usize, 2), graph.count());
+
+    graph.clear();
+
+    try std.testing.expectEqual(@as(usize, 0), graph.count());
+}
+
+test "getModule returns null for unknown path" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    const result = graph.getModule("/path/to/nonexistent.roc");
+    try std.testing.expect(result == null);
+}
+
+test "getOrCreateModule returns existing module" {
+    const allocator = std.testing.allocator;
+
+    var graph = DependencyGraph.init(allocator);
+    defer graph.deinit();
+
+    const node1 = try graph.getOrCreateModule("/path/to/A.roc", "A");
+    node1.depth = 5;
+
+    const node2 = try graph.getOrCreateModule("/path/to/A.roc", "A");
+
+    // Should be the same node
+    try std.testing.expectEqual(@as(u32, 5), node2.depth);
+    try std.testing.expectEqual(@as(usize, 1), graph.count());
 }

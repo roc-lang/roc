@@ -108,7 +108,9 @@ pub const SyntaxChecker = struct {
             }
 
             // Update the content hash for this module
-            self.dependency_graph.setContentHash(absolute_path, new_hash);
+            self.dependency_graph.setContentHash(absolute_path, new_hash) catch |err| {
+                self.logDebug(.build, "Failed to set content hash: {s}", .{@errorName(err)});
+            };
         }
 
         var env = try self.createFreshBuildEnv();

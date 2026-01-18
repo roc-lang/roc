@@ -736,6 +736,210 @@ test "document highlight handler returns empty for non-identifier" {
     try std.testing.expect(found_response);
 }
 
+test "definition handler finds local variable definition" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Document with a variable defined on line 0, used on line 1
+    // "myVar = 42\nresult = myVar + 1"
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"myVar = 42\\nresult = myVar + 1"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Request definition for 'myVar' on line 1, character 9 (the usage)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":9}}}}}}
+    , .{file_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Find the definition response (id: 2)
+    var found_response = false;
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer or id.integer != 2) continue;
+
+        // We should get a result (could be null if definition not found, or Location object)
+        const result = parsed.value.object.get("result");
+        try std.testing.expect(result != null);
+
+        // If result is an object (Location), verify it has uri and range
+        if (result.? == .object) {
+            const result_obj = result.?.object;
+            try std.testing.expect(result_obj.get("uri") != null);
+            try std.testing.expect(result_obj.get("range") != null);
+
+            // Verify the range points to line 0 (where myVar is defined)
+            const range = result_obj.get("range").?.object;
+            const start = range.get("start").?.object;
+            const start_line = start.get("line").?.integer;
+            try std.testing.expectEqual(@as(i64, 0), start_line);
+        }
+        found_response = true;
+        break;
+    }
+    try std.testing.expect(found_response);
+}
+
+test "definition handler returns null for undefined symbol" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "definition_undef.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Document with undefined variable usage
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"x = undefined_var"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Request definition for undefined variable (character 4)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":0,"character":4}}}}}}
+    , .{file_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Find the definition response (id: 2)
+    var found_response = false;
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer or id.integer != 2) continue;
+
+        // Should have a result field (can be null or valid response)
+        const result = parsed.value.object.get("result");
+        try std.testing.expect(result != null);
+        found_response = true;
+        break;
+    }
+    try std.testing.expect(found_response);
+}
+
 test "hover handler returns type info for type annotation" {
     // Regression test for Bug 1: s_type_anno statements were ignored by hover system
     const allocator = std.testing.allocator;
