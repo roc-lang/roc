@@ -216,10 +216,17 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             jit.callWithResultPtr(@ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
-        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => blk: {
+        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.dec => blk: {
+            var result: i128 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            // Dec values are stored scaled by 10^18 - show integer part for comparison
+            const int_part = @divTrunc(result, dec_scale);
+            break :blk std.fmt.allocPrint(allocator, "{}", .{int_part});
         },
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes - handle small string format

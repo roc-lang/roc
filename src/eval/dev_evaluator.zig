@@ -788,13 +788,39 @@ pub const DevEvaluator = struct {
             const lhs_val = self.evalConstantI128(module_env, lhs_expr, env) orelse return error.UnsupportedExpression;
             const rhs_val = self.evalConstantI128(module_env, rhs_expr, env) orelse return error.UnsupportedExpression;
 
+            // Dec is fixed-point scaled by 10^18
+            const dec_scale: i128 = 1_000_000_000_000_000_000;
+
             const result_val: i128 = switch (binop.op) {
                 .add => lhs_val +% rhs_val,
                 .sub => lhs_val -% rhs_val,
-                .mul => lhs_val *% rhs_val,
-                .div => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+                .mul => blk: {
+                    if (result_layout == .dec) {
+                        // Dec multiplication: (a*scale) * (b*scale) / scale = a*b*scale
+                        break :blk @divTrunc(lhs_val *% rhs_val, dec_scale);
+                    } else {
+                        break :blk lhs_val *% rhs_val;
+                    }
+                },
+                .div => blk: {
+                    if (rhs_val == 0) return error.UnsupportedExpression;
+                    if (result_layout == .dec) {
+                        // Dec division: (a*scale) * scale / (b*scale) = a/b*scale
+                        break :blk @divTrunc(lhs_val *% dec_scale, rhs_val);
+                    } else {
+                        break :blk @divTrunc(lhs_val, rhs_val);
+                    }
+                },
                 .rem => if (rhs_val != 0) @rem(lhs_val, rhs_val) else return error.UnsupportedExpression,
-                .div_trunc => if (rhs_val != 0) @divTrunc(lhs_val, rhs_val) else return error.UnsupportedExpression,
+                .div_trunc => blk: {
+                    if (rhs_val == 0) return error.UnsupportedExpression;
+                    if (result_layout == .dec) {
+                        // Dec div_trunc: same as div for Dec
+                        break :blk @divTrunc(lhs_val *% dec_scale, rhs_val);
+                    } else {
+                        break :blk @divTrunc(lhs_val, rhs_val);
+                    }
+                },
                 .lt => if (lhs_val < rhs_val) @as(i128, 1) else @as(i128, 0),
                 .gt => if (lhs_val > rhs_val) @as(i128, 1) else @as(i128, 0),
                 .le => if (lhs_val <= rhs_val) @as(i128, 1) else @as(i128, 0),
