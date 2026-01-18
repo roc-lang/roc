@@ -13,6 +13,7 @@ const types = @import("types");
 
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
+const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -37,6 +38,8 @@ pub const SyntaxChecker = struct {
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
     /// This is swapped with build_env after each successful build.
     previous_build_env: ?*BuildEnv = null,
+    /// Dependency graph for tracking module relationships and invalidation.
+    dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
     log_file: ?std.fs.File = null,
     debug: DebugFlags,
@@ -44,6 +47,7 @@ pub const SyntaxChecker = struct {
     pub fn init(allocator: std.mem.Allocator, debug: DebugFlags, log_file: ?std.fs.File) SyntaxChecker {
         return .{
             .allocator = allocator,
+            .dependency_graph = DependencyGraph.init(allocator),
             .debug = debug,
             .log_file = log_file,
         };
@@ -60,6 +64,7 @@ pub const SyntaxChecker = struct {
             self.allocator.destroy(env);
             self.previous_build_env = null;
         }
+        self.dependency_graph.deinit();
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
@@ -74,6 +79,19 @@ pub const SyntaxChecker = struct {
 
         self.mutex.lock();
         defer self.mutex.unlock();
+
+        // Check if content has changed using hash comparison
+        // This avoids unnecessary rebuilds on focus/blur events
+        if (override_text) |text| {
+            const new_hash = DependencyGraph.computeContentHash(text);
+            if (!self.dependency_graph.hasContentChanged(absolute_path, new_hash)) {
+                self.logDebug(.build, "skipping rebuild for {s}: content unchanged", .{absolute_path});
+                // Return empty diagnostics array - no changes means no new diagnostics
+                return &[_]Diagnostics.PublishDiagnostics{};
+            }
+            // Update the content hash for this module
+            self.dependency_graph.setContentHash(absolute_path, new_hash);
+        }
 
         var env = try self.createFreshBuildEnv();
 
@@ -108,6 +126,9 @@ pub const SyntaxChecker = struct {
             return err;
         };
         defer self.freeDrained(drained);
+
+        // Update dependency graph from successful build
+        self.updateDependencyGraph(env);
 
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
         errdefer {
@@ -266,6 +287,23 @@ pub const SyntaxChecker = struct {
             self.allocator.free(entry.abs_path);
         }
         self.allocator.free(drained);
+    }
+
+    /// Update the dependency graph from a successful build.
+    fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) void {
+        // Clear the old graph and rebuild from current state
+        self.dependency_graph.clear();
+
+        // Iterate through all schedulers (packages) and build the graph
+        var sched_it = env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            self.dependency_graph.buildFromPackageEnv(sched) catch |err| {
+                self.logDebug(.build, "failed to build dependency graph: {s}", .{@errorName(err)});
+            };
+        }
+
+        self.logDebug(.build, "dependency graph updated: {d} modules", .{self.dependency_graph.count()});
     }
 
     fn reportToDiagnostic(self: *SyntaxChecker, rep: reporting.Report) !Diagnostics.Diagnostic {
