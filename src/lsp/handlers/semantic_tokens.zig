@@ -8,6 +8,7 @@ const std = @import("std");
 const protocol = @import("../protocol.zig");
 const semantic_tokens = @import("../semantic_tokens.zig");
 const line_info = @import("../line_info.zig");
+const uri_util = @import("../uri.zig");
 
 /// Returns the semantic tokens handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
@@ -38,8 +39,30 @@ pub fn handler(comptime ServerType: type) type {
             };
             defer info.deinit();
 
-            // Extract semantic tokens using CIR for richer context
-            const tokens = semantic_tokens.extractSemanticTokensWithCIR(self.allocator, doc.text, &info) catch {
+            // Try to get imported ModuleEnvs for cross-module semantic tokens
+            var imported_envs: ?[]*@import("can").ModuleEnv = null;
+            defer if (imported_envs) |envs| self.allocator.free(envs);
+
+            // Convert URI to path and get imports
+            if (uri_util.uriToPath(self.allocator, params.textDocument.uri)) |path| {
+                defer self.allocator.free(path);
+                // Get absolute path
+                if (std.fs.cwd().realpathAlloc(self.allocator, path)) |abs_path| {
+                    defer self.allocator.free(abs_path);
+                    // Get imported modules from the syntax checker's cached build
+                    if (self.syntax_checker.getImportedModuleEnvs(abs_path)) |maybe_envs| {
+                        imported_envs = maybe_envs;
+                    } else |_| {}
+                } else |_| {}
+            } else |_| {}
+
+            // Extract semantic tokens using CIR with cross-module context
+            const tokens = semantic_tokens.extractSemanticTokensWithImports(
+                self.allocator,
+                doc.text,
+                &info,
+                imported_envs,
+            ) catch {
                 return try ServerType.sendError(self, id, .internal_error, "failed to extract tokens");
             };
             defer self.allocator.free(tokens);

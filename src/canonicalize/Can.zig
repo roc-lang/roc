@@ -2564,6 +2564,7 @@ pub fn canonicalizeFile(
                                     .name = name_ident,
                                     .anno_idx = type_anno_idx,
                                     .where = where_clauses,
+                                    .anno_region = region,
                                 });
                             } else {
                                 // Names don't match - create an anno-only def for this annotation
@@ -2823,6 +2824,9 @@ const TypeAnnoIdent = struct {
     name: base.Ident.Idx,
     anno_idx: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// The region of the type annotation line (e.g., "dog : Animal")
+    /// Used to create a combined region covering both annotation and declaration
+    anno_region: Region,
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
@@ -10223,6 +10227,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 .name = name_ident,
                                 .anno_idx = type_anno_idx,
                                 .where = where_clauses,
+                                .anno_region = region,
                             });
                             stmts_processed = .two;
                         } else {
@@ -10662,7 +10667,16 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
 /// Canonicalize a block declarataion
 pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!CanonicalizedStatement {
-    const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+    const decl_region = self.parse_ir.tokenizedRegionToRegion(d.region);
+    // When there's a matching annotation, create a combined region covering both lines
+    // This ensures hover/goto-definition work on the annotation line
+    const region = if (mb_last_anno) |anno_info|
+        Region{
+            .start = anno_info.anno_region.start,
+            .end = decl_region.end,
+        }
+    else
+        decl_region;
 
     // Check if this is a var reassignment
     const ast_pattern = self.parse_ir.store.getPattern(d.pattern);

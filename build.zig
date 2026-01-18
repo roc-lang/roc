@@ -2276,6 +2276,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
@@ -2622,8 +2623,8 @@ pub fn build(b: *std.Build) void {
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     for (module_tests_result.tests) |module_test| {
-        // Add compiled builtins to check, repl, eval, and compile module tests
-        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile")) {
+        // Add compiled builtins to check, repl, eval, compile, and lsp module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }

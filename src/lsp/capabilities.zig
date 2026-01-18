@@ -27,6 +27,11 @@ pub const ServerCapabilities = struct {
     semanticTokensProvider: ?SemanticTokensOptions = null,
     hoverProvider: bool = false,
     definitionProvider: bool = false,
+    documentFormattingProvider: bool = false,
+    documentSymbolProvider: bool = false,
+    foldingRangeProvider: bool = false,
+    selectionRangeProvider: bool = false,
+    documentHighlightProvider: bool = false,
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
@@ -67,5 +72,10 @@ pub fn buildCapabilities() ServerCapabilities {
         },
         .hoverProvider = true,
         .definitionProvider = true,
+        .documentFormattingProvider = true,
+        .documentSymbolProvider = true,
+        .foldingRangeProvider = true,
+        .selectionRangeProvider = true,
+        .documentHighlightProvider = true,
     };
 }
