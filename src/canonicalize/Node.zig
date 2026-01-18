@@ -377,21 +377,19 @@ pub const Payload = extern union {
     pub const StatementReassign = extern struct {
         pattern_idx: u32,
         expr: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_crash: msg expr
     pub const StatementCrash = extern struct {
         msg: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// statement_dbg, statement_expr, statement_expect: single expr/body
     pub const StatementSingleExpr = extern struct {
         expr: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// statement_for: patt + expr + body
@@ -405,28 +403,28 @@ pub const Payload = extern union {
     pub const StatementWhile = extern struct {
         cond: u32,
         body: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_return: expr + optional lambda
     pub const StatementReturn = extern struct {
         expr: u32,
         lambda_plus_one: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_import: module_name_tok + import_data_idx
     pub const StatementImport = extern struct {
         module_name_tok: u32,
         import_data_idx: u32, // Index into import_data list
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_alias_decl: header + anno
     pub const StatementAliasDecl = extern struct {
         header: u32,
         anno: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// statement_nominal_decl: header + anno + is_opaque flag
@@ -455,8 +453,7 @@ pub const Payload = extern union {
     /// expr_var: local variable lookup by pattern index
     pub const ExprVar = extern struct {
         pattern_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_external_lookup: lookup from another module
@@ -469,8 +466,7 @@ pub const Payload = extern union {
     /// expr_required_lookup: lookup from platform requires clause
     pub const ExprRequiredLookup = extern struct {
         requires_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_dec_small: small decimal value
@@ -484,13 +480,13 @@ pub const Payload = extern union {
     pub const ExprTuple = extern struct {
         elems_start: u32,
         elems_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprList = extern struct {
         elems_start: u32,
         elems_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprCall = extern struct {
@@ -501,8 +497,7 @@ pub const Payload = extern union {
 
     pub const ExprRecord = extern struct {
         fields_ext_idx: u32, // Index into span_with_node_data: (fields.start, fields.len, ext_value)
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprTag = extern struct {
@@ -513,14 +508,12 @@ pub const Payload = extern union {
 
     pub const ExprClosure = extern struct {
         closure_data_idx: u32, // Index into closure_data
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprLambda = extern struct {
         args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprBinOp = extern struct {
@@ -531,8 +524,7 @@ pub const Payload = extern union {
 
     pub const ExprUnary = extern struct {
         expr: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprBlock = extern struct {
@@ -543,14 +535,12 @@ pub const Payload = extern union {
 
     pub const ExprIfThenElse = extern struct {
         branches_else_idx: u32, // Index into span_with_node_data: (branches.start, branches.len, final_else)
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprMatch = extern struct {
         match_data_idx: u32, // Index into match_data: (cond, branches_start, branches_len, exhaustive, is_try_suffix)
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprFracF32 = extern struct {
@@ -583,7 +573,7 @@ pub const Payload = extern union {
     pub const ExprString = extern struct {
         segments_start: u32,
         segments_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprDotAccess = extern struct {
@@ -595,7 +585,7 @@ pub const Payload = extern union {
     pub const ExprFieldAccess = extern struct {
         receiver: u32,
         field_name: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprHostedLambda = extern struct {
@@ -607,13 +597,12 @@ pub const Payload = extern union {
     pub const ExprLowLevel = extern struct {
         op: u32,
         args_body_idx: u32, // Index into span_with_node_data: (args.start, args.len, body)
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExprZeroArgumentTag = extern struct {
         zero_arg_tag_idx: u32, // Index into zero_arg_tag_data
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const ExprFor = extern struct {
@@ -624,8 +613,7 @@ pub const Payload = extern union {
 
     pub const ExprExpect = extern struct {
         body: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_typed_int: typed integer with type name and value in int128_values
@@ -645,8 +633,7 @@ pub const Payload = extern union {
     /// expr_string_segment: string segment reference
     pub const ExprStringSegment = extern struct {
         segment_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_nominal: nominal type expression
@@ -666,29 +653,25 @@ pub const Payload = extern union {
     /// expr_crash: crash expression with message
     pub const ExprCrash = extern struct {
         msg: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_dbg: debug expression
     pub const ExprDbg = extern struct {
         expr: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_anno_only: annotation-only expression
     pub const ExprAnnoOnly = extern struct {
         ident: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_return: return expression
     pub const ExprReturn = extern struct {
         expr: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// expr_type_var_dispatch: type variable method dispatch
@@ -702,14 +685,13 @@ pub const Payload = extern union {
 
     pub const PatternIdentifier = extern struct {
         ident: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const PatternAs = extern struct {
         ident: u32,
         pattern: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const PatternAppliedTag = extern struct {
@@ -721,19 +703,18 @@ pub const Payload = extern union {
     pub const PatternRecordDestructure = extern struct {
         destructs_start: u32,
         destructs_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const PatternList = extern struct {
         pattern_list_data_idx: u32, // Index into pattern_list_data list
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const PatternTuple = extern struct {
         patterns_start: u32,
         patterns_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// pattern_num_literal: numeric pattern with value in int128_values
@@ -771,26 +752,23 @@ pub const Payload = extern union {
 
     pub const PatternStrLiteral = extern struct {
         literal: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const PatternFracF32 = extern struct {
         value: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const PatternFracF64 = extern struct {
         value_lo: u32,
         value_hi: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const PatternMalformed = extern struct {
         diagnostic: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // --- Type annotations ---
@@ -816,7 +794,7 @@ pub const Payload = extern union {
     pub const TyTuple = extern struct {
         elems_start: u32,
         elems_len: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const TyRecord = extern struct {
@@ -839,27 +817,23 @@ pub const Payload = extern union {
 
     pub const TyRigidVar = extern struct {
         name: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// ty_rigid_var_lookup: lookup reference to a rigid type variable
     pub const TyRigidVarLookup = extern struct {
         ref: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const TyParens = extern struct {
         anno: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const TyMalformed = extern struct {
         diagnostic: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // --- Other ---
@@ -867,7 +841,7 @@ pub const Payload = extern union {
     pub const RecordField = extern struct {
         name: u32,
         expr: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const RecordDestruct = extern struct {
@@ -878,14 +852,13 @@ pub const Payload = extern union {
 
     pub const MatchBranch = extern struct {
         match_branch_idx: u32, // Index into match_branch_data
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const MatchBranchPattern = extern struct {
         pattern: u32,
         degenerate: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const WhereClause = extern struct {
@@ -896,21 +869,19 @@ pub const Payload = extern union {
 
     pub const WhereMalformed = extern struct {
         diagnostic: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// where_alias: type variable alias in where clause
     pub const WhereAlias = extern struct {
         var_idx: u32,
         alias_name: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const Def = extern struct {
         def_data_idx: u32, // Index into def_data
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     pub const LambdaCapture = extern struct {
@@ -930,25 +901,21 @@ pub const Payload = extern union {
     /// Diagnostics that only need region (stored separately), no payload data.
     /// Used by: diag_invalid_num_literal, diag_empty_tuple, diag_break_outside_loop, etc.
     pub const DiagEmpty = extern struct {
-        _unused1: u32,
-        _unused2: u32,
-        _unused3: u32,
+        _padding: [12]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// Diagnostics with a single identifier.
     /// Used by: diag_ident_not_in_scope, diag_unused_variable, diag_undeclared_type, etc.
     pub const DiagSingleIdent = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// Diagnostics with a single u32 value (feature ID, count, bool, enum, etc.)
     /// Used by: diag_not_implemented, diag_too_many_exports, diag_default_app_wrong_arity, etc.
     pub const DiagSingleValue = extern struct {
         value: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     /// Diagnostics with two identifiers.
@@ -956,7 +923,7 @@ pub const Payload = extern union {
     pub const DiagTwoIdents = extern struct {
         ident1: u32, // @bitCast(Ident.Idx)
         ident2: u32, // @bitCast(Ident.Idx)
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// Diagnostics with an identifier and inline region offsets.
@@ -980,7 +947,7 @@ pub const Payload = extern union {
     pub const DiagSingleIdentExtra = extern struct {
         ident: u32, // @bitCast(Ident.Idx)
         region_span2_idx: u32, // index into span2_data: (region_start, region_end)
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// Diagnostics with two enum values.
@@ -988,7 +955,7 @@ pub const Payload = extern union {
     pub const DiagTwoEnums = extern struct {
         enum1: u32, // @intFromEnum
         enum2: u32, // @intFromEnum
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const TypeHeader = extern struct {
@@ -1000,7 +967,7 @@ pub const Payload = extern union {
     pub const TyRecordField = extern struct {
         name: u32,
         ty: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const ExposedItem = extern struct {
@@ -1012,13 +979,12 @@ pub const Payload = extern union {
     pub const IfBranch = extern struct {
         cond: u32,
         body: u32,
-        _unused: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     pub const TypeVarSlot = extern struct {
         parent_node_idx: u32,
-        _unused1: u32,
-        _unused2: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // Compile-time size verification

@@ -999,8 +999,6 @@ pub fn replaceExprWithZeroArgumentTag(
     var node = Node.init(.expr_zero_argument_tag);
     node.setPayload(.{ .expr_zero_argument_tag = .{
         .zero_arg_tag_idx = zero_arg_tag_idx,
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -1027,7 +1025,6 @@ pub fn replaceExprWithTuple(
     node.setPayload(.{ .expr_tuple = .{
         .elems_start = @intCast(index_data_start),
         .elems_len = @intCast(elem_indices.len),
-        ._unused = 0,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -1637,39 +1634,30 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_reassign = .{
                 .pattern_idx = @intFromEnum(s.pattern_idx),
                 .expr = @intFromEnum(s.expr),
-                ._unused = 0,
             } });
         },
         .s_crash => |s| {
             node.tag = .statement_crash;
             node.setPayload(.{ .statement_crash = .{
                 .msg = @intFromEnum(s.msg),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .s_dbg => |s| {
             node.tag = .statement_dbg;
             node.setPayload(.{ .statement_single_expr = .{
                 .expr = @intFromEnum(s.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .s_expr => |s| {
             node.tag = .statement_expr;
             node.setPayload(.{ .statement_single_expr = .{
                 .expr = @intFromEnum(s.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .s_expect => |s| {
             node.tag = .statement_expect;
             node.setPayload(.{ .statement_single_expr = .{
                 .expr = @intFromEnum(s.body),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .s_for => |s| {
@@ -1685,7 +1673,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_while = .{
                 .cond = @intFromEnum(s.cond),
                 .body = @intFromEnum(s.body),
-                ._unused = 0,
             } });
         },
         .s_break => |_| {
@@ -1698,7 +1685,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
                     .expr = @intFromEnum(s.expr),
                     // Store lambda using 0 for null and idx+1 for valid indices
                     .lambda_plus_one = if (s.lambda) |lambda| @intFromEnum(lambda) + 1 else 0,
-                    ._unused = 0,
                 },
             });
         },
@@ -1723,7 +1709,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_import = .{
                 .module_name_tok = @bitCast(s.module_name_tok),
                 .import_data_idx = import_data_idx,
-                ._unused = 0,
             } });
         },
         .s_alias_decl => |s| {
@@ -1731,7 +1716,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.setPayload(.{ .statement_alias_decl = .{
                 .header = @intFromEnum(s.header),
                 .anno = @intFromEnum(s.anno),
-                ._unused = 0,
             } });
         },
         .s_nominal_decl => |s| {
@@ -1772,8 +1756,6 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .malformed;
             node.setPayload(.{ .diag_single_value = .{
                 .value = @intFromEnum(s.diagnostic),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
     }
@@ -1793,8 +1775,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_var;
             node.setPayload(.{ .expr_var = .{
                 .pattern_idx = @intFromEnum(local.pattern_idx),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_lookup_external => |e| {
@@ -1811,8 +1791,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_required_lookup;
             node.setPayload(.{ .expr_required_lookup = .{
                 .requires_idx = e.requires_idx.toU32(),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_num => |e| {
@@ -1830,7 +1808,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_list = .{
                 .elems_start = e.elems.span.start,
                 .elems_len = e.elems.span.len,
-                ._unused = 0,
             } });
         },
         .e_empty_list => |_| {
@@ -1841,7 +1818,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_tuple = .{
                 .elems_start = e.elems.span.start,
                 .elems_len = e.elems.span.len,
-                ._unused = 0,
             } });
         },
         .e_frac_f32 => |e| {
@@ -1903,8 +1879,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_string_segment;
             node.setPayload(.{ .expr_string_segment = .{
                 .segment_idx = @intFromEnum(e.literal),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_str => |e| {
@@ -1912,7 +1886,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_string = .{
                 .segments_start = e.span.span.start,
                 .segments_len = e.span.span.len,
-                ._unused = 0,
             } });
         },
         .e_tag => |e| {
@@ -1968,24 +1941,18 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .malformed;
             node.setPayload(.{ .diag_single_value = .{
                 .value = @intFromEnum(e.diagnostic),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_crash => |c| {
             node.tag = .expr_crash;
             node.setPayload(.{ .expr_crash = .{
                 .msg = @intFromEnum(c.msg),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_dbg => |d| {
             node.tag = .expr_dbg;
             node.setPayload(.{ .expr_dbg = .{
                 .expr = @intFromEnum(d.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_ellipsis => |_| {
@@ -1995,16 +1962,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_anno_only;
             node.setPayload(.{ .expr_anno_only = .{
                 .ident = @bitCast(anno.ident),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_return => |ret| {
             node.tag = .expr_return;
             node.setPayload(.{ .expr_return = .{
                 .expr = @intFromEnum(ret.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_type_var_dispatch => |tvd| {
@@ -2046,7 +2009,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.setPayload(.{ .expr_low_level = .{
                 .op = @intFromEnum(low_level.op),
                 .args_body_idx = args_body_idx,
-                ._unused = 0,
             } });
         },
         .e_match => |e| {
@@ -2062,8 +2024,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_match = .{
                 .match_data_idx = match_data_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_if => |e| {
@@ -2077,8 +2037,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_if_then_else = .{
                 .branches_else_idx = branches_else_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_call => |e| {
@@ -2104,8 +2062,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_record = .{
                 .fields_ext_idx = fields_ext_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_empty_record => |_| {
@@ -2123,8 +2079,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_zero_argument_tag = .{
                 .zero_arg_tag_idx = zero_arg_tag_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_closure => |e| {
@@ -2139,8 +2093,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_closure = .{
                 .closure_data_idx = closure_data_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_lambda => |e| {
@@ -2154,8 +2106,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
 
             node.setPayload(.{ .expr_lambda = .{
                 .args_body_idx = args_body_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_binop => |e| {
@@ -2170,16 +2120,12 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_unary_minus;
             node.setPayload(.{ .expr_unary = .{
                 .expr = @intFromEnum(e.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_unary_not => |e| {
             node.tag = .expr_unary_not;
             node.setPayload(.{ .expr_unary = .{
                 .expr = @intFromEnum(e.expr),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_block => |e| {
@@ -2194,8 +2140,6 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .expr_expect;
             node.setPayload(.{ .expr_expect = .{
                 .body = @intFromEnum(e.body),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .e_for => |e| {
@@ -2227,7 +2171,6 @@ pub fn addRecordField(store: *NodeStore, recordField: CIR.RecordField, region: b
     node.setPayload(.{ .record_field = .{
         .name = @bitCast(recordField.name),
         .expr = @intFromEnum(recordField.value),
-        ._unused = 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2296,8 +2239,6 @@ pub fn addMatchBranch(store: *NodeStore, branch: CIR.Expr.Match.Branch, region: 
     var node = Node.init(.match_branch);
     node.setPayload(.{ .match_branch = .{
         .match_branch_idx = match_branch_idx,
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2314,7 +2255,6 @@ pub fn addMatchBranchPattern(store: *NodeStore, branchPattern: CIR.Expr.Match.Br
     node.setPayload(.{ .match_branch_pattern = .{
         .pattern = @intFromEnum(branchPattern.pattern),
         .degenerate = @intFromBool(branchPattern.degenerate),
-        ._unused = 0,
     } });
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -2348,15 +2288,12 @@ pub fn addWhereClause(store: *NodeStore, whereClause: CIR.WhereClause, region: b
             node.setPayload(.{ .where_alias = .{
                 .var_idx = @intFromEnum(mod_alias.var_),
                 .alias_name = @bitCast(mod_alias.alias_name),
-                ._unused = 0,
             } });
         },
         .w_malformed => |malformed| {
             node.tag = .where_malformed;
             node.setPayload(.{ .where_malformed = .{
                 .diagnostic = @intFromEnum(malformed.diagnostic),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
     }
@@ -2378,8 +2315,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_identifier;
             node.setPayload(.{ .pattern_identifier = .{
                 .ident = @bitCast(p.ident),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .as => |p| {
@@ -2387,7 +2322,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.setPayload(.{ .pattern_as = .{
                 .ident = @bitCast(p.ident),
                 .pattern = @intFromEnum(p.pattern),
-                ._unused = 0,
             } });
         },
         .applied_tag => |p| {
@@ -2424,7 +2358,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.setPayload(.{ .pattern_record_destructure = .{
                 .destructs_start = p.destructs.span.start,
                 .destructs_len = p.destructs.span.len,
-                ._unused = 0,
             } });
         },
         .list => |p| {
@@ -2449,8 +2382,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
 
             node.setPayload(.{ .pattern_list = .{
                 .pattern_list_data_idx = pattern_list_data_idx,
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .tuple => |p| {
@@ -2458,7 +2389,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.setPayload(.{ .pattern_tuple = .{
                 .patterns_start = p.patterns.span.start,
                 .patterns_len = p.patterns.span.len,
-                ._unused = 0,
             } });
         },
         .num_literal => |p| {
@@ -2492,16 +2422,12 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .pattern_str_literal;
             node.setPayload(.{ .pattern_str_literal = .{
                 .literal = @intFromEnum(p.literal),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .frac_f32_literal => |p| {
             node.tag = Node.Tag.pattern_f32_literal;
             node.setPayload(.{ .pattern_frac_f32 = .{
                 .value = @bitCast(p.value),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .frac_f64_literal => |p| {
@@ -2510,7 +2436,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.setPayload(.{ .pattern_frac_f64 = .{
                 .value_lo = @intCast(raw & 0xFFFFFFFF),
                 .value_hi = @intCast(raw >> 32),
-                ._unused = 0,
             } });
         },
         .underscore => {
@@ -2520,8 +2445,6 @@ pub fn addPattern(store: *NodeStore, pattern: CIR.Pattern, region: base.Region) 
             node.tag = .malformed;
             node.setPayload(.{ .pattern_malformed = .{
                 .diagnostic = @intFromEnum(e.diagnostic),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
     }
@@ -2573,16 +2496,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.tag = .ty_rigid_var;
             node.setPayload(.{ .ty_rigid_var = .{
                 .name = @bitCast(tv.name),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .rigid_var_lookup => |tv| {
             node.tag = .ty_rigid_var_lookup;
             node.setPayload(.{ .ty_rigid_var = .{
                 .name = @intFromEnum(tv.ref),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .underscore => |_| {
@@ -2633,7 +2552,6 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.setPayload(.{ .ty_tuple = .{
                 .elems_start = t.elems.span.start,
                 .elems_len = t.elems.span.len,
-                ._unused = 0,
             } });
         },
         .record => |r| {
@@ -2661,16 +2579,12 @@ pub fn addTypeAnno(store: *NodeStore, typeAnno: CIR.TypeAnno, region: base.Regio
             node.tag = .ty_parens;
             node.setPayload(.{ .ty_parens = .{
                 .anno = @intFromEnum(p.anno),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
         .malformed => |m| {
             node.tag = .ty_malformed;
             node.setPayload(.{ .ty_malformed = .{
                 .diagnostic = @intFromEnum(m.diagnostic),
-                ._unused1 = 0,
-                ._unused2 = 0,
             } });
         },
     }
@@ -2710,7 +2624,6 @@ pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: CIR.TypeAnno.Recor
     node.setPayload(.{ .ty_record_field = .{
         .name = @bitCast(annoRecordField.name),
         .ty = @intFromEnum(annoRecordField.ty),
-        ._unused = 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -2786,8 +2699,6 @@ pub fn addDef(store: *NodeStore, def: CIR.Def, region: base.Region) Allocator.Er
 
     node.setPayload(.{ .def = .{
         .def_data_idx = def_data_idx,
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
 
     const nid = try store.nodes.append(store.gpa, node);
@@ -3211,7 +3122,6 @@ pub fn addIfBranch(store: *NodeStore, if_branch: CIR.Expr.IfBranch, region: base
     node.setPayload(.{ .if_branch = .{
         .cond = @intFromEnum(if_branch.cond),
         .body = @intFromEnum(if_branch.body),
-        ._unused = 0,
     } });
     const node_idx = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -3268,7 +3178,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .not_implemented => |r| {
             node.tag = .diag_not_implemented;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.feature), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.feature) } });
         },
         .invalid_num_literal => |r| {
             node.tag = .diag_invalid_num_literal;
@@ -3281,12 +3191,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .ident_already_in_scope => |r| {
             node.tag = .diag_ident_already_in_scope;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .redundant_exposed => |r| {
             node.tag = .diag_redundant_exposed;
@@ -3296,27 +3206,27 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
                 .start = r.original_region.start.offset,
                 .len = r.original_region.end.offset,
             });
-            node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx, ._unused = 0 } });
+            node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx } });
         },
         .ident_not_in_scope => |r| {
             node.tag = .diag_ident_not_in_scope;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .self_referential_definition => |r| {
             node.tag = .diag_self_referential_definition;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .qualified_ident_does_not_exist => |r| {
             node.tag = .diag_qualified_ident_does_not_exist;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromEnum(r.stmt) } });
         },
         .expr_not_canonicalized => |r| {
             node.tag = .diag_expr_not_canonicalized;
@@ -3373,22 +3283,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .type_module_missing_matching_type => |r| {
             node.tag = .diag_type_module_missing_matching_type;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
         .default_app_missing_main => |r| {
             node.tag = .diag_default_app_missing_main;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
         .default_app_wrong_arity => |r| {
             node.tag = .diag_default_app_wrong_arity;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = r.arity, ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_value = .{ .value = r.arity } });
         },
         .cannot_import_default_app => |r| {
             node.tag = .diag_cannot_import_default_app;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
         .execution_requires_app_or_default_app => |r| {
             node.tag = .diag_execution_requires_app_or_default_app;
@@ -3397,7 +3307,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .type_name_case_mismatch => |r| {
             node.tag = .diag_type_name_case_mismatch;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
         .module_header_deprecated => |r| {
             node.tag = .diag_module_header_deprecated;
@@ -3406,12 +3316,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .redundant_expose_main_type => |r| {
             node.tag = .diag_redundant_expose_main_type;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.module_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.module_name) } });
         },
         .invalid_main_type_rename_in_exposing => |r| {
             node.tag = .diag_invalid_main_type_rename_in_exposing;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.alias), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.alias) } });
         },
         .var_across_function_boundary => |r| {
             node.tag = .diag_var_across_function_boundary;
@@ -3430,17 +3340,17 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .undeclared_type => |r| {
             node.tag = .diag_undeclared_type;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name) } });
         },
         .type_alias_but_needed_nominal => |r| {
             node.tag = .diag_type_alias_but_needed_nominal;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name) } });
         },
         .undeclared_type_var => |r| {
             node.tag = .diag_undeclared_type_var;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.name) } });
         },
         .type_alias_redeclared => |r| {
             node.tag = .diag_type_alias_redeclared;
@@ -3454,47 +3364,47 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .module_not_found => |r| {
             node.tag = .diag_module_not_found;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
         .value_not_exposed => |r| {
             node.tag = .diag_value_not_exposed;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.value_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.value_name) } });
         },
         .type_not_exposed => |r| {
             node.tag = .diag_type_not_exposed;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
         .type_from_missing_module => |r| {
             node.tag = .diag_type_from_missing_module;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
         },
         .module_not_imported => |r| {
             node.tag = .diag_module_not_imported;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
         .nested_type_not_found => |r| {
             node.tag = .diag_nested_type_not_found;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name) } });
         },
         .nested_value_not_found => |r| {
             node.tag = .diag_nested_value_not_found;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.parent_name), .ident2 = @bitCast(r.nested_name) } });
         },
         .record_builder_map2_not_found => |r| {
             node.tag = .diag_record_builder_map2_not_found;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.type_name), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.type_name) } });
         },
         .too_many_exports => |r| {
             node.tag = .diag_too_many_exports;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = r.count, ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_value = .{ .value = r.count } });
         },
         .nominal_type_redeclared => |r| {
             node.tag = .diag_nominal_type_redeclared;
@@ -3524,12 +3434,12 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .unused_variable => |r| {
             node.tag = .diag_unused_variable;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .used_underscore_variable => |r| {
             node.tag = .diag_used_underscore_variable;
             region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
@@ -3547,22 +3457,22 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .unused_type_var_name => |r| {
             node.tag = .diag_unused_type_var_name;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
         },
         .type_var_marked_unused => |r| {
             node.tag = .diag_type_var_marked_unused;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
         },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
-            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.suggested_name) } });
         },
         .underscore_in_type_declaration => |r| {
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
-            node.setPayload(.{ .diag_single_value = .{ .value = @intFromBool(r.is_alias), ._unused1 = 0, ._unused2 = 0 } });
+            node.setPayload(.{ .diag_single_value = .{ .value = @intFromBool(r.is_alias) } });
         },
         .break_outside_loop => |r| {
             node.tag = .diag_break_outside_loop;
@@ -3581,7 +3491,7 @@ pub fn addDiagnostic(store: *NodeStore, reason: CIR.Diagnostic) Allocator.Error!
         .deprecated_number_suffix => |r| {
             node.tag = .diag_deprecated_number_suffix;
             region = r.region;
-            node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested), ._unused = 0 } });
+            node.setPayload(.{ .diag_two_enums = .{ .enum1 = @intFromEnum(r.suffix), .enum2 = @intFromEnum(r.suggested) } });
         },
     }
 
@@ -3614,8 +3524,6 @@ pub fn addMalformed(store: *NodeStore, diagnostic_idx: CIR.Diagnostic.Idx, regio
     var malformed_node = Node.init(.malformed);
     malformed_node.setPayload(.{ .diag_single_value = .{
         .value = @intFromEnum(diagnostic_idx),
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
     const malformed_nid = try store.nodes.append(store.gpa, malformed_node);
     _ = try store.regions.append(store.gpa, region);
@@ -4012,8 +3920,6 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
     var node = Node.init(.type_var_slot);
     node.setPayload(.{ .type_var_slot = .{
         .parent_node_idx = @intFromEnum(parent_node_idx),
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
@@ -4031,8 +3937,6 @@ pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_no
         var node = Node.init(.type_var_slot);
         node.setPayload(.{ .type_var_slot = .{
             .parent_node_idx = @intFromEnum(parent_node_idx),
-            ._unused1 = 0,
-            ._unused2 = 0,
         } });
         store.nodes.items.appendAssumeCapacity(node);
         _ = try store.regions.append(store.gpa, region);
@@ -4311,8 +4215,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     var var_node = Node.init(.expr_var);
     var_node.setPayload(.{ .expr_var = .{
         .pattern_idx = 5,
-        ._unused1 = 0,
-        ._unused2 = 0,
     } });
     const var_node_idx = try original.nodes.append(gpa, var_node);
 
@@ -4321,7 +4223,6 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
     list_node.setPayload(.{ .expr_list = .{
         .elems_start = 10,
         .elems_len = 3,
-        ._unused = 0,
     } });
     const list_node_idx = try original.nodes.append(gpa, list_node);
 
