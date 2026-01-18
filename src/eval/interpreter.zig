@@ -390,8 +390,11 @@ pub const Interpreter = struct {
     /// individually - the entire arena is freed when the interpreter is deinitialized.
     /// This avoids leak detection false positives for intentionally-immortal string literals.
     constant_strings_arena: std.heap.ArenaAllocator,
+    /// Whether this interpreter owns (and should free) the constant_strings_arena.
+    /// When an external arena is passed in, this is false and the arena is not freed on deinit.
+    owns_constant_strings_arena: bool,
 
-    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv) !Interpreter {
+    pub fn init(allocator: std.mem.Allocator, env: *can.ModuleEnv, builtin_types: BuiltinTypes, builtin_module_env: ?*const can.ModuleEnv, other_envs: []const *const can.ModuleEnv, import_mapping: *const import_mapping_mod.ImportMapping, app_env: ?*can.ModuleEnv, constant_strings_arena: ?*std.heap.ArenaAllocator) !Interpreter {
         // Build maps from Ident.Idx to ModuleEnv and module ID
         var module_envs = std.AutoHashMapUnmanaged(base_pkg.Ident.Idx, *const can.ModuleEnv){};
         errdefer module_envs.deinit(allocator);
@@ -470,7 +473,7 @@ pub const Interpreter = struct {
             }
         }
 
-        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env);
+        return initWithModuleEnvs(allocator, env, other_envs, module_envs, module_ids, import_envs, next_id, builtin_types, builtin_module_env, import_mapping, app_env, constant_strings_arena);
     }
 
     /// Deinit the interpreter and also free the module maps if they were allocated by init()
@@ -490,6 +493,7 @@ pub const Interpreter = struct {
         builtin_module_env: ?*const can.ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
         app_env: ?*can.ModuleEnv,
+        constant_strings_arena: ?*std.heap.ArenaAllocator,
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -543,7 +547,8 @@ pub const Interpreter = struct {
             .num_literal_target_type = null,
             .last_error_message = null,
             .early_return_value = null,
-            .constant_strings_arena = std.heap.ArenaAllocator.init(allocator),
+            .constant_strings_arena = if (constant_strings_arena) |arena| arena.* else std.heap.ArenaAllocator.init(allocator),
+            .owns_constant_strings_arena = constant_strings_arena == null,
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
@@ -746,6 +751,12 @@ pub const Interpreter = struct {
         self.flex_type_context.clearRetainingCapacity();
         // Increment generation so translate_cache entries from previous contexts are invalidated
         self.poly_context_generation +%= 1;
+
+        const saved_env_for_debug = self.env;
+        errdefer {
+            // Restore env on error - some code paths may change env then throw errors
+            self.env = saved_env_for_debug;
+        }
         return try self.evalWithExpectedType(expr_idx, roc_ops, null);
     }
 
@@ -5901,6 +5912,234 @@ pub const Interpreter = struct {
         return error.StackOverflow;
     }
 
+    /// The canonical error message for infinite while loops detected at compile time.
+    const infinite_while_loop_message = "This while loop's condition evaluated to True at compile time, " ++
+        "and the loop body has no break or return statement, " ++
+        "which would cause an infinite loop. " ++
+        "Use a mutable variable for the condition, or add a break/return.";
+
+    /// Check if an expression (typically a loop body) contains a break or return statement
+    /// at the current loop nesting level. Does NOT count break/return statements inside
+    /// nested while/for loops, since those exit the inner loop, not the outer one.
+    fn bodyHasExitStatement(self: *const Interpreter, expr_idx: can.CIR.Expr.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+
+        return switch (expr) {
+            // Block: check all statements, then the final expression
+            .e_block => |block| {
+                for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    if (self.statementHasExitStatement(stmt_idx)) {
+                        return true;
+                    }
+                }
+                return self.bodyHasExitStatement(block.final_expr);
+            },
+
+            // If expression: check all branch bodies and the final else
+            .e_if => |if_expr| {
+                for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getIfBranch(branch_idx);
+                    if (self.bodyHasExitStatement(branch.body)) {
+                        return true;
+                    }
+                }
+                return self.bodyHasExitStatement(if_expr.final_else);
+            },
+
+            // Match expression: check all branch values
+            .e_match => |match_expr| {
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getMatchBranch(branch_idx);
+                    if (self.bodyHasExitStatement(branch.value)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Return expression is an exit
+            .e_return => true,
+
+            // For other expressions, no exit statement at this level
+            else => false,
+        };
+    }
+
+    /// Check if a statement contains a break or return at the current loop nesting level.
+    fn statementHasExitStatement(self: *const Interpreter, stmt_idx: can.CIR.Statement.Idx) bool {
+        const stmt = self.env.store.getStatement(stmt_idx);
+
+        return switch (stmt) {
+            // Break and return are exit statements
+            .s_break => true,
+            .s_return => true,
+
+            // Nested while/for loops: do NOT recurse - break inside exits the inner loop
+            .s_while, .s_for => false,
+
+            // Declaration statements: check the expression
+            .s_decl => |decl| self.bodyHasExitStatement(decl.expr),
+            .s_decl_gen => |decl| self.bodyHasExitStatement(decl.expr),
+            .s_var => |var_stmt| self.bodyHasExitStatement(var_stmt.expr),
+            .s_reassign => |reassign| self.bodyHasExitStatement(reassign.expr),
+
+            // Expression statement: check the expression
+            .s_expr => |expr_stmt| self.bodyHasExitStatement(expr_stmt.expr),
+
+            // Expect and dbg: check their body/expr
+            .s_expect => |expect| self.bodyHasExitStatement(expect.body),
+            .s_dbg => |dbg| self.bodyHasExitStatement(dbg.expr),
+
+            // Other statements don't contain exit statements
+            .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => false,
+        };
+    }
+
+    /// Check if an expression involves any mutable variables (variables with names starting with '$').
+    /// This is used to determine if a while loop condition could potentially change between iterations.
+    fn conditionInvolvesMutableVariable(self: *const Interpreter, expr_idx: can.CIR.Expr.Idx) bool {
+        const expr = self.env.store.getExpr(expr_idx);
+
+        return switch (expr) {
+            // Local lookup: check if the variable name starts with '$' (mutable variable convention)
+            .e_lookup_local => |lookup| {
+                const pattern = self.env.store.getPattern(lookup.pattern_idx);
+                if (pattern == .assign) {
+                    const ident_str = self.env.getIdent(pattern.assign.ident);
+                    if (ident_str.len > 0 and ident_str[0] == '$') {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Binary operation: check both sides
+            .e_binop => |binop| {
+                return self.conditionInvolvesMutableVariable(binop.lhs) or
+                    self.conditionInvolvesMutableVariable(binop.rhs);
+            },
+
+            // Unary operations: check the operand
+            .e_unary_minus => |unop| self.conditionInvolvesMutableVariable(unop.expr),
+            .e_unary_not => |unop| self.conditionInvolvesMutableVariable(unop.expr),
+
+            // Function call: check function and all arguments
+            .e_call => |call| {
+                if (self.conditionInvolvesMutableVariable(call.func)) {
+                    return true;
+                }
+                for (self.env.store.sliceExpr(call.args)) |arg_idx| {
+                    if (self.conditionInvolvesMutableVariable(arg_idx)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // If expression: check condition and all branches
+            .e_if => |if_expr| {
+                for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getIfBranch(branch_idx);
+                    if (self.conditionInvolvesMutableVariable(branch.cond) or
+                        self.conditionInvolvesMutableVariable(branch.body))
+                    {
+                        return true;
+                    }
+                }
+                return self.conditionInvolvesMutableVariable(if_expr.final_else);
+            },
+
+            // Match expression: check condition and all branches
+            .e_match => |match_expr| {
+                if (self.conditionInvolvesMutableVariable(match_expr.cond)) {
+                    return true;
+                }
+                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
+                    const branch = self.env.store.getMatchBranch(branch_idx);
+                    if (self.conditionInvolvesMutableVariable(branch.value)) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+
+            // Block: check all statements and final expression
+            .e_block => |block| {
+                for (self.env.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    if (self.statementInvolvesMutableVariable(stmt_idx)) {
+                        return true;
+                    }
+                }
+                return self.conditionInvolvesMutableVariable(block.final_expr);
+            },
+
+            // Dot access: check receiver and arguments
+            .e_dot_access => |access| {
+                if (self.conditionInvolvesMutableVariable(access.receiver)) {
+                    return true;
+                }
+                if (access.args) |args_span| {
+                    for (self.env.store.sliceExpr(args_span)) |arg_idx| {
+                        if (self.conditionInvolvesMutableVariable(arg_idx)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            },
+
+            // Literals and other expressions don't involve mutable variables
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_str,
+            .e_str_segment,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_crash,
+            .e_runtime_error,
+            => false,
+
+            // External lookups are immutable
+            .e_lookup_external, .e_lookup_required => false,
+
+            // For other expressions, be conservative and return false (don't involve mutable vars)
+            else => false,
+        };
+    }
+
+    /// Check if a statement involves any mutable variables.
+    fn statementInvolvesMutableVariable(self: *const Interpreter, stmt_idx: can.CIR.Statement.Idx) bool {
+        const stmt = self.env.store.getStatement(stmt_idx);
+
+        return switch (stmt) {
+            .s_decl => |decl| self.conditionInvolvesMutableVariable(decl.expr),
+            .s_decl_gen => |decl| self.conditionInvolvesMutableVariable(decl.expr),
+            .s_var => |var_stmt| self.conditionInvolvesMutableVariable(var_stmt.expr),
+            .s_reassign => |reassign| self.conditionInvolvesMutableVariable(reassign.expr),
+            .s_expr => |expr_stmt| self.conditionInvolvesMutableVariable(expr_stmt.expr),
+            .s_expect => |expect| self.conditionInvolvesMutableVariable(expect.body),
+            .s_dbg => |dbg| self.conditionInvolvesMutableVariable(dbg.expr),
+            .s_return => |ret| self.conditionInvolvesMutableVariable(ret.expr),
+            .s_while => |while_stmt| {
+                return self.conditionInvolvesMutableVariable(while_stmt.cond) or
+                    self.conditionInvolvesMutableVariable(while_stmt.body);
+            },
+            .s_for => |for_stmt| {
+                return self.conditionInvolvesMutableVariable(for_stmt.expr) or
+                    self.conditionInvolvesMutableVariable(for_stmt.body);
+            },
+            .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error, .s_break => false,
+        };
+    }
+
     fn handleExpectFailure(self: *Interpreter, snippet_expr_idx: can.CIR.Expr.Idx, roc_ops: *RocOps) void {
         const region = self.env.store.getExprRegion(snippet_expr_idx);
         const source_bytes = self.env.getSource(region);
@@ -7956,8 +8195,52 @@ pub const Interpreter = struct {
         self.def_stack.deinit();
         self.scratch_tags.deinit();
         self.instantiate_scratch.deinit();
-        // Free all constant/static strings at once - they were never freed individually
-        self.constant_strings_arena.deinit();
+        // Free all constant/static strings at once - only if we own the arena
+        if (self.owns_constant_strings_arena) {
+            self.constant_strings_arena.deinit();
+        }
+    }
+
+    /// Deinit interpreter but preserve the constant strings arena.
+    /// Use this when the interpreter's constant strings may still be referenced
+    /// by Roc values that outlive the interpreter (e.g., in render loop scenarios).
+    /// The caller is responsible for eventually freeing the arena.
+    pub fn deinitPreserveConstantStrings(self: *Interpreter) std.heap.ArenaAllocator {
+        self.empty_scope.deinit();
+        self.translate_cache.deinit();
+        self.translation_in_progress.deinit();
+        self.rigid_subst.deinit();
+        self.rigid_name_subst.deinit();
+        self.translate_rigid_subst.deinit();
+        self.flex_type_context.deinit();
+        var it = self.poly_cache.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.args.len > 0) {
+                self.allocator.free(@constCast(entry.value_ptr.args));
+            }
+        }
+        self.poly_cache.deinit();
+        self.method_resolution_cache.deinit();
+        self.module_envs.deinit(self.allocator);
+        self.translated_module_envs.deinit(self.allocator);
+        self.module_ids.deinit(self.allocator);
+        self.import_envs.deinit(self.allocator);
+        self.var_to_layout_slot.deinit(self.allocator);
+        self.runtime_layout_store.deinit();
+        self.runtime_types.deinit();
+        self.allocator.destroy(self.runtime_types);
+        self.snapshots.deinit();
+        self.problems.deinit(self.allocator);
+        self.unify_scratch.deinit();
+        self.type_writer.deinit();
+        self.stack_memory.deinit();
+        self.bindings.deinit();
+        self.active_closures.deinit();
+        self.def_stack.deinit();
+        self.scratch_tags.deinit();
+        self.instantiate_scratch.deinit();
+        // Return the arena instead of freeing it - caller takes ownership
+        return self.constant_strings_arena;
     }
 
     /// Get the module environment for a given origin module identifier.
@@ -9254,7 +9537,10 @@ pub const Interpreter = struct {
                                 try acc.put(f.name, f.var_);
                             }
 
-                            const rt_ext = try self.translateTypeVar(module, rec.ext);
+                            // Since we've flattened all extension fields into acc, the runtime record
+                            // should have an empty extension to avoid duplicate fields in layout.
+                            // The extension was only needed to collect its fields, which are now in acc.
+                            const rt_ext = try self.runtime_types.freshFromContent(.{ .structure = .empty_record });
                             var runtime_fields = try self.allocator.alloc(types.RecordField, acc.fields.items.len);
                             defer self.allocator.free(runtime_fields);
                             var j: usize = 0;
@@ -11152,6 +11438,11 @@ pub const Interpreter = struct {
                     const saved_env = self.env;
                     const saved_bindings_len = self.bindings.items.len;
                     self.env = @constCast(closure_header.source_env);
+                    // Ensure env is restored on error (e.g., DivisionByZero from callLowLevelBuiltin)
+                    errdefer {
+                        self.env = saved_env;
+                        self.trimBindingList(&self.bindings, saved_bindings_len, roc_ops);
+                    }
 
                     // Check if low-level lambda
                     const lambda_expr = self.env.store.getExpr(closure_header.lambda_expr_idx);
@@ -12738,13 +13029,18 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const layout_val = try self.getRuntimeLayout(layout_rt_var);
+        var layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Dec literals require Dec-compatible layout. If we reach here with a different layout
-        // (e.g., U8 integer), it means validation should have caught this and skipped evaluation.
-        std.debug.assert(layout_val.tag == .scalar and
+        // (e.g., function type from calling a literal like 0.0()), the type is incompatible.
+        // Return an error instead of crashing - the type checker will report the actual error.
+        const is_dec_layout = layout_val.tag == .scalar and
             layout_val.data.scalar.tag == .frac and
-            layout_val.data.scalar.data.frac == .dec);
+            layout_val.data.scalar.data.frac == .dec;
+        if (!is_dec_layout) {
+            // Fall back to Dec layout for the literal itself
+            layout_val = layout.Layout.frac(types.Frac.Precision.dec);
+        }
 
         // Check if the resolved type is flex/rigid (unconstrained).
         // If so, we need to give it a concrete Dec type for method dispatch to work.
@@ -13265,8 +13561,17 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
-        std.debug.assert(closure_layout.tag == .closure);
+        var closure_layout = try self.getRuntimeLayout(rt_var);
+        if (closure_layout.tag != .closure) {
+            // For recursive closures, the type translation may return a flex placeholder
+            // that hasn't been resolved to a function type yet. In evalLambda, we KNOW
+            // we need a closure layout, so create one with empty captures.
+            // This handles cases like:
+            //   flatten_aux = |l, acc| { ... flatten_aux(rest, acc) ... }
+            // where flatten_aux's type involves recursive types that haven't fully resolved.
+            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            closure_layout = layout.Layout.closure(empty_captures_idx);
+        }
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
@@ -14980,6 +15285,30 @@ pub const Interpreter = struct {
                                 .call_collect_args => |cc| {
                                     self.popCollectedValues(value_stack, cc.collected_count, roc_ops);
                                     // Function value is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                },
+                                .dot_access_resolve => |da| {
+                                    // Decref the receiver value stored in the continuation
+                                    da.receiver_value.decref(&self.runtime_layout_store, roc_ops);
+                                },
+                                .dot_access_collect_args => |dac| {
+                                    // Decref collected argument values
+                                    self.popCollectedValues(value_stack, dac.collected_count, roc_ops);
+                                    // Method function is also on the stack
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                    // Receiver value is also on the stack (pushed before method function)
+                                    if (value_stack.pop()) |val| {
+                                        val.decref(&self.runtime_layout_store, roc_ops);
+                                    }
+                                },
+                                .type_var_dispatch_collect_args => |tvc| {
+                                    // Decref collected argument values
+                                    self.popCollectedValues(value_stack, tvc.collected_count, roc_ops);
+                                    // Method function is also on the stack
                                     if (value_stack.pop()) |val| {
                                         val.decref(&self.runtime_layout_store, roc_ops);
                                     }
@@ -18551,6 +18880,19 @@ pub const Interpreter = struct {
                 const cond_value = value_stack.pop() orelse return error.Crash;
                 const cond_is_true = self.boolValueEquals(true, cond_value, roc_ops);
 
+                // Check for infinite loop: if condition is True, doesn't involve mutable variables,
+                // and the body has no break/return, this would loop forever at compile time.
+                if (cond_is_true) {
+                    const involves_mutable = self.conditionInvolvesMutableVariable(wl.cond);
+                    if (!involves_mutable) {
+                        const has_exit = self.bodyHasExitStatement(wl.body);
+                        if (!has_exit) {
+                            self.triggerCrash(infinite_while_loop_message, false, roc_ops);
+                            return error.Crash;
+                        }
+                    }
+                }
+
                 if (!cond_is_true) {
                     // Loop complete, continue with remaining statements
                     if (wl.remaining_stmts.len == 0) {
@@ -19099,7 +19441,7 @@ test "interpreter: translateTypeVar for str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     // Get the actual Str type from the Builtin module using the str_stmt index
@@ -19136,7 +19478,7 @@ test "interpreter: translateTypeVar for alias of Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     const alias_name = try env.common.idents.insert(gpa, @import("base").Ident.for_text("MyAlias"));
@@ -19189,7 +19531,7 @@ test "interpreter: translateTypeVar for nominal Point(Str)" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     const name_nominal = try env.common.idents.insert(gpa, @import("base").Ident.for_text("Point"));
@@ -19247,7 +19589,7 @@ test "interpreter: translateTypeVar for flex var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     const ct_flex = try env.types.freshFromContent(.{ .flex = types.Flex.init() });
@@ -19275,7 +19617,7 @@ test "interpreter: translateTypeVar for rigid var" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     const name_a = try env.common.idents.insert(gpa, @import("base").Ident.for_text("A"));
@@ -19313,7 +19655,7 @@ test "interpreter: getStaticDispatchConstraint returns error for non-constrained
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     // Create nominal Str type (no constraints)
@@ -19362,7 +19704,7 @@ test "interpreter: unification constrains (a->a) with Str" {
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &env, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     const func_id: u32 = 42;
@@ -19412,7 +19754,7 @@ test "interpreter: cross-module method resolution should find methods in origin 
     defer str_module.deinit();
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
-    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &module_b, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     // Register module A as an imported module
@@ -19469,7 +19811,7 @@ test "interpreter: transitive module method resolution (A imports B imports C)" 
 
     const builtin_types_test = BuiltinTypes.init(builtin_indices, bool_module.env, result_module.env, str_module.env);
     // Use module_a as the current module
-    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null);
+    var interp = try Interpreter.init(gpa, &module_a, builtin_types_test, null, &[_]*const can.ModuleEnv{}, &empty_import_mapping, null, null);
     defer interp.deinit();
 
     // Register module B

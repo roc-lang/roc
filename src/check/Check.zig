@@ -1223,6 +1223,11 @@ pub fn checkPlatformRequirements(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Ensure the type store is filled to match the number of regions.
+    // This is necessary because checkPlatformRequirements may be called with a
+    // fresh Check instance that hasn't had checkFile() called on it.
+    try ensureTypeStoreIsFilled(self);
+
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -1503,6 +1508,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated static dispatch constraints
     try self.checkDeferredStaticDispatchConstraints(&env);
+
+    // Check if the expression's type has incompatible constraints (e.g., !3)
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env);
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -3367,8 +3376,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized), so the code below will
-                        // unify directly with it, which is the correct behavior.
+                        // top_level rank (not generalized).
+                        //
+                        // If the def has a type annotation, we need to instantiate it
+                        // to avoid polluting the pattern variable's rank. Without this,
+                        // unifying directly would pull the annotation's rigid vars down
+                        // to the pattern's rank, preventing proper generalization.
+                        // This fixes GitHub issue #8994.
+                        const def = self.cir.store.getDef(processing_def.def_idx);
+                        if (def.annotation) |annotation_idx| {
+                            const anno_var = ModuleEnv.varFrom(annotation_idx);
+                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
+                            _ = try self.unify(expr_var, instantiated, env);
+                            return does_fx;
+                        }
+                        // Otherwise, fall through to unify directly with pat_var
                     },
                     .processed => {},
                 }
@@ -5661,7 +5683,8 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                         );
                     }
                 } else {
-                    // Other methods are not supported on anonymous types
+                    // Structural types (other than is_eq) cannot have methods called on them.
+                    // The user must explicitly wrap the value in a nominal type.
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -5671,8 +5694,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
             }
         } else if (dispatcher_content == .flex) {
-            // If the thing we're dispatching is a flex, then hold onto the
-            // constraint so we can try again later.
+            // If the dispatcher is a flex, hold onto the constraint to try again later.
+            // Note: flex vars with from_numeral constraints are validated separately
+            // in checkFlexVarConstraintCompatibility after type checking completes.
             _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
@@ -5792,6 +5816,53 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         // Error types: allow them to proceed
         .err => true,
     };
+}
+
+/// Check if a flex var has incompatible constraints and report errors.
+/// This is called after type-checking to catch cases like `!3` where a flex var
+/// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
+/// If the flex var has a from_numeral constraint (meaning it will default to a numeric
+/// type like Dec), we validate that all other constraints can be satisfied by Dec.
+fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (resolved.desc.content != .flex) return;
+
+    const flex = resolved.desc.content.flex;
+    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+    if (constraints.len == 0) return;
+
+    // Check if this flex var has from_numeral constraint (indicating numeric type)
+    var has_from_numeral = false;
+    for (constraints) |c| {
+        if (c.origin == .from_numeral) {
+            has_from_numeral = true;
+            break;
+        }
+    }
+
+    if (has_from_numeral) {
+        // This flex will default to Dec. Validate that all other constraints
+        // can be satisfied by Dec.
+        const builtin_env = self.builtin_ctx.builtin_module orelse return;
+        const indices = self.builtin_ctx.builtin_indices orelse return;
+
+        for (constraints) |constraint| {
+            // Skip from_numeral - that's satisfied by Dec by definition
+            if (constraint.origin == .from_numeral) continue;
+
+            // Check if Dec has this method
+            const method_ident = builtin_env.lookupMethodIdentFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
+            if (method_ident == null) {
+                // Dec doesn't have this method - report error
+                try self.reportConstraintError(
+                    var_,
+                    constraint,
+                    .{ .missing_method = .nominal },
+                    env,
+                );
+            }
+        }
+    }
 }
 
 /// Check if a type variable contains any error types anywhere in its structure.
@@ -6026,50 +6097,51 @@ pub fn createImportMapping(
                     // Skip invalid statement indices (index 0 is typically invalid/sentinel)
                     if (@intFromEnum(stmt_idx) != 0) {
                         const stmt = builtin_env.store.getStatement(stmt_idx);
-                        switch (stmt) {
-                            .s_nominal_decl => |decl| {
-                                const header = builtin_env.store.getTypeHeader(decl.header);
-                                const qualified_name = builtin_env.getIdentText(header.name);
-                                const relative_name = builtin_env.getIdentText(header.relative_name);
+                        const header_idx = switch (stmt) {
+                            .s_nominal_decl => |decl| decl.header,
+                            .s_alias_decl => |alias| alias.header,
+                            else => null,
+                        };
+                        if (header_idx) |hdr_idx| {
+                            const header = builtin_env.store.getTypeHeader(hdr_idx);
+                            const qualified_name = builtin_env.getIdentText(header.name);
+                            const relative_name = builtin_env.getIdentText(header.relative_name);
 
-                                // Extract display name (last component after dots)
-                                const display_name = blk: {
-                                    var last_dot: usize = 0;
-                                    for (qualified_name, 0..) |c, i| {
-                                        if (c == '.') last_dot = i + 1;
-                                    }
-                                    break :blk qualified_name[last_dot..];
-                                };
+                            // Extract display name (last component after dots)
+                            const display_name = blk: {
+                                var last_dot: usize = 0;
+                                for (qualified_name, 0..) |c, i| {
+                                    if (c == '.') last_dot = i + 1;
+                                }
+                                break :blk qualified_name[last_dot..];
+                            };
 
-                                const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
-                                const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
-                                const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
+                            const qualified_ident = try idents.insert(gpa, Ident.for_text(qualified_name));
+                            const relative_ident = try idents.insert(gpa, Ident.for_text(relative_name));
+                            const display_ident = try idents.insert(gpa, Ident.for_text(display_name));
 
-                                // Add mapping for qualified_name -> display_name
-                                if (mapping.get(qualified_ident)) |existing_ident| {
-                                    const existing_name = idents.getText(existing_ident);
-                                    if (displayNameIsBetter(display_name, existing_name)) {
-                                        try mapping.put(qualified_ident, display_ident);
-                                    }
-                                } else {
+                            // Add mapping for qualified_name -> display_name
+                            if (mapping.get(qualified_ident)) |existing_ident| {
+                                const existing_name = idents.getText(existing_ident);
+                                if (displayNameIsBetter(display_name, existing_name)) {
                                     try mapping.put(qualified_ident, display_ident);
                                 }
+                            } else {
+                                try mapping.put(qualified_ident, display_ident);
+                            }
 
-                                // Also add mapping for relative_name -> display_name
-                                // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
-                                if (mapping.get(relative_ident)) |existing_ident| {
-                                    const existing_name = idents.getText(existing_ident);
-                                    if (displayNameIsBetter(display_name, existing_name)) {
-                                        try mapping.put(relative_ident, display_ident);
-                                    }
-                                } else {
+                            // Also add mapping for relative_name -> display_name
+                            // This ensures types stored with relative_name (like "Num.Numeral") also map to display_name
+                            if (mapping.get(relative_ident)) |existing_ident| {
+                                const existing_name = idents.getText(existing_ident);
+                                if (displayNameIsBetter(display_name, existing_name)) {
                                     try mapping.put(relative_ident, display_ident);
                                 }
-                            },
-                            else => {
-                                // Skip non-nominal statements (e.g., nested types that aren't directly importable)
-                            },
+                            } else {
+                                try mapping.put(relative_ident, display_ident);
+                            }
                         }
+                        // else: Skip non-nominal/alias statements (e.g., nested types that aren't directly importable)
                     }
                 }
             }

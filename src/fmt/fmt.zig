@@ -1365,6 +1365,77 @@ const Formatter = struct {
             .ellipsis => |_| {
                 try fmt.pushAll("...");
             },
+            .record_builder => |rb| {
+                // Format record builder: { field: value, ... }.TypeName
+                const fields = fmt.ast.store.recordFieldSlice(rb.fields);
+
+                try fmt.push('{');
+
+                // Format fields like a regular record
+                if (multiline and fields.len > 0) {
+                    fmt.curr_indent += 1;
+                    _ = try fmt.flushCommentsAfter(rb.region.start);
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                }
+
+                for (fields, 0..) |field_idx, i| {
+                    if (!multiline) {
+                        try fmt.push(' ');
+                    }
+                    const field_region = try fmt.formatRecordField(field_idx);
+
+                    if (i < fields.len - 1) {
+                        try fmt.push(',');
+                        if (multiline) {
+                            _ = try fmt.flushCommentsAfter(field_region.end);
+                            try fmt.ensureNewline();
+                            try fmt.pushIndent();
+                        }
+                    } else if (multiline) {
+                        try fmt.push(',');
+                        _ = try fmt.flushCommentsAfter(field_region.end);
+                        fmt.curr_indent -= 1;
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
+                }
+
+                if (fields.len > 0 and !multiline) {
+                    try fmt.push(' ');
+                }
+                try fmt.push('}');
+
+                // Format the type suffix (mapper)
+                const mapper_expr = fmt.ast.store.getExpr(rb.mapper);
+                switch (mapper_expr) {
+                    .tag => |t| {
+                        try fmt.push('.');
+                        // Format qualifiers if any
+                        const qualifiers = fmt.ast.store.tokenSlice(t.qualifiers);
+                        for (qualifiers) |qual_tok| {
+                            try fmt.pushTokenText(qual_tok);
+                            try fmt.push('.');
+                        }
+                        try fmt.pushTokenText(t.token);
+                    },
+                    .ident => |id| {
+                        try fmt.push('.');
+                        // Format qualifiers if any
+                        const qualifiers = fmt.ast.store.tokenSlice(id.qualifiers);
+                        for (qualifiers) |qual_tok| {
+                            try fmt.pushTokenText(qual_tok);
+                            try fmt.push('.');
+                        }
+                        try fmt.pushTokenText(id.token);
+                    },
+                    else => {
+                        // Fallback - shouldn't happen for valid record builders
+                        try fmt.push('.');
+                        _ = try fmt.formatExpr(rb.mapper);
+                    },
+                }
+            },
             .malformed => {
                 // Output nothing for malformed node
             },
@@ -1571,6 +1642,121 @@ const Formatter = struct {
         }
 
         return region;
+    }
+
+    /// Format a targets section in a platform header
+    fn formatTargetsSection(fmt: *Formatter, targets_idx: AST.TargetsSection.Idx) !void {
+        const targets = fmt.ast.store.getTargetsSection(targets_idx);
+        const start_indent = fmt.curr_indent;
+
+        try fmt.pushAll("targets: {");
+
+        var has_content = false;
+
+        // Format files: field if present
+        if (targets.files_path) |files_token| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("files: ");
+            try fmt.push('"');
+            try fmt.pushTokenText(files_token);
+            try fmt.push('"');
+            try fmt.push(',');
+        }
+
+        // Format exe: field if present
+        if (targets.exe) |exe_idx| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("exe: ");
+            try fmt.formatTargetLinkType(exe_idx, start_indent + 1);
+            try fmt.push(',');
+        }
+
+        // Format static_lib: field if present
+        if (targets.static_lib) |static_lib_idx| {
+            has_content = true;
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent + 1;
+            try fmt.pushIndent();
+            try fmt.pushAll("static_lib: ");
+            try fmt.formatTargetLinkType(static_lib_idx, start_indent + 1);
+            try fmt.push(',');
+        }
+
+        if (has_content) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = start_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    /// Format a target link type (exe, static_lib, shared_lib) section
+    fn formatTargetLinkType(fmt: *Formatter, link_type_idx: AST.TargetLinkType.Idx, base_indent: u32) !void {
+        const link_type = fmt.ast.store.getTargetLinkType(link_type_idx);
+        const entries = fmt.ast.store.targetEntrySlice(link_type.entries);
+
+        try fmt.push('{');
+
+        for (entries, 0..) |entry_idx, i| {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent + 1;
+            try fmt.pushIndent();
+            try fmt.formatTargetEntry(entry_idx);
+            if (i < entries.len - 1 or entries.len > 0) {
+                try fmt.push(',');
+            }
+        }
+
+        if (entries.len > 0) {
+            try fmt.ensureNewline();
+            fmt.curr_indent = base_indent;
+            try fmt.pushIndent();
+        }
+        try fmt.push('}');
+    }
+
+    /// Format a single target entry: x64linux: ["host.o", app]
+    fn formatTargetEntry(fmt: *Formatter, entry_idx: AST.TargetEntry.Idx) !void {
+        const entry = fmt.ast.store.getTargetEntry(entry_idx);
+        const files = fmt.ast.store.targetFileSlice(entry.files);
+
+        // Format target name (e.g., x64linux)
+        try fmt.pushTokenText(entry.target);
+        try fmt.pushAll(": [");
+
+        // Format file list
+        for (files, 0..) |file_idx, i| {
+            try fmt.formatTargetFile(file_idx);
+            if (i < files.len - 1) {
+                try fmt.pushAll(", ");
+            }
+        }
+
+        try fmt.push(']');
+    }
+
+    /// Format a single target file entry
+    fn formatTargetFile(fmt: *Formatter, file_idx: AST.TargetFile.Idx) !void {
+        const file = fmt.ast.store.getTargetFile(file_idx);
+        switch (file) {
+            .string_literal => |token| {
+                try fmt.push('"');
+                try fmt.pushTokenText(token);
+                try fmt.push('"');
+            },
+            .special_ident => |token| {
+                try fmt.pushTokenText(token);
+            },
+            .malformed => {
+                // Don't format malformed target files - they'll be reported as errors
+            },
+        }
     }
 
     fn formatHeader(fmt: *Formatter, hi: AST.Header.Idx) !void {
@@ -1867,6 +2053,15 @@ const Formatter = struct {
                     fmt.ast.store.recordFieldSlice(.{ .span = provides.span }),
                     Formatter.formatRecordField,
                 );
+
+                // Format targets section if present
+                if (p.targets) |targets_idx| {
+                    _ = try fmt.flushCommentsBefore(provides.region.end);
+                    try fmt.ensureNewline();
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                    try fmt.formatTargetsSection(targets_idx);
+                }
             },
             .type_module => {},
             .default_app => {},
@@ -2391,6 +2586,9 @@ const Formatter = struct {
 
                         return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(r.fields));
                     },
+                    .record_builder => |rb| {
+                        return fmt.nodesWillBeMultiline(AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields));
+                    },
                     .suffix_single_question => |s| {
                         return fmt.nodeWillBeMultiline(AST.Expr.Idx, s.expr);
                     },
@@ -2702,4 +2900,26 @@ test "issue 8894: typed frac literal formats correctly" {
     const result = try moduleFmtsStable(std.testing.allocator, "x = 3.14.F64", false);
     defer std.testing.allocator.free(result);
     try std.testing.expectEqualStrings("x = 3.14.F64\n", result);
+}
+
+test "issue 8989: platform header targets section is preserved" {
+    // Platform header with targets section should preserve the targets after formatting
+    const input =
+        \\platform "test-platform"
+        \\    requires {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides {}
+        \\    targets: {
+        \\        files: "build/",
+        \\        exe: {
+        \\            x64linux: ["host.o", app],
+        \\            arm64linux: ["host.o", app],
+        \\        },
+        \\    }
+    ;
+    const result = try moduleFmtsStable(std.testing.allocator, input, false);
+    defer std.testing.allocator.free(result);
+    // The targets section must be preserved in the output
+    try std.testing.expect(std.mem.indexOf(u8, result, "targets:") != null);
 }

@@ -159,12 +159,6 @@ pub const ComptimeEvaluator = struct {
     expect: CrashContext, // Reuse CrashContext for expect failures
     roc_ops: ?RocOps,
     problems: *ProblemStore,
-    /// Track crash messages we've allocated so we can free them
-    crash_messages: std.array_list.Managed([]const u8),
-    /// Track expect failure messages we've allocated so we can free them
-    expect_messages: std.array_list.Managed([]const u8),
-    /// Track error names we've allocated so we can free them
-    error_names: std.array_list.Managed([]const u8),
     /// Track expressions that failed numeric literal validation (to skip evaluation)
     failed_literal_exprs: std.AutoHashMap(CIR.Expr.Idx, void),
     /// Flag to indicate if evaluation has been halted due to a crash
@@ -185,7 +179,7 @@ pub const ComptimeEvaluator = struct {
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null);
 
         return ComptimeEvaluator{
             .allocator = allocator,
@@ -195,9 +189,6 @@ pub const ComptimeEvaluator = struct {
             .expect = CrashContext.init(allocator),
             .roc_ops = null,
             .problems = problems,
-            .crash_messages = std.array_list.Managed([]const u8).init(allocator),
-            .expect_messages = std.array_list.Managed([]const u8).init(allocator),
-            .error_names = std.array_list.Managed([]const u8).init(allocator),
             .failed_literal_exprs = std.AutoHashMap(CIR.Expr.Idx, void).init(allocator),
             .halted = false,
             .current_expr_region = null,
@@ -207,13 +198,6 @@ pub const ComptimeEvaluator = struct {
     }
 
     pub fn deinit(self: *ComptimeEvaluator) void {
-        // Note: crash_messages, expect_messages, and error_names are NOT freed here.
-        // Ownership of these strings is transferred to ProblemStore when problems are
-        // appended. ProblemStore.deinit() is responsible for freeing them.
-        // We only deinit the tracking arrays themselves.
-        self.crash_messages.deinit();
-        self.expect_messages.deinit();
-        self.error_names.deinit();
         self.failed_literal_exprs.deinit();
 
         // Free all Roc runtime allocations at once
@@ -449,12 +433,12 @@ pub const ComptimeEvaluator = struct {
                         // Extract f32 value and fold to e_frac_f32
                         const f32_value = stack_value.asF32();
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        self.env.store.nodes.set(node_idx, .{
-                            .tag = .expr_frac_f32,
-                            .data_1 = @bitCast(f32_value),
-                            .data_2 = 1, // has_suffix = true (explicitly typed)
-                            .data_3 = 0,
-                        });
+                        var node = CIR.Node.init(.expr_frac_f32);
+                        node.setPayload(.{ .expr_frac_f32 = .{
+                            .value = @bitCast(f32_value),
+                            .has_suffix = true,
+                        } });
+                        self.env.store.nodes.set(node_idx, node);
                     },
                     .f64 => {
                         // Extract f64 value and fold to e_frac_f64
@@ -463,12 +447,13 @@ pub const ComptimeEvaluator = struct {
                         const low: u32 = @truncate(f64_bits);
                         const high: u32 = @truncate(f64_bits >> 32);
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        self.env.store.nodes.set(node_idx, .{
-                            .tag = .expr_frac_f64,
-                            .data_1 = low,
-                            .data_2 = high,
-                            .data_3 = 1, // has_suffix = true (explicitly typed)
-                        });
+                        var node = CIR.Node.init(.expr_frac_f64);
+                        node.setPayload(.{ .expr_frac_f64 = .{
+                            .value_lo = low,
+                            .value_hi = high,
+                            .has_suffix = true,
+                        } });
+                        self.env.store.nodes.set(node_idx, node);
                     },
                 }
             },
@@ -1058,17 +1043,17 @@ pub const ComptimeEvaluator = struct {
                 try arg_indices.append(arg_expr_idx);
             }
 
-            // Create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // Create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             // Create and return the tag expression
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1155,16 +1140,16 @@ pub const ComptimeEvaluator = struct {
             }
 
             // Create the tag expression with arguments
-            // First, create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // First, create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1212,15 +1197,15 @@ pub const ComptimeEvaluator = struct {
             try elem_indices.append(elem_expr_idx);
         }
 
-        // Create span in extra_data for tuple elements
-        const extra_data_start = self.env.store.extra_data.len();
+        // Create span in index_data for tuple elements
+        const index_data_start = self.env.store.index_data.len();
         for (elem_indices.items) |elem_idx| {
-            _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
             .e_tuple = .{
-                .elems = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(elem_indices.items.len) } },
+                .elems = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(elem_indices.items.len) } },
             },
         };
         return try self.env.addExpr(tuple_expr, region);
@@ -1233,12 +1218,10 @@ pub const ComptimeEvaluator = struct {
         region: base.Region,
         problem_type: enum { crash, expect_failed, error_eval },
     ) !void {
-        // Allocate and track the message
-        const owned_message = try self.allocator.dupe(u8, message);
-
+        // Put error str into problems store
+        const owned_message = try self.problems.putExtraString(message);
         switch (problem_type) {
             .crash => {
-                try self.crash_messages.append(owned_message);
                 const problem = Problem{
                     .comptime_crash = .{
                         .message = owned_message,
@@ -1248,7 +1231,6 @@ pub const ComptimeEvaluator = struct {
                 _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .expect_failed => {
-                try self.expect_messages.append(owned_message);
                 const problem = Problem{
                     .comptime_expect_failed = .{
                         .message = owned_message,
@@ -1258,7 +1240,6 @@ pub const ComptimeEvaluator = struct {
                 _ = try self.problems.appendProblem(self.allocator, problem);
             },
             .error_eval => {
-                try self.error_names.append(owned_message);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = owned_message,
@@ -1315,12 +1296,9 @@ pub const ComptimeEvaluator = struct {
                     else => {
                         // Non-nominal types (e.g., records, tuples, functions) don't have from_numeral
                         // This is a type error - numeric literal can't be used as this type
-                        const error_msg = try std.fmt.allocPrint(
-                            self.allocator,
+                        const error_msg = try self.problems.putExtraString(
                             "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
-                            .{},
                         );
-                        try self.error_names.append(error_msg);
                         const problem = Problem{
                             .comptime_eval_error = .{
                                 .error_name = error_msg,
@@ -1328,6 +1306,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                         continue;
                     },
                 },
@@ -1336,12 +1316,9 @@ pub const ComptimeEvaluator = struct {
                     // If still flex, type checking didn't fully resolve it - this is OK, may resolve later
                     // If rigid/alias, it doesn't support from_numeral
                     if (content != .flex) {
-                        const error_msg = try std.fmt.allocPrint(
-                            self.allocator,
+                        const error_msg = try self.problems.putExtraString(
                             "Numeric literal cannot be used as this type (type doesn't support from_numeral)",
-                            .{},
                         );
-                        try self.error_names.append(error_msg);
                         const problem = Problem{
                             .comptime_eval_error = .{
                                 .error_name = error_msg,
@@ -1349,6 +1326,8 @@ pub const ComptimeEvaluator = struct {
                             },
                         };
                         _ = try self.problems.appendProblem(self.allocator, problem);
+                        // Mark this expression as failed so we skip evaluating it
+                        try self.failed_literal_exprs.put(literal.expr_idx, {});
                     }
                     continue;
                 },
@@ -1390,12 +1369,10 @@ pub const ComptimeEvaluator = struct {
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "Type {s} does not have a from_numeral method",
                     .{short_type_name},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1415,12 +1392,10 @@ pub const ComptimeEvaluator = struct {
                     self.env.common.getIdentStore(),
                     nominal_type.ident.ident_idx,
                 );
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "Type {s} does not have an accessible from_numeral method",
                     .{short_type_name},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1512,12 +1487,12 @@ pub const ComptimeEvaluator = struct {
                 // Rewrite to e_frac_f32
                 const f32_value: f32 = @floatCast(f64_value);
                 const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                self.env.store.nodes.set(node_idx, .{
-                    .tag = .expr_frac_f32,
-                    .data_1 = @bitCast(f32_value),
-                    .data_2 = 1, // has_suffix = true to mark as explicitly typed
-                    .data_3 = 0,
-                });
+                var node = CIR.Node.init(.expr_frac_f32);
+                node.setPayload(.{ .expr_frac_f32 = .{
+                    .value = @bitCast(f32_value),
+                    .has_suffix = true,
+                } });
+                self.env.store.nodes.set(node_idx, node);
             },
             .f64 => {
                 // Rewrite to e_frac_f64
@@ -1525,12 +1500,13 @@ pub const ComptimeEvaluator = struct {
                 const f64_bits: u64 = @bitCast(f64_value);
                 const low: u32 = @truncate(f64_bits);
                 const high: u32 = @truncate(f64_bits >> 32);
-                self.env.store.nodes.set(node_idx, .{
-                    .tag = .expr_frac_f64,
-                    .data_1 = low,
-                    .data_2 = high,
-                    .data_3 = 1, // has_suffix = true to mark as explicitly typed
-                });
+                var node = CIR.Node.init(.expr_frac_f64);
+                node.setPayload(.{ .expr_frac_f64 = .{
+                    .value_lo = low,
+                    .value_hi = high,
+                    .has_suffix = true,
+                } });
+                self.env.store.nodes.set(node_idx, node);
             },
             .dec => {
                 // For Dec type, keep the original e_dec/e_dec_small expression
@@ -1647,12 +1623,10 @@ pub const ComptimeEvaluator = struct {
 
         // Evaluate the from_numeral function to get a closure
         const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "Failed to evaluate from_numeral function: {s}",
                 .{@errorName(err)},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1666,12 +1640,10 @@ pub const ComptimeEvaluator = struct {
 
         // Check if func_value is a closure
         if (func_value.layout.tag != .closure) {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "from_numeral is not a function",
                 .{},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1687,12 +1659,10 @@ pub const ComptimeEvaluator = struct {
         // Get the parameters
         const params = origin_env.store.slicePatterns(closure_header.params);
         if (params.len != 1) {
-            const error_msg = try std.fmt.allocPrint(
-                self.allocator,
+            const error_msg = try self.problems.putFmtExtraString(
                 "from_numeral has wrong number of parameters (expected 1, got {d})",
                 .{params.len},
             );
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1743,12 +1713,10 @@ pub const ComptimeEvaluator = struct {
             result = self.interpreter.callLowLevelBuiltinWithTargetType(low_level.op, &args, roc_ops, return_rt_var, target_rt_var) catch |err| {
                 // Include crash message if available for better debugging
                 const crash_msg = self.crash.crashMessage() orelse "no crash message";
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "from_numeral builtin failed: {s} ({s})",
                     .{ @errorName(err), crash_msg },
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1774,12 +1742,10 @@ pub const ComptimeEvaluator = struct {
 
             // Call the function body
             result = self.interpreter.eval(closure_header.body_idx, roc_ops) catch |err| {
-                const error_msg = try std.fmt.allocPrint(
-                    self.allocator,
+                const error_msg = try self.problems.putFmtExtraString(
                     "from_numeral evaluation failed: {s}",
                     .{@errorName(err)},
                 );
-                try self.error_names.append(error_msg);
                 const problem = Problem{
                     .comptime_eval_error = .{
                         .error_name = error_msg,
@@ -1903,10 +1869,9 @@ pub const ComptimeEvaluator = struct {
         // (happens when payload area is too small for RocStr)
         if (self.interpreter.last_error_message) |msg| {
             // Copy the message to our allocator
-            const error_msg = try self.allocator.dupe(u8, msg);
+            const error_msg = try self.problems.putExtraString(msg);
             // Free the original message from the interpreter's allocator
             self.interpreter.allocator.free(msg);
-            try self.error_names.append(error_msg);
             const problem = Problem{
                 .comptime_eval_error = .{
                     .error_name = error_msg,
@@ -1926,12 +1891,10 @@ pub const ComptimeEvaluator = struct {
                 // "Err" < "Ok" alphabetically, so Err = 0, Ok = 1
                 if (tag_value == 0) {
                     // Err with no payload - generic error
-                    const error_msg = try std.fmt.allocPrint(
-                        self.allocator,
+                    const error_msg = try self.problems.putFmtExtraString(
                         "Numeric literal validation failed",
                         .{},
                     );
-                    try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
@@ -1956,8 +1919,7 @@ pub const ComptimeEvaluator = struct {
                 const tag_value = tag_field.asI128();
                 if (tag_value == 0) {
                     // This is an Err - try to extract InvalidNumeral(Str) message
-                    const error_msg = try self.extractInvalidNumeralMessage(accessor, region);
-                    try self.error_names.append(error_msg);
+                    const error_msg = try self.problems.putExtraString(try self.extractInvalidNumeralMessage(accessor, region));
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,
@@ -1989,12 +1951,10 @@ pub const ComptimeEvaluator = struct {
                 if (tag_value == 0) {
                     // This is an Err - the detailed message should have been in last_error_message
                     // If we get here, something went wrong but we know it's an error
-                    const error_msg = try std.fmt.allocPrint(
-                        self.allocator,
+                    const error_msg = try self.problems.putFmtExtraString(
                         "Numeric literal validation failed",
                         .{},
                     );
-                    try self.error_names.append(error_msg);
                     const problem = Problem{
                         .comptime_eval_error = .{
                             .error_name = error_msg,

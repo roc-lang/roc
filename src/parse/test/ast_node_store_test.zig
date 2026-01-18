@@ -636,7 +636,7 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .record_builder = .{
-            .fields = rand_idx(AST.RecordField.Idx),
+            .fields = AST.RecordField.Span{ .span = rand_span() },
             .mapper = rand_idx(AST.Expr.Idx),
             .region = rand_region(),
         },
@@ -770,6 +770,6 @@ test "NodeStore debug function" {
         },
     });
 
-    // Call debug function - it should not crash
-    store.debug();
+    // Call debug function - it should not crash (use null writer to avoid polluting test output)
+    try store.debugTo(std.io.null_writer.any());
 }

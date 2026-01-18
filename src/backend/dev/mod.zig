@@ -1,0 +1,229 @@
+//! Development backends for the Roc compiler.
+//!
+//! These backends generate native machine code directly without LLVM,
+//! enabling fast compilation for development workflows.
+//!
+//! Supported architectures:
+//! - x86_64: Linux (System V ABI), macOS (System V ABI), Windows (Fastcall)
+//! - aarch64: Linux and macOS (AAPCS64)
+
+const std = @import("std");
+const base = @import("base");
+const layout = @import("layout");
+
+/// Backend selection for code evaluation
+pub const EvalBackend = enum {
+    interpreter,
+    dev,
+    // llvm, // Future: LLVM backend
+
+    pub fn fromString(s: []const u8) ?EvalBackend {
+        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
+        if (std.mem.eql(u8, s, "dev")) return .dev;
+        // if (std.mem.eql(u8, s, "llvm")) return .llvm;
+        return null;
+    }
+};
+
+pub const x86_64 = @import("x86_64/mod.zig");
+pub const aarch64 = @import("aarch64/mod.zig");
+pub const object = @import("object/mod.zig");
+pub const Relocation = @import("Relocation.zig").Relocation;
+pub const CodeGen = @import("CodeGen.zig");
+pub const Backend = @import("Backend.zig");
+pub const jit = @import("jit.zig");
+pub const JitCode = jit.JitCode;
+
+/// Generic development backend parameterized by architecture-specific types.
+///
+/// This struct provides the common code generation logic shared across
+/// all 64-bit architectures. Architecture-specific behavior is provided
+/// through the comptime type parameters.
+pub fn DevBackend(
+    comptime GeneralReg: type,
+    comptime FloatReg: type,
+) type {
+    return struct {
+        const Self = @This();
+
+        allocator: std.mem.Allocator,
+        target: base.target.Target,
+
+        /// Output buffer for generated machine code
+        buf: std.ArrayList(u8),
+
+        /// Relocations that need to be applied during linking
+        relocs: std.ArrayList(Relocation),
+
+        /// Storage manager for register allocation
+        storage: Storage(GeneralReg, FloatReg),
+
+        /// Layout store for type information
+        layout_store: *layout.Store,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            target: base.target.Target,
+            layout_store: *layout.Store,
+        ) !Self {
+            return Self{
+                .allocator = allocator,
+                .target = target,
+                .buf = .{},
+                .relocs = .{},
+                .storage = Storage(GeneralReg, FloatReg).init(allocator),
+                .layout_store = layout_store,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.buf.deinit(self.allocator);
+            self.relocs.deinit(self.allocator);
+            self.storage.deinit();
+        }
+
+        /// Reset the backend for generating a new procedure
+        pub fn reset(self: *Self) void {
+            self.buf.clearRetainingCapacity();
+            self.relocs.clearRetainingCapacity();
+            self.storage.reset();
+        }
+
+        /// Finalize the current procedure and return the generated code
+        pub fn finalize(self: *Self) struct { code: []const u8, relocs: []const Relocation } {
+            return .{
+                .code = self.buf.items,
+                .relocs = self.relocs.items,
+            };
+        }
+    };
+}
+
+/// Storage manager for register allocation and symbol tracking.
+///
+/// Tracks which symbols are stored in registers vs on the stack,
+/// manages register allocation and spilling.
+///
+/// Note: When spilling is implemented, this will need access to the Emit module
+/// (to emit spill code) and CallConv (to know which registers are callee-saved).
+/// For now, those are passed through DevBackend when needed.
+pub fn Storage(
+    comptime GeneralReg: type,
+    comptime FloatReg: type,
+) type {
+    return struct {
+        const Self = @This();
+
+        /// Where a value is stored
+        pub const Location = union(enum) {
+            /// Value is in a general-purpose register
+            general_reg: GeneralReg,
+            /// Value is in a floating-point register
+            float_reg: FloatReg,
+            /// Value is on the stack at the given offset from base pointer
+            stack: i32,
+            /// Value has no runtime representation (zero-sized type)
+            no_data: void,
+        };
+
+        allocator: std.mem.Allocator,
+
+        /// Map from symbol to its storage location
+        symbol_storage: std.AutoHashMap(u32, Location),
+
+        /// Free general-purpose registers (available for allocation)
+        general_free: std.ArrayList(GeneralReg),
+
+        /// Free floating-point registers
+        float_free: std.ArrayList(FloatReg),
+
+        /// Current stack frame size
+        stack_size: u32,
+
+        pub fn init(allocator: std.mem.Allocator) Self {
+            return Self{
+                .allocator = allocator,
+                .symbol_storage = std.AutoHashMap(u32, Location).init(allocator),
+                .general_free = .{},
+                .float_free = .{},
+                .stack_size = 0,
+            };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.symbol_storage.deinit();
+            self.general_free.deinit(self.allocator);
+            self.float_free.deinit(self.allocator);
+        }
+
+        pub fn reset(self: *Self) void {
+            self.symbol_storage.clearRetainingCapacity();
+            self.general_free.clearRetainingCapacity();
+            self.float_free.clearRetainingCapacity();
+            self.stack_size = 0;
+        }
+
+        /// Claim a general-purpose register for a symbol.
+        /// Panics if no registers are free (spilling not yet implemented).
+        pub fn claimGeneralReg(self: *Self, symbol: u32) !GeneralReg {
+            const reg = self.general_free.popOrNull() orelse
+                @panic("No free general registers - spilling not implemented");
+            try self.symbol_storage.put(symbol, .{ .general_reg = reg });
+            return reg;
+        }
+
+        /// Claim a floating-point register for a symbol.
+        /// Panics if no registers are free (spilling not yet implemented).
+        pub fn claimFloatReg(self: *Self, symbol: u32) !FloatReg {
+            const reg = self.float_free.popOrNull() orelse
+                @panic("No free float registers - spilling not implemented");
+            try self.symbol_storage.put(symbol, .{ .float_reg = reg });
+            return reg;
+        }
+
+        /// Free the storage for a symbol (when it's no longer needed)
+        pub fn freeSymbol(self: *Self, symbol: u32) !void {
+            if (self.symbol_storage.fetchRemove(symbol)) |entry| {
+                switch (entry.value) {
+                    .general_reg => |reg| try self.general_free.append(self.allocator, reg),
+                    .float_reg => |reg| try self.float_free.append(self.allocator, reg),
+                    .stack, .no_data => {},
+                }
+            }
+        }
+
+        /// Allocate space on the stack
+        pub fn allocStack(self: *Self, size: u32, alignment: u32) i32 {
+            // Align the stack size
+            self.stack_size = std.mem.alignForward(u32, self.stack_size, alignment);
+            self.stack_size += size;
+            // Return negative offset from base pointer
+            return -@as(i32, @intCast(self.stack_size));
+        }
+    };
+}
+
+/// Dev backend for x86_64 Linux using System V ABI.
+pub const X86_64LinuxBackend = DevBackend(
+    x86_64.GeneralReg,
+    x86_64.FloatReg,
+);
+
+/// Dev backend for x86_64 macOS (uses System V ABI).
+pub const X86_64MacBackend = X86_64LinuxBackend;
+
+/// Dev backend for x86_64 Windows using Fastcall ABI.
+pub const X86_64WinBackend = DevBackend(
+    x86_64.GeneralReg,
+    x86_64.FloatReg,
+);
+
+/// Dev backend for aarch64 using AAPCS64 calling convention.
+pub const AArch64Backend = DevBackend(
+    aarch64.GeneralReg,
+    aarch64.FloatReg,
+);
+
+test "backend module imports" {
+    std.testing.refAllDecls(@This());
+}
