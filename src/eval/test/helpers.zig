@@ -156,13 +156,29 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer jit.deinit();
 
-    // Execute and format result as string based on layout
+    // Execute with result pointer and format result as string based on layout
     const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
-        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch @panic("allocPrint failed"),
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnU64()}) catch @panic("allocPrint failed"),
-        layout_mod.Idx.f64, layout_mod.Idx.f32 => std.fmt.allocPrint(allocator, "{d}", .{jit.callReturnF64()}) catch @panic("allocPrint failed"),
-        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => std.fmt.allocPrint(allocator, "{}", .{jit.callReturnI64()}) catch @panic("allocPrint failed"),
+        layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
+            var result: i64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
+            var result: u64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
+            var result: f64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => blk: {
+            var result: i128 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
         else => std.debug.panic("Unsupported layout: {}", .{code_result.result_layout}),
     };
 }

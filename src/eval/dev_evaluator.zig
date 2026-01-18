@@ -1910,14 +1910,38 @@ pub const DevEvaluator = struct {
         var jit_code = backend.JitCode.init(code_result.code) catch return error.JitError;
         defer jit_code.deinit();
 
-        // Call and return result based on layout
+        // Call with result pointer and return result based on layout
         return switch (code_result.result_layout) {
-            .i64, .i8, .i16, .i32 => EvalResult{ .i64_val = jit_code.callReturnI64() },
-            .u64, .u8, .u16, .u32, .bool => EvalResult{ .u64_val = jit_code.callReturnU64() },
-            .f64, .f32 => EvalResult{ .f64_val = jit_code.callReturnF64() },
-            .i128 => EvalResult{ .i128_val = @as(i128, jit_code.callReturnI64()) }, // TODO: proper 128-bit
-            .u128 => EvalResult{ .u128_val = @as(u128, jit_code.callReturnU64()) }, // TODO: proper 128-bit
-            .dec => EvalResult{ .i128_val = @as(i128, jit_code.callReturnI64()) }, // TODO: proper decimal
+            .i64, .i8, .i16, .i32 => blk: {
+                var result: i64 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .i64_val = result };
+            },
+            .u64, .u8, .u16, .u32, .bool => blk: {
+                var result: u64 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .u64_val = result };
+            },
+            .f64, .f32 => blk: {
+                var result: f64 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .f64_val = result };
+            },
+            .i128 => blk: {
+                var result: i128 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .i128_val = result };
+            },
+            .u128 => blk: {
+                var result: u128 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .u128_val = result };
+            },
+            .dec => blk: {
+                var result: i128 = undefined;
+                jit_code.callWithResultPtr(@ptrCast(&result));
+                break :blk EvalResult{ .i128_val = result };
+            },
             else => return error.UnsupportedType, // str, list, record, etc. not yet supported
         };
     }
@@ -1950,11 +1974,12 @@ test "generate i64 code" {
     const code = try evaluator.generateReturnI64Code(42, .i64);
     defer evaluator.allocator.free(code);
 
-    // Execute the code using JIT
+    // Execute the code using JIT with result pointer
     var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
     defer jit.deinit();
 
-    const result = jit.callReturnI64();
+    var result: i64 = undefined;
+    jit.callWithResultPtr(@ptrCast(&result));
     try std.testing.expectEqual(@as(i64, 42), result);
 }
 
@@ -1975,7 +2000,8 @@ test "generate i64 code large value" {
     var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
     defer jit.deinit();
 
-    const result = jit.callReturnI64();
+    var result: i64 = undefined;
+    jit.callWithResultPtr(@ptrCast(&result));
     try std.testing.expectEqual(large_value, result);
 }
 
@@ -1994,7 +2020,8 @@ test "generate f64 code" {
     var jit = backend.JitCode.init(code) catch return error.SkipZigTest;
     defer jit.deinit();
 
-    const result = jit.callReturnF64();
+    var result: f64 = undefined;
+    jit.callWithResultPtr(@ptrCast(&result));
     try std.testing.expectApproxEqRel(@as(f64, 3.14159), result, 0.0001);
 }
 
