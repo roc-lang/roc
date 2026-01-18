@@ -23,42 +23,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const bindings = @import("bindings.zig");
+const layout = @import("layout");
 
 const Allocator = std.mem.Allocator;
-
-/// Type of the result value for JIT execution.
-///
-/// NOTE: This enum is duplicated in llvm_evaluator.zig because of module boundary
-/// constraints. The eval module may be compiled without LLVM linked, while this
-/// module (llvm_compile) requires LLVM. The two definitions must stay in sync,
-/// which is enforced by comptime validation in both files.
-pub const ResultType = enum {
-    i64,
-    u64,
-    i128,
-    u128,
-    f64,
-    dec,
-
-    /// Compile-time validation that this enum matches the expected structure.
-    /// This helps catch accidental divergence from llvm_evaluator.ResultType.
-    pub fn validate() void {
-        comptime {
-            const fields = @typeInfo(ResultType).@"enum".fields;
-            if (fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-            if (!std.mem.eql(u8, fields[0].name, "i64")) @compileError("ResultType[0] must be i64");
-            if (!std.mem.eql(u8, fields[1].name, "u64")) @compileError("ResultType[1] must be u64");
-            if (!std.mem.eql(u8, fields[2].name, "i128")) @compileError("ResultType[2] must be i128");
-            if (!std.mem.eql(u8, fields[3].name, "u128")) @compileError("ResultType[3] must be u128");
-            if (!std.mem.eql(u8, fields[4].name, "f64")) @compileError("ResultType[4] must be f64");
-            if (!std.mem.eql(u8, fields[5].name, "dec")) @compileError("ResultType[5] must be dec");
-        }
-    }
-};
-
-comptime {
-    ResultType.validate();
-}
+const LayoutIdx = layout.Idx;
 
 /// Dec (fixed-point decimal) has 18 decimal places.
 /// The internal representation is i128 scaled by 10^18.
@@ -199,12 +167,15 @@ pub const Error = error{
     OutOfMemory,
     JITCreationFailed,
     ModuleAddFailed,
+    ModuleLinkFailed,
     SymbolNotFound,
     ExecutionFailed,
     BitcodeParseError,
     /// JIT is not supported on this platform (e.g., statically-linked musl binaries
     /// don't support dynamic loading which LLVM ORC JIT requires).
     JITNotSupported,
+    /// The layout is not supported for JIT execution (e.g., non-scalar types).
+    UnsupportedLayout,
 };
 
 /// Returns true if JIT compilation is supported on this platform.
@@ -235,7 +206,10 @@ pub fn isJITSupported() bool {
 pub fn compileAndExecute(
     allocator: Allocator,
     bitcode: []const u32,
-    result_type: ResultType,
+    output_layout: LayoutIdx,
+    is_list: bool,
+    is_record: bool,
+    record_field_names: ?[]const u8,
 ) Error![]const u8 {
     // LLVM ORC JIT requires dynamic loading, which is not available on
     // statically-linked musl binaries.
@@ -272,6 +246,40 @@ pub fn compileAndExecute(
         return error.BitcodeParseError;
     }
     // Note: mem_buf is consumed by parseBitcodeInContext2, don't dispose
+
+    // Load and merge builtin bitcode into the user module.
+    // This makes all builtin functions available for the JIT to call.
+    // The builtins are compiled with single_threaded=true to avoid TLS symbols.
+    {
+        const builtin_bitcode = @embedFile("builtins.bc");
+        const builtin_mem_buf = bindings.MemoryBuffer.createMemoryBufferWithMemoryRange(
+            builtin_bitcode.ptr,
+            builtin_bitcode.len,
+            "roc_builtins",
+            bindings.Bool.False,
+        );
+
+        var builtin_module: *bindings.Module = undefined;
+        if (context.parseBitcodeInContext2(builtin_mem_buf, &builtin_module).toBool()) {
+            builtin_mem_buf.dispose();
+            module.dispose();
+            return error.BitcodeParseError;
+        }
+        // Note: builtin_mem_buf is consumed by parseBitcodeInContext2
+
+        // Set the builtin module's target triple and data layout to match the user module.
+        // This prevents "Linking two modules of different target triples" warnings and
+        // ensures the merged module is compatible with the JIT.
+        builtin_module.setTargetTriple(module.getTargetTriple());
+        builtin_module.setDataLayout(module.getDataLayout());
+
+        // Link builtins into user module (destroys builtin_module on success)
+        if (module.link(builtin_module).toBool()) {
+            module.dispose();
+            return error.ModuleLinkFailed;
+        }
+        // Note: builtin_module is now invalid - do NOT dispose it
+    }
 
     // Wrap module in thread-safe module (takes ownership of module)
     const ts_module = bindings.OrcThreadSafeModule.create(module, ts_context);
@@ -357,9 +365,10 @@ pub fn compileAndExecute(
     // Get main JIT dylib
     const dylib = jit.getMainJITDylib();
 
-    // Add a generator so the JIT can find symbols from the current process
-    // (not needed for roc_eval since it doesn't call external functions,
-    // but keep it for future flexibility)
+    // Add a generator so the JIT can find symbols from the current process.
+    // This handles:
+    // - Platform symbols (TLS, compiler-rt, etc.)
+    // - Builtin functions (until bitcode merging is enabled)
     const global_prefix: u8 = if (builtin.os.tag == .macos) '_' else 0;
     var process_syms_generator: *bindings.OrcDefinitionGenerator = undefined;
     if (bindings.createDynamicLibrarySearchGeneratorForProcess(
@@ -369,6 +378,7 @@ pub fn compileAndExecute(
         null, // no filter context
     )) |err| {
         bindings.consumeError(err);
+        ts_module.dispose();
         return error.JITCreationFailed;
     }
     bindings.jitDylibAddGenerator(dylib, process_syms_generator);
@@ -400,15 +410,104 @@ pub fn compileAndExecute(
     // This makes the ABI simple and platform-independent on all targets.
     //
     // Function signature: void roc_eval(<type>* out_ptr)
-    switch (result_type) {
-        .i64 => {
+
+    // Handle list output specially
+    // Format: [length: i64][elem0: i64][elem1: i64]...
+    if (is_list) {
+        // Max 16 elements (8 bytes length + 16*8 bytes elements = 136 bytes)
+        var result_buffer: [136]u8 = undefined;
+        const EvalFn = *const fn ([*]u8) callconv(.c) void;
+        const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+        eval_fn(&result_buffer);
+
+        // Read the length (first 8 bytes)
+        const length = std.mem.readInt(u64, result_buffer[0..8], .little);
+        if (length == 0) {
+            return allocator.dupe(u8, "[]") catch return error.OutOfMemory;
+        }
+
+        // Format: [elem0, elem1, ...]
+        var output = std.ArrayListUnmanaged(u8){};
+        output.append(allocator, '[') catch return error.OutOfMemory;
+
+        var i: usize = 0;
+        while (i < length and i < 16) : (i += 1) {
+            if (i > 0) {
+                output.appendSlice(allocator, ", ") catch return error.OutOfMemory;
+            }
+            // Read element at offset 8 + i*8
+            const offset = 8 + i * 8;
+            const value = std.mem.readInt(i64, result_buffer[offset..][0..8], .little);
+            const value_str = std.fmt.allocPrint(allocator, "{d}", .{value}) catch return error.OutOfMemory;
+            defer allocator.free(value_str);
+            output.appendSlice(allocator, value_str) catch return error.OutOfMemory;
+        }
+
+        output.append(allocator, ']') catch return error.OutOfMemory;
+        return output.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    }
+
+    // Handle record output specially
+    if (is_record) {
+        const field_names = record_field_names orelse "";
+        if (field_names.len == 0) {
+            return allocator.dupe(u8, "{}") catch return error.OutOfMemory;
+        }
+
+        // Count fields
+        var field_count: usize = 1;
+        for (field_names) |c| {
+            if (c == ',') field_count += 1;
+        }
+
+        // Allocate buffer for field values (8 bytes per field)
+        const buffer_size = field_count * 8;
+        var result_buffer: [64]u8 = undefined; // Max 8 fields
+        if (buffer_size > result_buffer.len) {
+            return allocator.dupe(u8, "{ <too many fields> }") catch return error.OutOfMemory;
+        }
+
+        // Call the function
+        const EvalFn = *const fn ([*]u8) callconv(.c) void;
+        const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+        eval_fn(&result_buffer);
+
+        // Format output: { a: 10, b: 20, c: 30 }
+        var output = std.ArrayListUnmanaged(u8){};
+        output.appendSlice(allocator, "{ ") catch return error.OutOfMemory;
+
+        var name_iter = std.mem.splitScalar(u8, field_names, ',');
+        var field_idx: usize = 0;
+        while (name_iter.next()) |name| : (field_idx += 1) {
+            if (field_idx > 0) {
+                output.appendSlice(allocator, ", ") catch return error.OutOfMemory;
+            }
+            output.appendSlice(allocator, name) catch return error.OutOfMemory;
+            output.appendSlice(allocator, ": ") catch return error.OutOfMemory;
+
+            // Read the i64 value at this offset
+            const offset = field_idx * 8;
+            const value = std.mem.readInt(i64, result_buffer[offset..][0..8], .little);
+            const value_str = std.fmt.allocPrint(allocator, "{d}", .{value}) catch return error.OutOfMemory;
+            defer allocator.free(value_str);
+            output.appendSlice(allocator, value_str) catch return error.OutOfMemory;
+        }
+
+        output.appendSlice(allocator, " }") catch return error.OutOfMemory;
+        return output.toOwnedSlice(allocator) catch return error.OutOfMemory;
+    }
+
+    switch (output_layout) {
+        // Signed integers that fit in i64
+        .i8, .i16, .i32, .i64 => {
             const EvalFn = *const fn (*i64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: i64 = undefined;
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return error.OutOfMemory;
         },
-        .u64 => {
+        // Unsigned integers that fit in u64
+        .u8, .u16, .u32, .u64 => {
             const EvalFn = *const fn (*u64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: u64 = undefined;
@@ -429,7 +528,7 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return error.OutOfMemory;
         },
-        .f64 => {
+        .f32, .f64 => {
             const EvalFn = *const fn (*f64) callconv(.c) void;
             const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
             var result: f64 = undefined;
@@ -443,5 +542,38 @@ pub fn compileAndExecute(
             eval_fn(&result);
             return formatDec(allocator, result) catch return error.OutOfMemory;
         },
+        .bool => {
+            // Bool is stored as i64 (extended from i1/i8) in the eval function
+            const EvalFn = *const fn (*i64) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: i64 = undefined;
+            eval_fn(&result);
+            const str = if (result != 0) "True" else "False";
+            return allocator.dupe(u8, str) catch return error.OutOfMemory;
+        },
+        .str => {
+            // RocStr is a 24-byte struct on 64-bit platforms
+            // For small strings (< 24 bytes), content is stored inline with length in last byte
+            const RocStrBytes = [24]u8;
+            const EvalFn = *const fn (*RocStrBytes) callconv(.c) void;
+            const eval_fn: EvalFn = @ptrFromInt(@as(usize, @intCast(eval_addr)));
+            var result: RocStrBytes = undefined;
+            eval_fn(&result);
+
+            // Check if it's a small string (last byte has high bit set)
+            const last_byte = result[23];
+            if (last_byte & 0x80 != 0) {
+                // Small string - length is in the last byte (without high bit)
+                const length = last_byte & 0x7F;
+                const content = result[0..length];
+                // Format as quoted string
+                return std.fmt.allocPrint(allocator, "\"{s}\"", .{content}) catch return error.OutOfMemory;
+            } else {
+                // Big string - we'd need to dereference a pointer which is complex
+                // For now, return a placeholder
+                return allocator.dupe(u8, "\"<heap string>\"") catch return error.OutOfMemory;
+            }
+        },
+        else => return error.UnsupportedLayout,
     }
 }

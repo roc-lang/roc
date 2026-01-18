@@ -118,29 +118,31 @@ pub const Codegen = struct {
         const bitcode_bytes = std.mem.sliceAsBytes(bitcode_words);
 
         // Convert strings to null-terminated for C API
-        var triple_buf: [256]u8 = undefined;
-        const triple_z = std.fmt.bufPrintZ(&triple_buf, "{s}", .{options.target_triple}) catch {
-            return CodegenResult.err("Target triple too long");
+        const triple_z = self.allocator.dupeZ(u8, options.target_triple) catch {
+            return CodegenResult.err("Failed to allocate target triple");
         };
+        defer self.allocator.free(triple_z);
 
-        var output_buf: [1024]u8 = undefined;
-        const output_z = std.fmt.bufPrintZ(&output_buf, "{s}", .{options.output_path}) catch {
-            return CodegenResult.err("Output path too long");
+        const output_z = self.allocator.dupeZ(u8, options.output_path) catch {
+            return CodegenResult.err("Failed to allocate output path");
         };
+        defer self.allocator.free(output_z);
 
-        // Handle optional CPU string
-        var cpu_buf: [64]u8 = undefined;
-        const cpu_z: ?[*:0]const u8 = if (options.cpu) |cpu|
-            std.fmt.bufPrintZ(&cpu_buf, "{s}", .{cpu}) catch null
+        const cpu_z: ?[:0]const u8 = if (options.cpu) |cpu|
+            self.allocator.dupeZ(u8, cpu) catch {
+                return CodegenResult.err("Failed to allocate CPU name");
+            }
         else
             null;
+        defer if (cpu_z) |z| self.allocator.free(z);
 
-        // Handle optional features string
-        var features_buf: [256]u8 = undefined;
-        const features_z: ?[*:0]const u8 = if (options.features) |features|
-            std.fmt.bufPrintZ(&features_buf, "{s}", .{features}) catch null
+        const features_z: ?[:0]const u8 = if (options.features) |features|
+            self.allocator.dupeZ(u8, features) catch {
+                return CodegenResult.err("Failed to allocate features string");
+            }
         else
             null;
+        defer if (features_z) |z| self.allocator.free(z);
 
         // Compile bitcode to object file using LLVM bindings
         const error_msg = bindings.compileBitcodeToObject(
