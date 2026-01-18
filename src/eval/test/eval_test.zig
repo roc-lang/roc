@@ -20,7 +20,8 @@ const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = helpers.interpreter_allocator;
 
 const runExpectI64 = helpers.runExpectI64;
 const runExpectIntDec = helpers.runExpectIntDec;
@@ -295,7 +296,7 @@ test "crash message storage and retrieval - host-managed context" {
     // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
 
-    var test_env_instance = TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
     defer test_env_instance.deinit();
 
     try testing.expect(test_env_instance.crashState() == .did_not_crash);
@@ -404,13 +405,13 @@ test "lambdas nested closures" {
 
 // Helper function to test that evaluation succeeds without checking specific values
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    var test_env_instance = TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
     defer test_env_instance.deinit();
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
+    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;

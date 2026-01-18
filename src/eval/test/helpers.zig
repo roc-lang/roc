@@ -28,10 +28,11 @@ const ModuleEnv = can.ModuleEnv;
 // Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
 
-// Use page_allocator for interpreter tests (doesn't track leaks).
-// The interpreter has known memory leak issues that we're not fixing now.
-// We want to focus on getting the dev backend working without leaks.
-const interpreter_allocator = std.heap.page_allocator;
+/// Use page_allocator for interpreter tests (doesn't track leaks).
+/// The interpreter has known memory leak issues that we're not fixing now.
+/// We want to focus on getting the dev backend working without leaks.
+/// Exported so other test files can use it.
+pub const interpreter_allocator = std.heap.page_allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
