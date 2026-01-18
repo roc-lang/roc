@@ -19,7 +19,8 @@ const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
 
 fn parseCheckAndEvalModule(src: []const u8) !struct {
     module_env: *ModuleEnv,

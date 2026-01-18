@@ -23,7 +23,8 @@ const Emitter = can.RocEmitter;
 const Monomorphizer = can.Monomorphizer;
 
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = helpers.interpreter_allocator;
 
 /// Helper to check if output contains a closure tag (format: C followed by digit)
 /// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint

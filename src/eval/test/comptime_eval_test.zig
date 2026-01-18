@@ -15,7 +15,8 @@ const Can = can.Can;
 const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use page_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = std.heap.page_allocator;
 
 const EvalModuleResult = struct {
     module_env: *ModuleEnv,
