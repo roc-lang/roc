@@ -362,7 +362,7 @@ pub const DevEvaluator = struct {
             .e_closure => return error.UnsupportedExpression, // Closures are handled via e_call
 
             // Lookups
-            .e_lookup_local => |lookup| try self.generateLookupLocalCode(lookup, result_layout, env),
+            .e_lookup_local => |lookup| try self.generateLookupLocalCode(module_env, lookup, result_layout, env),
             .e_lookup_external => {
                 self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
@@ -548,11 +548,21 @@ pub const DevEvaluator = struct {
                     return error.UnsupportedExpression;
                 }
             },
-            // Other expressions - try to evaluate as i64
+            // Other expressions - try to evaluate as constant, or bind as expr_ref for deferred evaluation
             else => {
-                const arg_val = self.evalConstantI64(module_env, arg_expr, env) orelse
-                    return error.UnsupportedExpression;
-                try new_env.bind(param_key, arg_val);
+                // Try i64 first
+                if (self.evalConstantI64(module_env, arg_expr, env)) |arg_val| {
+                    try new_env.bind(param_key, arg_val);
+                    return;
+                }
+                // Try i128
+                if (self.evalConstantI128(module_env, arg_expr, env)) |arg_val| {
+                    try new_env.bindI128(param_key, arg_val);
+                    return;
+                }
+                // For non-constant expressions (strings, etc.), bind the expression reference
+                // for deferred evaluation when the parameter is used
+                try new_env.bindExpr(param_key, arg_idx);
             },
         }
     }
@@ -744,26 +754,30 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for local variable lookup
-    fn generateLookupLocalCode(self: *DevEvaluator, lookup: anytype, result_layout: LayoutIdx, env: *Scope) Error![]const u8 {
+    fn generateLookupLocalCode(self: *DevEvaluator, module_env: *ModuleEnv, lookup: anytype, result_layout: LayoutIdx, env: *Scope) Error![]const u8 {
         const pattern_key = @intFromEnum(lookup.pattern_idx);
 
-        // Check if this is a 128-bit type or Dec
-        if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
-            const value = env.lookupI128(pattern_key) orelse return error.UnsupportedExpression;
-            return self.generateReturnI128Code(value);
-        }
-
-        // Check if this is a float type
-        if (result_layout == .f64 or result_layout == .f32) {
-            if (env.lookupF64(pattern_key)) |value| {
-                return self.generateReturnF64Code(value);
+        // First, get the full binding value to check if it's an expr_ref
+        if (env.lookupBinding(pattern_key)) |binding| {
+            switch (binding) {
+                .expr_ref => |expr_idx| {
+                    // Deferred expression - generate code for it now
+                    const expr = module_env.store.getExpr(expr_idx);
+                    return self.generateCodeForExpr(module_env, expr, result_layout, env);
+                },
+                .i64_val => |value| {
+                    return self.generateReturnI64Code(value, result_layout);
+                },
+                .i128_val => |value| {
+                    return self.generateReturnI128Code(value);
+                },
+                .f64_val => |value| {
+                    return self.generateReturnF64Code(value);
+                },
             }
-            // Fall through to try i64 (for integer promotion to float)
         }
 
-        // Default to i64
-        const value = env.lookup(pattern_key) orelse return error.UnsupportedExpression;
-        return self.generateReturnI64Code(value, result_layout);
+        return error.UnsupportedExpression;
     }
 
     /// Binary operation with environment support
@@ -1623,14 +1637,16 @@ pub const DevEvaluator = struct {
                     return error.UnsupportedExpression;
                 }
             },
-            // Other expressions - try i64 first, then i128
+            // Other expressions - try constants first, then use expr_ref for deferred evaluation
             else => {
                 if (self.evalConstantI64(module_env, expr, env)) |value| {
                     try env.bind(pattern_key, value);
                 } else if (self.evalConstantI128(module_env, expr, env)) |value| {
                     try env.bindI128(pattern_key, value);
                 } else {
-                    return error.UnsupportedExpression;
+                    // For non-constant expressions (e_call returning strings, etc.),
+                    // bind the expression reference for deferred evaluation
+                    try env.bindExpr(pattern_key, expr_idx);
                 }
             },
         }
@@ -2532,6 +2548,68 @@ pub const DevEvaluator = struct {
                 break :blk type_env.get(pattern_key) orelse .i64;
             },
             .e_str, .e_str_segment => .str,
+            .e_call => |call| blk: {
+                // Determine result type from the called function
+                const func_expr = module_env.store.getExpr(call.func);
+                switch (func_expr) {
+                    .e_lambda => |lambda| {
+                        // Lambda result type is its body type
+                        const body_expr = module_env.store.getExpr(lambda.body);
+                        // For identity lambdas (body is just a param lookup), infer from args
+                        switch (body_expr) {
+                            .e_lookup_local => {
+                                // The lambda body is a parameter lookup - return type matches arg type
+                                const args = module_env.store.sliceExpr(call.args);
+                                if (args.len > 0) {
+                                    const arg_expr = module_env.store.getExpr(args[0]);
+                                    break :blk self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
+                                }
+                            },
+                            else => {},
+                        }
+                        break :blk self.getExprLayoutWithTypeEnv(module_env, body_expr, type_env);
+                    },
+                    .e_closure => |closure| {
+                        const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+                        switch (lambda_expr) {
+                            .e_lambda => |lambda| {
+                                const body_expr = module_env.store.getExpr(lambda.body);
+                                switch (body_expr) {
+                                    .e_lookup_local => {
+                                        const args = module_env.store.sliceExpr(call.args);
+                                        if (args.len > 0) {
+                                            const arg_expr = module_env.store.getExpr(args[0]);
+                                            break :blk self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
+                                        }
+                                    },
+                                    else => {},
+                                }
+                                break :blk self.getExprLayoutWithTypeEnv(module_env, body_expr, type_env);
+                            },
+                            else => {},
+                        }
+                        break :blk .i64;
+                    },
+                    .e_lookup_local => {
+                        // Function is a variable - need to trace to the actual lambda
+                        // For now, try to infer from the arguments
+                        // (This handles identity-like functions where the result matches the arg)
+                        const args = module_env.store.sliceExpr(call.args);
+                        if (args.len > 0) {
+                            const arg_expr = module_env.store.getExpr(args[0]);
+                            const arg_layout = self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
+                            // If arg is a string, assume result is also a string
+                            // (This is a heuristic for identity-like functions)
+                            if (arg_layout == .str) {
+                                break :blk .str;
+                            }
+                        }
+                        break :blk .i64;
+                    },
+                    else => {},
+                }
+                break :blk .i64;
+            },
             .e_dot_access => |dot| blk: {
                 // Resolve the dot access to get the field expression and its layout
                 const target_expr = self.resolveDotAccess(module_env, dot) orelse break :blk .i64;
@@ -2584,13 +2662,21 @@ pub const DevEvaluator = struct {
                     } else {
                         // Try to find a separate type annotation for this pattern
                         const pattern = module_env.store.getPattern(decl.pattern);
+                        var found_annotation = false;
                         switch (pattern) {
                             .assign => |assign| {
                                 if (type_annos.get(assign.ident)) |anno_layout| {
                                     type_env.put(pattern_key, anno_layout) catch {};
+                                    found_annotation = true;
                                 }
                             },
                             else => {},
+                        }
+                        // If no annotation, infer type from the expression
+                        if (!found_annotation) {
+                            const decl_expr = module_env.store.getExpr(decl.expr);
+                            const inferred_layout = self.getExprLayoutWithTypeEnv(module_env, decl_expr, type_env);
+                            type_env.put(pattern_key, inferred_layout) catch {};
                         }
                     }
                 },
@@ -2601,13 +2687,21 @@ pub const DevEvaluator = struct {
                         type_env.put(pattern_key, anno_layout) catch {};
                     } else {
                         const pattern = module_env.store.getPattern(decl.pattern);
+                        var found_annotation = false;
                         switch (pattern) {
                             .assign => |assign| {
                                 if (type_annos.get(assign.ident)) |anno_layout| {
                                     type_env.put(pattern_key, anno_layout) catch {};
+                                    found_annotation = true;
                                 }
                             },
                             else => {},
+                        }
+                        // If no annotation, infer type from the expression
+                        if (!found_annotation) {
+                            const decl_expr = module_env.store.getExpr(decl.expr);
+                            const inferred_layout = self.getExprLayoutWithTypeEnv(module_env, decl_expr, type_env);
+                            type_env.put(pattern_key, inferred_layout) catch {};
                         }
                     }
                 },
