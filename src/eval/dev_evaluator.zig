@@ -1946,7 +1946,19 @@ pub const DevEvaluator = struct {
         // Resolve the dot access chain to get the target expression
         const target_expr = self.resolveDotAccess(module_env, dot) orelse return error.UnsupportedExpression;
 
-        // Evaluate the target expression
+        // For string fields, generate code for the string expression
+        if (result_layout == .str) {
+            return self.generateCodeForExpr(module_env, target_expr, result_layout, env);
+        }
+
+        // For i128/u128/Dec fields
+        if (result_layout == .i128 or result_layout == .u128 or result_layout == .dec) {
+            const field_val = self.evalConstantI128(module_env, target_expr, env) orelse
+                return error.UnsupportedExpression;
+            return self.generateReturnI128Code(field_val);
+        }
+
+        // Default: evaluate as i64 (f64 fields will use i64 representation for now)
         const field_val = self.evalConstantI64(module_env, target_expr, env) orelse
             return error.UnsupportedExpression;
 
@@ -2424,6 +2436,11 @@ pub const DevEvaluator = struct {
                 break :blk type_env.get(pattern_key) orelse .i64;
             },
             .e_str, .e_str_segment => .str,
+            .e_dot_access => |dot| blk: {
+                // Resolve the dot access to get the field expression and its layout
+                const target_expr = self.resolveDotAccess(module_env, dot) orelse break :blk .i64;
+                break :blk self.getExprLayoutWithTypeEnv(module_env, target_expr, type_env);
+            },
             else => .i64,
         };
     }
