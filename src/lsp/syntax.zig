@@ -846,14 +846,16 @@ pub const SyntaxChecker = struct {
                 },
                 .e_lookup_external => |lookup| {
                     // External lookup - resolve to the module file
-                    // Get the module name from the imports store
-                    const import_idx = @intFromEnum(lookup.module_idx);
-                    if (import_idx >= module_env.imports.imports.items.items.len) return null;
-                    const string_idx = module_env.imports.imports.items.items[import_idx];
-                    const import_name = module_env.common.getString(string_idx);
-
-                    // Use the helper to find the module
-                    return self.findModuleByName(import_name);
+                    // Extract module name from source text (handles builtins correctly)
+                    const region_text = module_env.getSource(lookup.region);
+                    // Module.function format - extract the module name (before the dot)
+                    if (std.mem.indexOf(u8, region_text, ".")) |dot_pos| {
+                        const module_name = region_text[0..dot_pos];
+                        self.logDebug(.build, "[DEF] e_lookup_external: extracted module='{s}' from '{s}'", .{ module_name, region_text });
+                        return self.findModuleByName(module_name);
+                    }
+                    self.logDebug(.build, "[DEF] e_lookup_external: could not extract module name from '{s}'", .{region_text});
+                    return null;
                 },
                 .e_dot_access => |dot| {
                     // Static dispatch - cursor is on method name
