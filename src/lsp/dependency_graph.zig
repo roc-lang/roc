@@ -88,7 +88,7 @@ pub const DependencyGraph = struct {
         self.modules.deinit();
     }
 
-    /// Clear the graph (e.g., before rebuilding from scratch)
+    /// Clear the graph completely (e.g., before rebuilding from scratch)
     pub fn clear(self: *DependencyGraph) void {
         var it = self.modules.iterator();
         while (it.next()) |entry| {
@@ -96,6 +96,27 @@ pub const DependencyGraph = struct {
             node.deinit(self.allocator);
         }
         self.modules.clearRetainingCapacity();
+    }
+
+    /// Clear only the dependency relationships (imports/dependents) while preserving
+    /// content and exports hashes for incremental change detection.
+    pub fn clearRelationships(self: *DependencyGraph) void {
+        var it = self.modules.iterator();
+        while (it.next()) |entry| {
+            var node = entry.value_ptr;
+            // Clear imports
+            for (node.imports.items) |imp| {
+                self.allocator.free(imp);
+            }
+            node.imports.clearRetainingCapacity();
+            // Clear dependents
+            for (node.dependents.items) |dep| {
+                self.allocator.free(dep);
+            }
+            node.dependents.clearRetainingCapacity();
+            // Reset depth but preserve hashes
+            node.depth = std.math.maxInt(u32);
+        }
     }
 
     /// Get or create a module node for the given path

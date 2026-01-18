@@ -311,8 +311,8 @@ pub const SyntaxChecker = struct {
     fn updateDependencyGraph(self: *SyntaxChecker, env: *BuildEnv) void {
         self.logDebug(.build, "[DEPS] Updating dependency graph...", .{});
 
-        // Clear the old graph and rebuild from current state
-        self.dependency_graph.clear();
+        // Clear only relationships, preserving content/exports hashes for incremental detection
+        self.dependency_graph.clearRelationships();
 
         var total_modules: usize = 0;
         var exports_computed: usize = 0;
