@@ -1386,7 +1386,7 @@ pub const DevEvaluator = struct {
             .x86_64 => {
                 // x86_64 code:
                 // movabs rax, <value>  ; 48 B8 <8 bytes> - load value into rax
-                // mov [rdi], rax       ; 48 89 07       - store to result pointer
+                // mov [reg], rax       ; store to result pointer (rdi on SysV, rcx on Windows)
                 // ret                  ; C3
                 var code = self.allocator.alloc(u8, 14) catch return error.OutOfMemory;
 
@@ -1395,10 +1395,11 @@ pub const DevEvaluator = struct {
                 code[1] = 0xB8; // MOV RAX, imm64
                 @memcpy(code[2..10], std.mem.asBytes(&value));
 
-                // mov [rdi], rax (store to result pointer)
+                // mov [reg], rax (store to result pointer)
+                // Windows x86_64 uses rcx for first arg, System V (Linux/macOS) uses rdi
                 code[10] = 0x48; // REX.W
                 code[11] = 0x89; // MOV r/m64, r64
-                code[12] = 0x07; // ModR/M: [rdi], rax
+                code[12] = if (builtin.os.tag == .windows) 0x01 else 0x07; // ModR/M: [rcx] or [rdi], rax
 
                 code[13] = 0xC3; // RET
 
@@ -1496,7 +1497,7 @@ pub const DevEvaluator = struct {
             .x86_64 => {
                 // x86_64 code:
                 // movabs rax, <bits>   ; 48 B8 <8 bytes> - load bits into rax
-                // mov [rdi], rax       ; 48 89 07       - store to result pointer
+                // mov [reg], rax       ; store to result pointer (rdi on SysV, rcx on Windows)
                 // movq xmm0, rax       ; 66 48 0F 6E C0 - move to xmm0 for float return
                 // ret                  ; C3
                 var code = self.allocator.alloc(u8, 19) catch return error.OutOfMemory;
@@ -1506,10 +1507,11 @@ pub const DevEvaluator = struct {
                 code[1] = 0xB8; // MOV RAX, imm64
                 @memcpy(code[2..10], std.mem.asBytes(&bits));
 
-                // mov [rdi], rax (store to result pointer)
+                // mov [reg], rax (store to result pointer)
+                // Windows x86_64 uses rcx for first arg, System V (Linux/macOS) uses rdi
                 code[10] = 0x48; // REX.W
                 code[11] = 0x89; // MOV r/m64, r64
-                code[12] = 0x07; // ModR/M: [rdi], rax
+                code[12] = if (builtin.os.tag == .windows) 0x01 else 0x07; // ModR/M: [rcx] or [rdi], rax
 
                 // movq xmm0, rax
                 code[13] = 0x66;
