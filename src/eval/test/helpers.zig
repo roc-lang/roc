@@ -173,6 +173,31 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer jit.deinit();
 
+    // Check if this is a tuple
+    if (code_result.tuple_len > 1) {
+        // Allocate buffer for tuple elements (each element is 8 bytes / i64)
+        var result_buf: [32]i64 = undefined;
+        jit.callWithResultPtr(@ptrCast(&result_buf));
+
+        // Format as "(elem1, elem2, ...)"
+        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+            return error.OutOfMemory;
+        errdefer output.deinit();
+        output.append('(') catch return error.OutOfMemory;
+
+        for (0..code_result.tuple_len) |i| {
+            if (i > 0) {
+                try output.appendSlice(", ");
+            }
+            const elem_str = try std.fmt.allocPrint(allocator, "{}", .{result_buf[i]});
+            defer allocator.free(elem_str);
+            try output.appendSlice(elem_str);
+        }
+
+        try output.append(')');
+        return output.toOwnedSlice();
+    }
+
     // Execute with result pointer and format result as string based on layout
     const layout_mod = @import("layout");
     return switch (code_result.result_layout) {

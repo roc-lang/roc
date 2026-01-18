@@ -183,6 +183,8 @@ pub const DevEvaluator = struct {
         result_layout: LayoutIdx,
         /// Allocator used for cleanup
         allocator: Allocator,
+        /// Number of tuple elements (0 = not a tuple)
+        tuple_len: u8 = 0,
 
         pub fn deinit(self: *CodeResult) void {
             self.allocator.free(self.code);
@@ -316,10 +318,20 @@ pub const DevEvaluator = struct {
 
         const code = try self.generateCodeForExpr(module_env, expr, result_layout, &empty_env);
 
+        // Detect tuple expressions and set tuple_len
+        const tuple_len: u8 = switch (expr) {
+            .e_tuple => |tuple| blk: {
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                break :blk @intCast(@min(elems.len, 255));
+            },
+            else => 0,
+        };
+
         return CodeResult{
             .code = code,
             .result_layout = result_layout,
             .allocator = self.allocator,
+            .tuple_len = tuple_len,
         };
     }
 
@@ -1329,26 +1341,128 @@ pub const DevEvaluator = struct {
     fn generateTupleCode(self: *DevEvaluator, module_env: *ModuleEnv, tuple: anytype, result_layout: LayoutIdx, env: *Scope) Error![]const u8 {
         const elems = module_env.store.sliceExpr(tuple.elems);
 
+        // Empty tuple is unit, return 0
+        if (elems.len == 0) {
+            return self.generateReturnI64Code(0, result_layout);
+        }
+
         // For simple single-element tuples, just return the element value
         if (elems.len == 1) {
             const elem_expr = module_env.store.getExpr(elems[0]);
             return self.generateCodeForExpr(module_env, elem_expr, result_layout, env);
         }
 
-        // For multi-element tuples with all constant values, we could pack them
-        // For now, only support single-element or all-constant tuples
-        if (elems.len == 0) {
-            // Empty tuple is unit, return 0
-            return self.generateReturnI64Code(0, result_layout);
+        // For multi-element tuples, pack all elements into memory
+        // First, collect all element values as i64
+        var elem_values = std.array_list.Managed(i64).initCapacity(self.allocator, elems.len) catch
+            return error.OutOfMemory;
+        defer elem_values.deinit();
+
+        for (elems) |elem_idx| {
+            const elem_expr = module_env.store.getExpr(elem_idx);
+            const elem_val = self.evalConstantI64(module_env, elem_expr, env) orelse
+                return error.UnsupportedExpression;
+            elem_values.append(elem_val) catch return error.OutOfMemory;
         }
 
-        // For tuples, try to evaluate all elements as constants
-        // Return the first element's value for now (simplified)
-        const first_expr = module_env.store.getExpr(elems[0]);
-        const first_val = self.evalConstantI64(module_env, first_expr, env) orelse
-            return error.UnsupportedExpression;
+        // Generate code that writes all elements to the result pointer
+        // Each element is 8 bytes (i64), written at offset 8*index
+        return self.generateReturnTupleCode(elem_values.items);
+    }
 
-        return self.generateReturnI64Code(first_val, result_layout);
+    /// Generate code that returns a tuple of i64 values.
+    /// Writes each element at offset 8*index in the result buffer.
+    fn generateReturnTupleCode(self: *DevEvaluator, values: []const i64) Error![]const u8 {
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                // For each element:
+                // movabs rax, <value>    ; 10 bytes
+                // mov [rdi+offset], rax  ; 4 bytes
+                // Plus final ret         ; 1 byte
+                const per_elem: usize = 14;
+                const code_size = values.len * per_elem + 1;
+                var code = self.allocator.alloc(u8, code_size) catch return error.OutOfMemory;
+
+                var pos: usize = 0;
+                for (values, 0..) |value, idx| {
+                    // movabs rax, imm64
+                    code[pos] = 0x48; // REX.W
+                    code[pos + 1] = 0xB8; // MOV RAX, imm64
+                    @memcpy(code[pos + 2 .. pos + 10], std.mem.asBytes(&value));
+
+                    // mov [rdi+offset], rax
+                    const offset: u8 = @intCast(idx * 8);
+                    if (offset == 0) {
+                        code[pos + 10] = 0x48; // REX.W
+                        code[pos + 11] = 0x89; // MOV r/m64, r64
+                        code[pos + 12] = if (builtin.os.tag == .windows) 0x01 else 0x07; // [rcx] or [rdi]
+                        code[pos + 13] = 0x90; // NOP padding
+                    } else {
+                        code[pos + 10] = 0x48; // REX.W
+                        code[pos + 11] = 0x89; // MOV r/m64, r64
+                        code[pos + 12] = if (builtin.os.tag == .windows) 0x41 else 0x47; // [rcx+disp8] or [rdi+disp8]
+                        code[pos + 13] = offset; // disp8
+                    }
+                    pos += per_elem;
+                }
+
+                // ret
+                code[pos] = 0xC3;
+
+                return code;
+            },
+            .aarch64 => {
+                // For each element:
+                // 4 MOV/MOVK instructions (16 bytes) to load value into x1
+                // 1 STR instruction (4 bytes) to store to [x0+offset]
+                // Plus final RET (4 bytes)
+                const per_elem: usize = 20;
+                const code_size = values.len * per_elem + 4;
+                var code = self.allocator.alloc(u8, code_size) catch return error.OutOfMemory;
+
+                var pos: usize = 0;
+                for (values, 0..) |value, idx| {
+                    const uvalue: u64 = @bitCast(value);
+                    const imm0: u16 = @truncate(uvalue);
+                    const imm1: u16 = @truncate(uvalue >> 16);
+                    const imm2: u16 = @truncate(uvalue >> 32);
+                    const imm3: u16 = @truncate(uvalue >> 48);
+
+                    // MOV X1, #imm0
+                    var mov_inst: u32 = 0xD2800001 | (@as(u32, imm0) << 5);
+                    @memcpy(code[pos .. pos + 4], std.mem.asBytes(&mov_inst));
+                    pos += 4;
+
+                    // MOVK X1, #imm1, LSL #16
+                    var movk1: u32 = 0xF2A00001 | (@as(u32, imm1) << 5);
+                    @memcpy(code[pos .. pos + 4], std.mem.asBytes(&movk1));
+                    pos += 4;
+
+                    // MOVK X1, #imm2, LSL #32
+                    var movk2: u32 = 0xF2C00001 | (@as(u32, imm2) << 5);
+                    @memcpy(code[pos .. pos + 4], std.mem.asBytes(&movk2));
+                    pos += 4;
+
+                    // MOVK X1, #imm3, LSL #48
+                    var movk3: u32 = 0xF2E00001 | (@as(u32, imm3) << 5);
+                    @memcpy(code[pos .. pos + 4], std.mem.asBytes(&movk3));
+                    pos += 4;
+
+                    // STR X1, [X0, #offset]
+                    const offset: u12 = @intCast(idx * 8);
+                    const str_inst: u32 = 0xF9000001 | (@as(u32, offset / 8) << 10);
+                    @memcpy(code[pos .. pos + 4], std.mem.asBytes(&str_inst));
+                    pos += 4;
+                }
+
+                // RET
+                const ret_inst: u32 = 0xD65F03C0;
+                @memcpy(code[pos .. pos + 4], std.mem.asBytes(&ret_inst));
+
+                return code;
+            },
+            else => return error.UnsupportedType,
+        }
     }
 
     /// Generate code for list expressions
