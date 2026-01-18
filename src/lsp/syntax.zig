@@ -772,6 +772,15 @@ pub const SyntaxChecker = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
+
+            // Check type annotation on this definition
+            if (def.annotation) |anno_idx| {
+                const annotation = module_env.store.getAnnotation(anno_idx);
+                if (self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset)) |result| {
+                    return result;
+                }
+            }
+
             const expr_idx = def.expr;
             const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
             const expr_region = module_env.store.getRegionAt(expr_node_idx);
@@ -802,6 +811,23 @@ pub const SyntaxChecker = struct {
                     if (self.findModuleByName(module_name)) |result| {
                         return result;
                     }
+                }
+            }
+
+            // Check type annotations in statements
+            const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
+                .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                .s_decl_gen => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                .s_type_anno => |t| t.anno,
+                .s_alias_decl => |a| a.anno,
+                .s_nominal_decl => |n| n.anno,
+                else => null,
+            };
+
+            if (maybe_type_anno) |type_anno_idx| {
+                if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
+                    return result;
                 }
             }
 
@@ -1191,6 +1217,108 @@ pub const SyntaxChecker = struct {
         }
 
         return result;
+    }
+
+    /// Find the type annotation at the given offset and return a DefinitionResult.
+    /// This recursively walks type annotation trees to find the most specific type at the cursor.
+    fn findTypeAnnoAtOffset(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        type_anno_idx: CIR.TypeAnno.Idx,
+        target_offset: u32,
+    ) ?DefinitionResult {
+        const region = module_env.store.getTypeAnnoRegion(type_anno_idx);
+        if (!regionContainsOffset(region, target_offset)) return null;
+
+        const type_anno = module_env.store.getTypeAnno(type_anno_idx);
+        switch (type_anno) {
+            .lookup => |lookup| {
+                // Simple type like `Str` - return the module for this type
+                const type_name = module_env.common.idents.getText(lookup.name);
+                self.logDebug(.build, "[DEF] TypeAnno.lookup: type='{s}'", .{type_name});
+                return self.findModuleByName(type_name);
+            },
+            .apply => |apply| {
+                // Type with args like `List(Str)` - check args first, then the base type
+                const args_slice = module_env.store.sliceTypeAnnos(apply.args);
+                for (args_slice) |arg_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                // If not in args, return the base type
+                const type_name = module_env.common.idents.getText(apply.name);
+                self.logDebug(.build, "[DEF] TypeAnno.apply: type='{s}'", .{type_name});
+                return self.findModuleByName(type_name);
+            },
+            .record => |rec| {
+                // Check record field types
+                const fields_slice = module_env.store.sliceAnnoRecordFields(rec.fields);
+                for (fields_slice) |field_idx| {
+                    const field = module_env.store.getAnnoRecordField(field_idx);
+                    if (self.findTypeAnnoAtOffset(module_env, field.ty, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                return null;
+            },
+            .tag_union => |tu| {
+                // Check tag types
+                const tags_slice = module_env.store.sliceTypeAnnos(tu.tags);
+                for (tags_slice) |tag_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, tag_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                if (tu.ext) |ext_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, ext_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                return null;
+            },
+            .tag => |t| {
+                // Check tag argument types
+                const args_slice = module_env.store.sliceTypeAnnos(t.args);
+                for (args_slice) |arg_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                return null;
+            },
+            .@"fn" => |f| {
+                // Check function argument and return types
+                const args_slice = module_env.store.sliceTypeAnnos(f.args);
+                for (args_slice) |arg_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, arg_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                if (self.findTypeAnnoAtOffset(module_env, f.ret, target_offset)) |result| {
+                    return result;
+                }
+                return null;
+            },
+            .tuple => |t| {
+                // Check tuple element types
+                const elems_slice = module_env.store.sliceTypeAnnos(t.elems);
+                for (elems_slice) |elem_idx| {
+                    if (self.findTypeAnnoAtOffset(module_env, elem_idx, target_offset)) |result| {
+                        return result;
+                    }
+                }
+                return null;
+            },
+            .parens => |p| {
+                // Unwrap and recurse
+                return self.findTypeAnnoAtOffset(module_env, p.anno, target_offset);
+            },
+            .rigid_var, .rigid_var_lookup, .underscore, .malformed => {
+                // These don't have type definitions to navigate to
+                return null;
+            },
+        }
     }
 
     /// Result of finding a type at an offset
