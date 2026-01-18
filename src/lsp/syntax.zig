@@ -777,6 +777,13 @@ pub const SyntaxChecker = struct {
             if (def.annotation) |anno_idx| {
                 const annotation = module_env.store.getAnnotation(anno_idx);
                 if (self.findTypeAnnoAtOffset(module_env, annotation.anno, target_offset)) |result| {
+                    // If URI is empty, it's a local type - use current file
+                    if (result.uri.len == 0) {
+                        return DefinitionResult{
+                            .uri = current_uri,
+                            .range = result.range,
+                        };
+                    }
                     return result;
                 }
             }
@@ -786,7 +793,11 @@ pub const SyntaxChecker = struct {
             const expr_region = module_env.store.getRegionAt(expr_node_idx);
 
             if (regionContainsOffset(expr_region, target_offset)) {
-                // Search within this expression for the most specific lookup
+                // First check for type annotations in nested blocks
+                if (self.findTypeAnnoInExpr(module_env, expr_idx, target_offset, current_uri)) |result| {
+                    return result;
+                }
+                // Then search for lookup expressions
                 if (self.findLookupAtOffset(module_env, expr_idx, target_offset, &best_size)) |found| {
                     best_expr = found;
                 }
@@ -827,6 +838,13 @@ pub const SyntaxChecker = struct {
 
             if (maybe_type_anno) |type_anno_idx| {
                 if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
+                    // If URI is empty, it's a local type - use current file
+                    if (result.uri.len == 0) {
+                        return DefinitionResult{
+                            .uri = current_uri,
+                            .range = result.range,
+                        };
+                    }
                     return result;
                 }
             }
@@ -1233,10 +1251,30 @@ pub const SyntaxChecker = struct {
         const type_anno = module_env.store.getTypeAnno(type_anno_idx);
         switch (type_anno) {
             .lookup => |lookup| {
-                // Simple type like `Str` - return the module for this type
                 const type_name = module_env.common.idents.getText(lookup.name);
-                self.logDebug(.build, "[DEF] TypeAnno.lookup: type='{s}'", .{type_name});
-                return self.findModuleByName(type_name);
+                self.logDebug(.build, "[DEF] TypeAnno.lookup: type='{s}', base={s}", .{
+                    type_name,
+                    @tagName(lookup.base),
+                });
+
+                switch (lookup.base) {
+                    .local => |local| {
+                        // Local type definition - navigate to the statement where it's declared
+                        const decl_region = module_env.store.getStatementRegion(local.decl_idx);
+                        const range = regionToRange(module_env, decl_region) orelse return null;
+                        // For local definitions, we need the current file URI
+                        // Since we don't have it here, we return null and let the caller handle it
+                        // Actually, we can construct a result with a marker that means "same file"
+                        return DefinitionResult{
+                            .uri = "", // Empty URI means same file - caller should fill in
+                            .range = range,
+                        };
+                    },
+                    .builtin, .external => {
+                        // Builtin or external type - find the module
+                        return self.findModuleByName(type_name);
+                    },
+                }
             },
             .apply => |apply| {
                 // Type with args like `List(Str)` - check args first, then the base type
@@ -1248,8 +1286,26 @@ pub const SyntaxChecker = struct {
                 }
                 // If not in args, return the base type
                 const type_name = module_env.common.idents.getText(apply.name);
-                self.logDebug(.build, "[DEF] TypeAnno.apply: type='{s}'", .{type_name});
-                return self.findModuleByName(type_name);
+                self.logDebug(.build, "[DEF] TypeAnno.apply: type='{s}', base={s}", .{
+                    type_name,
+                    @tagName(apply.base),
+                });
+
+                switch (apply.base) {
+                    .local => |local| {
+                        // Local type definition - navigate to the statement where it's declared
+                        const decl_region = module_env.store.getStatementRegion(local.decl_idx);
+                        const range = regionToRange(module_env, decl_region) orelse return null;
+                        return DefinitionResult{
+                            .uri = "", // Empty URI means same file - caller should fill in
+                            .range = range,
+                        };
+                    },
+                    .builtin, .external => {
+                        // Builtin or external type - find the module
+                        return self.findModuleByName(type_name);
+                    },
+                }
             },
             .record => |rec| {
                 // Check record field types
@@ -1318,6 +1374,115 @@ pub const SyntaxChecker = struct {
                 // These don't have type definitions to navigate to
                 return null;
             },
+        }
+    }
+
+    /// Recursively search for type annotations in nested expressions (blocks, lambdas, etc.)
+    fn findTypeAnnoInExpr(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        target_offset: u32,
+        current_uri: []const u8,
+    ) ?DefinitionResult {
+        const expr = module_env.store.getExpr(expr_idx);
+
+        switch (expr) {
+            .e_block => |block| {
+                // Check statements in the block for type annotations
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+
+                    // Extract type annotation from statement
+                    const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
+                        .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                        .s_decl_gen => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                        .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
+                        .s_type_anno => |t| t.anno,
+                        .s_alias_decl => |a| a.anno,
+                        .s_nominal_decl => |n| n.anno,
+                        else => null,
+                    };
+
+                    if (maybe_type_anno) |type_anno_idx| {
+                        if (self.findTypeAnnoAtOffset(module_env, type_anno_idx, target_offset)) |result| {
+                            if (result.uri.len == 0) {
+                                return DefinitionResult{
+                                    .uri = current_uri,
+                                    .range = result.range,
+                                };
+                            }
+                            return result;
+                        }
+                    }
+
+                    // Recurse into expressions within the statement
+                    const stmt_parts = getStatementParts(stmt);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        if (self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
+                            return result;
+                        }
+                    }
+                    if (stmt_parts.expr2) |stmt_expr| {
+                        if (self.findTypeAnnoInExpr(module_env, stmt_expr, target_offset, current_uri)) |result| {
+                            return result;
+                        }
+                    }
+                }
+                // Also check final expression
+                return self.findTypeAnnoInExpr(module_env, block.final_expr, target_offset, current_uri);
+            },
+            .e_lambda => |lambda| {
+                return self.findTypeAnnoInExpr(module_env, lambda.body, target_offset, current_uri);
+            },
+            .e_closure => |closure| {
+                return self.findTypeAnnoInExpr(module_env, closure.lambda_idx, target_offset, current_uri);
+            },
+            .e_if => |if_expr| {
+                const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    if (self.findTypeAnnoInExpr(module_env, branch.cond, target_offset, current_uri)) |result| {
+                        return result;
+                    }
+                    if (self.findTypeAnnoInExpr(module_env, branch.body, target_offset, current_uri)) |result| {
+                        return result;
+                    }
+                }
+                return self.findTypeAnnoInExpr(module_env, if_expr.final_else, target_offset, current_uri);
+            },
+            .e_match => |match_expr| {
+                if (self.findTypeAnnoInExpr(module_env, match_expr.cond, target_offset, current_uri)) |result| {
+                    return result;
+                }
+                const branch_indices = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branch_indices) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    if (self.findTypeAnnoInExpr(module_env, branch.value, target_offset, current_uri)) |result| {
+                        return result;
+                    }
+                    if (branch.guard) |guard| {
+                        if (self.findTypeAnnoInExpr(module_env, guard, target_offset, current_uri)) |result| {
+                            return result;
+                        }
+                    }
+                }
+                return null;
+            },
+            .e_call => |call| {
+                if (self.findTypeAnnoInExpr(module_env, call.func, target_offset, current_uri)) |result| {
+                    return result;
+                }
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    if (self.findTypeAnnoInExpr(module_env, arg, target_offset, current_uri)) |result| {
+                        return result;
+                    }
+                }
+                return null;
+            },
+            else => return null,
         }
     }
 

@@ -2,7 +2,6 @@
 
 const std = @import("std");
 const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
-const DependencyGraph = @import("../dependency_graph.zig").DependencyGraph;
 const uri_util = @import("../uri.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
