@@ -31,9 +31,11 @@ pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 pub const DevEvaluator = @import("dev_evaluator.zig").DevEvaluator;
 /// Compile-time value representation for the dev backend
 pub const comptime_value = @import("comptime_value.zig");
-/// JIT execution for dev backend (re-exported from backend module)
+/// Executable memory for running generated code (re-exported from backend module)
 const backend = @import("backend");
-pub const JitCode = backend.JitCode;
+pub const ExecutableMemory = backend.ExecutableMemory;
+/// Backwards compatibility alias
+pub const JitCode = ExecutableMemory;
 /// Layout module (re-exported for result type information)
 pub const layout = @import("layout");
 

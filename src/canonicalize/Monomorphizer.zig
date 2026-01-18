@@ -1812,6 +1812,10 @@ fn duplicateExpr(
             }, base.Region.zero());
         },
 
+        .e_type_var_dispatch => |dispatch| {
+            return try self.resolveTypeVarDispatch(dispatch, type_subs);
+        },
+
         // Pass through simple expressions unchanged
         .e_num,
         .e_frac_f32,
@@ -1831,7 +1835,6 @@ fn duplicateExpr(
         .e_ellipsis,
         .e_anno_only,
         .e_lookup_required,
-        .e_type_var_dispatch,
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
@@ -1840,6 +1843,83 @@ fn duplicateExpr(
         .e_decref,
         .e_free,
         => return expr_idx,
+    }
+}
+
+/// Resolve a type variable dispatch expression to a concrete method call.
+///
+/// This function is called during monomorphization when we have concrete type
+/// information available. It:
+/// 1. Gets the type variable from the s_type_var_alias statement
+/// 2. Looks up the concrete type using type substitutions
+/// 3. Finds the method implementation for that concrete type
+/// 4. Creates an e_call expression to the resolved method
+fn resolveTypeVarDispatch(
+    self: *Self,
+    dispatch: std.meta.fieldInfo(Expr, .e_type_var_dispatch).type,
+    type_subs: *const types.VarMap,
+) std.mem.Allocator.Error!Expr.Idx {
+    // 1. Get the type var alias statement
+    const stmt = self.module_env.store.getStatement(dispatch.type_var_alias_stmt);
+    const alias_data = stmt.s_type_var_alias;
+
+    // 2. Get the type variable and look up its concrete type
+    const type_var_anno = alias_data.type_var_anno;
+    const ct_var = ModuleEnv.varFrom(type_var_anno);
+
+    // Look up the concrete type in the substitution map
+    const concrete_type = type_subs.get(ct_var) orelse ct_var;
+
+    // 3. Look up the method implementation for the concrete type
+    if (self.lookupStaticDispatch(concrete_type, dispatch.method_name)) |impl| {
+        // 4. Get the method's expression from its definition
+        // Use node_idx to look up the def and get the method's expression
+        const method_expr: Expr.Idx = if (impl.node_idx) |node_idx| blk: {
+            const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
+            const def = self.module_env.store.getDef(def_idx);
+            break :blk def.expr;
+        } else blk: {
+            // Fallback: create a lookup if we don't have the node_idx
+            const method_pattern = try self.module_env.store.addPattern(
+                Pattern{ .assign = .{ .ident = impl.method_ident } },
+                base.Region.zero(),
+            );
+            break :blk try self.module_env.store.addExpr(
+                Expr{ .e_lookup_local = .{ .pattern_idx = method_pattern } },
+                base.Region.zero(),
+            );
+        };
+
+        // Duplicate the arguments
+        const args = self.module_env.store.sliceExpr(dispatch.args);
+        const args_start = self.module_env.store.scratch.?.exprs.top();
+
+        for (args) |arg_idx| {
+            const new_arg = try self.duplicateExpr(arg_idx, type_subs);
+            try self.module_env.store.scratch.?.exprs.append(new_arg);
+        }
+
+        const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
+
+        // Create the call expression with the resolved method
+        return try self.module_env.store.addExpr(
+            Expr{ .e_call = .{
+                .func = method_expr,
+                .args = new_args_span,
+                .called_via = .apply,
+            } },
+            base.Region.zero(),
+        );
+    } else {
+        // Method not found - this is an error case, but for now we'll create
+        // a runtime error expression to preserve compilation
+        // TODO: Add proper error handling/diagnostics
+        return try self.module_env.store.addExpr(
+            Expr{ .e_runtime_error = .{
+                .diagnostic = @enumFromInt(0),
+            } },
+            base.Region.zero(),
+        );
     }
 }
 

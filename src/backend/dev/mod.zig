@@ -29,11 +29,19 @@ pub const EvalBackend = enum {
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
-pub const Relocation = @import("Relocation.zig").Relocation;
+const relocation_mod = @import("Relocation.zig");
+pub const Relocation = relocation_mod.Relocation;
+pub const applyRelocations = relocation_mod.applyRelocations;
+pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
-pub const jit = @import("jit.zig");
-pub const JitCode = jit.JitCode;
+pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+/// Backwards compatibility alias
+pub const JitCode = ExecutableMemory;
+const expr_codegen = @import("ExprCodeGen.zig");
+pub const ExprCodeGen = expr_codegen.ExprCodeGen;
+pub const BindingValue = expr_codegen.BindingValue;
+pub const Scope = expr_codegen.Scope;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
