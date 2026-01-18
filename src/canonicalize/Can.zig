@@ -11307,7 +11307,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         const node = self.env.store.nodes.get(node_idx);
 
         if (node.tag == .pattern_identifier) {
-            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
+            const assign_ident: base.Ident.Idx = @bitCast(node.getPayload().pattern_identifier.ident);
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
                 continue;
             }

@@ -666,24 +666,25 @@ fn rewriteNumericLiteralExpr(
         // Rewrite to e_frac_f32
         const f32_value: f32 = @floatCast(f64_value);
         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-        env.store.nodes.set(node_idx, .{
-            .tag = .expr_frac_f32,
-            .data_1 = @bitCast(f32_value),
-            .data_2 = 1, // has_suffix = true
-            .data_3 = 0,
-        });
+        var node = CIR.Node.init(.expr_frac_f32);
+        node.setPayload(.{ .expr_frac_f32 = .{
+            .value = @bitCast(f32_value),
+            .has_suffix = true,
+        } });
+        env.store.nodes.set(node_idx, node);
     } else if (std.mem.eql(u8, type_name, "F64")) {
         // Rewrite to e_frac_f64
         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
         const f64_bits: u64 = @bitCast(f64_value);
         const low: u32 = @truncate(f64_bits);
         const high: u32 = @truncate(f64_bits >> 32);
-        env.store.nodes.set(node_idx, .{
-            .tag = .expr_frac_f64,
-            .data_1 = low,
-            .data_2 = high,
-            .data_3 = 1, // has_suffix = true
-        });
+        var node = CIR.Node.init(.expr_frac_f64);
+        node.setPayload(.{ .expr_frac_f64 = .{
+            .value_lo = low,
+            .value_hi = high,
+            .has_suffix = true,
+        } });
+        env.store.nodes.set(node_idx, node);
     } else if (!num_lit_info.is_fractional) {
         // Integer type - rewrite to e_num
         const num_kind: CIR.NumKind = blk: {

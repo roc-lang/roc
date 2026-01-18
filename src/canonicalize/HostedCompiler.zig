@@ -117,13 +117,12 @@ pub fn replaceAnnoOnlyWithHosted(env: *ModuleEnv) !std.ArrayList(CIR.Def.Idx) {
             }
 
             // Now replace the e_anno_only expression with the e_hosted_lambda
-            // We need to modify the def's expr field in extra_data (NOT data_2!)
-            // The expr is stored in extra_data[extra_start + 1]
+            // The def's expr field is stored in def_data
             // (reuse def_node_idx from above)
             const def_node = env.store.nodes.get(def_node_idx);
-            const extra_start = def_node.data_1;
+            const def_data_idx = def_node.getPayload().def.def_data_idx;
 
-            env.store.extra_data.items.items[extra_start + 1] = @intFromEnum(expr_idx);
+            env.store.def_data.items.items[def_data_idx].expr = @intFromEnum(expr_idx);
 
             // Track this modified def index
             try modified_def_indices.append(gpa, def_idx);
@@ -210,11 +209,10 @@ pub fn assignHostedIndices(env: *ModuleEnv, sorted_fns: []const HostedFunctionIn
         const expr_node_idx = @as(@TypeOf(env.store.nodes).Idx, @enumFromInt(@intFromEnum(fn_info.expr_idx)));
         var expr_node = env.store.nodes.get(expr_node_idx);
 
-        // For e_hosted_lambda nodes:
-        // data_1 = symbol_name (Ident.Idx via @bitCast)
-        // data_2 = index (u32) <- We set this here
-        // data_3 = extra_data pointer (for args and body)
-        expr_node.data_2 = @intCast(index);
+        // For e_hosted_lambda nodes, update the index field in the payload
+        var payload = expr_node.getPayload().expr_hosted_lambda;
+        payload.index = @intCast(index);
+        expr_node.setPayload(.{ .expr_hosted_lambda = payload });
 
         env.store.nodes.set(expr_node_idx, expr_node);
     }
