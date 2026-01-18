@@ -221,6 +221,21 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             jit.callWithResultPtr(@ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
+        layout_mod.Idx.str => blk: {
+            // RocStr is 24 bytes - handle small string format
+            var result: [24]u8 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+
+            // Check if small string (last byte has high bit set)
+            if (result[23] & 0x80 != 0) {
+                const len = result[23] & 0x7F;
+                // Return the string content directly (no quotes in result)
+                break :blk std.fmt.allocPrint(allocator, "{s}", .{result[0..len]});
+            } else {
+                // Large string (heap allocated) - not yet supported
+                break :blk error.UnsupportedLayout;
+            }
+        },
         else => error.UnsupportedLayout,
     };
 }

@@ -1685,22 +1685,164 @@ pub const DevEvaluator = struct {
     }
 
     /// Generate code for a string expression (one or more segments)
-    fn generateStrCode(_: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: LayoutIdx, _: *Scope) Error![]const u8 {
+    fn generateStrCode(self: *DevEvaluator, module_env: *ModuleEnv, str: anytype, _: LayoutIdx, _: *Scope) Error![]const u8 {
         const segments = module_env.store.sliceExpr(str.span);
 
-        // For simple single-segment strings, we could potentially handle them
+        // For simple single-segment strings
         if (segments.len == 1) {
             const seg_expr = module_env.store.getExpr(segments[0]);
             switch (seg_expr) {
-                .e_str_segment => {
-                    // Single segment string - still not fully supported yet
-                    return error.UnsupportedExpression;
+                .e_str_segment => |seg| {
+                    const text = module_env.common.getString(seg.literal);
+                    return self.generateSmallStringCode(text);
                 },
                 else => return error.UnsupportedExpression,
             }
         }
 
-        return error.UnsupportedExpression;
+        // Multi-segment strings: concatenate all segments
+        // For now, only support if they all fit in a small string
+        var total_len: usize = 0;
+        for (segments) |seg_idx| {
+            const seg_expr = module_env.store.getExpr(seg_idx);
+            switch (seg_expr) {
+                .e_str_segment => |seg| {
+                    const text = module_env.common.getString(seg.literal);
+                    total_len += text.len;
+                },
+                else => return error.UnsupportedExpression,
+            }
+        }
+
+        const SMALL_STRING_SIZE: usize = 24;
+        if (total_len >= SMALL_STRING_SIZE) {
+            return error.UnsupportedExpression;
+        }
+
+        // Concatenate all segments
+        var combined: [24]u8 = undefined;
+        var pos: usize = 0;
+        for (segments) |seg_idx| {
+            const seg_expr = module_env.store.getExpr(seg_idx);
+            switch (seg_expr) {
+                .e_str_segment => |seg| {
+                    const text = module_env.common.getString(seg.literal);
+                    @memcpy(combined[pos..][0..text.len], text);
+                    pos += text.len;
+                },
+                else => {},
+            }
+        }
+
+        return self.generateSmallStringCode(combined[0..pos]);
+    }
+
+    /// Generate code that returns a small string (up to 23 bytes).
+    /// RocStr small string format:
+    /// - bytes 0-22: string data (inline)
+    /// - byte 23: length | 0x80 (small string marker)
+    fn generateSmallStringCode(self: *DevEvaluator, text: []const u8) Error![]const u8 {
+        const SMALL_STRING_SIZE: usize = 24;
+        if (text.len >= SMALL_STRING_SIZE) {
+            return error.UnsupportedExpression;
+        }
+
+        // Build the RocStr in-memory representation
+        var roc_str: [SMALL_STRING_SIZE]u8 = undefined;
+        @memset(&roc_str, 0);
+        @memcpy(roc_str[0..text.len], text);
+        roc_str[SMALL_STRING_SIZE - 1] = @as(u8, @intCast(text.len)) | 0x80; // length with small string bit
+
+        // Generate code to write this to the result pointer
+        switch (builtin.cpu.arch) {
+            .x86_64 => {
+                // Write 24 bytes (3x 8-byte writes) to [rdi]
+                var code = self.allocator.alloc(u8, 36) catch return error.OutOfMemory;
+
+                // First 8 bytes
+                const val0: u64 = @bitCast(roc_str[0..8].*);
+                code[0] = 0x48; // REX.W
+                code[1] = 0xB8; // MOV RAX, imm64
+                @memcpy(code[2..10], std.mem.asBytes(&val0));
+                code[10] = 0x48; // REX.W
+                code[11] = 0x89;
+                code[12] = if (builtin.os.tag == .windows) 0x01 else 0x07; // [rcx] or [rdi]
+
+                // Second 8 bytes
+                const val1: u64 = @bitCast(roc_str[8..16].*);
+                code[13] = 0x48;
+                code[14] = 0xB8;
+                @memcpy(code[15..23], std.mem.asBytes(&val1));
+                code[23] = 0x48;
+                code[24] = 0x89;
+                code[25] = if (builtin.os.tag == .windows) 0x41 else 0x47; // [rcx+8] or [rdi+8]
+                code[26] = 0x08;
+
+                // Third 8 bytes
+                const val2: u64 = @bitCast(roc_str[16..24].*);
+                code[27] = 0x48;
+                code[28] = 0xB8;
+                @memcpy(code[29..37], std.mem.asBytes(&val2));
+
+                // Need to resize
+                code = self.allocator.realloc(code, 42) catch return error.OutOfMemory;
+                code[37] = 0x48;
+                code[38] = 0x89;
+                code[39] = if (builtin.os.tag == .windows) 0x41 else 0x47; // [rcx+16] or [rdi+16]
+                code[40] = 0x10;
+                code[41] = 0xC3; // ret
+
+                return code;
+            },
+            .aarch64 => {
+                // Write 24 bytes (3x 8-byte writes) to [x0]
+                // For each 8 bytes: 4 MOV/MOVK (16 bytes) + 1 STR (4 bytes) = 20 bytes
+                // Total: 3 * 20 + 4 (RET) = 64 bytes
+                var code = self.allocator.alloc(u8, 64) catch return error.OutOfMemory;
+                var pos: usize = 0;
+
+                for (0..3) |chunk_idx| {
+                    const chunk_val: u64 = @bitCast(roc_str[chunk_idx * 8 ..][0..8].*);
+                    const imm0: u16 = @truncate(chunk_val);
+                    const imm1: u16 = @truncate(chunk_val >> 16);
+                    const imm2: u16 = @truncate(chunk_val >> 32);
+                    const imm3: u16 = @truncate(chunk_val >> 48);
+
+                    // MOV X1, #imm0
+                    var mov_inst: u32 = 0xD2800001 | (@as(u32, imm0) << 5);
+                    @memcpy(code[pos..][0..4], std.mem.asBytes(&mov_inst));
+                    pos += 4;
+
+                    // MOVK X1, #imm1, LSL #16
+                    var movk1: u32 = 0xF2A00001 | (@as(u32, imm1) << 5);
+                    @memcpy(code[pos..][0..4], std.mem.asBytes(&movk1));
+                    pos += 4;
+
+                    // MOVK X1, #imm2, LSL #32
+                    var movk2: u32 = 0xF2C00001 | (@as(u32, imm2) << 5);
+                    @memcpy(code[pos..][0..4], std.mem.asBytes(&movk2));
+                    pos += 4;
+
+                    // MOVK X1, #imm3, LSL #48
+                    var movk3: u32 = 0xF2E00001 | (@as(u32, imm3) << 5);
+                    @memcpy(code[pos..][0..4], std.mem.asBytes(&movk3));
+                    pos += 4;
+
+                    // STR X1, [X0, #offset]
+                    const offset: u12 = @intCast(chunk_idx * 8);
+                    const str_inst: u32 = 0xF9000001 | (@as(u32, offset / 8) << 10);
+                    @memcpy(code[pos..][0..4], std.mem.asBytes(&str_inst));
+                    pos += 4;
+                }
+
+                // RET
+                const ret_inst: u32 = 0xD65F03C0;
+                @memcpy(code[pos..][0..4], std.mem.asBytes(&ret_inst));
+
+                return code;
+            },
+            else => return error.UnsupportedType,
+        }
     }
 
     /// Generate code for tag expressions with arguments
@@ -2255,6 +2397,7 @@ pub const DevEvaluator = struct {
                 const pattern_key = @intFromEnum(lookup.pattern_idx);
                 break :blk type_env.get(pattern_key) orelse .i64;
             },
+            .e_str, .e_str_segment => .str,
             else => .i64,
         };
     }
