@@ -11907,17 +11907,41 @@ pub const Interpreter = struct {
                     }
                     try value_stack.push(dest);
                 } else {
-                    // Get element type from list_rt_var. The list type should be List(elem)
-                    // where vars[0] is backing and vars[1] is the element type.
-                    // The element type may be flex (e.g., Num *) which is fine - downstream
-                    // code like getRuntimeLayout will default flex to Dec as needed.
+                    // Determine the element type for this non-empty list literal.
+                    //
+                    // Primary path: Extract from list type structure.
+                    // The list type should be List(elem) where vars[0] is backing and
+                    // vars[1] is the element type. The element type may be flex (e.g.,
+                    // Num *) which is fine - downstream code like getRuntimeLayout will
+                    // default flex to Dec as needed.
+                    //
+                    // Alternative path: Derive from first element's type.
+                    // In polymorphic contexts (e.g., inside a for loop in a polymorphic
+                    // function), the list type variable may resolve to a flex/rigid
+                    // rather than a List(elem) structure. This happens due to union-find
+                    // redirect chains in the type store. In this case, we determine the
+                    // element type from the first element's compile-time type.
+                    //
+                    // This alternative is semantically correct because the element type
+                    // of a list literal [e1, e2, ...] IS the type of its elements - the
+                    // type checker explicitly unifies the list's element type with the
+                    // first element's type (see Check.zig e_list handling).
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
-                    std.debug.assert(list_resolved.desc.content == .structure);
-                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
-                    const nom = list_resolved.desc.content.structure.nominal_type;
-                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
-                    const elem_rt_var = vars[1];
+                    const elem_rt_var = blk: {
+                        if (list_resolved.desc.content == .structure) {
+                            if (list_resolved.desc.content.structure == .nominal_type) {
+                                const nom = list_resolved.desc.content.structure.nominal_type;
+                                const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                                if (vars.len == 2) {
+                                    // vars[0] = backing, vars[1] = element type
+                                    break :blk vars[1];
+                                }
+                            }
+                        }
+                        // List type is flex/rigid - derive element type from first element
+                        const first_elem_ct_var = can.ModuleEnv.varFrom(elems[0]);
+                        break :blk try self.translateTypeVar(self.env, first_elem_ct_var);
+                    };
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
