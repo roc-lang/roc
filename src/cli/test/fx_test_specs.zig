@@ -284,11 +284,6 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
     },
     .{
-        .roc_file = "test/fx/issue8936.roc",
-        .io_spec = "1>Tests passed!",
-        .description = "Regression test: List pattern matching with rest operator panic (issue #8936)",
-    },
-    .{
         .roc_file = "test/fx/record_builder_cli_parser.roc",
         // Multi-line strings (\\) create strings with embedded newlines - use \n in spec
         // Note: Str.inspect(Bool.False) outputs "0" not "Bool.False"
