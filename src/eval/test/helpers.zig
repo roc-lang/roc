@@ -229,7 +229,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             break :blk std.fmt.allocPrint(allocator, "{}", .{int_part});
         },
         layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes - handle small string format
+            // RocStr is 24 bytes
             var result: [24]u8 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
 
@@ -239,8 +239,12 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 // Return the string content directly (no quotes in result)
                 break :blk std.fmt.allocPrint(allocator, "{s}", .{result[0..len]});
             } else {
-                // Large string (heap allocated) - not yet supported
-                break :blk error.UnsupportedLayout;
+                // Large string (heap allocated)
+                // Layout: bytes pointer (8), length (8), capacity (8)
+                const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&result[0]));
+                const length_ptr: *const usize = @ptrCast(@alignCast(&result[8]));
+                const str_bytes = bytes_ptr.*[0..length_ptr.*];
+                break :blk std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
             }
         },
         else => error.UnsupportedLayout,
