@@ -369,6 +369,21 @@ pub const DevEvaluator = struct {
                 self.setCrashMessage("Dev evaluator: low-level lambda closure not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
             },
+
+            // RC expressions - inserted by RC insertion pass
+            // These are intentionally no-ops in the dev backend because:
+            // 1. Memory leaks are acceptable for short-lived REPL sessions
+            // 2. Full RC code generation requires calling convention handling
+            //    and would need to call increfDataPtrC/decrefDataPtrC/freeDataPtrC
+            // 3. The interpreter backend handles RC correctly for production use
+            //
+            // The JIT relocation infrastructure (jit.zig) and builtin resolver
+            // (mod.zig:resolveBuiltinFunction) are in place for when full RC
+            // code generation is implemented.
+            .e_incref, .e_decref, .e_free => {
+                // Return empty record (unit type) - RC operations produce no value
+                return self.generateReturnI64Code(0, result_layout);
+            },
         };
     }
 

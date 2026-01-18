@@ -1617,7 +1617,6 @@ pub const ComptimeEvaluator = struct {
         // Build the Numeral record
         // Ownership of before_list and after_list is transferred to this record
         const num_literal_record = try self.buildNumeralRecord(is_neg_value, before_list, after_list, roc_ops);
-        defer num_literal_record.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Evaluate the from_numeral function to get a closure
         const func_value = self.interpreter.eval(target_def.expr, roc_ops) catch |err| {
@@ -1634,7 +1633,6 @@ pub const ComptimeEvaluator = struct {
             _ = try self.problems.appendProblem(self.allocator, problem);
             return false;
         };
-        defer func_value.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Check if func_value is a closure
         if (func_value.layout.tag != .closure) {
@@ -1754,7 +1752,6 @@ pub const ComptimeEvaluator = struct {
                 return false;
             };
         }
-        defer result.decref(&self.interpreter.runtime_layout_store, roc_ops);
 
         // Check the Try result
         return try self.checkTryResult(result, region);

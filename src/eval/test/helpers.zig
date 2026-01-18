@@ -7,6 +7,7 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
+const rc = @import("rc");
 
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
@@ -256,7 +257,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -301,7 +302,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // For boolean results, read the underlying byte value
     const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -347,7 +348,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual = result.asF32();
 
@@ -387,7 +388,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual = result.asF64();
 
@@ -431,7 +432,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual_dec = result.asDec(ops);
 
@@ -473,7 +474,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual_dec = result.asDec(ops);
 
@@ -511,7 +512,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
@@ -563,7 +564,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
@@ -616,7 +617,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);
@@ -686,7 +687,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     if (result.layout.tag != .list_of_zst) {
         std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
@@ -726,7 +727,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // A list of i64 must have .list layout, not .list_of_zst
     if (result.layout.tag != .list) {
@@ -779,7 +780,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a .list_of_zst layout (empty list optimization)
     if (result.layout.tag != .list_of_zst) {
@@ -1038,6 +1039,12 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
 
+    // Run RC insertion pass to add explicit incref/decref operations to the IR.
+    // This enables compile-time reference counting rather than runtime RC.
+    var rc_pass = try rc.InsertPass.init(allocator, module_env);
+    defer rc_pass.deinit();
+    try rc_pass.run();
+
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
         .module_env = module_env,
@@ -1088,7 +1095,7 @@ test "eval tag - already primitive" {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
@@ -1121,7 +1128,7 @@ test "interpreter reuse across multiple evaluations" {
             const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
-            defer interpreter.cleanupBindings(ops);
+            defer interpreter.bindings.items.len = 0;
 
             try std.testing.expect(result.layout.tag == .scalar);
 

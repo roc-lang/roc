@@ -10,6 +10,7 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
+const builtins = @import("builtins");
 
 /// Backend selection for code evaluation
 pub const EvalBackend = enum {
@@ -224,6 +225,48 @@ pub const AArch64Backend = DevBackend(
     aarch64.FloatReg,
 );
 
+/// Resolve builtin function names to their addresses.
+/// This is used by JitCode to patch function call relocations.
+///
+/// Supported function names:
+/// - "incref_data_ptr" -> increfDataPtrC
+/// - "decref_data_ptr" -> decrefDataPtrC
+/// - "free_data_ptr" -> freeDataPtrC
+pub fn resolveBuiltinFunction(name: []const u8) ?usize {
+    const utils = builtins.utils;
+
+    if (std.mem.eql(u8, name, "incref_data_ptr")) {
+        return @intFromPtr(&utils.increfDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_data_ptr")) {
+        return @intFromPtr(&utils.decrefDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "free_data_ptr")) {
+        return @intFromPtr(&utils.freeDataPtrC);
+    }
+    // RC pointer functions (for direct refcount manipulation)
+    if (std.mem.eql(u8, name, "incref_rc_ptr")) {
+        return @intFromPtr(&utils.increfRcPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_rc_ptr")) {
+        return @intFromPtr(&utils.decrefRcPtrC);
+    }
+
+    return null;
+}
+
 test "backend module imports" {
     std.testing.refAllDecls(@This());
+}
+
+test "resolve builtin functions" {
+    // Test that all RC functions resolve
+    try std.testing.expect(resolveBuiltinFunction("incref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("free_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("incref_rc_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_rc_ptr") != null);
+
+    // Test unknown function returns null
+    try std.testing.expect(resolveBuiltinFunction("unknown_func") == null);
 }

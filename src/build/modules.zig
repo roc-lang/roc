@@ -301,6 +301,7 @@ pub const ModuleType = enum {
     base58,
     lsp,
     backend,
+    rc,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -318,17 +319,18 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend, .rc },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend, .rc },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
             .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types },
-            .backend => &.{ .base, .layout },
+            .backend => &.{ .base, .layout, .builtins },
+            .rc => &.{ .can, .layout, .base, .types },
         };
     }
 };
@@ -359,6 +361,7 @@ pub const RocModules = struct {
     base58: *Module,
     lsp: *Module,
     backend: *Module,
+    rc: *Module,
     roc_target: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
@@ -393,6 +396,7 @@ pub const RocModules = struct {
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
             .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/dev/mod.zig") }),
+            .rc = b.addModule("rc", .{ .root_source_file = b.path("src/rc/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
         };
 
@@ -433,6 +437,7 @@ pub const RocModules = struct {
             .base58,
             .lsp,
             .backend,
+            .rc,
         };
 
         // Setup dependencies for each module
@@ -510,6 +515,7 @@ pub const RocModules = struct {
             .base58 => self.base58,
             .lsp => self.lsp,
             .backend => self.backend,
+            .rc => self.rc,
         };
     }
 

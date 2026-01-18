@@ -10,6 +10,7 @@ const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const rc = @import("rc");
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
@@ -675,8 +676,12 @@ pub const Repl = struct {
 
         const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
 
+        // The REPL owns the final result of the expression and must release it after printing.
+        // The compile-time RC pass handles all internal RC, but the top-level result is
+        // "returned" to the REPL which decides to discard it after rendering.
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
-        interpreter.cleanupBindings(self.roc_ops);
+
+        interpreter.bindings.items.len = 0;
         return .{ .expression = output };
     }
 };

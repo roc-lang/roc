@@ -533,6 +533,16 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
         .e_low_level_lambda => {
             try self.write("<low_level>");
         },
+        // RC expressions are inserted after canonicalization
+        .e_incref => {
+            try self.write("<incref>");
+        },
+        .e_decref => {
+            try self.write("<decref>");
+        },
+        .e_free => {
+            try self.write("<free>");
+        },
     }
 }
 

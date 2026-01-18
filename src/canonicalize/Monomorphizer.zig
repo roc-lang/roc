@@ -199,6 +199,10 @@ in_progress: std.AutoHashMap(SpecializationKey, void),
 /// Counter for generating unique specialization names
 specialization_counter: u32,
 
+/// Counter for generating unique synthetic argument names (e.g., #arg0, #arg1)
+/// Used during argument normalization to convert complex call arguments into let-bindings
+synthetic_arg_counter: u32,
+
 /// Current phase
 phase: Phase,
 
@@ -245,6 +249,7 @@ pub fn init(
         .specialization_names = std.AutoHashMap(SpecializationKey, base.Ident.Idx).init(allocator),
         .in_progress = std.AutoHashMap(SpecializationKey, void).init(allocator),
         .specialization_counter = 0,
+        .synthetic_arg_counter = 0,
         .phase = .finding,
         .recursion_depth = 0,
         .max_recursion_depth = DEFAULT_MAX_RECURSION_DEPTH,
@@ -1346,24 +1351,90 @@ fn duplicateExpr(
             // Use the specialized function if available, otherwise duplicate the original
             const new_func = specialized_func orelse try self.duplicateExpr(call.func, type_subs);
 
-            // Duplicate arguments
+            // Normalize arguments: complex expressions become let-bindings, simple lookups stay as-is.
+            // This ensures all call arguments are simple symbol references by the time RC runs,
+            // matching the architecture of crates/compiler/mono/src/inc_dec.rs.
             const args = self.module_env.store.sliceExpr(call.args);
             const args_start = self.module_env.store.scratch.?.exprs.top();
+            const stmts_start = self.module_env.store.scratchTop("statements");
+            var needs_block = false;
 
             for (args) |arg_idx| {
                 const new_arg = try self.duplicateExpr(arg_idx, type_subs);
-                try self.module_env.store.scratch.?.exprs.append(new_arg);
+                const arg_expr = self.module_env.store.getExpr(new_arg);
+
+                // Check if this argument needs normalization (is not a simple lookup)
+                const is_simple = switch (arg_expr) {
+                    .e_lookup_local => true,
+                    // Literals and other non-refcounted values don't need normalization
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small,
+                    .e_typed_int, .e_typed_frac, .e_zero_argument_tag,
+                    .e_empty_record => true,
+                    else => false,
+                };
+
+                if (is_simple) {
+                    try self.module_env.store.scratch.?.exprs.append(new_arg);
+                } else {
+                    // Create a synthetic let-binding for this complex argument
+                    // Use # prefix which is invalid in Roc syntax (starts a comment)
+                    var name_buf: [32]u8 = undefined;
+                    const name = std.fmt.bufPrint(&name_buf, "#arg{d}", .{self.synthetic_arg_counter}) catch "#arg";
+                    self.synthetic_arg_counter += 1;
+
+                    // Create the synthetic identifier and pattern
+                    const ident = base.Ident.for_text(name);
+                    const ident_idx = try self.module_env.insertIdent(ident);
+                    const pattern_idx = try self.module_env.store.addPattern(
+                        Pattern{ .assign = .{ .ident = ident_idx } },
+                        base.Region.zero(),
+                    );
+
+                    // Create the let-binding statement: #argN = complex_expr
+                    const decl_stmt = try self.module_env.store.addStatement(
+                        .{ .s_decl = .{
+                            .pattern = pattern_idx,
+                            .expr = new_arg,
+                            .anno = null,
+                        } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.addScratchStatement(decl_stmt);
+                    needs_block = true;
+
+                    // Replace the argument with a lookup to the synthetic binding
+                    const lookup_expr = try self.module_env.store.addExpr(
+                        Expr{ .e_lookup_local = .{ .pattern_idx = pattern_idx } },
+                        base.Region.zero(),
+                    );
+                    try self.module_env.store.scratch.?.exprs.append(lookup_expr);
+                }
             }
 
             const new_args_span = try self.module_env.store.exprSpanFrom(args_start);
 
-            return try self.module_env.store.addExpr(Expr{
+            // Create the call expression
+            const call_expr = try self.module_env.store.addExpr(Expr{
                 .e_call = .{
                     .func = new_func,
                     .args = new_args_span,
                     .called_via = call.called_via,
                 },
             }, base.Region.zero());
+
+            // If we created synthetic bindings, wrap the call in a block
+            if (needs_block) {
+                const stmts_span = try self.module_env.store.statementSpanFrom(stmts_start);
+                return try self.module_env.store.addExpr(
+                    Expr{ .e_block = .{
+                        .stmts = stmts_span,
+                        .final_expr = call_expr,
+                    } },
+                    base.Region.zero(),
+                );
+            }
+
+            return call_expr;
         },
 
         .e_lambda => |lambda| {
@@ -1754,6 +1825,10 @@ fn duplicateExpr(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
+        // RC expressions are inserted after monomorphization
+        .e_incref,
+        .e_decref,
+        .e_free,
         => return expr_idx,
     }
 }

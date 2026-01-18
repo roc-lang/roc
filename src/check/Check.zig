@@ -4088,6 +4088,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         .e_runtime_error => {
             try self.unifyWith(expr_var, .err, env);
         },
+
+        // RC expressions are inserted after type checking (by RC insertion pass)
+        // These should never appear during type checking - panic if they do
+        .e_incref, .e_decref, .e_free => {
+            @panic("RC expressions should not exist during type checking");
+        },
     }
 
     // Check if we have an annotation

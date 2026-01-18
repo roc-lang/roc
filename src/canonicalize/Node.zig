@@ -223,4 +223,9 @@ pub const Tag = enum {
     diag_break_outside_loop,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+
+    // RC expressions (inserted by RC insertion pass, added at end to preserve enum ordering)
+    expr_incref,
+    expr_decref,
+    expr_free,
 };

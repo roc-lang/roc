@@ -1149,6 +1149,11 @@ fn exprContainsPatternRef(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
+        // RC expressions are inserted after canonicalization, they reference patterns
+        // but don't introduce new pattern references for closure detection
+        .e_incref,
+        .e_decref,
+        .e_free,
         => return false,
     }
 }
@@ -2264,6 +2269,10 @@ pub fn transformExpr(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!Ex
         .e_lookup_required,
         .e_hosted_lambda,
         .e_low_level_lambda,
+        // RC expressions are inserted after canonicalization, pass through unchanged
+        .e_incref,
+        .e_decref,
+        .e_free,
         => return expr_idx,
 
         .e_type_var_dispatch => |tvd| {
