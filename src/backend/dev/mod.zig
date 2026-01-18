@@ -33,6 +33,8 @@ pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
 pub const jit = @import("jit.zig");
 pub const JitCode = jit.JitCode;
+/// Object file reader for extracting code sections from ELF/Mach-O/COFF
+pub const object_reader = @import("object_reader.zig");
 
 /// Generic development backend parameterized by architecture-specific types.
 ///

@@ -1,14 +1,15 @@
 //! LLVM-based Evaluator for Roc expressions
 //!
 //! This module generates LLVM bitcode from Roc expressions. The bitcode can then
-//! be JIT compiled and executed by llvm_compile.compileAndExecute().
+//! be compiled to an object file using llvm_compile.compileToObject() and executed
+//! using llvm_execute.executeAndFormat().
 //!
 //! Used when the `--opt=size` or `--opt=speed` flags are passed to the REPL.
 //!
 //! The evaluator works by:
 //! 1. Parsing and type-checking the source expression
 //! 2. Translating the CIR to LLVM IR using Zig's LLVM Builder
-//! 3. Serializing to LLVM bitcode for JIT compilation
+//! 3. Serializing to LLVM bitcode for compilation to native code
 //!
 //! ## Supported Expression Types
 //!
@@ -1453,7 +1454,8 @@ pub const LlvmEvaluator = struct {
 
     /// Generate bitcode from source code string
     /// This does the full pipeline: parse → canonicalize → type check → generate bitcode
-    /// The caller is responsible for compiling and executing the bitcode using llvm_compile.
+    /// The caller is responsible for compiling (llvm_compile.compileToObject) and
+    /// executing (llvm_execute.executeAndFormat) the bitcode.
     pub fn generateBitcodeFromSource(self: *LlvmEvaluator, source: []const u8) Error!BitcodeResult {
         // Step 1: Create module environment and parse
         var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
