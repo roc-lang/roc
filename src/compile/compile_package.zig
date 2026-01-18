@@ -533,6 +533,17 @@ pub const PackageEnv = struct {
         return null;
     }
 
+    /// Public API to find a module by its filesystem path.
+    /// Returns the ModuleState if found, null otherwise.
+    pub fn findModuleByPath(self: *PackageEnv, path: []const u8) ?*ModuleState {
+        for (self.modules.items) |*module| {
+            if (std.mem.eql(u8, module.path, path)) {
+                return module;
+            }
+        }
+        return null;
+    }
+
     /// Public API for processing a module by name (used by BuildEnv)
     pub fn processModuleByName(self: *PackageEnv, module_name: []const u8) !void {
         if (self.module_names.get(module_name)) |module_id| {

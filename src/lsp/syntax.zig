@@ -1938,4 +1938,185 @@ pub const SyntaxChecker = struct {
             else => {},
         }
     }
+
+    /// Get document symbols (outline) for a file.
+    pub fn getDocumentSymbols(
+        self: *SyntaxChecker,
+        allocator: std.mem.Allocator,
+        uri: []const u8,
+        source: []const u8,
+    ) ![]document_symbol_handler.SymbolInformation {
+        const SymbolInformation = document_symbol_handler.SymbolInformation;
+
+        const env = self.build_env orelse return &[_]SymbolInformation{};
+
+        // Convert URI to absolute path to match against module paths
+        const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
+        defer allocator.free(path);
+
+        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch
+            allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
+        defer allocator.free(absolute_path);
+
+        // Find the module matching this file path across all schedulers
+        const module_env = blk: {
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+                // Search for module by path in this scheduler
+                if (sched.findModuleByPath(absolute_path)) |module| {
+                    if (module.env) |*e| {
+                        break :blk e;
+                    }
+                }
+            }
+            // Fallback: try the root module of the "app" scheduler
+            if (env.schedulers.get("app")) |sched| {
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env) |*e| {
+                        break :blk e;
+                    }
+                }
+            }
+            return &[_]SymbolInformation{};
+        };
+
+        // Build line offset table
+        const line_offsets = buildLineOffsets(source);
+
+        var symbols = std.ArrayList(SymbolInformation){};
+        errdefer {
+            for (symbols.items) |*sym| {
+                allocator.free(sym.name);
+            }
+            symbols.deinit(allocator);
+        }
+
+        // Check top-level definitions (modules/apps store functions here)
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (extractSymbolFromDecl(module_env, def.pattern, def.expr, source, uri, &line_offsets)) |symbol| {
+                const owned_name = try allocator.dupe(u8, symbol.name);
+                try symbols.append(allocator, .{
+                    .name = owned_name,
+                    .kind = symbol.kind,
+                    .location = .{
+                        .uri = uri,
+                        .range = symbol.location.range,
+                    },
+                });
+            }
+        }
+
+        // Also check top-level statements (some module types use these)
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+
+            if (stmt_parts.pattern) |pattern_idx| {
+                if (stmt_parts.expr) |expr_idx| {
+                    if (extractSymbolFromDecl(module_env, pattern_idx, expr_idx, source, uri, &line_offsets)) |symbol| {
+                        const owned_name = try allocator.dupe(u8, symbol.name);
+                        try symbols.append(allocator, .{
+                            .name = owned_name,
+                            .kind = symbol.kind,
+                            .location = .{
+                                .uri = uri,
+                                .range = symbol.location.range,
+                            },
+                        });
+                    }
+                }
+            }
+        }
+        return symbols.toOwnedSlice(allocator);
+    }
 };
+
+const document_symbol_handler = @import("handlers/document_symbol.zig");
+
+fn buildLineOffsets(source: []const u8) LineOffsets {
+    var result = LineOffsets{ .offsets = undefined, .count = 0 };
+    result.offsets[0] = 0;
+    result.count = 1;
+
+    for (source, 0..) |c, i| {
+        if (c == '\n' and result.count < 1024) {
+            result.offsets[result.count] = @intCast(i + 1);
+            result.count += 1;
+        }
+    }
+    return result;
+}
+
+const LineOffsets = struct {
+    offsets: [1024]u32,
+    count: usize,
+};
+
+fn offsetToPosition(offset: u32, line_offsets: *const LineOffsets) document_symbol_handler.Position {
+    var line: u32 = 0;
+    for (0..line_offsets.count) |i| {
+        if (line_offsets.offsets[i] > offset) break;
+        line = @intCast(i);
+    }
+    const line_start = line_offsets.offsets[line];
+    return .{
+        .line = line,
+        .character = offset - line_start,
+    };
+}
+
+fn extractSymbolFromDecl(
+    module_env: *ModuleEnv,
+    pattern_idx: CIR.Pattern.Idx,
+    expr_idx: CIR.Expr.Idx,
+    source: []const u8,
+    uri: []const u8,
+    line_offsets: *const LineOffsets,
+) ?document_symbol_handler.SymbolInformation {
+    _ = source; // We use getIdentText instead of extracting from source
+
+    // Check if RHS is a function
+    const expr = module_env.store.getExpr(expr_idx);
+    const is_function = switch (expr) {
+        .e_closure, .e_lambda, .e_hosted_lambda => true,
+        else => false,
+    };
+
+    // Get the pattern and extract the identifier name
+    const pattern = module_env.store.getPattern(pattern_idx);
+    const ident_idx = switch (pattern) {
+        .assign => |p| p.ident,
+        .as => |p| p.ident,
+        else => return null, // Only handle assign and as patterns
+    };
+
+    // Get the identifier text from the module's ident table
+    const name = module_env.getIdentText(ident_idx);
+
+    // Skip empty or placeholder names
+    if (name.len == 0) {
+        return null;
+    }
+
+    // Get the pattern region for position info
+    const pattern_region = module_env.store.getPatternRegion(pattern_idx);
+    const start_offset = pattern_region.start.offset;
+    const end_offset = pattern_region.end.offset;
+
+    // Convert offsets to positions
+    const start_pos = offsetToPosition(start_offset, line_offsets);
+    const end_pos = offsetToPosition(end_offset, line_offsets);
+
+    return .{
+        .name = name,
+        .kind = if (is_function) .function else .variable,
+        .location = .{
+            .uri = uri,
+            .range = .{ .start = start_pos, .end = end_pos },
+        },
+    };
+}

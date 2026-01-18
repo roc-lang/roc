@@ -228,11 +228,11 @@ test "document symbol handler extracts function declarations" {
 
         const result = parsed.value.object.get("result") orelse continue;
         try std.testing.expect(result == .array);
-        // Verify structure of any symbols returned
+        // Verify structure of any symbols returned (SymbolInformation format)
         for (result.array.items) |symbol| {
             try std.testing.expect(symbol.object.get("name") != null);
             try std.testing.expect(symbol.object.get("kind") != null);
-            try std.testing.expect(symbol.object.get("range") != null);
+            try std.testing.expect(symbol.object.get("location") != null);
         }
         found_symbols_response = true;
         break;
