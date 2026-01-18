@@ -141,11 +141,20 @@ fn canHandleExpr(module_env: *ModuleEnv, expr: CIR.Expr) bool {
     };
 }
 
+/// Errors that can occur during DevEvaluator string generation
+const DevEvalError = error{
+    DevEvaluatorInitFailed,
+    GenerateCodeFailed,
+    JitInitFailed,
+    UnsupportedLayout,
+    OutOfMemory,
+};
+
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
-fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) []const u8 {
+fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) DevEvalError![]const u8 {
     // Initialize DevEvaluator
-    var dev_eval = DevEvaluator.init(allocator) catch |err| {
-        std.debug.panic("DevEvaluator.init failed: {}", .{err});
+    var dev_eval = DevEvaluator.init(allocator) catch {
+        return error.DevEvaluatorInitFailed;
     };
     defer dev_eval.deinit();
 
@@ -153,14 +162,14 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const expr = module_env.store.getExpr(expr_idx);
 
     // Generate code
-    var code_result = dev_eval.generateCode(module_env, expr) catch |err| {
-        std.debug.panic("DevEvaluator.generateCode failed: {}", .{err});
+    var code_result = dev_eval.generateCode(module_env, expr) catch {
+        return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
 
     // JIT execute the code
-    var jit = backend.JitCode.init(code_result.code) catch |err| {
-        std.debug.panic("JitCode.init failed: {}", .{err});
+    var jit = backend.JitCode.init(code_result.code) catch {
+        return error.JitInitFailed;
     };
     defer jit.deinit();
 
@@ -170,24 +179,24 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
             var result: f64 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result}) catch @panic("allocPrint failed");
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => blk: {
             var result: i128 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
-        else => std.debug.panic("Unsupported layout: {}", .{code_result.result_layout}),
+        else => error.UnsupportedLayout,
     };
 }
 
@@ -196,7 +205,13 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 /// an expression, the test will fail (which is the desired behavior to
 /// track what still needs to be implemented).
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
+    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx) catch |err| {
+        std.debug.print(
+            "\nDevEvaluator failed with error: {s}. Interpreter result was: {s}\n",
+            .{ @errorName(err), interpreter_str },
+        );
+        return error.DevEvaluatorFailed;
+    };
     defer allocator.free(dev_str);
 
     if (!std.mem.eql(u8, interpreter_str, dev_str)) {
