@@ -34,6 +34,9 @@ pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
     build_env: ?*BuildEnv = null,
+    /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
+    /// This is swapped with build_env after each successful build.
+    previous_build_env: ?*BuildEnv = null,
     cache_config: CacheConfig = .{},
     log_file: ?std.fs.File = null,
     debug: DebugFlags,
@@ -52,6 +55,11 @@ pub const SyntaxChecker = struct {
             self.allocator.destroy(env);
             self.build_env = null;
         }
+        if (self.previous_build_env) |env| {
+            env.deinit();
+            self.allocator.destroy(env);
+            self.previous_build_env = null;
+        }
     }
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
@@ -67,7 +75,7 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.resetBuildEnv();
+        var env = try self.createFreshBuildEnv();
 
         var provider_state = OverrideProvider{
             .override_path = absolute_path,
@@ -147,15 +155,20 @@ pub const SyntaxChecker = struct {
         return publish_list.toOwnedSlice(self.allocator);
     }
 
-    fn resetBuildEnv(self: *SyntaxChecker) !*BuildEnv {
-        var env_ptr = self.build_env orelse try self.allocator.create(BuildEnv);
-        if (self.build_env != null) {
-            env_ptr.deinit();
+    /// Creates a fresh BuildEnv for a new build.
+    /// The previous build_env is moved to previous_build_env for module lookups.
+    fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnv {
+        // Move current build_env to previous_build_env (destroy old previous if exists)
+        if (self.previous_build_env) |old_prev| {
+            old_prev.deinit();
+            self.allocator.destroy(old_prev);
         }
-        errdefer {
-            self.build_env = null;
-            self.allocator.destroy(env_ptr);
-        }
+        self.previous_build_env = self.build_env;
+        self.build_env = null;
+
+        // Create a fresh BuildEnv
+        const env_ptr = try self.allocator.create(BuildEnv);
+        errdefer self.allocator.destroy(env_ptr);
 
         env_ptr.* = try BuildEnv.init(self.allocator, .single_threaded, 1);
         env_ptr.compiler_version = build_options.compiler_version;
@@ -168,6 +181,84 @@ pub const SyntaxChecker = struct {
 
         self.build_env = env_ptr;
         return env_ptr;
+    }
+
+    /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
+    /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
+    pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
+        // Prefer current build_env if it exists and has modules
+        if (self.build_env) |env| {
+            if (env.schedulers.count() > 0) {
+                return env;
+            }
+        }
+        // Fall back to previous_build_env
+        return self.previous_build_env;
+    }
+
+    /// Look up a ModuleEnv by its file path from the cached BuildEnv.
+    /// Returns null if no matching module is found.
+    pub fn getModuleEnvByPath(self: *SyntaxChecker, path: []const u8) ?*ModuleEnv {
+        const env = self.getModuleLookupEnv() orelse return null;
+
+        // Iterate through all schedulers (packages)
+        var sched_it = env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            // Iterate through all modules in this package
+            for (sched.modules.items) |*module_state| {
+                if (std.mem.eql(u8, module_state.path, path)) {
+                    if (module_state.env) |*mod_env| {
+                        return mod_env;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Get all imported ModuleEnvs for a given module.
+    /// Returns a slice of ModuleEnv pointers for the module's imports.
+    /// Caller must free the returned slice.
+    pub fn getImportedModuleEnvs(self: *SyntaxChecker, module_path: []const u8) !?[]*ModuleEnv {
+        const env = self.getModuleLookupEnv() orelse return null;
+
+        // First, find the module and its scheduler
+        var target_sched: ?*compile.package.PackageEnv = null;
+        var target_module_imports: ?[]const u32 = null;
+
+        var sched_it = env.schedulers.iterator();
+        outer: while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            for (sched.modules.items) |*module_state| {
+                if (std.mem.eql(u8, module_state.path, module_path)) {
+                    target_sched = sched;
+                    target_module_imports = module_state.imports.items;
+                    break :outer;
+                }
+            }
+        }
+
+        const sched = target_sched orelse return null;
+        const imports = target_module_imports orelse return null;
+
+        // Collect ModuleEnvs for all imports
+        var imported_envs: std.ArrayListUnmanaged(*ModuleEnv) = .{};
+        errdefer imported_envs.deinit(self.allocator);
+
+        // Local imports (within same package)
+        for (imports) |import_id| {
+            if (import_id < sched.modules.items.len) {
+                const imported_module = &sched.modules.items[import_id];
+                if (imported_module.env) |*imp_env| {
+                    try imported_envs.append(self.allocator, imp_env);
+                }
+            }
+        }
+
+        // TODO: Handle external_imports (cross-package) when needed
+
+        return try imported_envs.toOwnedSlice(self.allocator);
     }
 
     fn freeDrained(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports) void {
@@ -348,7 +439,7 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.resetBuildEnv();
+        var env = try self.createFreshBuildEnv();
 
         var provider_state = OverrideProvider{
             .override_path = absolute_path,
@@ -443,7 +534,7 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.resetBuildEnv();
+        var env = try self.createFreshBuildEnv();
 
         var provider_state = OverrideProvider{
             .override_path = absolute_path,
@@ -1662,7 +1753,7 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.resetBuildEnv();
+        var env = try self.createFreshBuildEnv();
 
         var provider_state = OverrideProvider{
             .override_path = absolute_path,

@@ -265,6 +265,17 @@ pub fn extractSemanticTokensWithCIR(
     source: []const u8,
     info: *const LineInfo,
 ) ![]SemanticToken {
+    return extractSemanticTokensWithImports(allocator, source, info, null);
+}
+
+/// Extracts semantic tokens with cross-module import context.
+/// When imported_envs is provided, can distinguish Module.function from record.field.
+pub fn extractSemanticTokensWithImports(
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    info: *const LineInfo,
+    imported_envs: ?[]*ModuleEnv,
+) ![]SemanticToken {
     // Create ModuleEnv with source
     var module_env = ModuleEnv.init(allocator, source) catch {
         // Fall back to token-only extraction on error
@@ -295,6 +306,16 @@ pub fn extractSemanticTokensWithCIR(
         return extractSemanticTokens(allocator, source, info);
     };
 
+    // Build import context for cross-module lookups
+    var import_context = ImportContext.init(allocator);
+    defer import_context.deinit();
+
+    if (imported_envs) |envs| {
+        for (envs) |imp_env| {
+            import_context.addModuleExports(imp_env) catch {};
+        }
+    }
+
     // Create a semantic collector to walk the CIR
     var collector = SemanticCollector{
         .allocator = allocator,
@@ -302,6 +323,7 @@ pub fn extractSemanticTokensWithCIR(
         .module_env = &module_env,
         .info = info,
         .source = source,
+        .import_context = &import_context,
     };
     errdefer collector.tokens.deinit(allocator);
 
@@ -322,6 +344,68 @@ pub fn extractSemanticTokensWithCIR(
     return collector.tokens.toOwnedSlice(allocator);
 }
 
+/// Context for cross-module import lookups.
+/// Maps module names to their exported symbols.
+const ImportContext = struct {
+    allocator: std.mem.Allocator,
+    /// Maps module name to a set of exported function names
+    module_functions: std.StringHashMap(std.StringHashMap(void)),
+
+    fn init(allocator: std.mem.Allocator) ImportContext {
+        return .{
+            .allocator = allocator,
+            .module_functions = std.StringHashMap(std.StringHashMap(void)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *ImportContext) void {
+        var it = self.module_functions.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.module_functions.deinit();
+    }
+
+    /// Add exports from a module to the context.
+    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) !void {
+        const module_name = module_env.module_name;
+        if (module_name.len == 0) return;
+
+        // Get or create the function set for this module
+        const gop = try self.module_functions.getOrPut(module_name);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.StringHashMap(void).init(self.allocator);
+        }
+
+        // Add all exported definitions that are functions
+        const exports = module_env.store.sliceDefs(module_env.exports);
+        for (exports) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            // Check if this definition is a function by looking at its expression
+            const expr = module_env.store.getExpr(def.expr);
+            const is_function = switch (expr) {
+                .e_lambda, .e_closure => true,
+                else => false,
+            };
+            if (is_function) {
+                // Get the name from the pattern
+                const pattern = module_env.store.getPattern(def.pattern);
+                if (pattern == .assign) {
+                    const ident_idx = pattern.assign.ident;
+                    const name = module_env.common.idents.getText(ident_idx);
+                    try gop.value_ptr.put(name, {});
+                }
+            }
+        }
+    }
+
+    /// Check if a symbol is an exported function from a given module.
+    fn isModuleFunction(self: *const ImportContext, module_name: []const u8, symbol_name: []const u8) bool {
+        const functions = self.module_functions.get(module_name) orelse return false;
+        return functions.contains(symbol_name);
+    }
+};
+
 /// Collector for walking CIR and extracting semantic tokens.
 const SemanticCollector = struct {
     allocator: std.mem.Allocator,
@@ -329,6 +413,7 @@ const SemanticCollector = struct {
     module_env: *const ModuleEnv,
     info: *const LineInfo,
     source: []const u8,
+    import_context: *const ImportContext,
 
     /// Walk all top-level statements in the module.
     fn walkStatements(self: *SemanticCollector) !void {
@@ -484,18 +569,54 @@ const SemanticCollector = struct {
 
     /// Add tokens from the tokenizer that weren't covered by CIR.
     /// This includes keywords, operators, literals, and identifiers as fallback.
+    /// Uses import context to distinguish Module.function from record.field.
     fn addTokensFromTokenizer(self: *SemanticCollector, ast: *const parse.AST) !void {
         const tags = ast.tokens.tokens.items(.tag);
         const regions = ast.tokens.tokens.items(.region);
 
+        // Track previous token for Module.function detection
+        var prev_tag: ?Token.Tag = null;
+        var prev_region: ?base.Region = null;
+
         for (tags, regions) |tag, region| {
-            const semantic_type = tokenTagToSemanticType(tag) orelse continue;
+            defer {
+                prev_tag = tag;
+                prev_region = region;
+            }
+
+            var semantic_type = tokenTagToSemanticType(tag) orelse continue;
 
             const start_offset = region.start.offset;
             const end_offset = region.end.offset;
             const length = end_offset - start_offset;
 
             if (length == 0) continue;
+
+            // Check for Module.function pattern:
+            // Previous token was UpperIdent (module name) and current is DotLowerIdent
+            if ((tag == .DotLowerIdent or tag == .NoSpaceDotLowerIdent) and
+                prev_tag != null and prev_tag.? == .UpperIdent)
+            {
+                if (prev_region) |prev_reg| {
+                    // Get the module name from the previous UpperIdent token
+                    const module_start = prev_reg.start.offset;
+                    const module_end = prev_reg.end.offset;
+                    if (module_start < self.source.len and module_end <= self.source.len) {
+                        const module_name = self.source[module_start..module_end];
+
+                        // Get the function name from the current token (skip the leading dot)
+                        const func_start = start_offset + 1; // Skip the '.'
+                        if (func_start < self.source.len and end_offset <= self.source.len) {
+                            const func_name = self.source[func_start..end_offset];
+
+                            // Check if this is an exported function from the module
+                            if (self.import_context.isModuleFunction(module_name, func_name)) {
+                                semantic_type = @intFromEnum(SemanticType.function);
+                            }
+                        }
+                    }
+                }
+            }
 
             const pos = self.info.positionFromOffset(start_offset) orelse continue;
 
