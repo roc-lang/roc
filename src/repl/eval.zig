@@ -609,6 +609,11 @@ pub const Repl = struct {
             return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
         }
 
+        // Note: ClosureTransformer + LambdaLifter are NOT run here because the
+        // interpreter evaluates closures directly (e_lambda, e_closure). The
+        // transformation is designed for code generation backends (LLVM) where
+        // closures become tagged unions with capture records.
+
         // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
         if (self.backend == .dev) {
             if (self.dev_evaluator) |*dev_eval| {

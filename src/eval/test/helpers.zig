@@ -7,7 +7,6 @@ const can = @import("can");
 const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
-const rc = @import("rc");
 
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
@@ -1039,12 +1038,11 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
 
-    // Run RC insertion pass to add explicit incref/decref operations to the IR.
-    // This enables compile-time reference counting rather than runtime RC.
-    // Use runOnExpr since the test expression isn't wrapped in a def.
-    var rc_pass = try rc.InsertPass.init(allocator, module_env);
-    defer rc_pass.deinit();
-    const transformed_expr_idx = try rc_pass.runOnExpr(canonical_expr_idx);
+    // Note: We do NOT run ClosureTransformer, LambdaLifter, or RC insertion here.
+    // The interpreter handles closures natively (e_lambda, e_closure) and does
+    // its own runtime reference counting. The transformations are designed for
+    // code generation backends (dev backend, LLVM) where closures need to be
+    // lowered to tagged unions with capture records.
 
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
@@ -1052,7 +1050,7 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
-        .expr_idx = transformed_expr_idx,  // Use RC-transformed expression
+        .expr_idx = canonical_expr_idx,  // Use original expression - interpreter does runtime RC
         .bool_stmt = bool_stmt_in_bool_module,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
