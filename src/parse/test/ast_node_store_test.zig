@@ -636,7 +636,7 @@ test "NodeStore round trip - Expr" {
     });
     try expressions.append(gpa, AST.Expr{
         .record_builder = .{
-            .fields = rand_idx(AST.RecordField.Idx),
+            .fields = AST.RecordField.Span{ .span = rand_span() },
             .mapper = rand_idx(AST.Expr.Idx),
             .region = rand_region(),
         },

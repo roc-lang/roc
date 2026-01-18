@@ -142,6 +142,10 @@ pub const Diagnostic = union(enum) {
         nested_name: Ident.Idx,
         region: Region,
     },
+    record_builder_map2_not_found: struct {
+        type_name: Ident.Idx,
+        region: Region,
+    },
     too_many_exports: struct {
         count: u32,
         region: Region,

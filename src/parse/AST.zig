@@ -2525,7 +2525,7 @@ pub const Expr = union(enum) {
     },
     record_builder: struct {
         mapper: Expr.Idx,
-        fields: RecordField.Idx,
+        fields: RecordField.Span,
         region: TokenizedRegion,
     },
     ellipsis: struct {
@@ -2865,14 +2865,28 @@ pub const Expr = union(enum) {
             .record_builder => |a| {
                 const begin = tree.beginNode();
                 try tree.pushStaticAtom("e-record-builder");
+                try ast.appendRegionInfoToSexprTree(env, tree, a.region);
                 const attrs = tree.beginNode();
 
-                // Push mapper
+                // Push mapper (the type suffix)
+                const mapper_wrapper = tree.beginNode();
+                try tree.pushStaticAtom("mapper");
                 try ast.store.getExpr(a.mapper).pushToSExprTree(gpa, env, ast, tree);
+                const mapper_attrs = tree.beginNode();
+                try tree.endNode(mapper_wrapper, mapper_attrs);
 
-                // Push single field (not a collection)
-                const field = ast.store.getRecordField(a.fields);
-                try field.pushToSExprTree(gpa, env, ast, tree);
+                // Push fields
+                for (ast.store.recordFieldSlice(a.fields)) |field_idx| {
+                    const record_field = ast.store.getRecordField(field_idx);
+                    const field_node = tree.beginNode();
+                    try tree.pushStaticAtom("field");
+                    try tree.pushStringPair("field", ast.resolve(record_field.name));
+                    const attrs2 = tree.beginNode();
+                    if (record_field.value) |value_id| {
+                        try ast.store.getExpr(value_id).pushToSExprTree(gpa, env, ast, tree);
+                    }
+                    try tree.endNode(field_node, attrs2);
+                }
 
                 try tree.endNode(begin, attrs);
             },

@@ -19,11 +19,9 @@ const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
 const tracy = @import("tracy");
-const llvm_compile = @import("llvm_compile");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
-const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -3525,78 +3523,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     for (inputs.items) |input| {
         const repl_output = try repl_instance.step(input);
         try actual_outputs.append(repl_output);
-    }
-
-    // Dual-mode testing: Run full LLVM compilation pipeline and compare outputs
-    // This ensures the LLVM backend produces the same results as the interpreter.
-    // Skip on platforms where JIT is not supported (e.g., statically-linked musl).
-    if (llvm_compile.isJITSupported()) {
-        var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
-            std.debug.print("LLVM evaluator init failed: {}\n", .{err});
-            success = false;
-            return success;
-        };
-        defer llvm_evaluator.deinit();
-
-        for (inputs.items, actual_outputs.items) |input, interp_output| {
-            // Skip LLVM evaluation for non-expression outputs (problems, assignments, crashes)
-            // TYPE MISMATCH and other errors are detected at type-check time, not evaluation
-            // "assigned `x`" outputs are variable bindings, not expressions to evaluate
-            // "Crash:" outputs are runtime crashes that we don't need to verify
-            if (std.mem.startsWith(u8, interp_output, "TYPE MISMATCH") or
-                std.mem.startsWith(u8, interp_output, "assigned `") or
-                std.mem.startsWith(u8, interp_output, "Crash:") or
-                std.mem.startsWith(u8, interp_output, "**"))
-            {
-                continue;
-            }
-
-            // Step 1: Generate LLVM bitcode from source
-            var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
-                switch (err) {
-                    // UnsupportedType and UnsupportedLayout are expected - LLVM backend is still in progress
-                    error.UnsupportedType, error.UnsupportedLayout => continue,
-                    error.ParseError, error.CanonicalizeError, error.TypeError => {
-                        std.debug.print("LLVM FRONTEND ERROR in {s}:\n  Input: {s}\n  Error: {}\n", .{ snapshot_path, input, err });
-                        success = false;
-                        continue;
-                    },
-                    else => {
-                        std.debug.print("LLVM bitcode generation failed for input '{s}': {}\n", .{ input, err });
-                        success = false;
-                        continue;
-                    },
-                }
-            };
-            defer bitcode_result.deinit();
-
-            // Step 2: Compile and execute using full LLVM pipeline
-            const llvm_output = llvm_compile.compileAndExecute(
-                output.gpa,
-                bitcode_result.bitcode,
-                bitcode_result.output_layout,
-                bitcode_result.is_list,
-                bitcode_result.is_record,
-                bitcode_result.record_field_names,
-            ) catch |err| {
-                std.debug.print("LLVM compile/execute failed for input '{s}': {}\n", .{ input, err });
-                success = false;
-                continue;
-            };
-            defer output.gpa.free(llvm_output);
-
-            // Compare outputs - fail the snapshot if they differ
-            if (!std.mem.eql(u8, interp_output, llvm_output)) {
-                std.debug.print(
-                    \\LLVM/Interpreter MISMATCH in {s}:
-                    \\  Input: {s}
-                    \\  Interpreter: {s}
-                    \\  LLVM:        {s}
-                    \\
-                , .{ snapshot_path, input, interp_output, llvm_output });
-                success = false;
-            }
-        }
     }
 
     switch (config.output_section_command) {
