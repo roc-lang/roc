@@ -192,14 +192,10 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 }
 
 /// Compare Interpreter result string with DevEvaluator result string.
-/// Only compares for expressions that DevEvaluator can handle.
-/// Fails the test if both can handle it but produce different strings.
+/// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
+/// an expression, the test will fail (which is the desired behavior to
+/// track what still needs to be implemented).
 fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
-    // Skip comparison for expressions DevEvaluator can't handle yet
-    if (!canDevEvaluatorHandle(module_env, expr_idx)) {
-        return;
-    }
-
     const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
     defer allocator.free(dev_str);
 
@@ -527,6 +523,10 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
 
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx);
+
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
     if (!roc_str.isSmallStr()) {
@@ -582,7 +582,12 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
-    for (expected_elements) |expected_element| {
+    // Build string representation for comparison with DevEvaluator
+    var tuple_str = std.ArrayList(u8).init(test_allocator);
+    defer tuple_str.deinit();
+    try tuple_str.appendSlice("(");
+
+    for (expected_elements, 0..) |expected_element, i| {
         // Get the element at the specified index
         // Use the result's rt_var since we're accessing elements of the evaluated expression
         const element = try tuple_accessor.getElement(@intCast(expected_element.index), result.rt_var);
@@ -598,8 +603,16 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
+
+        if (i > 0) try tuple_str.appendSlice(", ");
+        try tuple_str.writer().print("{}", .{int_val});
+
         try std.testing.expectEqual(expected_element.value, int_val);
     }
+    try tuple_str.appendSlice(")");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, tuple_str.items, resources.module_env, resources.expr_idx);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -635,6 +648,12 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
 
+    // Build string representation for comparison with DevEvaluator
+    var record_str = std.ArrayList(u8).init(test_allocator);
+    defer record_str.deinit();
+    try record_str.appendSlice("{ ");
+
+    var field_idx: usize = 0;
     for (expected_fields) |expected_field| {
         var found = false;
         var i: u32 = 0;
@@ -664,12 +683,21 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     const RocDec = builtins.dec.RocDec;
                     break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
                 };
+
+                if (field_idx > 0) try record_str.appendSlice(", ");
+                try record_str.writer().print("{s}: {}", .{ expected_field.name, int_val });
+                field_idx += 1;
+
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
             }
         }
         try std.testing.expect(found);
     }
+    try record_str.appendSlice(" }");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, record_str.items, resources.module_env, resources.expr_idx);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -710,6 +738,20 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
 
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
+
+    // Build string representation for comparison with DevEvaluator
+    // ZST lists are formatted as [(), (), ...] or [] for empty
+    var list_str = std.ArrayList(u8).init(test_allocator);
+    defer list_str.deinit();
+    try list_str.appendSlice("[");
+    for (0..expected_element_count) |i| {
+        if (i > 0) try list_str.appendSlice(", ");
+        try list_str.appendSlice("()");
+    }
+    try list_str.appendSlice("]");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -752,6 +794,11 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
+    // Build string representation for comparison with DevEvaluator
+    var list_str = std.ArrayList(u8).init(test_allocator);
+    defer list_str.deinit();
+    try list_str.appendSlice("[");
+
     for (expected_elements, 0..) |expected_val, i| {
         // Use the result's rt_var since we're accessing elements of the evaluated expression
         const element = try list_accessor.getElement(i, result.rt_var);
@@ -760,8 +807,16 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
         try std.testing.expect(element.layout.tag == .scalar);
         try std.testing.expect(element.layout.data.scalar.tag == .int);
         const int_val = element.asI128();
+
+        if (i > 0) try list_str.appendSlice(", ");
+        try list_str.writer().print("{}", .{int_val});
+
         try std.testing.expectEqual(@as(i128, expected_val), int_val);
     }
+    try list_str.appendSlice("]");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -805,6 +860,9 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     // Use the ListAccessor to verify the list is empty
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
     try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
+
+    // Compare with DevEvaluator - empty list is "[]"
+    try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx);
 }
 
 /// Parse and canonicalize an expression.
