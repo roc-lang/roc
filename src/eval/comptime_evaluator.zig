@@ -291,6 +291,15 @@ pub const ComptimeEvaluator = struct {
                         },
                     };
                 },
+                error.ErroneousType => {
+                    // Type checking produced an error type that was evaluated
+                    return EvalResult{
+                        .crash = .{
+                            .message = "Type error in expression",
+                            .region = region,
+                        },
+                    };
+                },
                 else => return EvalResult{
                     .error_eval = .{
                         .err = err,
@@ -508,12 +517,9 @@ pub const ComptimeEvaluator = struct {
         defer tag_list.deinit();
         try self.interpreter.appendUnionTags(rt_var, &tag_list);
 
-        // If tag index is out of range, can't fold (consistent with foldTagUnionTuple)
-        // This can happen when the type is not a proper tag union (e.g., error type or
-        // an undefined tag in invalid code like `b = 6 + L` where L is undefined)
-        if (tag_index >= tag_list.items.len) {
-            return;
-        }
+        // Tag index from the value must be valid. If it's not, this indicates a bug -
+        // erroneous types should be caught earlier at layout computation time.
+        std.debug.assert(tag_index < tag_list.items.len);
 
         const tag_info = tag_list.items[tag_index];
         const arg_vars = self.interpreter.runtime_types.sliceVars(tag_info.args);

@@ -3059,7 +3059,8 @@ test "issue 8979: nested while - inner break does not save outer loop" {
 test "issue 9005: adding undefined tag to number should not panic" {
     // Regression test: `b = 6 + L` where L is an undefined tag should
     // not cause a panic in foldTagUnionScalar when the tag list is empty.
-    // The comptime evaluator should gracefully handle this case.
+    // The comptime evaluator should detect the erroneous type at layout
+    // computation time and crash gracefully instead of panicking.
     const src =
         \\b = 6 + L
     ;
@@ -3069,8 +3070,8 @@ test "issue 9005: adding undefined tag to number should not panic" {
 
     const summary = try res.evaluator.evalAll();
 
-    // Should not crash - the undefined tag should be handled gracefully
-    try testing.expectEqual(@as(u32, 0), summary.crashed);
+    // Should crash gracefully - the erroneous type should be detected at layout time
+    try testing.expectEqual(@as(u32, 1), summary.crashed);
 }
 
 // Note: List.repeat test temporarily disabled while investigating

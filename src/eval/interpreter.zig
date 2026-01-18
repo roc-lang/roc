@@ -2236,7 +2236,10 @@ pub const Interpreter = struct {
                     const expected_layout = self.runtime_layout_store.getLayout(expected_idx);
 
                     if (return_rt_var) |rt_var| {
-                        const candidate = self.getRuntimeLayout(rt_var) catch expected_layout;
+                        const candidate = self.getRuntimeLayout(rt_var) catch |err| switch (err) {
+                            error.ErroneousType => return err,
+                            else => expected_layout,
+                        };
                         if (candidate.tag == .list) {
                             const elem_layout = self.runtime_layout_store.getLayout(candidate.data.list);
                             if (elem_layout.tag == .scalar and elem_layout.data.scalar.tag == .str) {
@@ -7098,7 +7101,10 @@ pub const Interpreter = struct {
                             const effective_layout = if (arg_resolved.desc.content == .rigid) blk: {
                                 if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
                                     // Use the substituted concrete type's layout
-                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                    break :blk self.getRuntimeLayout(subst_var) catch |err| switch (err) {
+                                        error.ErroneousType => return err,
+                                        else => field_value.layout,
+                                    };
                                 }
                                 break :blk field_value.layout;
                             } else field_value.layout;
@@ -7185,7 +7191,10 @@ pub const Interpreter = struct {
                             // First try: if arg is a rigid with a substitution, use substituted type's layout
                             if (arg_resolved.desc.content == .rigid) {
                                 if (self.rigid_subst.get(arg_resolved.var_)) |subst_var| {
-                                    break :blk self.getRuntimeLayout(subst_var) catch field_value.layout;
+                                    break :blk self.getRuntimeLayout(subst_var) catch |err| switch (err) {
+                                        error.ErroneousType => return err,
+                                        else => field_value.layout,
+                                    };
                                 }
                             }
                             // For flex vars, use the actual field_value.layout which was set
@@ -7932,7 +7941,10 @@ pub const Interpreter = struct {
                 // Get type-based layout for element extraction.
                 // This is important for recursive opaque types where the physical layout is 'tuple'
                 // but we need 'tag_union' layout for proper pattern matching.
-                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch physical_elem_layout;
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch |err| switch (err) {
+                    error.ErroneousType => return err,
+                    else => physical_elem_layout,
+                };
 
                 // Use physical layout for memory access (size/stride)
                 var accessor = try value.asList(&self.runtime_layout_store, physical_elem_layout, roc_ops);
@@ -8923,6 +8935,7 @@ pub const Interpreter = struct {
         }
 
         const layout_idx = switch (resolved.desc.content) {
+            .err => return error.ErroneousType,
             .structure => |st| switch (st) {
                 .empty_record => try self.runtime_layout_store.ensureEmptyRecordLayout(),
                 .nominal_type => try self.runtime_layout_store.addTypeVar(resolved.var_, &self.empty_scope),
@@ -11634,6 +11647,23 @@ pub const Interpreter = struct {
                         // - If both are unresolved (flex/rigid), default both to Dec
                         const lhs_resolved = self.runtime_types.resolveVar(lhs_rt_var);
                         const rhs_resolved = self.runtime_types.resolveVar(rhs_rt_var);
+
+                        // Check for erroneous types (type checking errors)
+                        if (lhs_resolved.desc.content == .err or rhs_resolved.desc.content == .err) {
+                            return error.ErroneousType;
+                        }
+
+                        // Check that operands are not tag unions for arithmetic operations
+                        // (tag unions are not valid operands for +, -, *, /, etc.)
+                        const lhs_is_tag_union = lhs_resolved.desc.content == .structure and
+                            lhs_resolved.desc.content.structure == .tag_union;
+                        const rhs_is_tag_union = rhs_resolved.desc.content == .structure and
+                            rhs_resolved.desc.content.structure == .tag_union;
+                        if (lhs_is_tag_union or rhs_is_tag_union) {
+                            // Type error: can't perform arithmetic on tag unions
+                            return error.ErroneousType;
+                        }
+
                         const lhs_is_flex = lhs_resolved.desc.content == .flex or lhs_resolved.desc.content == .rigid;
                         const rhs_is_flex = rhs_resolved.desc.content == .flex or rhs_resolved.desc.content == .rigid;
 
@@ -12137,6 +12167,10 @@ pub const Interpreter = struct {
                 var rt_var = blk: {
                     if (expected_rt_var) |expected| {
                         const expected_resolved = self.runtime_types.resolveVar(expected);
+                        // If expected type is an error type, propagate the error
+                        if (expected_resolved.desc.content == .err) {
+                            return error.ErroneousType;
+                        }
                         // Use expected only if it's concrete (not flex)
                         if (expected_resolved.desc.content == .structure or
                             expected_resolved.desc.content == .alias)
@@ -14851,7 +14885,10 @@ pub const Interpreter = struct {
                         const actual_elem_layout = values[0].layout;
 
                         // Try to get the expected element layout to check for Box.
-                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch null;
+                        const expected_elem_layout_opt: ?layout.Layout = self.getRuntimeLayout(lc.elem_rt_var) catch |err| switch (err) {
+                            error.ErroneousType => return err,
+                            else => null,
+                        };
 
                         // Check if the element type is a recursive nominal that needs boxing.
                         // We check if the actual element layout is a tag_union that contains
@@ -18711,7 +18748,10 @@ pub const Interpreter = struct {
                 // compute the type-based layout and use the larger size for correct iteration.
                 // Use elem_rt_var (which was already resolved from the list's type) rather than
                 // fl_in.patt_rt_var (which might be a flex variable that causes infinite loops).
-                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch elem_layout;
+                const type_based_elem_layout = self.getRuntimeLayout(elem_rt_var) catch |err| switch (err) {
+                    error.ErroneousType => return err,
+                    else => elem_layout,
+                };
 
                 // For 'box' layouts (recursive types), unwrap to get the actual backing layout
                 const effective_elem_layout = if (type_based_elem_layout.tag == .box) blk: {
@@ -18722,7 +18762,10 @@ pub const Interpreter = struct {
                         if (resolved.desc.content == .structure and resolved.desc.content.structure == .nominal_type) {
                             const nom = resolved.desc.content.structure.nominal_type;
                             const backing = self.runtime_types.getNominalBackingVar(nom);
-                            const backing_layout = self.getRuntimeLayout(backing) catch inner;
+                            const backing_layout = self.getRuntimeLayout(backing) catch |err| switch (err) {
+                                error.ErroneousType => return err,
+                                else => inner,
+                            };
                             break :blk backing_layout;
                         }
                     }
