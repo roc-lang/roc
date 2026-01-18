@@ -14,6 +14,7 @@ const types = @import("types");
 const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
 const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
+const compiled_builtins = @import("compiled_builtins");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -75,7 +76,7 @@ pub const SyntaxChecker = struct {
         const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
         defer self.allocator.free(absolute_path);
 
-        _ = workspace_root; // reserved for future workspace-root-aware overrides
+        _ = workspace_root; // Reserved for future use
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -302,11 +303,31 @@ pub const SyntaxChecker = struct {
         return try imported_envs.toOwnedSlice(self.allocator);
     }
 
-    fn freeDrained(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports) void {
-        for (drained) |entry| {
+    /// Free drained reports. If `free_reports` is true, also deinit each report.
+    /// The `check` function processes reports itself, so uses free_reports=false.
+    /// Other functions like `getDefinitionAtPosition` don't process reports, so use free_reports=true.
+    fn freeDrainedEx(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports, free_reports: bool) void {
+        for (drained) |*entry| {
             self.allocator.free(entry.abs_path);
+            if (free_reports) {
+                // Free the reports themselves - each Report has owned allocations
+                for (entry.reports) |*report| {
+                    @constCast(report).deinit();
+                }
+                self.allocator.free(entry.reports);
+            }
         }
         self.allocator.free(drained);
+    }
+
+    fn freeDrained(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports) void {
+        // Legacy behavior - don't free reports (for check() which processes them manually)
+        self.freeDrainedEx(drained, false);
+    }
+
+    fn freeDrainedWithReports(self: *SyntaxChecker, drained: []BuildEnv.DrainedModuleReports) void {
+        // Free reports too (for functions that don't process reports)
+        self.freeDrainedEx(drained, true);
     }
 
     /// Update the dependency graph from a successful build.
@@ -573,9 +594,9 @@ pub const SyntaxChecker = struct {
             return null;
         };
 
-        // Drain reports but ignore them for hover
+        // Drain reports but ignore them for hover (must still free them to avoid leaks)
         const drained = env.drainReports() catch return null;
-        defer self.freeDrained(drained);
+        defer self.freeDrainedWithReports(drained);
 
         // Get any available scheduler and find the root module
         // Try "app" first, then fall back to iterating through all schedulers
@@ -668,9 +689,9 @@ pub const SyntaxChecker = struct {
             return null;
         };
 
-        // Drain reports but ignore them for definition
+        // Drain reports but ignore them for definition (must still free them to avoid leaks)
         const drained = env.drainReports() catch return null;
-        defer self.freeDrained(drained);
+        defer self.freeDrainedWithReports(drained);
 
         // Get any available scheduler and find the root module
         const app_sched = env.schedulers.get("app") orelse blk: {
@@ -767,6 +788,23 @@ pub const SyntaxChecker = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getStatement(stmt_idx);
+
+            // Handle import statements specially - navigate to the imported module
+            if (stmt == .s_import) {
+                const import_stmt = stmt.s_import;
+                const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+
+                if (regionContainsOffset(stmt_region, target_offset)) {
+                    // Get the module name from the import
+                    const module_name = module_env.common.idents.getText(import_stmt.module_name_tok);
+
+                    // Try to find the module in the schedulers
+                    if (self.findModuleByName(module_name)) |result| {
+                        return result;
+                    }
+                }
+            }
+
             const stmt_parts = getStatementParts(stmt);
 
             if (stmt_parts.expr) |expr_idx| {
@@ -814,43 +852,146 @@ pub const SyntaxChecker = struct {
                     const string_idx = module_env.imports.imports.items.items[import_idx];
                     const import_name = module_env.common.getString(string_idx);
 
-                    // Try to find the module path from BuildEnv schedulers
-                    const env = self.build_env orelse return null;
+                    // Use the helper to find the module
+                    return self.findModuleByName(import_name);
+                },
+                .e_dot_access => |dot| {
+                    // Static dispatch - cursor is on method name
+                    // Get the type of the receiver to find which module provides the method
+                    const receiver_type_var = ModuleEnv.varFrom(dot.receiver);
+                    var type_writer = module_env.initTypeWriter() catch |err| {
+                        self.logDebug(.build, "[DEF] initTypeWriter failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    defer type_writer.deinit();
 
-                    // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
-                    const base_name = if (std.mem.lastIndexOf(u8, import_name, ".")) |dot_pos|
-                        import_name[dot_pos + 1 ..]
-                    else
-                        import_name;
+                    type_writer.write(receiver_type_var, .one_line) catch |err| {
+                        self.logDebug(.build, "[DEF] type_writer.write failed: {s}", .{@errorName(err)});
+                        return null;
+                    };
+                    const type_str = type_writer.get();
 
-                    // Search all schedulers for a module matching this name
-                    var sched_it = env.schedulers.iterator();
-                    while (sched_it.next()) |entry| {
-                        const sched = entry.value_ptr.*;
-                        // Look for module by name
-                        if (sched.getModuleState(base_name)) |mod_state| {
-                            // Found the module - convert its path to a URI
-                            const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch return null;
-                            // Return definition at start of file (line 0, char 0)
-                            // TODO: Use target_node_idx to navigate to specific definition
-                            return DefinitionResult{
-                                .uri = module_uri,
-                                .range = .{
-                                    .start_line = 0,
-                                    .start_col = 0,
-                                    .end_line = 0,
-                                    .end_col = 0,
-                                },
-                            };
-                        }
+                    // Extract the base type name (e.g., "Str" from complex type)
+                    const base_type = extractBaseTypeName(type_str);
+
+                    self.logDebug(.build, "[DEF] e_dot_access type_str='{s}', base_type='{s}'", .{ type_str, base_type });
+
+                    // Find the module for this type
+                    // TODO: Also navigate to the specific method definition within the module
+                    const result = self.findModuleByName(base_type);
+                    if (result == null) {
+                        self.logDebug(.build, "[DEF] findModuleByName returned null for '{s}'", .{base_type});
                     }
-                    return null;
+                    return result;
                 },
                 else => return null,
             }
         }
 
         return null;
+    }
+
+    /// Known builtin type names that are part of the Builtin module
+    const BUILTIN_TYPES = [_][]const u8{ "Str", "List", "Bool", "Try", "Dict", "Set", "Box", "U8", "U16", "U32", "U64", "U128", "I8", "I16", "I32", "I64", "I128", "F32", "F64", "Dec", "Num" };
+
+    /// Check if a type name is a builtin type
+    fn isBuiltinType(type_name: []const u8) bool {
+        for (BUILTIN_TYPES) |builtin| {
+            if (std.mem.eql(u8, type_name, builtin)) return true;
+        }
+        return false;
+    }
+
+    /// Helper function to find a module by name and return a DefinitionResult pointing to it
+    fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
+        const env = self.build_env orelse return null;
+
+        // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
+        const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
+            module_name[dot_pos + 1 ..]
+        else
+            module_name;
+
+        // Check if this is a builtin type - use embedded Builtin.roc source
+        if (isBuiltinType(base_name)) {
+            self.logDebug(.build, "[DEF] '{s}' is a builtin type", .{base_name});
+
+            // Write embedded builtin source to roc cache
+            const cache_dir = self.cache_config.getCacheEntriesDir(self.allocator) catch return null;
+            const builtin_cache_path = std.fs.path.join(self.allocator, &.{ cache_dir, "Builtin.roc" }) catch {
+                self.allocator.free(cache_dir);
+                return null;
+            };
+            self.allocator.free(cache_dir);
+
+            // Write file if it doesn't exist
+            if (std.fs.cwd().access(builtin_cache_path, .{})) |_| {
+                // Already exists
+            } else |_| {
+                // Create parent dirs and write embedded source
+                if (std.fs.path.dirname(builtin_cache_path)) |dir| {
+                    std.fs.cwd().makePath(dir) catch {};
+                }
+                const file = std.fs.cwd().createFile(builtin_cache_path, .{}) catch {
+                    self.allocator.free(builtin_cache_path);
+                    return null;
+                };
+                defer file.close();
+                file.writeAll(compiled_builtins.builtin_source) catch {
+                    self.allocator.free(builtin_cache_path);
+                    return null;
+                };
+            }
+
+            const module_uri = uri_util.pathToUri(self.allocator, builtin_cache_path) catch {
+                self.allocator.free(builtin_cache_path);
+                return null;
+            };
+            self.allocator.free(builtin_cache_path);
+
+            return DefinitionResult{
+                .uri = module_uri,
+                .range = .{ .start_line = 0, .start_col = 0, .end_line = 0, .end_col = 0 },
+            };
+        }
+
+        // Search all schedulers for a module matching this name
+        var sched_it = env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            if (sched.getModuleState(base_name)) |mod_state| {
+                const module_uri = uri_util.pathToUri(self.allocator, mod_state.path) catch return null;
+                return DefinitionResult{
+                    .uri = module_uri,
+                    .range = .{
+                        .start_line = 0,
+                        .start_col = 0,
+                        .end_line = 0,
+                        .end_col = 0,
+                    },
+                };
+            }
+        }
+        return null;
+    }
+
+    /// Extract the base type name from a type string (e.g., "Str" from "Str", "List a" -> "List")
+    fn extractBaseTypeName(type_str: []const u8) []const u8 {
+        // Skip leading whitespace
+        var start: usize = 0;
+        while (start < type_str.len and (type_str[start] == ' ' or type_str[start] == '\t')) {
+            start += 1;
+        }
+
+        // Find end of the type name (stop at space, bracket, or end)
+        var end = start;
+        while (end < type_str.len) {
+            const c = type_str[end];
+            if (c == ' ' or c == '[' or c == '(' or c == '{' or c == '<') break;
+            end += 1;
+        }
+
+        return type_str[start..end];
     }
 
     /// Find the narrowest lookup expression at the given offset
@@ -871,7 +1012,7 @@ pub const SyntaxChecker = struct {
         const expr = module_env.store.getExpr(expr_idx);
         var result: ?CIR.Expr.Idx = null;
 
-        // Check if this expression itself is a lookup
+        // Check if this expression itself is a lookup or a dot access with cursor on method name
         switch (expr) {
             .e_lookup_local => {
                 const size = region.end.offset - region.start.offset;
@@ -885,6 +1026,22 @@ pub const SyntaxChecker = struct {
                 if (size < best_size.*) {
                     best_size.* = size;
                     result = expr_idx;
+                }
+            },
+            .e_dot_access => |dot| {
+                // Check if cursor is on the field/method name (for static dispatch)
+                self.logDebug(.build, "[DEF] e_dot_access found: field_name_region={d}-{d}, target_offset={d}", .{
+                    dot.field_name_region.start.offset,
+                    dot.field_name_region.end.offset,
+                    target_offset,
+                });
+                if (regionContainsOffset(dot.field_name_region, target_offset)) {
+                    const size = dot.field_name_region.end.offset - dot.field_name_region.start.offset;
+                    if (size < best_size.*) {
+                        best_size.* = size;
+                        result = expr_idx;
+                        self.logDebug(.build, "[DEF] e_dot_access MATCHED!", .{});
+                    }
                 }
             },
             else => {},
@@ -1887,9 +2044,9 @@ pub const SyntaxChecker = struct {
             return null;
         };
 
-        // Drain reports but ignore them
+        // Drain reports but ignore them (must still free them to avoid leaks)
         const drained = env.drainReports() catch return null;
-        defer self.freeDrained(drained);
+        defer self.freeDrainedWithReports(drained);
 
         // Get any available scheduler and find the root module
         const app_sched = env.schedulers.get("app") orelse blk: {

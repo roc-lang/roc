@@ -186,10 +186,9 @@ pub const DependencyGraph = struct {
     /// This extracts module relationships from the compiler's internal state.
     pub fn buildFromPackageEnv(self: *DependencyGraph, pkg_env: *compile.package.PackageEnv) !void {
         // First pass: create all module nodes
-        for (pkg_env.modules.items, 0..) |*module_state, idx| {
+        for (pkg_env.modules.items) |*module_state| {
             const node = try self.getOrCreateModule(module_state.path, module_state.name);
             node.depth = module_state.depth;
-            _ = idx;
         }
 
         // Second pass: build import/dependent relationships
