@@ -1223,6 +1223,11 @@ pub fn checkPlatformRequirements(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Ensure the type store is filled to match the number of regions.
+    // This is necessary because checkPlatformRequirements may be called with a
+    // fresh Check instance that hasn't had checkFile() called on it.
+    try ensureTypeStoreIsFilled(self);
+
     // Create a solver env for type operations
     var env = try self.env_pool.acquire();
     defer self.env_pool.release(env);
@@ -1503,6 +1508,10 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
 
     // Check any accumulated static dispatch constraints
     try self.checkDeferredStaticDispatchConstraints(&env);
+
+    // Check if the expression's type has incompatible constraints (e.g., !3)
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    try self.checkFlexVarConstraintCompatibility(expr_var, &env);
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -3367,8 +3376,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     },
                     .processing => {
                         // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized), so the code below will
-                        // unify directly with it, which is the correct behavior.
+                        // top_level rank (not generalized).
+                        //
+                        // If the def has a type annotation, we need to instantiate it
+                        // to avoid polluting the pattern variable's rank. Without this,
+                        // unifying directly would pull the annotation's rigid vars down
+                        // to the pattern's rank, preventing proper generalization.
+                        // This fixes GitHub issue #8994.
+                        const def = self.cir.store.getDef(processing_def.def_idx);
+                        if (def.annotation) |annotation_idx| {
+                            const anno_var = ModuleEnv.varFrom(annotation_idx);
+                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
+                            _ = try self.unify(expr_var, instantiated, env);
+                            return does_fx;
+                        }
+                        // Otherwise, fall through to unify directly with pat_var
                     },
                     .processed => {},
                 }
@@ -5672,8 +5694,9 @@ fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Alloca
                 }
             }
         } else if (dispatcher_content == .flex) {
-            // If the thing we're dispatching is a flex, then hold onto the
-            // constraint so we can try again later.
+            // If the dispatcher is a flex, hold onto the constraint to try again later.
+            // Note: flex vars with from_numeral constraints are validated separately
+            // in checkFlexVarConstraintCompatibility after type checking completes.
             _ = try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
         } else {
             // If the root type is anything but a nominal type or anonymous structural type, push an error
@@ -5793,6 +5816,53 @@ fn varSupportsIsEq(self: *Self, var_: Var) bool {
         // Error types: allow them to proceed
         .err => true,
     };
+}
+
+/// Check if a flex var has incompatible constraints and report errors.
+/// This is called after type-checking to catch cases like `!3` where a flex var
+/// has both `from_numeral` (numeric) and `not` (Bool only) constraints.
+/// If the flex var has a from_numeral constraint (meaning it will default to a numeric
+/// type like Dec), we validate that all other constraints can be satisfied by Dec.
+fn checkFlexVarConstraintCompatibility(self: *Self, var_: Var, env: *Env) Allocator.Error!void {
+    const resolved = self.types.resolveVar(var_);
+    if (resolved.desc.content != .flex) return;
+
+    const flex = resolved.desc.content.flex;
+    const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
+    if (constraints.len == 0) return;
+
+    // Check if this flex var has from_numeral constraint (indicating numeric type)
+    var has_from_numeral = false;
+    for (constraints) |c| {
+        if (c.origin == .from_numeral) {
+            has_from_numeral = true;
+            break;
+        }
+    }
+
+    if (has_from_numeral) {
+        // This flex will default to Dec. Validate that all other constraints
+        // can be satisfied by Dec.
+        const builtin_env = self.builtin_ctx.builtin_module orelse return;
+        const indices = self.builtin_ctx.builtin_indices orelse return;
+
+        for (constraints) |constraint| {
+            // Skip from_numeral - that's satisfied by Dec by definition
+            if (constraint.origin == .from_numeral) continue;
+
+            // Check if Dec has this method
+            const method_ident = builtin_env.lookupMethodIdentFromEnvConst(self.cir, indices.dec_ident, constraint.fn_name);
+            if (method_ident == null) {
+                // Dec doesn't have this method - report error
+                try self.reportConstraintError(
+                    var_,
+                    constraint,
+                    .{ .missing_method = .nominal },
+                    env,
+                );
+            }
+        }
+    }
 }
 
 /// Check if a type variable contains any error types anywhere in its structure.

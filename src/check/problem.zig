@@ -91,19 +91,19 @@ pub const PlatformDefNotFound = struct {
 
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
-    message: []const u8,
+    message: ExtraStringIdx,
     region: base.Region,
 };
 
 /// An expect that failed during compile-time evaluation
 pub const ComptimeExpectFailed = struct {
-    message: []const u8,
+    message: ExtraStringIdx,
     region: base.Region,
 };
 
 /// An error that occurred during compile-time evaluation
 pub const ComptimeEvalError = struct {
-    error_name: []const u8,
+    error_name: ExtraStringIdx,
     region: base.Region,
 };
 
@@ -3238,7 +3238,9 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPTIME CRASH", .runtime_error);
         errdefer report.deinit();
 
-        const owned_message = try report.addOwnedString(data.message);
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
 
         try report.document.addText("This definition crashed during compile-time evaluation:");
         try report.document.addLineBreak();
@@ -3294,7 +3296,9 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPTIME EVAL ERROR", .runtime_error);
         errdefer report.deinit();
 
-        const owned_error_name = try report.addOwnedString(data.error_name);
+        const owned_error_name = try report.addOwnedString(
+            self.problems.getExtraString(data.error_name),
+        );
 
         try report.document.addText("This definition could not be evaluated at compile time:");
         try report.document.addLineBreak();
@@ -3539,21 +3543,26 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free allocated memory in problem data
-        for (self.problems.items) |prob| {
-            switch (prob) {
-                // Free comptime evaluation messages - these are allocated by ComptimeEvaluator
-                // and ownership is transferred to ProblemStore
-                .comptime_crash => |cc| gpa.free(cc.message),
-                .comptime_expect_failed => |cef| gpa.free(cef.message),
-                .comptime_eval_error => |cee| gpa.free(cee.error_name),
-                else => {},
-            }
-        }
-
         self.extra_strings_backing.deinit();
         self.missing_patterns_backing.deinit();
         self.problems.deinit(gpa);
+    }
+
+    /// Put an extra string in the backing store, returning an "id" (range)
+    pub fn putExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
+        const start = self.extra_strings_backing.items.len;
+        try self.extra_strings_backing.appendSlice(str);
+        const end = self.extra_strings_backing.items.len;
+        return ByteListRange{ .start = start, .count = end - start };
+    }
+
+    /// Put an extra string in the backing store, returning an "id" (range)
+    pub fn putFmtExtraString(self: *Self, comptime format: []const u8, args: anytype) std.mem.Allocator.Error!ExtraStringIdx {
+        const start = self.extra_strings_backing.items.len;
+        var writer = self.extra_strings_backing.writer();
+        try writer.print(format, args);
+        const end = self.extra_strings_backing.items.len;
+        return ByteListRange{ .start = start, .count = end - start };
     }
 
     /// Get a stored pattern string by its range

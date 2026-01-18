@@ -437,6 +437,72 @@ test "fx platform checked directly finds sibling modules" {
     }
 }
 
+test "custom platform and package qualifiers work in roc run" {
+    // Regression test for package qualifier extraction and execution.
+    // Apps can use any identifier for their platform/package qualifiers (e.g., "fx" instead of "pf").
+    // The qualifier must be correctly extracted from the app header for module resolution.
+    //
+    // This test uses an app with:
+    // - Platform qualifier "fx" (instead of default "pf") importing fx.Stdout
+    // - Package qualifier "hlp" importing hlp.Helper from a sibling package
+    //
+    // Two bugs were fixed:
+    // 1. setupSharedMemoryWithModuleEnv hardcoded "pf." when registering platform modules
+    // 2. Non-platform packages weren't loaded at all during IPC mode execution
+    //
+    // The test verifies the app runs correctly and produces expected output.
+    //
+    // See: https://github.com/roc-lang/roc/issues/9030
+    const allocator = std.testing.allocator;
+
+    // Run an app that uses custom qualifiers for both platform and package
+    const run_result = try std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{
+            roc_binary_path,
+            "test/fx/multi_qualifier.roc",
+        },
+    });
+    defer allocator.free(run_result.stdout);
+    defer allocator.free(run_result.stderr);
+
+    // Check for undefined variable errors which would indicate qualifier mismatch
+    if (std.mem.indexOf(u8, run_result.stderr, "UNDEFINED VARIABLE") != null) {
+        std.debug.print("\n❌ Custom qualifiers not recognized\n", .{});
+        std.debug.print("This indicates the qualifiers were not correctly extracted from the app header.\n", .{});
+        std.debug.print("\n========== FULL OUTPUT ==========\n", .{});
+        std.debug.print("STDOUT:\n{s}\n", .{run_result.stdout});
+        std.debug.print("STDERR:\n{s}\n", .{run_result.stderr});
+        std.debug.print("==================================\n\n", .{});
+        return error.PackageQualifierNotRecognized;
+    }
+
+    // Check that roc run succeeded
+    switch (run_result.term) {
+        .Exited => |code| {
+            if (code != 0) {
+                std.debug.print("\n❌ Run with custom qualifiers failed with exit code {}\n", .{code});
+                std.debug.print("STDOUT:\n{s}\n", .{run_result.stdout});
+                std.debug.print("STDERR:\n{s}\n", .{run_result.stderr});
+                return error.RunFailed;
+            }
+        },
+        else => {
+            std.debug.print("\n❌ Run terminated abnormally: {}\n", .{run_result.term});
+            return error.AbnormalTermination;
+        },
+    }
+
+    // Verify the expected output
+    const expected_output = "Hello, World!";
+    if (std.mem.indexOf(u8, run_result.stdout, expected_output) == null) {
+        std.debug.print("\n❌ Expected output not found\n", .{});
+        std.debug.print("Expected: {s}\n", .{expected_output});
+        std.debug.print("Got:\n{s}\n", .{run_result.stdout});
+        return error.UnexpectedOutput;
+    }
+}
+
 test "fx platform string interpolation type mismatch" {
     const allocator = testing.allocator;
 

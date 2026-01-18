@@ -410,7 +410,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -768,7 +768,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -843,7 +843,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -2333,4 +2333,35 @@ test "issue 8946: closure capturing for-loop element with == comparison" {
         \\    check([1, 2])
         \\}
     , 2, .no_trace);
+}
+
+test "issue 8978: incref alignment with recursive tag unions in tuples" {
+    // Regression test for GitHub issue #8978: incref alignment check failed
+    // when a recursive tag union using pointer tagging was stored in a tuple.
+    //
+    // Recursive tag unions (types that contain themselves, like linked lists
+    // or expression trees) use pointer tagging to store the tag discriminant
+    // in the low bits of the pointer. When incref is called on such a pointer,
+    // it needs to strip the tag bits before accessing the refcount at ptr - 8.
+    //
+    // The bug was that increfDataPtrC had an alignment check that would fail
+    // on tagged pointers because they aren't aligned to @alignOf(usize).
+    //
+    // The fix: remove the alignment check since the tag bits are stripped
+    // before accessing the refcount anyway.
+    //
+    // This test uses a recursive tag pattern (Element containing children
+    // that can also be Element) inside a tuple, which triggers the incref
+    // alignment issue when the tuple is returned from a function.
+    try runExpectI64(
+        \\{
+        \\    make_result = || {
+        \\        elem = Element("div", [Text("hello"), Element("span", [Text("world")])])
+        \\        children = match elem { Element(_tag, c) => c, Text(_) => [] }
+        \\        (children, 42i64)
+        \\    }
+        \\    (_, n) = make_result()
+        \\    n
+        \\}
+    , 42, .no_trace);
 }

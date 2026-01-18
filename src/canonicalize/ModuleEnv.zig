@@ -1602,6 +1602,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .record_builder_map2_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "RECORD BUILDER NOT SUPPORTED", .runtime_error);
+
+            const type_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_bytes);
+
+            // "The type `Foo` is used in a record builder expression, but does not implement `map2`:"
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is used in a record builder expression, but does not implement ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            // Hint
+            try report.document.addReflowingText("Hint: To use ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" as a record builder, add a ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(" method to its type module.");
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -2588,14 +2622,17 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                 else => continue, // Skip non-assign patterns (like destructuring)
             }
 
-            const pattern_var = varFrom(def.pattern);
+            // Use def_idx for type lookup, not def.pattern. During type checking,
+            // def_var and pattern_var are unified, but the type store may not have
+            // slots for all pattern indices. Def indices are always within bounds.
+            const def_var = varFrom(def_idx);
 
             // Get the region for this definition
             const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
             // Write the type to the buffer
-            try type_writer.write(pattern_var, .one_line);
+            try type_writer.write(def_var, .one_line);
 
             // Add the pattern type entry
             const patt_begin = tree.beginNode();
