@@ -7647,47 +7647,29 @@ pub const Interpreter = struct {
                 // which may differ from the type system's layout if runtime defaulting occurred.
                 const list_layout = value.layout;
 
-                // Check if the list value itself is polymorphic (from a polymorphic function)
-                const value_rt_resolved = self.runtime_types.resolveVar(value_rt_var);
-                const list_is_polymorphic = value_rt_resolved.desc.content == .flex or
-                    value_rt_resolved.desc.content == .rigid;
-
-                // Get element type from the list value's type if available, otherwise from the pattern
-                // Using the value's type preserves proper method bindings through polymorphic calls
-                const elem_rt_var: types.Var = if (list_is_polymorphic) blk: {
-                    // List came from polymorphic context - create a fresh flex variable for elements
-                    // so they maintain their polymorphic nature
-                    break :blk try self.runtime_types.fresh();
-                } else if (value_rt_resolved.desc.content == .structure and
-                    value_rt_resolved.desc.content.structure == .nominal_type)
-                blk: {
-                    // Use the element type from the list value's actual type
-                    // This preserves method bindings through polymorphic function calls
-                    const nominal = value_rt_resolved.desc.content.structure.nominal_type;
-                    const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
-                    if (vars.len == 2) {
-                        break :blk vars[1]; // element type is second var
+                // Prefer the actual value's rt_var over the passed value_rt_var.
+                // The value was created during evaluation with a concrete type, while
+                // value_rt_var may be polymorphic (e.g., from a polymorphic function's
+                // translated scrutinee type). Using the concrete type ensures that
+                // pattern-bound variables like `rest` in `[_, .. as rest]` get concrete
+                // types for subsequent operations.
+                const effective_list_rt_var = blk: {
+                    const value_resolved = self.runtime_types.resolveVar(value.rt_var);
+                    if (value_resolved.desc.content == .structure and
+                        value_resolved.desc.content.structure == .nominal_type)
+                    {
+                        break :blk value.rt_var;
                     }
-                    // Fallback to pattern translation if structure is unexpected
-                    const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
-                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
-                    std.debug.assert(list_rt_content == .structure);
-                    std.debug.assert(list_rt_content.structure == .nominal_type);
-                    const nom = list_rt_content.structure.nominal_type;
-                    const pattern_vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                    std.debug.assert(pattern_vars.len == 2);
-                    break :blk pattern_vars[1];
-                } else blk: {
-                    // Value's type is not a nominal List type - extract from pattern
-                    const list_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(pattern_idx));
-                    const list_rt_content = self.runtime_types.resolveVar(list_rt_var).desc.content;
-                    std.debug.assert(list_rt_content == .structure);
-                    std.debug.assert(list_rt_content.structure == .nominal_type);
-                    const nominal = list_rt_content.structure.nominal_type;
-                    const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
-                    std.debug.assert(vars.len == 2);
-                    break :blk vars[1];
+                    break :blk value_rt_var;
                 };
+
+                const list_rt_resolved = self.runtime_types.resolveVar(effective_list_rt_var);
+                std.debug.assert(list_rt_resolved.desc.content == .structure);
+                std.debug.assert(list_rt_resolved.desc.content.structure == .nominal_type);
+                const nominal = list_rt_resolved.desc.content.structure.nominal_type;
+                const vars = self.runtime_types.sliceVars(nominal.vars.nonempty);
+                std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                const elem_rt_var = vars[1];
 
                 // Get element layout from the actual list layout for memory access.
                 // The list's runtime layout may differ from the type system's expectation.
@@ -7748,10 +7730,10 @@ pub const Interpreter = struct {
 
                     if (rest_info.pattern) |rest_pat_idx| {
                         const rest_len = total_len - prefix_len - suffix_len;
-                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, value_rt_var, roc_ops);
+                        const rest_value = try self.makeListSliceValue(list_layout, physical_elem_layout, accessor.list, prefix_len, rest_len, effective_list_rt_var, roc_ops);
                         defer rest_value.decref(&self.runtime_layout_store, roc_ops);
                         const before = out_binds.items.len;
-                        if (!try self.patternMatchesBind(rest_pat_idx, rest_value, value_rt_var, roc_ops, out_binds, expr_idx)) {
+                        if (!try self.patternMatchesBind(rest_pat_idx, rest_value, effective_list_rt_var, roc_ops, out_binds, expr_idx)) {
                             self.trimBindingList(out_binds, before, roc_ops);
                             return false;
                         }
@@ -11551,12 +11533,15 @@ pub const Interpreter = struct {
                 defer sched_trace.end();
                 const elems = self.env.store.sliceExpr(list_expr.elems);
 
-                // Get list type variable
-                // If expected_rt_var is flex/rigid (polymorphic), fall back to expression's type
+                // Get list type variable. If expected_rt_var is provided and concrete, use it.
+                // Otherwise translate from the expression's compile-time type, which should
+                // be concrete for a list literal like ["a", "b", "c"].
                 const list_rt_var = blk: {
                     if (expected_rt_var) |expected| {
                         const expected_resolved = self.runtime_types.resolveVar(expected);
-                        if (expected_resolved.desc.content != .flex and expected_resolved.desc.content != .rigid) {
+                        if (expected_resolved.desc.content == .structure and
+                            expected_resolved.desc.content.structure == .nominal_type)
+                        {
                             break :blk expected;
                         }
                     }
@@ -11583,30 +11568,12 @@ pub const Interpreter = struct {
                     // The element type may be flex (e.g., Num *) which is fine - downstream
                     // code like getRuntimeLayout will default flex to Dec as needed.
                     const list_resolved = self.runtime_types.resolveVar(list_rt_var);
-
-                    // Handle polymorphic list types (flex/rigid)
-                    // This can happen when the list literal appears in a polymorphic context
-                    // where the expected type is a bare type variable rather than List(elem).
-                    // In this case, create a fresh flex for element type and let element
-                    // evaluation infer the actual types.
-                    const elem_rt_var: types.Var = if (list_resolved.desc.content == .flex or
-                        list_resolved.desc.content == .rigid)
-                    blk: {
-                        break :blk try self.runtime_types.fresh();
-                    } else if (list_resolved.desc.content == .structure and
-                        list_resolved.desc.content.structure == .nominal_type)
-                    blk: {
-                        const nom = list_resolved.desc.content.structure.nominal_type;
-                        const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
-                        if (vars.len == 2) {
-                            break :blk vars[1]; // element type is second var
-                        }
-                        // Unexpected structure - fall back to fresh flex
-                        break :blk try self.runtime_types.fresh();
-                    } else blk: {
-                        // Other content types - fall back to fresh flex
-                        break :blk try self.runtime_types.fresh();
-                    };
+                    std.debug.assert(list_resolved.desc.content == .structure);
+                    std.debug.assert(list_resolved.desc.content.structure == .nominal_type);
+                    const nom = list_resolved.desc.content.structure.nominal_type;
+                    const vars = self.runtime_types.sliceVars(nom.vars.nonempty);
+                    std.debug.assert(vars.len == 2); // vars[0] = backing, vars[1] = element type
+                    const elem_rt_var = vars[1];
 
                     const elem_resolved = self.runtime_types.resolveVar(elem_rt_var);
                     const elem_content = elem_resolved.desc.content;
