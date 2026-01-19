@@ -27,6 +27,12 @@ pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
+/// Interpreter for running CIR expressions
+pub const Interpreter = @import("interpreter.zig").Interpreter;
+/// Stack value representation for interpreter
+pub const StackValue = @import("StackValue.zig");
+/// Render helpers for outputting values
+pub const render_helpers = @import("render_helpers.zig");
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
@@ -37,4 +43,23 @@ test "eval tests" {
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
+    std.testing.refAllDecls(@import("interpreter.zig"));
+    std.testing.refAllDecls(@import("StackValue.zig"));
+    std.testing.refAllDecls(@import("render_helpers.zig"));
+
+    // Test files that compare interpreter output with dev backend
+    std.testing.refAllDecls(@import("test/helpers.zig"));
+    std.testing.refAllDecls(@import("test/eval_test.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_pattern.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_alias.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_complex.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_conditional.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_containers.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_function.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
+    std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
+    std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
 }

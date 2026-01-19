@@ -151,18 +151,19 @@ const DevEvalError = error{
 };
 
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
-fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) DevEvalError![]const u8 {
+fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
     var dev_eval = DevEvaluator.init(allocator) catch {
         return error.DevEvaluatorInitFailed;
     };
     defer dev_eval.deinit();
 
-    // Get the expression from the index
-    const expr = module_env.store.getExpr(expr_idx);
+    // Create module envs array for code generation
+    // Note: generateCode expects []const *ModuleEnv (mutable pointers in immutable slice)
+    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
-    // Generate code
-    var code_result = dev_eval.generateCode(module_env, expr) catch {
+    // Generate code using Mono IR pipeline
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
         return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
@@ -255,8 +256,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 /// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
 /// an expression, the test will fail (which is the desired behavior to
 /// track what still needs to be implemented).
-fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx) catch |err| {
+fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env) catch |err| {
         std.debug.print(
             "\nDevEvaluator failed with error: {s}. Interpreter result was: {s}\n",
             .{ @errorName(err), interpreter_str },
@@ -344,7 +345,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     // Compare with DevEvaluator using string representation
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -389,7 +390,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     // Compare with DevEvaluator using string representation
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -425,7 +426,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     // Compare with DevEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -465,7 +466,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     // Compare with DevEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -510,7 +511,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const int_part = @divTrunc(actual_dec.num, dec_scale);
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -552,7 +553,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const int_part = @divTrunc(actual_dec.num, dec_scale);
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -591,7 +592,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const str_slice = roc_str.asSlice();
 
     // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
@@ -685,7 +686,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer test_allocator.free(tuple_str);
 
     // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -771,7 +772,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer test_allocator.free(record_str);
 
     // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -825,7 +826,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     try list_str.appendSlice(test_allocator, "]");
 
     // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -892,7 +893,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     try list_str.appendSlice(test_allocator, "]");
 
     // Compare with DevEvaluator
-    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -938,7 +939,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
 
     // Compare with DevEvaluator - empty list is "[]"
-    try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Parse and canonicalize an expression.
