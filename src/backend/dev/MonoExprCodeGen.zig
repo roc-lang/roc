@@ -541,13 +541,7 @@ pub const MonoExprCodeGen = struct {
             .field_access => |fa| self.evalFieldAccessI64(fa, env),
             .if_then_else => |ite| self.evalIfThenElseI64(ite, env),
             .nominal => |nom| self.evalConstantI64(nom.backing_expr, env),
-            .call => |call| blk: {
-                // Check if this is a call to a zero-arg function that returns a constant
-                const fn_result = self.evalConstantI64(call.fn_expr, env);
-                if (fn_result != null) break :blk fn_result;
-                // Try evaluating the call's result if it's a known pattern
-                break :blk null;
-            },
+            .call => |call| self.evalCallI64(call, env),
             .block => |block| self.evalConstantI64(block.final_expr, env),
             else => null,
         };
@@ -709,6 +703,134 @@ pub const MonoExprCodeGen = struct {
         }
 
         return self.evalConstantI64(ite.final_else, env);
+    }
+
+    /// Evaluate a function call for i64 - handles recursive calls
+    fn evalCallI64(self: *MonoExprCodeGen, call: anytype, env: *MonoScope) ?i64 {
+        const fn_expr = self.mono_store.getExpr(call.fn_expr);
+
+        switch (fn_expr) {
+            .lambda => |lambda| {
+                return self.evalApplyLambdaI64(lambda, call.args, env);
+            },
+            .closure => |closure| {
+                return self.evalApplyClosureI64(closure, call.args, env);
+            },
+            .lookup => |lookup| {
+                // Look up the closure in scope and apply it
+                if (env.lookupClosure(lookup.symbol)) |closure_id| {
+                    const closure_expr = self.mono_store.getExpr(closure_id);
+                    switch (closure_expr) {
+                        .lambda => |lambda| {
+                            return self.evalApplyLambdaI64(lambda, call.args, env);
+                        },
+                        .closure => |closure| {
+                            return self.evalApplyClosureI64(closure, call.args, env);
+                        },
+                        else => return null,
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+
+    /// Evaluate applying a lambda to arguments for i64
+    fn evalApplyLambdaI64(self: *MonoExprCodeGen, lambda: anytype, args_span: anytype, env: *MonoScope) ?i64 {
+        const arg_ids = self.mono_store.getExprSpan(args_span);
+        const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+        if (arg_ids.len != param_ids.len) {
+            return null;
+        }
+
+        // Create a child scope for the lambda body
+        var new_env = env.child();
+        defer new_env.deinit();
+
+        // Bind arguments to parameters
+        for (arg_ids, param_ids) |arg_id, param_id| {
+            const pattern = self.mono_store.getPattern(param_id);
+            switch (pattern) {
+                .bind => |b| {
+                    const arg_val = self.evalConstantI64(arg_id, env) orelse return null;
+                    new_env.bind(b.symbol, arg_val) catch return null;
+                },
+                .wildcard => {}, // No binding needed
+                else => return null,
+            }
+        }
+
+        // Evaluate the lambda body
+        return self.evalConstantI64(lambda.body, &new_env);
+    }
+
+    /// Evaluate applying a closure to arguments for i64
+    fn evalApplyClosureI64(self: *MonoExprCodeGen, closure: anytype, args_span: anytype, env: *MonoScope) ?i64 {
+        const lambda_expr = self.mono_store.getExpr(closure.lambda);
+        switch (lambda_expr) {
+            .lambda => |lambda| {
+                const arg_ids = self.mono_store.getExprSpan(args_span);
+                const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+                if (arg_ids.len != param_ids.len) {
+                    return null;
+                }
+
+                // Create a child scope for the closure body
+                var new_env = env.child();
+                defer new_env.deinit();
+
+                // First bind captured variables
+                const captures = self.mono_store.getCaptures(closure.captures);
+                for (captures) |capture| {
+                    if (env.lookup(capture.symbol)) |val| {
+                        new_env.bind(capture.symbol, val) catch return null;
+                    } else if (env.lookupBinding(capture.symbol)) |binding| {
+                        switch (binding) {
+                            .expr_ref => |expr_id| {
+                                const cap_val = self.evalConstantI64(expr_id, env) orelse {
+                                    // If we can't evaluate the capture as a constant, try binding as closure
+                                    if (env.lookupClosure(capture.symbol)) |closure_id| {
+                                        new_env.bindClosure(capture.symbol, closure_id) catch return null;
+                                        continue;
+                                    }
+                                    return null;
+                                };
+                                new_env.bind(capture.symbol, cap_val) catch return null;
+                            },
+                            .i64_val => |val| {
+                                new_env.bind(capture.symbol, val) catch return null;
+                            },
+                            else => return null,
+                        }
+                    } else if (env.lookupClosure(capture.symbol)) |closure_id| {
+                        // Capture is a closure - carry it forward for recursive calls
+                        new_env.bindClosure(capture.symbol, closure_id) catch return null;
+                    } else {
+                        return null;
+                    }
+                }
+
+                // Then bind arguments to parameters
+                for (arg_ids, param_ids) |arg_id, param_id| {
+                    const pattern = self.mono_store.getPattern(param_id);
+                    switch (pattern) {
+                        .bind => |b| {
+                            const arg_val = self.evalConstantI64(arg_id, env) orelse return null;
+                            new_env.bind(b.symbol, arg_val) catch return null;
+                        },
+                        .wildcard => {}, // No binding needed
+                        else => return null,
+                    }
+                }
+
+                // Evaluate the lambda body
+                return self.evalConstantI64(lambda.body, &new_env);
+            },
+            else => return null,
+        }
     }
 
     /// Generate code for binary operations
