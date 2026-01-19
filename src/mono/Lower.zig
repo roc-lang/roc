@@ -38,6 +38,7 @@ const MonoExprId = ir.MonoExprId;
 const MonoPatternId = ir.MonoPatternId;
 const MonoExprSpan = ir.MonoExprSpan;
 const MonoPatternSpan = ir.MonoPatternSpan;
+const MonoFieldNameSpan = ir.MonoFieldNameSpan;
 const MonoSymbol = ir.MonoSymbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
@@ -195,6 +196,12 @@ fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx 
     };
 }
 
+/// Get layout for an expression from its index
+fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
+    const expr = module_env.store.getExpr(expr_idx);
+    return self.getExprLayout(module_env, expr);
+}
+
 /// Lower a single expression
 pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
     const old_module = self.current_module_idx;
@@ -225,14 +232,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_dec => |d| .{ .dec_literal = d.value.num },
         .e_dec_small => |d| .{ .dec_literal = d.value.toRocDec().num },
 
-        .e_str_segment => |seg| .{ .str_literal = seg.literal },
+        .e_str_segment => |seg| blk: {
+            // Copy the string from the module to the mono store
+            const str_text = module_env.common.getString(seg.literal);
+            const mono_idx = self.store.insertString(str_text) catch return error.OutOfMemory;
+            break :blk .{ .str_literal = mono_idx };
+        },
         .e_str => |str| blk: {
             // For now, handle simple strings - interpolation needs more work
             const segments = module_env.store.sliceExpr(str.span);
             if (segments.len == 1) {
                 const seg_expr = module_env.store.getExpr(segments[0]);
                 if (seg_expr == .e_str_segment) {
-                    break :blk .{ .str_literal = seg_expr.e_str_segment.literal };
+                    // Copy the string from the module to the mono store
+                    const str_text = module_env.common.getString(seg_expr.e_str_segment.literal);
+                    const mono_idx = self.store.insertString(str_text) catch return error.OutOfMemory;
+                    break :blk .{ .str_literal = mono_idx };
                 }
             }
             // Complex string - lower all segments
@@ -262,6 +277,29 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         // ============ Function calls ============
         .e_call => |call| blk: {
+            // Check if this is a call to a low-level lambda (like str_inspekt)
+            const fn_expr = module_env.store.getExpr(call.func);
+            if (fn_expr == .e_low_level_lambda) {
+                const ll = fn_expr.e_low_level_lambda;
+                if (ll.op == .str_inspekt) {
+                    // Expand str_inspekt at lowering time
+                    const arg_indices = module_env.store.sliceExpr(call.args);
+                    if (arg_indices.len == 1) {
+                        const arg_idx = arg_indices[0];
+                        const arg_id = try self.lowerExprFromIdx(module_env, arg_idx);
+                        // Get the type variable for the argument
+                        // In the Zig implementation, expr indices ARE type variables
+                        const arg_type_var = ModuleEnv.varFrom(arg_idx);
+                        const arg_layout = self.getExprLayoutFromIdx(module_env, arg_idx);
+                        return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
+                    }
+                }
+                // For other low-level ops, we would need to convert the op enum
+                // For now, return a placeholder - full low-level op support would
+                // require converting between CIR.Expr.LowLevel and MonoExpr.LowLevel
+                break :blk .{ .runtime_error = {} };
+            }
+
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
             const args = try self.lowerExprSpan(module_env, call.args);
             break :blk .{ .call = .{
@@ -312,10 +350,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         },
 
         .e_record => |rec| blk: {
-            const fields = try self.lowerRecordFields(module_env, rec.fields);
+            const result = try self.lowerRecordFields(module_env, rec.fields);
             break :blk .{ .record = .{
                 .record_layout = .i64, // TODO
-                .fields = fields,
+                .fields = result.fields,
+                .field_names = result.field_names,
             } };
         },
 
@@ -327,6 +366,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .record_layout = .i64, // TODO
                 .field_layout = .i64, // TODO
                 .field_idx = 0, // TODO: resolve field index from layout
+                .field_name = dot.field_name,
             } };
         },
 
@@ -474,6 +514,58 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_typed_frac => |tf| .{ .dec_literal = tf.value.toI128() },
 
+        // Low-level lambda - these are compiler-generated intrinsics
+        .e_low_level_lambda => |ll| blk: {
+            // Low-level lambdas are typically called, not evaluated directly
+            // When called, we intercept them in e_call handling
+            // If we encounter one directly, it's like a closure reference
+            _ = ll;
+            break :blk .{ .runtime_error = {} };
+        },
+
+        // ============ Reference counting operations ============
+        // These are inserted by the RC insertion pass after canonicalization
+
+        .e_incref => |rc_op| blk: {
+            // Convert pattern reference to a lookup expression
+            const symbol = self.patternToSymbol(rc_op.pattern_idx);
+            const lookup_id = try self.store.addExpr(.{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = .i64, // TODO: get actual layout from pattern
+            } }, region);
+            break :blk .{ .incref = .{
+                .value = lookup_id,
+                .layout_idx = .i64, // TODO: get actual layout
+                .count = rc_op.count,
+            } };
+        },
+
+        .e_decref => |rc_op| blk: {
+            // Convert pattern reference to a lookup expression
+            const symbol = self.patternToSymbol(rc_op.pattern_idx);
+            const lookup_id = try self.store.addExpr(.{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = .i64, // TODO: get actual layout from pattern
+            } }, region);
+            break :blk .{ .decref = .{
+                .value = lookup_id,
+                .layout_idx = .i64, // TODO: get actual layout
+            } };
+        },
+
+        .e_free => |rc_op| blk: {
+            // Convert pattern reference to a lookup expression
+            const symbol = self.patternToSymbol(rc_op.pattern_idx);
+            const lookup_id = try self.store.addExpr(.{ .lookup = .{
+                .symbol = symbol,
+                .layout_idx = .i64, // TODO: get actual layout from pattern
+            } }, region);
+            break :blk .{ .free = .{
+                .value = lookup_id,
+                .layout_idx = .i64, // TODO: get actual layout
+            } };
+        },
+
         else => .{ .runtime_error = {} }, // Placeholder for unsupported expressions
     };
 
@@ -503,21 +595,62 @@ fn lowerExprSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Expr.Span) Error
     return self.store.addExprSpan(lowered.items);
 }
 
-/// Lower record fields
-fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Error!MonoExprSpan {
-    const field_indices = module_env.store.sliceRecordFields(fields);
-    if (field_indices.len == 0) return MonoExprSpan.empty();
+/// Result of lowering record fields
+const LowerRecordFieldsResult = struct {
+    fields: MonoExprSpan,
+    field_names: MonoFieldNameSpan,
+};
 
-    var lowered = std.ArrayList(MonoExprId).empty;
-    defer lowered.deinit(self.allocator);
+/// Lower record fields - sorted alphabetically by field name to match layout order
+fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Error!LowerRecordFieldsResult {
+    const field_indices = module_env.store.sliceRecordFields(fields);
+    if (field_indices.len == 0) return .{
+        .fields = MonoExprSpan.empty(),
+        .field_names = MonoFieldNameSpan.empty(),
+    };
+
+    // Collect (name, value) pairs for sorting
+    const FieldPair = struct {
+        name: base.Ident.Idx,
+        value: CIR.Expr.Idx,
+    };
+
+    var pairs = std.ArrayList(FieldPair).empty;
+    defer pairs.deinit(self.allocator);
 
     for (field_indices) |field_idx| {
         const field = module_env.store.getRecordField(field_idx);
-        const id = try self.lowerExprFromIdx(module_env, field.value);
-        try lowered.append(self.allocator, id);
+        try pairs.append(self.allocator, .{ .name = field.name, .value = field.value });
     }
 
-    return self.store.addExprSpan(lowered.items);
+    // Sort fields alphabetically by name (matches layout order for same-alignment fields)
+    const SortContext = struct {
+        module_env: *ModuleEnv,
+        pub fn lessThan(ctx: @This(), a: FieldPair, b: FieldPair) bool {
+            const a_str = ctx.module_env.getIdent(a.name);
+            const b_str = ctx.module_env.getIdent(b.name);
+            return std.mem.order(u8, a_str, b_str) == .lt;
+        }
+    };
+    std.mem.sort(FieldPair, pairs.items, SortContext{ .module_env = module_env }, SortContext.lessThan);
+
+    // Lower fields and collect names in sorted order
+    var lowered = std.ArrayList(MonoExprId).empty;
+    defer lowered.deinit(self.allocator);
+
+    var names = std.ArrayList(base.Ident.Idx).empty;
+    defer names.deinit(self.allocator);
+
+    for (pairs.items) |pair| {
+        const id = try self.lowerExprFromIdx(module_env, pair.value);
+        try lowered.append(self.allocator, id);
+        try names.append(self.allocator, pair.name);
+    }
+
+    return .{
+        .fields = self.store.addExprSpan(lowered.items) catch return error.OutOfMemory,
+        .field_names = self.store.addFieldNameSpan(names.items) catch return error.OutOfMemory,
+    };
 }
 
 /// Lower a pattern
@@ -737,6 +870,415 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .@"or" => .@"or",
         .div_trunc => .div, // Truncating division maps to div for now
     };
+}
+
+// ============ str_inspekt lowering ============
+
+/// Lower str_inspekt(value) by expanding it into a tree of MonoExprs
+/// that directly build the result string with all names embedded as literals.
+///
+/// This traverses the TYPE (for field/tag names) alongside the LAYOUT (for offsets)
+/// to generate specialized inspection code at compile time.
+pub fn lowerStrInspekt(
+    self: *Self,
+    value_expr: MonoExprId,
+    type_var: types.Var,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Error!MonoExprId {
+    // Need layout store to resolve layouts
+    const layout_store = self.layout_store orelse return error.LayoutError;
+
+    // Resolve the type to get its structure
+    const resolved = module_env.types.resolveVar(type_var);
+
+    return switch (resolved.desc.content) {
+        .structure => |flat_type| switch (flat_type) {
+            .record => |record| try self.lowerInspectRecord(
+                value_expr,
+                record,
+                value_layout,
+                module_env,
+                region,
+            ),
+            .tuple => |tuple| try self.lowerInspectTuple(
+                value_expr,
+                tuple,
+                value_layout,
+                module_env,
+                region,
+            ),
+            .tag_union => |tu| try self.lowerInspectTagUnion(
+                value_expr,
+                tu,
+                value_layout,
+                module_env,
+                region,
+            ),
+            .empty_record => try self.addStrLiteral("{}", region),
+            .empty_tag_union => try self.addStrLiteral("[]", region),
+            .fn_pure, .fn_effectful, .fn_unbound => try self.addStrLiteral("<function>", region),
+            .nominal_type => |nom| try self.lowerInspectNominal(
+                value_expr,
+                nom,
+                value_layout,
+                module_env,
+                region,
+            ),
+            .record_unbound => try self.addStrLiteral("{}", region),
+        },
+        .flex, .rigid => {
+            // Unresolved type variable - get layout info to determine how to render
+            const layout_val = layout_store.getLayout(value_layout);
+            return try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region);
+        },
+        .alias => {
+            // Alias - inspect the underlying type
+            // For now, just treat as the layout indicates
+            const layout_val = layout_store.getLayout(value_layout);
+            return try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region);
+        },
+        .err => try self.addStrLiteral("<error>", region),
+    };
+}
+
+/// Inspect based on layout when we don't have full type info
+fn lowerInspectByLayout(
+    self: *Self,
+    value_expr: MonoExprId,
+    layout_val: layout_mod.Layout,
+    value_layout: LayoutIdx,
+    region: Region,
+) Error!MonoExprId {
+    _ = value_layout;
+
+    return switch (layout_val.tag) {
+        .scalar => switch (layout_val.data.scalar.tag) {
+            .int => try self.store.addExpr(.{ .int_to_str = .{
+                .value = value_expr,
+                .int_precision = layout_val.data.scalar.data.int,
+            } }, region),
+            .frac => blk: {
+                if (layout_val.data.scalar.data.frac == .dec) {
+                    break :blk try self.store.addExpr(.{ .dec_to_str = value_expr }, region);
+                }
+                break :blk try self.store.addExpr(.{ .float_to_str = .{
+                    .value = value_expr,
+                    .float_precision = layout_val.data.scalar.data.frac,
+                } }, region);
+            },
+            .str => try self.store.addExpr(.{ .str_escape_and_quote = value_expr }, region),
+            .opaque_ptr => try self.addStrLiteral("<opaque>", region),
+        },
+        .list, .list_of_zst => try self.addStrLiteral("[...]", region),
+        else => try self.addStrLiteral("<value>", region),
+    };
+}
+
+/// Check if layout represents a Bool type (int with u8 precision)
+fn isBoolLayout(layout_val: layout_mod.Layout) bool {
+    return layout_val.tag == .scalar and
+        layout_val.data.scalar.tag == .int and
+        layout_val.data.scalar.data.int == .u8;
+}
+
+/// Inspect a boolean value
+fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Error!MonoExprId {
+    // Create branches for True (discriminant 1) and False (discriminant 0)
+    const false_str = try self.addStrLiteral("Bool.false", region);
+    const true_str = try self.addStrLiteral("Bool.true", region);
+
+    const branches = try self.store.addExprSpan(&[_]MonoExprId{ false_str, true_str });
+
+    return self.store.addExpr(.{ .discriminant_switch = .{
+        .value = value_expr,
+        .union_layout = .bool,
+        .branches = branches,
+    } }, region);
+}
+
+/// Inspect a record: { field1: value1, field2: value2, ... }
+fn lowerInspectRecord(
+    self: *Self,
+    value_expr: MonoExprId,
+    record: types.Record,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Error!MonoExprId {
+    const layout_store = self.layout_store orelse return error.LayoutError;
+
+    // Get field info from TYPE (for names)
+    const fields_slice = module_env.types.getRecordFieldsSlice(record.fields);
+    const field_names = fields_slice.items(.name);
+    const field_vars = fields_slice.items(.var_);
+
+    if (field_names.len == 0) {
+        return try self.addStrLiteral("{}", region);
+    }
+
+    var parts = std.ArrayList(MonoExprId).empty;
+    defer parts.deinit(self.allocator);
+
+    // Opening brace
+    try parts.append(self.allocator, try self.addStrLiteral("{ ", region));
+
+    // Get layout data for field offsets
+    const layout_val = layout_store.getLayout(value_layout);
+
+    for (field_names, field_vars, 0..) |field_name_idx, field_var, i| {
+        if (i > 0) {
+            try parts.append(self.allocator, try self.addStrLiteral(", ", region));
+        }
+
+        // Get field name string from ident store
+        const field_name = module_env.getIdent(field_name_idx);
+
+        // Build "fieldName: "
+        const name_with_colon = try std.fmt.allocPrint(self.allocator, "{s}: ", .{field_name});
+        defer self.allocator.free(name_with_colon);
+        try parts.append(self.allocator, try self.addStrLiteral(name_with_colon, region));
+
+        // Get field layout from record layout
+        // For now, we create field access based on index
+        const field_layout = self.getFieldLayoutFromRecord(layout_val, @intCast(i), layout_store);
+
+        // Create field access expression
+        const field_access_expr = try self.store.addExpr(.{ .field_access = .{
+            .record_expr = value_expr,
+            .record_layout = value_layout,
+            .field_layout = field_layout,
+            .field_idx = @intCast(i),
+            .field_name = field_name_idx,
+        } }, region);
+
+        // Recursively inspect the field value
+        const field_inspect = try self.lowerStrInspekt(
+            field_access_expr,
+            field_var,
+            field_layout,
+            module_env,
+            region,
+        );
+        try parts.append(self.allocator, field_inspect);
+    }
+
+    // Closing brace
+    try parts.append(self.allocator, try self.addStrLiteral(" }", region));
+
+    // Concatenate all parts
+    return self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(parts.items) }, region);
+}
+
+/// Inspect a tuple: (elem0, elem1, ...)
+fn lowerInspectTuple(
+    self: *Self,
+    value_expr: MonoExprId,
+    tuple: types.Tuple,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Error!MonoExprId {
+    const layout_store = self.layout_store orelse return error.LayoutError;
+
+    const elem_vars = module_env.types.sliceVars(tuple.elems);
+
+    if (elem_vars.len == 0) {
+        return try self.addStrLiteral("()", region);
+    }
+
+    var parts = std.ArrayList(MonoExprId).empty;
+    defer parts.deinit(self.allocator);
+
+    // Opening paren
+    try parts.append(self.allocator, try self.addStrLiteral("(", region));
+
+    const layout_val = layout_store.getLayout(value_layout);
+
+    for (elem_vars, 0..) |elem_var, i| {
+        if (i > 0) {
+            try parts.append(self.allocator, try self.addStrLiteral(", ", region));
+        }
+
+        // Get element layout
+        const elem_layout = self.getTupleElemLayout(layout_val, @intCast(i), layout_store);
+
+        // Create tuple access expression
+        const tuple_access_expr = try self.store.addExpr(.{ .tuple_access = .{
+            .tuple_expr = value_expr,
+            .tuple_layout = value_layout,
+            .elem_layout = elem_layout,
+            .elem_idx = @intCast(i),
+        } }, region);
+
+        // Recursively inspect the element
+        const elem_inspect = try self.lowerStrInspekt(
+            tuple_access_expr,
+            elem_var,
+            elem_layout,
+            module_env,
+            region,
+        );
+        try parts.append(self.allocator, elem_inspect);
+    }
+
+    // Closing paren
+    try parts.append(self.allocator, try self.addStrLiteral(")", region));
+
+    return self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(parts.items) }, region);
+}
+
+/// Inspect a tag union: Ok(value) or Err(msg) or None
+fn lowerInspectTagUnion(
+    self: *Self,
+    value_expr: MonoExprId,
+    tag_union: types.TagUnion,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Error!MonoExprId {
+    // Get tag info from TYPE
+    const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
+    const tag_names = tags_slice.items(.name);
+    const tag_args = tags_slice.items(.args);
+
+    if (tag_names.len == 0) {
+        return try self.addStrLiteral("[]", region);
+    }
+
+    // Build a branch for each tag variant
+    var branches = std.ArrayList(MonoExprId).empty;
+    defer branches.deinit(self.allocator);
+
+    for (tag_names, tag_args) |tag_name_idx, args_range| {
+        const tag_name = module_env.getIdent(tag_name_idx);
+        const args_slice = module_env.types.sliceVars(args_range);
+
+        if (args_slice.len == 0) {
+            // No payload: just emit tag name
+            try branches.append(self.allocator, try self.addStrLiteral(tag_name, region));
+        } else {
+            // Has payload: emit "TagName(payload)" or "TagName(p1, p2, ...)"
+            var branch_parts = std.ArrayList(MonoExprId).empty;
+            defer branch_parts.deinit(self.allocator);
+
+            try branch_parts.append(self.allocator, try self.addStrLiteral(tag_name, region));
+            try branch_parts.append(self.allocator, try self.addStrLiteral("(", region));
+
+            // For multi-arg payloads, we'd need to access each argument
+            // For now, just show a placeholder for payload
+            for (args_slice, 0..) |_, arg_i| {
+                if (arg_i > 0) {
+                    try branch_parts.append(self.allocator, try self.addStrLiteral(", ", region));
+                }
+                // TODO: Access actual payload values using layout info
+                try branch_parts.append(self.allocator, try self.addStrLiteral("_", region));
+            }
+
+            try branch_parts.append(self.allocator, try self.addStrLiteral(")", region));
+            try branches.append(self.allocator, try self.store.addExpr(.{
+                .str_concat = try self.store.addExprSpan(branch_parts.items),
+            }, region));
+        }
+    }
+
+    // Create discriminant switch
+    return self.store.addExpr(.{ .discriminant_switch = .{
+        .value = value_expr,
+        .union_layout = value_layout,
+        .branches = try self.store.addExprSpan(branches.items),
+    } }, region);
+}
+
+/// Inspect a nominal type: TypeName.value
+fn lowerInspectNominal(
+    self: *Self,
+    value_expr: MonoExprId,
+    nom: types.NominalType,
+    value_layout: LayoutIdx,
+    module_env: *const ModuleEnv,
+    region: Region,
+) Error!MonoExprId {
+    const type_name = module_env.getIdent(nom.ident.ident_idx);
+
+    // Check for Bool type (special case: render as Bool.true/Bool.false)
+    if (std.mem.eql(u8, type_name, "Bool")) {
+        return try self.lowerInspectBool(value_expr, region);
+    }
+
+    if (nom.is_opaque) {
+        // Opaque types render as <opaque>
+        return try self.addStrLiteral("<opaque>", region);
+    }
+
+    // For transparent nominal types, inspect the backing value
+    // Get the first type variable which should be the backing type
+    const vars = module_env.types.sliceVars(nom.vars.nonempty);
+    if (vars.len > 0) {
+        const backing_var = vars[0];
+        return self.lowerStrInspekt(value_expr, backing_var, value_layout, module_env, region);
+    }
+
+    // Fallback: just show the type name with the value
+    var parts = std.ArrayList(MonoExprId).empty;
+    defer parts.deinit(self.allocator);
+
+    try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
+    try parts.append(self.allocator, try self.addStrLiteral(".", region));
+    // For backing value, inspect by layout
+    const layout_store = self.layout_store orelse return error.LayoutError;
+    const layout_val = layout_store.getLayout(value_layout);
+    try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
+
+    return self.store.addExpr(.{ .str_concat = try self.store.addExprSpan(parts.items) }, region);
+}
+
+/// Helper to add a string literal expression
+fn addStrLiteral(self: *Self, text: []const u8, region: Region) Error!MonoExprId {
+    // Add the string literal to the MonoExprStore's string table
+    const lit_idx = self.store.insertString(text) catch return error.OutOfMemory;
+    return self.store.addExpr(.{ .str_literal = lit_idx }, region);
+}
+
+/// Helper to get field layout from record layout
+fn getFieldLayoutFromRecord(
+    self: *Self,
+    layout_val: layout_mod.Layout,
+    field_idx: u16,
+    layout_store: *LayoutStore,
+) LayoutIdx {
+    _ = self;
+    if (layout_val.tag == .record) {
+        const record_data = layout_store.getRecordData(layout_val.data.record.idx);
+        const fields_range = record_data.getFields();
+        const fields = layout_store.record_fields.sliceRange(fields_range);
+        if (field_idx < fields.len) {
+            return fields.get(field_idx).layout;
+        }
+    }
+    // Fallback to a default layout
+    return .i64;
+}
+
+/// Helper to get tuple element layout
+fn getTupleElemLayout(
+    self: *Self,
+    layout_val: layout_mod.Layout,
+    elem_idx: u16,
+    layout_store: *LayoutStore,
+) LayoutIdx {
+    _ = self;
+    if (layout_val.tag == .tuple) {
+        const tuple_data = layout_store.getTupleData(layout_val.data.tuple.idx);
+        const fields_range = tuple_data.getFields();
+        const fields = layout_store.tuple_fields.sliceRange(fields_range);
+        if (elem_idx < fields.len) {
+            return fields.get(elem_idx).layout;
+        }
+    }
+    // Fallback to a default layout
+    return .i64;
 }
 
 // ============ Public API ============

@@ -43,6 +43,9 @@ pub const MonoExprCodeGen = mono_expr_codegen.MonoExprCodeGen;
 pub const MonoScope = mono_expr_codegen.MonoScope;
 pub const MonoBindingValue = mono_expr_codegen.BindingValue;
 
+// Static data interner for string literals and other static data
+pub const StaticDataInterner = @import("StaticDataInterner.zig");
+
 /// Generic development backend parameterized by architecture-specific types.
 ///
 /// This struct provides the common code generation logic shared across

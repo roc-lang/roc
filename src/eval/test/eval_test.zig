@@ -2366,3 +2366,45 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\}
     , 42, .no_trace);
 }
+
+// ============ str_inspekt (Str.inspect) tests ============
+
+test "str_inspekt - integer" {
+    // Str.inspect on an integer should return its string representation
+    try runExpectStr("Str.inspect(42)", "42", .no_trace);
+}
+
+test "str_inspekt - negative integer" {
+    try runExpectStr("Str.inspect(-123)", "-123", .no_trace);
+}
+
+test "str_inspekt - zero" {
+    try runExpectStr("Str.inspect(0)", "0", .no_trace);
+}
+
+test "str_inspekt - boolean true" {
+    // Str.inspect on Bool.true should return "Bool.true"
+    try runExpectStr("Str.inspect(Bool.true)", "Bool.true", .no_trace);
+}
+
+test "str_inspekt - boolean false" {
+    try runExpectStr("Str.inspect(Bool.false)", "Bool.false", .no_trace);
+}
+
+test "str_inspekt - simple string" {
+    // Str.inspect on a string should return it quoted and escaped
+    try runExpectStr("Str.inspect(\"hello\")", "\"hello\"", .no_trace);
+}
+
+test "str_inspekt - string with quotes" {
+    // Quotes inside strings should be escaped
+    try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"", .no_trace);
+}
+
+test "str_inspekt - empty string" {
+    try runExpectStr("Str.inspect(\"\")", "\"\"", .no_trace);
+}
+
+test "str_inspekt - large integer" {
+    try runExpectStr("Str.inspect(1234567890)", "1234567890", .no_trace);
+}

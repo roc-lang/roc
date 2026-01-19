@@ -68,6 +68,10 @@ captures: std.ArrayList(MonoCapture),
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u48, MonoExprId),
 
+/// String literal store for strings generated during lowering (e.g., by str_inspekt)
+/// This allows us to add new string literals without needing mutable module envs.
+strings: base.StringLiteral.Store,
+
 /// Allocator used for this store
 allocator: Allocator,
 
@@ -84,6 +88,7 @@ pub fn init(allocator: Allocator) Self {
         .stmts = std.ArrayList(MonoStmt).empty,
         .captures = std.ArrayList(MonoCapture).empty,
         .symbol_defs = std.AutoHashMap(u48, MonoExprId).init(allocator),
+        .strings = base.StringLiteral.Store{},
         .allocator = allocator,
     };
 }
@@ -111,6 +116,7 @@ pub fn deinit(self: *Self) void {
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
     self.symbol_defs.deinit();
+    self.strings.deinit(self.allocator);
 }
 
 // ============ Expression operations ============
@@ -205,6 +211,33 @@ pub fn addPatternSpan(self: *Self, pattern_ids: []const MonoPatternId) Allocator
 
 /// Get pattern IDs from a span
 pub fn getPatternSpan(self: *const Self, span: MonoPatternSpan) []const MonoPatternId {
+    if (span.len == 0) return &.{};
+    const slice = self.extra_data.items[span.start..][0..span.len];
+    return @ptrCast(slice);
+}
+
+// ============ Field name operations ============
+
+/// Add a span of field names (Ident.Idx)
+pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.MonoFieldNameSpan {
+    if (field_names.len == 0) {
+        return ir.MonoFieldNameSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.extra_data.items.len));
+
+    for (field_names) |name| {
+        try self.extra_data.append(self.allocator, @bitCast(name));
+    }
+
+    return .{
+        .start = start,
+        .len = @intCast(field_names.len),
+    };
+}
+
+/// Get field names from a span
+pub fn getFieldNameSpan(self: *const Self, span: ir.MonoFieldNameSpan) []const base.Ident.Idx {
     if (span.len == 0) return &.{};
     const slice = self.extra_data.items[span.start..][0..span.len];
     return @ptrCast(slice);
@@ -307,6 +340,18 @@ pub fn registerSymbolDef(self: *Self, symbol: MonoSymbol, expr_id: MonoExprId) A
 /// Look up a top-level symbol definition
 pub fn getSymbolDef(self: *const Self, symbol: MonoSymbol) ?MonoExprId {
     return self.symbol_defs.get(@bitCast(symbol));
+}
+
+// ============ String literal operations ============
+
+/// Insert a string literal and return its index
+pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
+    return self.strings.insert(self.allocator, text);
+}
+
+/// Get a string literal by index
+pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
+    return self.strings.get(idx);
 }
 
 // ============ Statistics ============

@@ -30,6 +30,7 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
+const types = @import("types");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
@@ -183,6 +184,16 @@ pub const MonoStmt = struct {
     expr: MonoExprId,
 };
 
+/// Span of field names (Ident.Idx) for records
+pub const MonoFieldNameSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() MonoFieldNameSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+};
+
 /// Lowered expression - all types are layouts, all references are global symbols.
 /// This is the core type that backends consume for code generation.
 pub const MonoExpr = union(enum) {
@@ -272,10 +283,12 @@ pub const MonoExpr = union(enum) {
     /// Empty record `{}`
     empty_record: void,
 
-    /// Record with fields (fields are in sorted order by field index)
+    /// Record with fields (fields are in sorted order by field name)
     record: struct {
         record_layout: layout.Idx,
         fields: MonoExprSpan,
+        /// Field names in the same order as fields (for compile-time lookup)
+        field_names: MonoFieldNameSpan,
     },
 
     /// Tuple
@@ -291,8 +304,10 @@ pub const MonoExpr = union(enum) {
         record_expr: MonoExprId,
         record_layout: layout.Idx,
         field_layout: layout.Idx,
-        /// Field index within the record layout
+        /// Field index within the record layout (for runtime access)
         field_idx: u16,
+        /// Field name for compile-time lookup in record literals
+        field_name: base.Ident.Idx,
     },
 
     /// Tuple element access by index
@@ -413,6 +428,72 @@ pub const MonoExpr = union(enum) {
     nominal: struct {
         backing_expr: MonoExprId,
         nominal_layout: layout.Idx,
+    },
+
+    // ============ Inspect operations (str_inspekt support) ============
+
+    /// Concatenate multiple strings into one
+    /// Used by str_inspekt to build output strings
+    str_concat: MonoExprSpan,
+
+    /// Format integer as string
+    int_to_str: struct {
+        value: MonoExprId,
+        int_precision: types.Int.Precision,
+    },
+
+    /// Format float as string
+    float_to_str: struct {
+        value: MonoExprId,
+        float_precision: types.Frac.Precision,
+    },
+
+    /// Format decimal as string
+    dec_to_str: MonoExprId,
+
+    /// Escape and quote a string for inspect output (adds surrounding quotes, escapes special chars)
+    str_escape_and_quote: MonoExprId,
+
+    /// Switch on discriminant value and produce the corresponding branch result
+    discriminant_switch: struct {
+        /// Expression that produces the value to switch on
+        value: MonoExprId,
+        /// Layout of the tag union (to determine discriminant location)
+        union_layout: layout.Idx,
+        /// One expression per variant, indexed by discriminant value
+        branches: MonoExprSpan,
+    },
+
+    // ============ Reference counting operations ============
+
+    /// Increment reference count of a refcounted value
+    /// If the value has static refcount (isize::MIN), this is a no-op
+    incref: struct {
+        /// The refcounted value to increment
+        value: MonoExprId,
+        /// Layout of the value (to determine RC strategy)
+        layout_idx: layout.Idx,
+        /// Number of increments (usually 1, but can be more for multiple uses)
+        count: u16,
+    },
+
+    /// Decrement reference count of a refcounted value
+    /// If refcount reaches 0, the value is deallocated
+    /// If the value has static refcount (isize::MIN), this is a no-op
+    decref: struct {
+        /// The refcounted value to decrement
+        value: MonoExprId,
+        /// Layout of the value (to determine RC strategy and deallocation)
+        layout_idx: layout.Idx,
+    },
+
+    /// Direct deallocation when refcount is known to be 0
+    /// Used by the optimizer when it can prove the value is unused
+    free: struct {
+        /// The value to deallocate
+        value: MonoExprId,
+        /// Layout of the value (to determine deallocation strategy)
+        layout_idx: layout.Idx,
     },
 
     /// Binary operation types

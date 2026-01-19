@@ -178,7 +178,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     if (code_result.tuple_len > 1) {
         // Allocate buffer for tuple elements (each element is 8 bytes / i64)
         var result_buf: [32]i64 = undefined;
-        jit.callWithResultPtr(@ptrCast(&result_buf));
+        jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
 
         // Format as "(elem1, elem2, ...)"
         var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
@@ -204,27 +204,27 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
             var result: u64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
             var result: f64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
             var result: i128 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
             var result: i128 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             // Dec values are stored scaled by 10^18 - show integer part for comparison
             const int_part = @divTrunc(result, dec_scale);
             break :blk std.fmt.allocPrint(allocator, "{}", .{int_part});
@@ -232,7 +232,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes
             var result: [24]u8 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
 
             // Check if small string (last byte has high bit set)
             if (result[23] & 0x80 != 0) {

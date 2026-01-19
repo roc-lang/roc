@@ -1035,9 +1035,15 @@ pub const MonoExprCodeGen = struct {
         }
     }
 
-    /// Refcount value indicating static data that should never be freed
-    /// This is isize::MIN as usize, matching Roc's REFCOUNT_CONSTANT
-    const REFCOUNT_STATIC: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+    /// Refcount value indicating static data that should never be freed.
+    /// This MUST match utils.REFCOUNT_STATIC_DATA = 0.
+    /// When a refcount equals this value, it indicates static/constant data that
+    /// should never be decremented or freed.
+    /// The value 0 is chosen because:
+    /// - It's clearly distinct from normal refcounts (which start at 1)
+    /// - It makes the "constant" check very efficient
+    /// - It's safe since normal refcounts should never reach 0 while still being referenced
+    const REFCOUNT_STATIC: usize = 0;
 
     /// Generate code for a big string (>23 bytes)
     /// Uses static interner when available for proper static storage.
@@ -1443,42 +1449,358 @@ pub const MonoExprCodeGen = struct {
 
     // ========== Reference Counting Operations ==========
     //
-    // For compile-time evaluation in the REPL/evaluator context, RC operations
-    // are no-ops because:
-    // - Memory is managed by arenas (freed in bulk when evaluation completes)
-    // - Static string literals have REFCOUNT_STATIC and are never freed
-    // - We're not running long-lived code where GC pressure matters
+    // RC operations (incref/decref) MUST work properly during codegen because:
+    // - Roc's opportunistic in-place mutation relies on checking runtime reference counts
+    // - If refcount == 1, the value is unique and can be mutated in place
+    // - If refcount > 1, the value is shared and must be copied before mutation
     //
-    // The values being RC'd still get evaluated (for their side effects),
-    // but the actual RC manipulation is skipped.
+    // Only free() should be a no-op (arena manages actual deallocation).
+    //
+    // Implementation:
+    // - Generated code receives result_ptr in rdi/x0 and roc_ops in rsi/x1
+    // - For RC operations, we evaluate the value expression to get the data pointer
+    // - Then call the appropriate builtin RC function with the roc_ops
+    //
+    // Memory layout for refcounted values:
+    // [REFCOUNT: isize] [DATA...]
+    //        ^              ^
+    //        |              +-- data pointer points here
+    //        +-- refcount at (data_ptr - sizeof(usize))
+    //
+    // REFCOUNT_STATIC_DATA (0) marks static data that RC ops skip.
 
     /// Generate code for incref operation.
-    /// In compile-time evaluation context, this is a no-op since arenas manage memory.
+    /// Increments the reference count of a refcounted value.
+    /// Skips values with REFCOUNT_STATIC_DATA (0) as they are static.
+    ///
+    /// Note: Falls back to no-op if:
+    /// - The builtin incref function can't be resolved
+    /// - The value expression can't be generated (unsupported expression type)
+    /// This is acceptable because:
+    /// - Static data has REFCOUNT_STATIC_DATA (0) and RC ops are no-ops for it
+    /// - If we can't generate the value expression, we'd fail elsewhere anyway
     fn generateIncrefCode(
         self: *MonoExprCodeGen,
         rc: anytype,
         env: *MonoScope,
     ) Error![]const u8 {
-        // Evaluate the value expression for any side effects, but discard result
-        // The value might be a complex expression that needs evaluation
-        _ = try self.generateCodeForExpr(rc.value, rc.layout_idx, env);
+        const dev = @import("mod.zig");
 
-        // RC operations don't produce a value - just return a no-op
-        return self.generateNoOpCode();
+        // Get the address of the builtin incref function
+        const incref_addr = dev.resolveBuiltinFunction("incref_data_ptr") orelse {
+            // No builtin available - fall back to no-op
+            return self.generateNoOpCode();
+        };
+
+        // Generate code for the value expression (writes to temp location)
+        const value_code = self.generateCodeForExpr(rc.value, rc.layout_idx, env) catch {
+            // Can't generate value expression - fall back to no-op
+            // This typically means the expression type isn't supported yet
+            return self.generateNoOpCode();
+        };
+        defer self.allocator.free(value_code);
+
+        return switch (builtin.cpu.arch) {
+            .x86_64 => self.generateX64IncrefCall(value_code, rc.count, incref_addr),
+            .aarch64 => self.generateArm64IncrefCall(value_code, rc.count, incref_addr),
+            else => self.generateNoOpCode(),
+        };
     }
 
     /// Generate code for decref operation.
-    /// In compile-time evaluation context, this is a no-op since arenas manage memory.
+    /// Decrements the reference count and calls free when it reaches 0.
+    /// Skips values with REFCOUNT_STATIC_DATA (0) as they are static.
+    ///
+    /// Note: Falls back to no-op if:
+    /// - The builtin decref function can't be resolved
+    /// - The value expression can't be generated (unsupported expression type)
     fn generateDecrefCode(
         self: *MonoExprCodeGen,
         rc: anytype,
         env: *MonoScope,
     ) Error![]const u8 {
-        // Evaluate the value expression for any side effects, but discard result
-        _ = try self.generateCodeForExpr(rc.value, rc.layout_idx, env);
+        const dev = @import("mod.zig");
 
-        // RC operations don't produce a value - just return a no-op
-        return self.generateNoOpCode();
+        // Get the address of the builtin decref function
+        const decref_addr = dev.resolveBuiltinFunction("decref_data_ptr") orelse {
+            // No builtin available - fall back to no-op
+            return self.generateNoOpCode();
+        };
+
+        // Generate code for the value expression (writes to temp location)
+        const value_code = self.generateCodeForExpr(rc.value, rc.layout_idx, env) catch {
+            // Can't generate value expression - fall back to no-op
+            return self.generateNoOpCode();
+        };
+        defer self.allocator.free(value_code);
+
+        // For decref, we need alignment and elements_refcounted from layout
+        // Default to 8-byte alignment and non-refcounted elements for now
+        const alignment: u32 = 8;
+        const elements_refcounted: bool = false;
+
+        return switch (builtin.cpu.arch) {
+            .x86_64 => self.generateX64DecrefCall(value_code, alignment, elements_refcounted, decref_addr),
+            .aarch64 => self.generateArm64DecrefCall(value_code, alignment, elements_refcounted, decref_addr),
+            else => self.generateNoOpCode(),
+        };
+    }
+
+    /// Generate x86_64 code to call increfDataPtrC.
+    /// The generated function receives: rdi=result_ptr, rsi=roc_ops
+    /// increfDataPtrC signature: (bytes_or_null: ?[*]u8, inc_amount: isize, roc_ops: *RocOps)
+    fn generateX64IncrefCall(
+        self: *MonoExprCodeGen,
+        value_code: []const u8,
+        count: u32,
+        incref_addr: usize,
+    ) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Prologue: set up stack frame and save registers
+        try code.appendSlice(&[_]u8{ 0x55 }); // push rbp
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try code.appendSlice(&[_]u8{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64 (maintain 16-byte alignment)
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x7D, 0xF8 }); // mov [rbp-8], rdi (save result_ptr)
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x75, 0xF0 }); // mov [rbp-16], rsi (save roc_ops)
+
+        // Set rdi to stack location for temp storage of value expression result
+        try code.appendSlice(&[_]u8{ 0x48, 0x8D, 0x7D, 0xD0 }); // lea rdi, [rbp-48]
+
+        // Inline the value code (strip trailing ret if present)
+        if (value_code.len > 0 and value_code[value_code.len - 1] == 0xC3) {
+            try code.appendSlice(value_code[0 .. value_code.len - 1]);
+        } else {
+            try code.appendSlice(value_code);
+        }
+
+        // Now [rbp-48] contains the data structure (e.g., RocStr)
+        // The data pointer (bytes field for RocStr) is at offset 0
+        // Call increfDataPtrC(data_ptr, inc_amount, roc_ops)
+
+        // arg1: data_ptr - load the bytes pointer from the first qword
+        try code.appendSlice(&[_]u8{ 0x48, 0x8B, 0x7D, 0xD0 }); // mov rdi, [rbp-48]
+
+        // arg2: inc_amount (as isize)
+        try code.appendSlice(&[_]u8{ 0xBE }); // mov esi, imm32 (zero-extends to rsi)
+        try code.appendSlice(&@as([4]u8, @bitCast(count)));
+
+        // arg3: roc_ops
+        try code.appendSlice(&[_]u8{ 0x48, 0x8B, 0x55, 0xF0 }); // mov rdx, [rbp-16]
+
+        // Load function address and call
+        try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+        try code.appendSlice(&@as([8]u8, @bitCast(@as(u64, incref_addr))));
+        try code.appendSlice(&[_]u8{ 0xFF, 0xD0 }); // call rax
+
+        // Epilogue
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
+        try code.appendSlice(&[_]u8{ 0x5D }); // pop rbp
+        try code.appendSlice(&[_]u8{ 0xC3 }); // ret
+
+        return code.toOwnedSlice();
+    }
+
+    /// Generate x86_64 code to call decrefDataPtrC.
+    /// The generated function receives: rdi=result_ptr, rsi=roc_ops
+    /// decrefDataPtrC signature: (bytes_or_null: ?[*]u8, alignment: u32, elements_refcounted: bool, roc_ops: *RocOps)
+    fn generateX64DecrefCall(
+        self: *MonoExprCodeGen,
+        value_code: []const u8,
+        alignment: u32,
+        elements_refcounted: bool,
+        decref_addr: usize,
+    ) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Prologue: set up stack frame and save registers
+        try code.appendSlice(&[_]u8{ 0x55 }); // push rbp
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0xE5 }); // mov rbp, rsp
+        try code.appendSlice(&[_]u8{ 0x48, 0x83, 0xEC, 0x40 }); // sub rsp, 64
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x7D, 0xF8 }); // mov [rbp-8], rdi (save result_ptr)
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x75, 0xF0 }); // mov [rbp-16], rsi (save roc_ops)
+
+        // Set rdi to stack location for temp storage
+        try code.appendSlice(&[_]u8{ 0x48, 0x8D, 0x7D, 0xD0 }); // lea rdi, [rbp-48]
+
+        // Inline the value code (strip trailing ret if present)
+        if (value_code.len > 0 and value_code[value_code.len - 1] == 0xC3) {
+            try code.appendSlice(value_code[0 .. value_code.len - 1]);
+        } else {
+            try code.appendSlice(value_code);
+        }
+
+        // Call decrefDataPtrC(data_ptr, alignment, elements_refcounted, roc_ops)
+
+        // arg1: data_ptr
+        try code.appendSlice(&[_]u8{ 0x48, 0x8B, 0x7D, 0xD0 }); // mov rdi, [rbp-48]
+
+        // arg2: alignment
+        try code.appendSlice(&[_]u8{ 0xBE }); // mov esi, imm32
+        try code.appendSlice(&@as([4]u8, @bitCast(alignment)));
+
+        // arg3: elements_refcounted (bool as u8)
+        const elem_refcounted_byte: u8 = if (elements_refcounted) 1 else 0;
+        try code.appendSlice(&[_]u8{ 0xB2, elem_refcounted_byte }); // mov dl, imm8
+
+        // arg4: roc_ops
+        try code.appendSlice(&[_]u8{ 0x48, 0x8B, 0x4D, 0xF0 }); // mov rcx, [rbp-16]
+
+        // Load function address and call
+        try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+        try code.appendSlice(&@as([8]u8, @bitCast(@as(u64, decref_addr))));
+        try code.appendSlice(&[_]u8{ 0xFF, 0xD0 }); // call rax
+
+        // Epilogue
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0xEC }); // mov rsp, rbp
+        try code.appendSlice(&[_]u8{ 0x5D }); // pop rbp
+        try code.appendSlice(&[_]u8{ 0xC3 }); // ret
+
+        return code.toOwnedSlice();
+    }
+
+    /// Generate ARM64 code to call increfDataPtrC.
+    /// The generated function receives: x0=result_ptr, x1=roc_ops
+    fn generateArm64IncrefCall(
+        self: *MonoExprCodeGen,
+        value_code: []const u8,
+        count: u32,
+        incref_addr: usize,
+    ) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Prologue: save frame pointer, link register, and callee-saved registers
+        // stp x29, x30, [sp, #-16]!
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA9BF7BFD))));
+        // mov x29, sp
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910003FD))));
+        // stp x19, x20, [sp, #-16]!
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA9BF53F3))));
+        // mov x19, x0 (save result_ptr)
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA0003F3))));
+        // mov x20, x1 (save roc_ops)
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA0103F4))));
+        // sub sp, sp, #64
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD10103FF))));
+
+        // Set x0 to stack location for temp storage
+        // mov x0, sp
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910003E0))));
+
+        // Inline the value code (strip trailing ret if present)
+        // ARM64 ret is 0xD65F03C0
+        const ret_instr: [4]u8 = @bitCast(@as(u32, 0xD65F03C0));
+        if (value_code.len >= 4 and std.mem.eql(u8, value_code[value_code.len - 4 ..], &ret_instr)) {
+            try code.appendSlice(value_code[0 .. value_code.len - 4]);
+        } else {
+            try code.appendSlice(value_code);
+        }
+
+        // Call increfDataPtrC(data_ptr, inc_amount, roc_ops)
+
+        // arg1 (x0): data_ptr - load from stack
+        // ldr x0, [sp]
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xF94003E0))));
+
+        // arg2 (x1): inc_amount
+        try self.generateArm64LoadImm64(&code, 1, @as(u64, count));
+
+        // arg3 (x2): roc_ops
+        // mov x2, x20
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA1403E2))));
+
+        // Load function address and call
+        try self.generateArm64LoadImm64(&code, 8, incref_addr);
+        // blr x8
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD63F0100))));
+
+        // Epilogue
+        // add sp, sp, #64
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910103FF))));
+        // ldp x19, x20, [sp], #16
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA8C153F3))));
+        // ldp x29, x30, [sp], #16
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA8C17BFD))));
+        // ret
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD65F03C0))));
+
+        return code.toOwnedSlice();
+    }
+
+    /// Generate ARM64 code to call decrefDataPtrC.
+    /// The generated function receives: x0=result_ptr, x1=roc_ops
+    fn generateArm64DecrefCall(
+        self: *MonoExprCodeGen,
+        value_code: []const u8,
+        alignment: u32,
+        elements_refcounted: bool,
+        decref_addr: usize,
+    ) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Prologue
+        // stp x29, x30, [sp, #-16]!
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA9BF7BFD))));
+        // mov x29, sp
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910003FD))));
+        // stp x19, x20, [sp, #-16]!
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA9BF53F3))));
+        // mov x19, x0 (save result_ptr)
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA0003F3))));
+        // mov x20, x1 (save roc_ops)
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA0103F4))));
+        // sub sp, sp, #64
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD10103FF))));
+
+        // Set x0 to stack location
+        // mov x0, sp
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910003E0))));
+
+        // Inline the value code
+        const ret_instr: [4]u8 = @bitCast(@as(u32, 0xD65F03C0));
+        if (value_code.len >= 4 and std.mem.eql(u8, value_code[value_code.len - 4 ..], &ret_instr)) {
+            try code.appendSlice(value_code[0 .. value_code.len - 4]);
+        } else {
+            try code.appendSlice(value_code);
+        }
+
+        // Call decrefDataPtrC(data_ptr, alignment, elements_refcounted, roc_ops)
+
+        // arg1 (x0): data_ptr
+        // ldr x0, [sp]
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xF94003E0))));
+
+        // arg2 (w1): alignment
+        try self.generateArm64LoadImm64(&code, 1, @as(u64, alignment));
+
+        // arg3 (w2): elements_refcounted
+        const elem_refcounted_val: u64 = if (elements_refcounted) 1 else 0;
+        try self.generateArm64LoadImm64(&code, 2, elem_refcounted_val);
+
+        // arg4 (x3): roc_ops
+        // mov x3, x20
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xAA1403E3))));
+
+        // Load function address and call
+        try self.generateArm64LoadImm64(&code, 8, decref_addr);
+        // blr x8
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD63F0100))));
+
+        // Epilogue
+        // add sp, sp, #64
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0x910103FF))));
+        // ldp x19, x20, [sp], #16
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA8C153F3))));
+        // ldp x29, x30, [sp], #16
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xA8C17BFD))));
+        // ret
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD65F03C0))));
+
+        return code.toOwnedSlice();
     }
 
     /// Generate machine code that does nothing (just returns).

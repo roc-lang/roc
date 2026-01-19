@@ -21,6 +21,7 @@ const layout = @import("layout");
 const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
+const builtins = @import("builtins");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -29,10 +30,116 @@ const Can = can.Can;
 const Check = check.Check;
 const LoadedModule = builtin_loading.LoadedModule;
 
+// Host ABI types for RocOps
+const RocOps = builtins.host_abi.RocOps;
+const RocAlloc = builtins.host_abi.RocAlloc;
+const RocDealloc = builtins.host_abi.RocDealloc;
+const RocRealloc = builtins.host_abi.RocRealloc;
+const RocDbg = builtins.host_abi.RocDbg;
+const RocExpectFailed = builtins.host_abi.RocExpectFailed;
+const RocCrashed = builtins.host_abi.RocCrashed;
+
 // Mono IR types
 const MonoExprStore = mono.MonoExprStore;
 const MonoLower = mono.Lower;
 const MonoExprId = mono.MonoExprId;
+
+// Static data interner for string literals
+const StaticDataInterner = backend.StaticDataInterner;
+const JitStaticBackend = StaticDataInterner.JitStaticBackend;
+
+/// Environment for RocOps in the DevEvaluator.
+/// Manages arena-backed allocation where free() is a no-op.
+/// This enables proper RC tracking for in-place mutation optimization
+/// while arenas handle actual memory deallocation.
+const DevRocEnv = struct {
+    allocator: Allocator,
+
+    fn init(allocator: Allocator) DevRocEnv {
+        return .{ .allocator = allocator };
+    }
+
+    /// Allocation function for RocOps.
+    fn rocAllocFn(roc_alloc: *RocAlloc, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+
+        // Allocate memory with the requested alignment
+        const ptr = switch (roc_alloc.alignment) {
+            1 => self.allocator.alignedAlloc(u8, .@"1", roc_alloc.length),
+            2 => self.allocator.alignedAlloc(u8, .@"2", roc_alloc.length),
+            4 => self.allocator.alignedAlloc(u8, .@"4", roc_alloc.length),
+            8 => self.allocator.alignedAlloc(u8, .@"8", roc_alloc.length),
+            16 => self.allocator.alignedAlloc(u8, .@"16", roc_alloc.length),
+            else => {
+                std.debug.print("DevRocEnv: Unsupported alignment {d}\n", .{roc_alloc.alignment});
+                unreachable;
+            },
+        } catch {
+            std.debug.print("DevRocEnv: Allocation failed\n", .{});
+            unreachable;
+        };
+
+        roc_alloc.answer = @ptrCast(ptr.ptr);
+    }
+
+    /// Deallocation function for RocOps.
+    /// This is a NO-OP because arenas manage actual memory deallocation.
+    /// RC operations still work to track uniqueness for in-place mutation.
+    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
+        // Intentional no-op: arena manages actual deallocation
+        // This allows RC to track uniqueness while arena handles cleanup
+    }
+
+    /// Reallocation function for RocOps.
+    /// For arena-based allocation, we just allocate new memory.
+    /// Since free is a no-op, we don't need to worry about freeing the old allocation.
+    fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+
+        // Allocate new memory with the requested alignment
+        const new_ptr = switch (roc_realloc.alignment) {
+            1 => self.allocator.alignedAlloc(u8, .@"1", roc_realloc.new_length),
+            2 => self.allocator.alignedAlloc(u8, .@"2", roc_realloc.new_length),
+            4 => self.allocator.alignedAlloc(u8, .@"4", roc_realloc.new_length),
+            8 => self.allocator.alignedAlloc(u8, .@"8", roc_realloc.new_length),
+            16 => self.allocator.alignedAlloc(u8, .@"16", roc_realloc.new_length),
+            else => {
+                std.debug.print("DevRocEnv: Unsupported alignment {d}\n", .{roc_realloc.alignment});
+                unreachable;
+            },
+        } catch {
+            std.debug.print("DevRocEnv: Reallocation failed\n", .{});
+            unreachable;
+        };
+
+        // Copy old data from the existing allocation
+        // Note: The old pointer is in roc_realloc.answer
+        // We copy new_length bytes (assuming the old allocation was at least that large)
+        const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
+        @memcpy(new_ptr[0..roc_realloc.new_length], old_ptr[0..roc_realloc.new_length]);
+
+        // Return the new pointer
+        roc_realloc.answer = @ptrCast(new_ptr.ptr);
+    }
+
+    /// Debug output function.
+    fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
+        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+        std.debug.print("[dbg] {s}\n", .{msg});
+    }
+
+    /// Expect failed function.
+    fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
+        std.debug.print("[expect failed]\n", .{});
+    }
+
+    /// Crash function.
+    fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
+        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+        std.debug.print("Roc crashed: {s}\n", .{msg});
+        unreachable;
+    }
+};
 
 // Re-export types from backend MonoExprCodeGen
 pub const MonoExprCodeGen = backend.MonoExprCodeGen;
@@ -56,6 +163,24 @@ pub const DevEvaluator = struct {
     /// Loaded builtin module (Bool, Result, etc.)
     builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
+
+    /// Backend for static data allocation (arena-based for JIT)
+    /// Heap-allocated to ensure stable pointer for the interner's Backend reference
+    jit_backend: *JitStaticBackend,
+
+    /// Global interner for static data (string literals, etc.)
+    /// Lives for the duration of the evaluator session, enabling deduplication
+    /// across multiple evaluations in a REPL session.
+    static_interner: StaticDataInterner,
+
+    /// RocOps environment for RC operations.
+    /// Heap-allocated to ensure stable pointer for the roc_ops reference.
+    roc_env: *DevRocEnv,
+
+    /// RocOps instance for passing to generated code.
+    /// Contains function pointers for allocation, deallocation, and error handling.
+    /// Required for proper RC tracking (incref/decref operations).
+    roc_ops: RocOps,
 
     pub const Error = error{
         OutOfMemory,
@@ -86,15 +211,46 @@ pub const DevEvaluator = struct {
             compiled_builtins.builtin_source,
         ) catch return error.OutOfMemory;
 
+        // Heap-allocate the JIT backend so the pointer remains stable
+        const jit_backend = allocator.create(JitStaticBackend) catch return error.OutOfMemory;
+        jit_backend.* = JitStaticBackend.init(allocator);
+
+        // Initialize the interner with a pointer to the heap-allocated backend
+        const static_interner = StaticDataInterner.init(allocator, jit_backend.backend());
+
+        // Heap-allocate the RocOps environment so the pointer remains stable
+        const roc_env = allocator.create(DevRocEnv) catch return error.OutOfMemory;
+        roc_env.* = DevRocEnv.init(allocator);
+
+        // Create RocOps with function pointers to the DevRocEnv handlers
+        const roc_ops = RocOps{
+            .env = @ptrCast(roc_env),
+            .roc_alloc = &DevRocEnv.rocAllocFn,
+            .roc_dealloc = &DevRocEnv.rocDeallocFn,
+            .roc_realloc = &DevRocEnv.rocReallocFn,
+            .roc_dbg = &DevRocEnv.rocDbgFn,
+            .roc_expect_failed = &DevRocEnv.rocExpectFailedFn,
+            .roc_crashed = &DevRocEnv.rocCrashedFn,
+            .hosted_fns = .{ .count = 0, .fns = undefined },
+        };
+
         return DevEvaluator{
             .allocator = allocator,
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
+            .jit_backend = jit_backend,
+            .static_interner = static_interner,
+            .roc_env = roc_env,
+            .roc_ops = roc_ops,
         };
     }
 
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
+        self.static_interner.deinit();
+        self.jit_backend.deinit();
+        self.allocator.destroy(self.jit_backend);
+        self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
     }
 
@@ -231,8 +387,13 @@ pub const DevEvaluator = struct {
             }
         };
 
-        // Generate code from Mono IR
-        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, all_module_envs);
+        // Generate code from Mono IR, using the static interner for string literals
+        var mono_codegen = MonoExprCodeGen.initWithInterner(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            &self.static_interner,
+        );
         defer mono_codegen.deinit();
 
         var mono_env = mono_codegen.createScope();
@@ -344,6 +505,7 @@ pub const DevEvaluator = struct {
         f64_val: f64,
         i128_val: i128,
         u128_val: u128,
+        str_val: []const u8, // String contents (caller owns memory)
 
         pub fn format(self_val: EvalResult, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
             switch (self_val) {
@@ -352,9 +514,14 @@ pub const DevEvaluator = struct {
                 .f64_val => |v| try writer.print("{d}", .{v}),
                 .i128_val => |v| try writer.print("{}", .{v}),
                 .u128_val => |v| try writer.print("{}", .{v}),
+                .str_val => |v| try writer.print("\"{s}\"", .{v}),
             }
         }
     };
+
+    /// RocStr constants (must match MonoExprCodeGen)
+    const ROCSTR_SIZE: usize = 24;
+    const SMALL_STR_MASK: u8 = 0x80;
 
     /// Evaluate source code and return the result
     pub fn evaluate(self: *DevEvaluator, source: []const u8) Error!EvalResult {
@@ -374,33 +541,67 @@ pub const DevEvaluator = struct {
         return switch (code_result.result_layout) {
             .i64, .i8, .i16, .i32 => blk: {
                 var result: i64 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .i64_val = result };
             },
             .u64, .u8, .u16, .u32, .bool => blk: {
                 var result: u64 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .u64_val = result };
             },
             .f64, .f32 => blk: {
                 var result: f64 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .f64_val = result };
             },
             .i128 => blk: {
                 var result: i128 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .i128_val = result };
             },
             .u128 => blk: {
                 var result: u128 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .u128_val = result };
             },
             .dec => blk: {
                 var result: i128 = undefined;
-                executable.callWithResultPtr(@ptrCast(&result));
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .i128_val = result };
+            },
+            .str => blk: {
+                // RocStr is 24 bytes: { bytes: *u8, length: usize, capacity: usize }
+                var roc_str_bytes: [ROCSTR_SIZE]u8 = undefined;
+                executable.callWithResultPtrAndRocOps(@ptrCast(&roc_str_bytes), @constCast(&self.roc_ops));
+
+                // Check if it's a small string (high bit of last byte is set)
+                const len_byte = roc_str_bytes[ROCSTR_SIZE - 1];
+                if (len_byte & SMALL_STR_MASK != 0) {
+                    // Small string: length is in the last byte with mask removed
+                    const len = len_byte & ~SMALL_STR_MASK;
+                    // Copy the string data to newly allocated memory
+                    const str_copy = self.allocator.dupe(u8, roc_str_bytes[0..len]) catch return error.OutOfMemory;
+                    break :blk EvalResult{ .str_val = str_copy };
+                } else {
+                    // Big string: first 8 bytes are pointer to data, next 8 bytes are length
+                    const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&roc_str_bytes[0]));
+                    const length_ptr: *const u64 = @ptrCast(@alignCast(&roc_str_bytes[8]));
+
+                    const data_ptr = bytes_ptr.*;
+                    const length = length_ptr.*;
+
+                    // Handle the seamless slice bit (high bit of length indicates seamless slice)
+                    const SEAMLESS_SLICE_BIT: u64 = @as(u64, @bitCast(@as(i64, std.math.minInt(i64))));
+                    const actual_length = length & ~SEAMLESS_SLICE_BIT;
+
+                    if (actual_length == 0) {
+                        break :blk EvalResult{ .str_val = "" };
+                    }
+
+                    // Copy the string data from the heap-allocated memory
+                    const str_copy = self.allocator.dupe(u8, data_ptr[0..actual_length]) catch return error.OutOfMemory;
+                    break :blk EvalResult{ .str_val = str_copy };
+                }
             },
             else => return error.UnsupportedType,
         };
@@ -524,6 +725,25 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                         }
                     }
                     break :blk .i64;
+                },
+                else => {},
+            }
+            break :blk .i64;
+        },
+        .e_dot_access => |dot| blk: {
+            // Get the receiver expression and check if it's a record
+            const receiver_expr = module_env.store.getExpr(dot.receiver);
+            switch (receiver_expr) {
+                .e_record => |rec| {
+                    // Find the field with the matching name
+                    const fields = module_env.store.sliceRecordFields(rec.fields);
+                    for (fields) |field_idx| {
+                        const field = module_env.store.getRecordField(field_idx);
+                        if (@as(u32, @bitCast(field.name)) == @as(u32, @bitCast(dot.field_name))) {
+                            const field_expr = module_env.store.getExpr(field.value);
+                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, field_expr, type_env);
+                        }
+                    }
                 },
                 else => {},
             }
@@ -712,7 +932,7 @@ test "generate i64 code" {
     defer exec.deinit();
 
     var result: i64 = undefined;
-    exec.callWithResultPtr(@ptrCast(&result));
+    exec.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&runner.roc_ops));
     try std.testing.expectEqual(@as(i64, 42), result);
 }
 
@@ -733,7 +953,7 @@ test "generate i64 code large value" {
     defer exec.deinit();
 
     var result: i64 = undefined;
-    exec.callWithResultPtr(@ptrCast(&result));
+    exec.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&runner.roc_ops));
     try std.testing.expectEqual(large_value, result);
 }
 
@@ -753,7 +973,7 @@ test "generate f64 code" {
     defer exec.deinit();
 
     var result: f64 = undefined;
-    exec.callWithResultPtr(@ptrCast(&result));
+    exec.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&runner.roc_ops));
     try std.testing.expectApproxEqRel(@as(f64, 3.14159), result, 0.0001);
 }
 
