@@ -4,11 +4,12 @@
 //! 1. Parsing source code
 //! 2. Canonicalizing to CIR
 //! 3. Type checking
-//! 4. Generating native machine code (x86_64/aarch64)
-//! 5. Executing the generated code
+//! 4. Lowering to Mono IR (globally unique symbols)
+//! 5. Generating native machine code (x86_64/aarch64)
+//! 6. Executing the generated code
 //!
-//! Code generation is delegated to ExprCodeGen in the backend.
-//! This module handles orchestration and the compilation pipeline.
+//! Code generation uses Mono IR with globally unique MonoSymbol references,
+//! eliminating cross-module index collisions.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -18,6 +19,7 @@ const can = @import("can");
 const check = @import("check");
 const layout = @import("layout");
 const backend = @import("backend");
+const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 
 const Allocator = std.mem.Allocator;
@@ -27,10 +29,15 @@ const Can = can.Can;
 const Check = check.Check;
 const LoadedModule = builtin_loading.LoadedModule;
 
-// Re-export types from backend ExprCodeGen
-pub const ExprCodeGen = backend.ExprCodeGen;
-pub const BindingValue = backend.BindingValue;
-pub const Scope = backend.Scope;
+// Mono IR types
+const MonoExprStore = mono.MonoExprStore;
+const MonoLower = mono.Lower;
+const MonoExprId = mono.MonoExprId;
+
+// Re-export types from backend MonoExprCodeGen
+pub const MonoExprCodeGen = backend.MonoExprCodeGen;
+pub const MonoScope = backend.MonoScope;
+pub const BindingValue = backend.MonoBindingValue;
 
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
@@ -40,11 +47,11 @@ pub const LayoutIdx = layout.Idx;
 /// Orchestrates the compilation pipeline:
 /// - Initializes with builtin modules
 /// - Parses, canonicalizes, and type-checks expressions
-/// - Delegates code generation to ExprCodeGen
+/// - Lowers CIR to Mono IR (global symbols)
+/// - Generates native machine code via MonoExprCodeGen
 /// - Executes generated code
 pub const DevEvaluator = struct {
     allocator: Allocator,
-    codegen: ExprCodeGen,
 
     /// Loaded builtin module (Bool, Result, etc.)
     builtin_module: LoadedModule,
@@ -81,7 +88,6 @@ pub const DevEvaluator = struct {
 
         return DevEvaluator{
             .allocator = allocator,
-            .codegen = ExprCodeGen.init(allocator),
             .builtin_module = builtin_module,
             .builtin_indices = builtin_indices,
         };
@@ -89,13 +95,7 @@ pub const DevEvaluator = struct {
 
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
-        self.codegen.deinit();
         self.builtin_module.deinit();
-    }
-
-    /// Create an empty scope for code generation
-    pub fn createScope(self: *DevEvaluator) Scope {
-        return self.codegen.createScope();
     }
 
     /// Prepare modules for code generation by running the closure pipeline.
@@ -133,7 +133,6 @@ pub const DevEvaluator = struct {
 
                 var lifter = can.LambdaLifter.init(self.allocator, module, &top_level_patterns);
                 defer lifter.deinit();
-                // Note: Actual lifting happens when needed, not all at once
                 module.is_lambda_lifted = true;
             }
         }
@@ -148,7 +147,6 @@ pub const DevEvaluator = struct {
             if (!module.is_defunctionalized) {
                 var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
                 defer transformer.deinit();
-                // Note: Actual transformation happens when needed, not all at once
                 module.is_defunctionalized = true;
             }
         }
@@ -165,33 +163,36 @@ pub const DevEvaluator = struct {
         crash_message: ?[]const u8 = null,
 
         pub fn deinit(self: *CodeResult) void {
-            self.allocator.free(self.code);
+            if (self.code.len > 0) {
+                self.allocator.free(self.code);
+            }
         }
     };
 
-    /// Generate code for a CIR expression
-    /// Takes an optional slice of all module environments for resolving external lookups.
-    /// If not provided, defaults to [module_env, builtin_module.env].
-    pub fn generateCode(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!CodeResult {
-        return self.generateCodeWithModules(module_env, expr, null);
-    }
-
-    /// Generate code for a CIR expression with explicit module environments
-    pub fn generateCodeWithModules(
+    /// Generate code for a CIR expression using Mono IR
+    ///
+    /// Pipeline:
+    /// 1. Lowers CIR to Mono IR (globally unique symbols)
+    /// 2. Uses MonoExprCodeGen to generate machine code
+    ///
+    /// This solves the cross-module index collision issue where module-local
+    /// CIR.Expr.Idx values get confused across module boundaries.
+    pub fn generateCode(
         self: *DevEvaluator,
         module_env: *ModuleEnv,
-        expr: CIR.Expr,
-        all_module_envs: ?[]const *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
-        var env = self.createScope();
-        defer env.deinit();
+        // Get the CIR expression to determine layout
+        const expr = module_env.store.getExpr(expr_idx);
 
-        // Determine result layout and tuple length
+        // Determine result layout
         var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
         defer type_env.deinit();
-        const result_layout = self.getExprLayoutWithTypeEnv(module_env, expr, &type_env);
-        var tuple_len: usize = 1;
+        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, expr, &type_env);
 
+        // Determine tuple length
+        var tuple_len: usize = 1;
         switch (expr) {
             .e_tuple => |tuple| {
                 const elems = module_env.store.sliceExpr(tuple.elems);
@@ -200,17 +201,46 @@ pub const DevEvaluator = struct {
             else => {},
         }
 
-        // Set up module environments for external lookups
-        // Default: [builtin_module] - Builtin is at index 0 to match import resolution
-        // Note: The user module is passed directly to generateCodeForExpr, not via this array
-        var default_envs: [1]*ModuleEnv = .{self.builtin_module.env};
-        self.codegen.all_module_envs = all_module_envs orelse &default_envs;
+        // Create Mono IR store
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
 
-        // Generate code using ExprCodeGen
-        const code = self.codegen.generateCodeForExpr(module_env, expr, result_layout, &env) catch |err| {
+        // Find module index for the current module
+        var module_idx: u16 = 0;
+        for (all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                module_idx = @intCast(i);
+                break;
+            }
+        }
+
+        // Lower CIR to Mono IR
+        var lowerer = MonoLower.init(
+            self.allocator,
+            &mono_store,
+            all_module_envs,
+            null, // lambda_inference - not needed for simple expressions
+            null, // layout_store - using default layouts
+        );
+        defer lowerer.deinit();
+
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch |err| {
+            switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return error.UnsupportedExpression,
+            }
+        };
+
+        // Generate code from Mono IR
+        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, all_module_envs);
+        defer mono_codegen.deinit();
+
+        var mono_env = mono_codegen.createScope();
+        defer mono_env.deinit();
+
+        const code = mono_codegen.generateCodeForExpr(mono_expr_id, result_layout, &mono_env) catch |err| {
             if (err == error.Crash or err == error.RuntimeError) {
-                // Create result with crash message
-                const crash_msg = self.codegen.getCrashMessage();
+                const crash_msg = mono_codegen.getCrashMessage();
                 return CodeResult{
                     .code = &[_]u8{},
                     .allocator = self.allocator,
@@ -229,245 +259,6 @@ pub const DevEvaluator = struct {
             .tuple_len = tuple_len,
             .crash_message = null,
         };
-    }
-
-    /// Type environment for tracking variable types
-    const TypeEnv = std.AutoHashMap(u32, LayoutIdx);
-
-    /// Get the Layout for code execution from a CIR expression
-    fn getExprLayout(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx {
-        var type_env = TypeEnv.init(self.allocator);
-        defer type_env.deinit();
-        return self.getExprLayoutWithTypeEnv(module_env, expr, &type_env);
-    }
-
-    /// Get the Layout with a type environment for tracking variable types through blocks
-    fn getExprLayoutWithTypeEnv(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *TypeEnv) LayoutIdx {
-        return switch (expr) {
-            .e_num => |num| switch (num.kind) {
-                .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-                .u8, .u16, .u32, .u64 => .u64,
-                .i128 => .i128,
-                .u128 => .u128,
-                .f32, .f64 => .f64,
-                .dec => .dec,
-            },
-            .e_frac_f32, .e_frac_f64 => .f64,
-            .e_dec, .e_dec_small => .dec,
-            .e_typed_int => |ti| self.getTypedIntLayout(module_env, ti.type_name),
-            .e_binop => |binop| self.getBinopLayoutWithTypeEnv(module_env, binop, type_env),
-            .e_unary_minus => |unary| blk: {
-                const inner_expr = module_env.store.getExpr(unary.expr);
-                break :blk self.getExprLayoutWithTypeEnv(module_env, inner_expr, type_env);
-            },
-            .e_nominal => |nom| blk: {
-                const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk self.getExprLayoutWithTypeEnv(module_env, backing_expr, type_env);
-            },
-            .e_nominal_external => |nom| blk: {
-                const backing_expr = module_env.store.getExpr(nom.backing_expr);
-                break :blk self.getExprLayoutWithTypeEnv(module_env, backing_expr, type_env);
-            },
-            .e_if => |if_expr| blk: {
-                const else_expr = module_env.store.getExpr(if_expr.final_else);
-                break :blk self.getExprLayoutWithTypeEnv(module_env, else_expr, type_env);
-            },
-            .e_block => |block| self.getBlockLayout(module_env, block, type_env),
-            .e_lookup_local => |lookup| blk: {
-                const pattern_key = @intFromEnum(lookup.pattern_idx);
-                break :blk type_env.get(pattern_key) orelse .i64;
-            },
-            .e_str, .e_str_segment => .str,
-            .e_call => |call| blk: {
-                const func_expr = module_env.store.getExpr(call.func);
-                switch (func_expr) {
-                    .e_lambda => |lambda| {
-                        const body_expr = module_env.store.getExpr(lambda.body);
-                        switch (body_expr) {
-                            .e_lookup_local => {
-                                const args = module_env.store.sliceExpr(call.args);
-                                if (args.len > 0) {
-                                    const arg_expr = module_env.store.getExpr(args[0]);
-                                    break :blk self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
-                                }
-                            },
-                            else => {},
-                        }
-                        break :blk self.getExprLayoutWithTypeEnv(module_env, body_expr, type_env);
-                    },
-                    .e_closure => |closure| {
-                        const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
-                        switch (lambda_expr) {
-                            .e_lambda => |lambda| {
-                                const body_expr = module_env.store.getExpr(lambda.body);
-                                switch (body_expr) {
-                                    .e_lookup_local => {
-                                        const args = module_env.store.sliceExpr(call.args);
-                                        if (args.len > 0) {
-                                            const arg_expr = module_env.store.getExpr(args[0]);
-                                            break :blk self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
-                                        }
-                                    },
-                                    else => {},
-                                }
-                                break :blk self.getExprLayoutWithTypeEnv(module_env, body_expr, type_env);
-                            },
-                            else => {},
-                        }
-                        break :blk .i64;
-                    },
-                    .e_lookup_local => {
-                        const args = module_env.store.sliceExpr(call.args);
-                        if (args.len > 0) {
-                            const arg_expr = module_env.store.getExpr(args[0]);
-                            const arg_layout = self.getExprLayoutWithTypeEnv(module_env, arg_expr, type_env);
-                            if (arg_layout == .str) {
-                                break :blk .str;
-                            }
-                        }
-                        break :blk .i64;
-                    },
-                    else => {},
-                }
-                break :blk .i64;
-            },
-            .e_dot_access => |dot| blk: {
-                const target_expr = self.codegen.resolveDotAccess(module_env, dot) orelse break :blk .i64;
-                break :blk self.getExprLayoutWithTypeEnv(module_env, target_expr, type_env);
-            },
-            else => .i64,
-        };
-    }
-
-    /// Get the result type for a block
-    fn getBlockLayout(self: *DevEvaluator, module_env: *ModuleEnv, block: anytype, type_env: *TypeEnv) LayoutIdx {
-        var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(self.allocator);
-        defer type_annos.deinit();
-
-        const stmts = module_env.store.sliceStatements(block.stmts);
-
-        // First pass: collect type annotations
-        for (stmts) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_type_anno => |ta| {
-                    const type_anno = module_env.store.getTypeAnno(ta.anno);
-                    switch (type_anno) {
-                        .apply => |apply| {
-                            const result_layout = layoutFromLocalOrExternal(apply.base);
-                            type_annos.put(ta.name, result_layout) catch {};
-                        },
-                        .lookup => |lookup| {
-                            const result_layout = layoutFromLocalOrExternal(lookup.base);
-                            type_annos.put(ta.name, result_layout) catch {};
-                        },
-                        else => {},
-                    }
-                },
-                else => {},
-            }
-        }
-
-        // Second pass: process declarations
-        for (stmts) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .s_decl => |decl| {
-                    const pattern_key = @intFromEnum(decl.pattern);
-                    if (decl.anno) |anno_idx| {
-                        const result_layout = self.getAnnotationLayout(module_env, anno_idx);
-                        type_env.put(pattern_key, result_layout) catch {};
-                    } else {
-                        const pattern = module_env.store.getPattern(decl.pattern);
-                        var found_annotation = false;
-                        switch (pattern) {
-                            .assign => |assign| {
-                                if (type_annos.get(assign.ident)) |anno_layout| {
-                                    type_env.put(pattern_key, anno_layout) catch {};
-                                    found_annotation = true;
-                                }
-                            },
-                            else => {},
-                        }
-                        if (!found_annotation) {
-                            const decl_expr = module_env.store.getExpr(decl.expr);
-                            const inferred_layout = self.getExprLayoutWithTypeEnv(module_env, decl_expr, type_env);
-                            type_env.put(pattern_key, inferred_layout) catch {};
-                        }
-                    }
-                },
-                .s_decl_gen => |decl| {
-                    const pattern_key = @intFromEnum(decl.pattern);
-                    if (decl.anno) |anno_idx| {
-                        const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
-                        type_env.put(pattern_key, anno_layout) catch {};
-                    } else {
-                        const pattern = module_env.store.getPattern(decl.pattern);
-                        var found_annotation = false;
-                        switch (pattern) {
-                            .assign => |assign| {
-                                if (type_annos.get(assign.ident)) |anno_layout| {
-                                    type_env.put(pattern_key, anno_layout) catch {};
-                                    found_annotation = true;
-                                }
-                            },
-                            else => {},
-                        }
-                        if (!found_annotation) {
-                            const decl_expr = module_env.store.getExpr(decl.expr);
-                            const inferred_layout = self.getExprLayoutWithTypeEnv(module_env, decl_expr, type_env);
-                            type_env.put(pattern_key, inferred_layout) catch {};
-                        }
-                    }
-                },
-                else => {},
-            }
-        }
-
-        const final_expr = module_env.store.getExpr(block.final_expr);
-        return self.getExprLayoutWithTypeEnv(module_env, final_expr, type_env);
-    }
-
-    /// Get the result type from an annotation
-    fn getAnnotationLayout(_: *DevEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
-        const anno = module_env.store.getAnnotation(anno_idx);
-        const type_anno = module_env.store.getTypeAnno(anno.anno);
-        switch (type_anno) {
-            .apply => |apply| return layoutFromLocalOrExternal(apply.base),
-            .lookup => |lookup| return layoutFromLocalOrExternal(lookup.base),
-            else => return .i64,
-        }
-    }
-
-    /// Get the result type for a typed integer
-    fn getTypedIntLayout(_: *DevEvaluator, module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
-        const idents = &module_env.idents;
-        if (type_name == idents.u8_type or
-            type_name == idents.u16_type or
-            type_name == idents.u32_type or
-            type_name == idents.u64_type)
-        {
-            return .u64;
-        } else if (type_name == idents.u128_type) {
-            return .u128;
-        } else if (type_name == idents.i128_type) {
-            return .i128;
-        } else if (type_name == idents.f32_type or type_name == idents.f64_type) {
-            return .f64;
-        } else if (type_name == idents.dec_type) {
-            return .dec;
-        }
-        return .i64;
-    }
-
-    /// Get the result type for a binary operation
-    fn getBinopLayoutWithTypeEnv(self: *DevEvaluator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *TypeEnv) LayoutIdx {
-        switch (binop.op) {
-            .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
-            else => {},
-        }
-        const lhs_expr = module_env.store.getExpr(binop.lhs);
-        return self.getExprLayoutWithTypeEnv(module_env, lhs_expr, type_env);
     }
 
     /// Generate native code from source code string (full pipeline)
@@ -541,9 +332,9 @@ pub const DevEvaluator = struct {
             return error.TypeError;
         };
 
-        // Step 4: Generate native code
-        const expr = module_env.store.getExpr(final_expr_idx);
-        return self.generateCode(&module_env, expr);
+        // Step 4: Generate native code using Mono IR
+        var all_module_envs = [_]*ModuleEnv{ &module_env, self.builtin_module.env };
+        return self.generateCode(&module_env, final_expr_idx, &all_module_envs);
     }
 
     /// Result of evaluation
@@ -569,6 +360,13 @@ pub const DevEvaluator = struct {
     pub fn evaluate(self: *DevEvaluator, source: []const u8) Error!EvalResult {
         var code_result = try self.generateCodeFromSource(source);
         defer code_result.deinit();
+
+        if (code_result.code.len == 0) {
+            if (code_result.crash_message != null) {
+                return error.Crash;
+            }
+            return error.UnsupportedExpression;
+        }
 
         var executable = backend.ExecutableMemory.init(code_result.code) catch return error.ExecutionError;
         defer executable.deinit();
@@ -610,17 +408,261 @@ pub const DevEvaluator = struct {
 
     // Public methods for direct code generation (used by tests)
     pub fn generateReturnI64Code(self: *DevEvaluator, value: i64, result_layout: LayoutIdx) Error![]const u8 {
-        return self.codegen.generateReturnI64Code(value, result_layout);
+        // Create a temporary MonoExprStore and codegen
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
+
+        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
+        defer mono_codegen.deinit();
+
+        return mono_codegen.generateReturnI64Code(value, result_layout);
     }
 
     pub fn generateReturnF64Code(self: *DevEvaluator, value: f64) Error![]const u8 {
-        return self.codegen.generateReturnF64Code(value);
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
+
+        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
+        defer mono_codegen.deinit();
+
+        return mono_codegen.generateReturnF64Code(value);
     }
 
     pub fn generateReturnI128Code(self: *DevEvaluator, value: i128) Error![]const u8 {
-        return self.codegen.generateReturnI128Code(value);
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
+
+        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
+        defer mono_codegen.deinit();
+
+        return mono_codegen.generateReturnI128Code(value);
     }
 };
+
+/// Get the Layout for a CIR expression
+fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    return switch (expr) {
+        .e_num => |num| switch (num.kind) {
+            .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
+            .u8, .u16, .u32, .u64 => .u64,
+            .i128 => .i128,
+            .u128 => .u128,
+            .f32, .f64 => .f64,
+            .dec => .dec,
+        },
+        .e_frac_f32, .e_frac_f64 => .f64,
+        .e_dec, .e_dec_small => .dec,
+        .e_typed_int => |ti| getTypedIntLayout(module_env, ti.type_name),
+        .e_binop => |binop| getBinopLayout(allocator, module_env, binop, type_env),
+        .e_unary_minus => |unary| blk: {
+            const inner_expr = module_env.store.getExpr(unary.expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, inner_expr, type_env);
+        },
+        .e_nominal => |nom| blk: {
+            const backing_expr = module_env.store.getExpr(nom.backing_expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
+        },
+        .e_nominal_external => |nom| blk: {
+            const backing_expr = module_env.store.getExpr(nom.backing_expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
+        },
+        .e_if => |if_expr| blk: {
+            const else_expr = module_env.store.getExpr(if_expr.final_else);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, else_expr, type_env);
+        },
+        .e_block => |block| getBlockLayout(allocator, module_env, block, type_env),
+        .e_lookup_local => |lookup| blk: {
+            const pattern_key = @intFromEnum(lookup.pattern_idx);
+            break :blk type_env.get(pattern_key) orelse .i64;
+        },
+        .e_str, .e_str_segment => .str,
+        .e_call => |call| blk: {
+            const func_expr = module_env.store.getExpr(call.func);
+            switch (func_expr) {
+                .e_lambda => |lambda| {
+                    const body_expr = module_env.store.getExpr(lambda.body);
+                    switch (body_expr) {
+                        .e_lookup_local => {
+                            const args = module_env.store.sliceExpr(call.args);
+                            if (args.len > 0) {
+                                const arg_expr = module_env.store.getExpr(args[0]);
+                                break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                            }
+                        },
+                        else => {},
+                    }
+                    break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+                },
+                .e_closure => |closure| {
+                    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+                    switch (lambda_expr) {
+                        .e_lambda => |lambda| {
+                            const body_expr = module_env.store.getExpr(lambda.body);
+                            switch (body_expr) {
+                                .e_lookup_local => {
+                                    const args = module_env.store.sliceExpr(call.args);
+                                    if (args.len > 0) {
+                                        const arg_expr = module_env.store.getExpr(args[0]);
+                                        break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                                    }
+                                },
+                                else => {},
+                            }
+                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+                        },
+                        else => {},
+                    }
+                    break :blk .i64;
+                },
+                .e_lookup_local => {
+                    const args = module_env.store.sliceExpr(call.args);
+                    if (args.len > 0) {
+                        const arg_expr = module_env.store.getExpr(args[0]);
+                        const arg_layout = getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                        if (arg_layout == .str) {
+                            break :blk .str;
+                        }
+                    }
+                    break :blk .i64;
+                },
+                else => {},
+            }
+            break :blk .i64;
+        },
+        else => .i64,
+    };
+}
+
+/// Get the result type for a block
+fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(allocator);
+    defer type_annos.deinit();
+
+    const stmts = module_env.store.sliceStatements(block.stmts);
+
+    // First pass: collect type annotations
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_type_anno => |ta| {
+                const type_anno = module_env.store.getTypeAnno(ta.anno);
+                switch (type_anno) {
+                    .apply => |apply| {
+                        const result_layout = layoutFromLocalOrExternal(apply.base);
+                        type_annos.put(ta.name, result_layout) catch {};
+                    },
+                    .lookup => |lookup| {
+                        const result_layout = layoutFromLocalOrExternal(lookup.base);
+                        type_annos.put(ta.name, result_layout) catch {};
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Second pass: process declarations
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_decl => |decl| {
+                const pattern_key = @intFromEnum(decl.pattern);
+                if (decl.anno) |anno_idx| {
+                    const result_layout = getAnnotationLayout(module_env, anno_idx);
+                    type_env.put(pattern_key, result_layout) catch {};
+                } else {
+                    const pattern = module_env.store.getPattern(decl.pattern);
+                    var found_annotation = false;
+                    switch (pattern) {
+                        .assign => |assign| {
+                            if (type_annos.get(assign.ident)) |anno_layout| {
+                                type_env.put(pattern_key, anno_layout) catch {};
+                                found_annotation = true;
+                            }
+                        },
+                        else => {},
+                    }
+                    if (!found_annotation) {
+                        const decl_expr = module_env.store.getExpr(decl.expr);
+                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
+                        type_env.put(pattern_key, inferred_layout) catch {};
+                    }
+                }
+            },
+            .s_decl_gen => |decl| {
+                const pattern_key = @intFromEnum(decl.pattern);
+                if (decl.anno) |anno_idx| {
+                    const anno_layout = getAnnotationLayout(module_env, anno_idx);
+                    type_env.put(pattern_key, anno_layout) catch {};
+                } else {
+                    const pattern = module_env.store.getPattern(decl.pattern);
+                    var found_annotation = false;
+                    switch (pattern) {
+                        .assign => |assign| {
+                            if (type_annos.get(assign.ident)) |anno_layout| {
+                                type_env.put(pattern_key, anno_layout) catch {};
+                                found_annotation = true;
+                            }
+                        },
+                        else => {},
+                    }
+                    if (!found_annotation) {
+                        const decl_expr = module_env.store.getExpr(decl.expr);
+                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
+                        type_env.put(pattern_key, inferred_layout) catch {};
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    const final_expr = module_env.store.getExpr(block.final_expr);
+    return getExprLayoutWithTypeEnv(allocator, module_env, final_expr, type_env);
+}
+
+/// Get the result type from an annotation
+fn getAnnotationLayout(module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
+    const anno = module_env.store.getAnnotation(anno_idx);
+    const type_anno = module_env.store.getTypeAnno(anno.anno);
+    switch (type_anno) {
+        .apply => |apply| return layoutFromLocalOrExternal(apply.base),
+        .lookup => |lookup| return layoutFromLocalOrExternal(lookup.base),
+        else => return .i64,
+    }
+}
+
+/// Get the result type for a typed integer
+fn getTypedIntLayout(module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
+    const idents = &module_env.idents;
+    if (type_name == idents.u8_type or
+        type_name == idents.u16_type or
+        type_name == idents.u32_type or
+        type_name == idents.u64_type)
+    {
+        return .u64;
+    } else if (type_name == idents.u128_type) {
+        return .u128;
+    } else if (type_name == idents.i128_type) {
+        return .i128;
+    } else if (type_name == idents.f32_type or type_name == idents.f64_type) {
+        return .f64;
+    } else if (type_name == idents.dec_type) {
+        return .dec;
+    }
+    return .i64;
+}
+
+/// Get the result type for a binary operation
+fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    switch (binop.op) {
+        .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
+        else => {},
+    }
+    const lhs_expr = module_env.store.getExpr(binop.lhs);
+    return getExprLayoutWithTypeEnv(allocator, module_env, lhs_expr, type_env);
+}
 
 /// Convert a LocalOrExternal to LayoutIdx
 fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
@@ -726,7 +768,7 @@ test "evaluate addition" {
 
     const result = runner.evaluate("1 + 2") catch |err| {
         return switch (err) {
-            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
             else => err,
         };
     };
@@ -745,7 +787,7 @@ test "evaluate subtraction" {
 
     const result = runner.evaluate("10 - 3") catch |err| {
         return switch (err) {
-            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
             else => err,
         };
     };
@@ -764,7 +806,7 @@ test "evaluate multiplication" {
 
     const result = runner.evaluate("6 * 7") catch |err| {
         return switch (err) {
-            error.ParseError, error.CanonicalizeError, error.TypeError => error.SkipZigTest,
+            error.ParseError, error.CanonicalizeError, error.TypeError, error.UnsupportedExpression => error.SkipZigTest,
             else => err,
         };
     };

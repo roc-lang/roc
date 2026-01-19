@@ -93,7 +93,6 @@ const BuildEnv = compile.BuildEnv;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
-const TestRunner = eval.TestRunner;
 const Allocators = base.Allocators;
 const CompactWriter = collections.CompactWriter;
 
@@ -102,42 +101,12 @@ const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
 const SerializedHeader = collections.SerializedHeader;
 const SerializedModuleInfo = collections.SerializedModuleInfo;
 
-/// Embedded interpreter shim libraries for different targets.
-/// The native shim is used for roc run and native builds.
-/// Cross-compilation shims are used for roc build --target=<target>.
+/// DEPRECATED: Interpreter shim libraries have been removed.
+/// Native code generation via Mono IR is now used instead.
 const ShimLibraries = struct {
-    /// Native shim (for host platform builds and roc run)
-    const native = if (builtin.is_test)
-        &[_]u8{}
-    else if (builtin.target.os.tag == .windows)
-        @embedFile("roc_interpreter_shim.lib")
-    else
-        @embedFile("libroc_interpreter_shim.a");
-
-    /// Cross-compilation target shims (Linux musl targets)
-    const x64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64musl/libroc_interpreter_shim.a");
-    const arm64musl = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64musl/libroc_interpreter_shim.a");
-
-    /// Cross-compilation target shims (Linux glibc targets)
-    const x64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/x64glibc/libroc_interpreter_shim.a");
-    const arm64glibc = if (builtin.is_test) &[_]u8{} else @embedFile("targets/arm64glibc/libroc_interpreter_shim.a");
-
-    /// WebAssembly target shim (wasm32-freestanding)
-    const wasm32 = if (builtin.is_test) &[_]u8{} else @embedFile("targets/wasm32/libroc_interpreter_shim.a");
-
-    /// Get the appropriate shim library bytes for the given target
-    pub fn forTarget(target: roc_target.RocTarget) []const u8 {
-        return switch (target) {
-            .x64musl => x64musl,
-            .arm64musl => arm64musl,
-            .x64glibc => x64glibc,
-            .arm64glibc => arm64glibc,
-            .wasm32 => wasm32,
-            // Native/host targets use the native shim
-            .x64mac, .arm64mac, .x64win, .arm64win => native,
-            // Fallback for other targets (will use native, may not work for cross-compilation)
-            else => native,
-        };
+    const native: []const u8 = &[_]u8{};
+    pub fn forTarget(_: roc_target.RocTarget) []const u8 {
+        return &[_]u8{};
     }
 };
 
@@ -4980,246 +4949,17 @@ const CopiedFile = struct {
 };
 
 fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // Start timing
-    const start_time = std.time.nanoTimestamp();
-
-    const stdout = ctx.io.stdout();
+    _ = args;
     const stderr = ctx.io.stderr();
-
-    // Read the Roc file
-    var source = std.fs.cwd().readFileAlloc(ctx.gpa, args.path, std.math.maxInt(usize)) catch |err| {
-        try stderr.print("Failed to read file '{s}': {}\n", .{ args.path, err });
-        return err;
-    };
-    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
-        ctx.gpa.free(source);
-        return err;
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(args.path);
-    const module_name = try ctx.arena.dupe(u8, basename);
-
-    // Create ModuleEnv
-    var env = ModuleEnv.init(ctx.gpa, source) catch |err| {
-        try stderr.print("Failed to initialize module environment: {}\n", .{err});
-        return err;
-    };
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Load builtin modules required by the type checker and interpreter
-    const builtin_indices = builtin_loading.deserializeBuiltinIndices(ctx.gpa, compiled_builtins.builtin_indices_bin) catch |err| {
-        try stderr.print("Failed to deserialize builtin indices: {}\n", .{err});
-        return err;
-    };
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = builtin_loading.loadCompiledModule(ctx.gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source) catch |err| {
-        try stderr.print("Failed to load Builtin module: {}\n", .{err});
-        return err;
-    };
-    defer builtin_module.deinit();
-
-    // Populate module_envs with Bool, Try, Dict, Set from builtin module
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs.deinit();
-
-    const module_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try env.insertIdent(base.Ident.for_text(module_name)),
-        .bool_stmt = builtin_indices.bool_type,
-        .try_stmt = builtin_indices.try_type,
-        .str_stmt = builtin_indices.str_type,
-        .builtin_module = builtin_module.env,
-        .builtin_indices = builtin_indices,
-    };
-
-    // Parse the source code as a full module
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch |err| {
-        try stderr.print("Failed to parse file: {}\n", .{err});
-        return err;
-    };
-    defer parse_ast.deinit(ctx.gpa);
-
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR fields in ModuleEnv
-    try env.initCIRFields(module_name);
-
-    // Populate module_envs with Bool, Try, Dict, Set using shared function
-    try Can.populateModuleEnvs(
-        &module_envs,
-        &env,
-        builtin_module.env,
-        builtin_indices,
-    );
-
-    // Create canonicalizer
-    var canonicalizer = Can.init(&env, &parse_ast, &module_envs) catch |err| {
-        try stderr.print("Failed to initialize canonicalizer: {}\n", .{err});
-        return err;
-    };
-    defer canonicalizer.deinit();
-
-    // Canonicalize the entire module
-    canonicalizer.canonicalizeFile() catch |err| {
-        try stderr.print("Failed to canonicalize file: {}\n", .{err});
-        return err;
-    };
-
-    // Validate for checking mode
-    canonicalizer.validateForChecking() catch |err| {
-        try stderr.print("Failed to validate module: {}\n", .{err});
-        return err;
-    };
-
-    // Build imported_envs array with builtin module
-    const imported_envs: []const *const ModuleEnv = &.{builtin_module.env};
-
-    // Resolve imports - map each import to its index in imported_envs
-    env.imports.resolveImports(&env, imported_envs);
-
-    // Type check the module
-    var checker = Check.init(ctx.gpa, &env.types, &env, imported_envs, &module_envs, &env.store.regions, module_builtin_ctx) catch |err| {
-        try stderr.print("Failed to initialize type checker: {}\n", .{err});
-        return err;
-    };
-    defer checker.deinit();
-
-    checker.checkFile() catch |err| {
-        try stderr.print("Type checking failed: {}\n", .{err});
-        return err;
-    };
-
-    // Evaluate all top-level declarations at compile time
-    const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(ctx.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping) catch |err| {
-        try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
-        return err;
-    };
-    // Note: comptime_evaluator must be deinitialized AFTER building reports from checker.problems
-    // because the crash messages are owned by the evaluator but referenced by the problems
-
-    _ = comptime_evaluator.evalAll() catch |err| {
-        try stderr.print("Failed to evaluate declarations: {}\n", .{err});
-        return err;
-    };
-
-    // Create test runner infrastructure for test evaluation (reuse builtin_types_for_eval from above)
-    var test_runner = TestRunner.init(ctx.gpa, &env, builtin_types_for_eval, imported_envs, builtin_module.env, &checker.import_mapping) catch |err| {
-        try stderr.print("Failed to create test runner: {}\n", .{err});
-        return err;
-    };
-    defer test_runner.deinit();
-
-    const summary = test_runner.eval_all() catch |err| {
-        try stderr.print("Failed to evaluate tests: {}\n", .{err});
-        return err;
-    };
-    const passed = summary.passed;
-    const failed = summary.failed;
-
-    // Calculate elapsed time
-    const end_time = std.time.nanoTimestamp();
-    const elapsed_ns = @as(u64, @intCast(end_time - start_time));
-    const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
-
-    // Report any compile-time crashes
-    const has_comptime_crashes = checker.problems.len() > 0;
-    if (has_comptime_crashes) {
-        const problem = @import("check").problem;
-        var report_builder = problem.ReportBuilder.init(
-            ctx.gpa,
-            &env,
-            &env,
-            &checker.snapshots,
-            &checker.problems,
-            args.path,
-            &.{},
-            &checker.import_mapping,
-        );
-        defer report_builder.deinit();
-
-        for (0..checker.problems.len()) |i| {
-            const problem_idx: problem.Problem.Idx = @enumFromInt(i);
-            const prob = checker.problems.get(problem_idx);
-            var report = report_builder.build(prob) catch |err| {
-                try stderr.print("Failed to build problem report: {}\n", .{err});
-                continue;
-            };
-            defer report.deinit();
-
-            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-            const config = reporting.ReportingConfig.initColorTerminal();
-            try reporting.renderReportToTerminal(&report, stderr, palette, config);
-        }
-    }
-
-    // Clean up comptime evaluator AFTER building reports (crash messages must stay alive until reports are built)
-    comptime_evaluator.deinit();
-
-    // Report results
-    if (failed == 0 and !has_comptime_crashes) {
-        // Success case: print summary
-        try stdout.print("All ({}) tests passed in {d:.1} ms.\n", .{ passed, elapsed_ms });
-        if (args.verbose) {
-            // Generate and render a detailed report if verbose is true
-            for (test_runner.test_results.items) |test_result| {
-                const region_info = env.calcRegionInfo(test_result.region);
-                try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-            }
-        }
-        return; // Exit with 0
-    } else {
-        // Failure case: always print summary with timing
-        const total_tests = passed + failed;
-        if (total_tests > 0) {
-            try stderr.print("Ran {} test(s): {} passed, {} failed in {d:.1}ms\n", .{ total_tests, passed, failed, elapsed_ms });
-        }
-
-        if (args.verbose) {
-            for (test_runner.test_results.items) |test_result| {
-                const region_info = env.calcRegionInfo(test_result.region);
-                if (test_result.passed) {
-                    try stdout.print("\x1b[32mPASS\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                } else {
-                    // Generate and render a detailed report for this failure
-                    var report = test_runner.createReport(test_result, args.path) catch |err| {
-                        // Fallback to simple message if report generation fails
-                        try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}", .{ args.path, region_info.start_line_idx + 1 });
-                        if (test_result.error_msg) |msg| {
-                            try stderr.print(" - {s}", .{msg});
-                        }
-                        try stderr.print(" (report generation failed: {})\n", .{err});
-                        continue;
-                    };
-                    defer report.deinit();
-
-                    // Render the report to terminal
-                    const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
-                    const config = reporting.ReportingConfig.initColorTerminal();
-                    try reporting.renderReportToTerminal(&report, stderr, palette, config);
-                }
-            }
-        } else {
-            // Non-verbose mode: just show simple FAIL messages with line numbers
-            for (test_runner.test_results.items) |test_result| {
-                if (!test_result.passed) {
-                    const region_info = env.calcRegionInfo(test_result.region);
-                    try stderr.print("\x1b[31mFAIL\x1b[0m: {s}:{}\n", .{ args.path, region_info.start_line_idx + 1 });
-                }
-            }
-        }
-
-        return error.TestsFailed;
-    }
+    try stderr.print(
+        \\Error: `roc test` is not yet implemented.
+        \\
+        \\The interpreter-based test runner has been removed. Test execution using
+        \\the new dev backend with Mono IR is not yet available.
+        \\
+        \\
+    , .{});
+    return error.NotImplemented;
 }
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {

@@ -14,8 +14,6 @@ const Check = check_mod.Check;
 const CIR = can_mod.CIR;
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
-const eval_mod = @import("eval");
-const Interpreter = eval_mod.Interpreter;
 
 // Tests
 const testing = std.testing;
@@ -113,7 +111,7 @@ test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     try testing.expect(repl.definitions.count() == 0);
@@ -123,7 +121,7 @@ test "Repl - special commands" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -143,19 +141,19 @@ test "Repl - simple expressions" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("42");
     defer interpreter_allocator.free(result);
-    try testing.expectEqualStrings("42", result);
+    try testing.expectEqualStrings("42 : Dec", result);
 }
 
 test "Repl - string expressions" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
@@ -167,7 +165,7 @@ test "Repl - silent assignments" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Assignment should return descriptive output
@@ -178,14 +176,14 @@ test "Repl - silent assignments" {
     // Expression should evaluate with context
     const result2 = try repl.step("x");
     defer interpreter_allocator.free(result2);
-    try testing.expectEqualStrings("5", result2);
+    try testing.expectEqualStrings("5 : Dec", result2);
 }
 
 test "Repl - variable redefinition" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // First definition
@@ -201,7 +199,7 @@ test "Repl - variable redefinition" {
     // Evaluate y
     const result3 = try repl.step("y");
     defer interpreter_allocator.free(result3);
-    try testing.expectEqualStrings("6", result3);
+    try testing.expectEqualStrings("6 : Dec", result3);
 
     // Redefine x
     const result4 = try repl.step("x = 3");
@@ -211,14 +209,14 @@ test "Repl - variable redefinition" {
     // Evaluate y again (should reflect new x value)
     const result5 = try repl.step("y");
     defer interpreter_allocator.free(result5);
-    try testing.expectEqualStrings("4", result5);
+    try testing.expectEqualStrings("4 : Dec", result5);
 }
 
 test "Repl - build full source with block syntax" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Add definitions manually to test source building
@@ -243,7 +241,7 @@ test "Repl - definition replacement" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Manually add definitions to test replacement behavior
@@ -272,7 +270,7 @@ test "Repl - definition replacement" {
 //     var test_env = TestEnv.init(interpreter_allocator);
 //     defer test_env.deinit();
 //
-//     var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+//     var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
 //     defer repl.deinit();
 //
 //     // Test Bool.not(True) should return False
@@ -286,93 +284,15 @@ test "Repl - definition replacement" {
 //     try testing.expectEqualStrings("True", result2);
 // }
 
-test "Repl - minimal interpreter integration" {
-    const gpa = interpreter_allocator;
-
-    var test_env = TestEnv.init(gpa);
-    defer test_env.deinit();
-
-    // Load builtin module
-    const builtin_indices = try deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
-    const builtin_source = compiled_builtins.builtin_source;
-    var builtin_module = try loadCompiledModule(gpa, compiled_builtins.builtin_bin, "Builtin", builtin_source);
-    defer builtin_module.deinit();
-
-    // Step 1: Create module environment
-    const source = "42";
-    var arena = std.heap.ArenaAllocator.init(gpa);
-    defer arena.deinit();
-
-    var module_env = try ModuleEnv.init(gpa, source);
-    defer module_env.deinit();
-
-    // Step 2: Parse as expression
-    var parse_ast = try parse.parseExpr(&module_env.common, gpa);
-    defer parse_ast.deinit(gpa);
-
-    // Empty scratch space (required before canonicalization)
-    parse_ast.store.emptyScratch();
-
-    // Step 3: Create CIR
-    const cir = &module_env; // CIR is now just ModuleEnv
-    try cir.initCIRFields("test");
-
-    // Get Bool, Try, and Str statement indices from the builtin module
-    const bool_stmt_in_builtin_module = builtin_indices.bool_type;
-    const try_stmt_in_builtin_module = builtin_indices.try_type;
-    const str_stmt_in_builtin_module = builtin_indices.str_type;
-
-    const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try cir.insertIdent(base.Ident.for_text("test")),
-        .bool_stmt = bool_stmt_in_builtin_module,
-        .try_stmt = try_stmt_in_builtin_module,
-        .str_stmt = str_stmt_in_builtin_module,
-        .builtin_module = builtin_module.env,
-        .builtin_indices = builtin_indices,
-    };
-
-    // Step 4: Canonicalize
-    var can = try Canon.init(cir, &parse_ast, null);
-    defer can.deinit();
-
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-    const canonical_expr_idx = try can.canonicalizeExpr(expr_idx) orelse {
-        return error.CanonicalizeError;
-    };
-
-    // Step 5: Type check - Pass Builtin as imported module
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
-
-    // Resolve imports - map each import to its index in imported_envs
-    cir.imports.resolveImports(cir, &imported_envs);
-
-    var checker = try Check.init(gpa, &module_env.types, cir, &imported_envs, null, &cir.store.regions, builtin_ctx);
-    defer checker.deinit();
-
-    _ = try checker.checkExprRepl(canonical_expr_idx.get_idx());
-
-    // Step 6: Create interpreter
-    const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &imported_envs, &checker.import_mapping, null, null);
-    defer interpreter.deinitAndFreeOtherEnvs();
-
-    // Step 7: Evaluate
-    const result = try interpreter.eval(canonical_expr_idx.get_idx(), test_env.get_ops());
-    defer result.decref(&interpreter.runtime_layout_store, test_env.get_ops());
-
-    // Step 8: Verify result using renderer
-    const ct_var = ModuleEnv.varFrom(canonical_expr_idx.get_idx());
-    const rt_var = try interpreter.translateTypeVar(&module_env, ct_var);
-    const rendered = try interpreter.renderValueRocWithType(result, rt_var, test_env.get_ops());
-    defer gpa.free(rendered);
-    try testing.expectEqualStrings("42", rendered);
-}
+// NOTE: The "minimal interpreter integration" test has been removed.
+// The interpreter has been replaced by the dev backend with Mono IR.
+// The REPL now uses DevEvaluator for evaluation.
 
 test "Repl - Str.is_empty works for empty and non-empty strings" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const empty_result = try repl.step("Str.is_empty(\"\")");
@@ -388,7 +308,7 @@ test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // This expression was leaking memory
@@ -401,7 +321,7 @@ test "Repl - Str.to_utf8 returns list that should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Test Str.to_utf8 directly - the resulting list should be decreffed
@@ -414,7 +334,7 @@ test "Repl - multiple Str.to_utf8 calls should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Test multiple calls in same REPL session
@@ -439,7 +359,7 @@ test "Repl - list literals should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Test list literals
@@ -459,7 +379,7 @@ test "Repl - list of strings should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // List of strings - similar to what snapshot tests do
@@ -472,7 +392,7 @@ test "Repl - from_utf8_lossy should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     {
@@ -486,7 +406,7 @@ test "Repl - for loop over list should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Simple list of strings - test that list literals are properly freed
@@ -508,7 +428,7 @@ test "Repl - list_sort_with should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Test list_sort_with - matches the snapshot pattern
@@ -528,7 +448,7 @@ test "Repl - list fold with concat should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // Test List.fold with List.concat - creates list literals in callback
@@ -541,7 +461,7 @@ test "Repl - all list operations should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // All list operation patterns from snapshots
@@ -596,7 +516,7 @@ test "Repl - all for loop snapshots should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // All the for loop snapshot patterns
@@ -632,7 +552,7 @@ test "Repl - full list_sort_with snapshot pattern" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // All expressions from list_sort_with.md - collected first then freed
@@ -664,7 +584,7 @@ test "Repl - full str_to_utf8 snapshot test" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     // All expressions from str_to_utf8.md
@@ -739,7 +659,7 @@ test "Repl - lambda function renders as <function>" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("|x| x + 1");
@@ -751,7 +671,7 @@ test "Repl - multi-arg lambda function renders as <function>" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), test_env.crashContextPtr());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
     defer repl.deinit();
 
     const result = try repl.step("|x, y| x + y");

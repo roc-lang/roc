@@ -14,12 +14,10 @@ const builtins = @import("builtins");
 
 /// Backend selection for code evaluation
 pub const EvalBackend = enum {
-    interpreter,
     dev,
     // llvm, // Future: LLVM backend
 
     pub fn fromString(s: []const u8) ?EvalBackend {
-        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
         if (std.mem.eql(u8, s, "dev")) return .dev;
         // if (std.mem.eql(u8, s, "llvm")) return .llvm;
         return null;
@@ -38,10 +36,12 @@ pub const Backend = @import("Backend.zig");
 pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 /// Backwards compatibility alias
 pub const JitCode = ExecutableMemory;
-const expr_codegen = @import("ExprCodeGen.zig");
-pub const ExprCodeGen = expr_codegen.ExprCodeGen;
-pub const BindingValue = expr_codegen.BindingValue;
-pub const Scope = expr_codegen.Scope;
+
+// Mono IR code generation (global symbol references, no cross-module collisions)
+const mono_expr_codegen = @import("MonoExprCodeGen.zig");
+pub const MonoExprCodeGen = mono_expr_codegen.MonoExprCodeGen;
+pub const MonoScope = mono_expr_codegen.MonoScope;
+pub const MonoBindingValue = mono_expr_codegen.BindingValue;
 
 /// Generic development backend parameterized by architecture-specific types.
 ///
