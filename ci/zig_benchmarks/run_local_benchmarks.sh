@@ -18,6 +18,7 @@ KEEP_ARTIFACTS=false
 ORIGINAL_BRANCH=""
 STASH_CREATED=false
 CLEANUP_DONE=false
+TEMP_SCRIPTS_DIR=""
 
 usage() {
     cat <<EOF
@@ -93,6 +94,12 @@ cleanup() {
     if [ "$STASH_CREATED" = "true" ]; then
         echo "  Restoring stashed changes"
         git stash pop --quiet 2>/dev/null || true
+    fi
+
+    # Clean up temp scripts
+    if [ -n "$TEMP_SCRIPTS_DIR" ] && [ -d "$TEMP_SCRIPTS_DIR" ]; then
+        echo "  Removing temporary scripts"
+        rm -rf "$TEMP_SCRIPTS_DIR"
     fi
 
     # Clean up artifacts unless requested to keep them
@@ -172,6 +179,15 @@ main() {
         echo ""
     fi
 
+    # Copy benchmark scripts to temp location (they may not exist on base branch)
+    log "Copying benchmark scripts to temp location"
+    TEMP_SCRIPTS_DIR=$(mktemp -d)
+    cp "$SCRIPT_DIR/run_fx_benchmarks.sh" "$TEMP_SCRIPTS_DIR/"
+    cp "$SCRIPT_DIR/run_snapshot_benchmark.sh" "$TEMP_SCRIPTS_DIR/"
+    chmod +x "$TEMP_SCRIPTS_DIR"/*.sh
+    echo "  Scripts copied to $TEMP_SCRIPTS_DIR"
+    echo ""
+
     # === BUILD BASE BRANCH ===
     log "Building $BASE_BRANCH branch"
     git checkout "$BASE_BRANCH" --quiet
@@ -207,7 +223,7 @@ main() {
 
     if [ "$SKIP_FX" = "false" ]; then
         log "Running FX benchmarks"
-        if ! "$SCRIPT_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc; then
+        if ! "$TEMP_SCRIPTS_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc; then
             BENCHMARK_FAILED=true
         fi
         echo ""
@@ -215,7 +231,7 @@ main() {
 
     if [ "$SKIP_SNAPSHOT" = "false" ]; then
         log "Running snapshot benchmarks"
-        if ! "$SCRIPT_DIR/run_snapshot_benchmark.sh" bench-main/snapshot bench-local/snapshot; then
+        if ! "$TEMP_SCRIPTS_DIR/run_snapshot_benchmark.sh" bench-main/snapshot bench-local/snapshot; then
             BENCHMARK_FAILED=true
         fi
         echo ""
