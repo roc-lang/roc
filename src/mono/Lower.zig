@@ -372,11 +372,18 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         // ============ Tags ============
         .e_zero_argument_tag => |tag| blk: {
-            // Get discriminant from tag name
+            // Get discriminant from tag name by comparing text
             // For Bool, True = 1, False = 0
-            const discriminant: u16 = if (tag.name == module_env.idents.true_tag)
+            // We compare by text rather than ident index to handle cross-module cases
+            const tag_name_text = module_env.getIdent(tag.name);
+            // Handle both "True"/"False" (canonical form) and potential variations
+            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "True") or std.mem.eql(u8, tag_name_text, "true"))
                 1
-            else if (tag.name == module_env.idents.false_tag)
+            else if (std.mem.eql(u8, tag_name_text, "False") or std.mem.eql(u8, tag_name_text, "false"))
+                0
+            else if (std.ascii.eqlIgnoreCase(tag_name_text, "true"))
+                1
+            else if (std.ascii.eqlIgnoreCase(tag_name_text, "false"))
                 0
             else
                 0; // TODO: proper discriminant lookup
@@ -389,8 +396,35 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_tag => |tag| blk: {
             const args = try self.lowerExprSpan(module_env, tag.args);
+            const args_slice = module_env.store.sliceExpr(tag.args);
+
+            // Get discriminant from tag name - handle True/False specially
+            const tag_name_text = module_env.getIdent(tag.name);
+            const discriminant: u16 = if (args_slice.len == 0) disc_blk: {
+                // Zero-argument tag - check for True/False
+                if (std.mem.eql(u8, tag_name_text, "True") or std.ascii.eqlIgnoreCase(tag_name_text, "true")) {
+                    break :disc_blk 1;
+                } else if (std.mem.eql(u8, tag_name_text, "False") or std.ascii.eqlIgnoreCase(tag_name_text, "false")) {
+                    break :disc_blk 0;
+                } else {
+                    break :disc_blk 0; // TODO: proper discriminant lookup
+                }
+            } else 0; // TODO: proper discriminant lookup for tags with args
+
+            // For zero-argument tags like True/False, use zero_arg_tag
+            if (args_slice.len == 0 and (std.mem.eql(u8, tag_name_text, "True") or
+                std.mem.eql(u8, tag_name_text, "False") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "true") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "false")))
+            {
+                break :blk .{ .zero_arg_tag = .{
+                    .discriminant = discriminant,
+                    .union_layout = .bool,
+                } };
+            }
+
             break :blk .{ .tag = .{
-                .discriminant = 0, // TODO
+                .discriminant = discriminant,
                 .union_layout = .i64, // TODO
                 .args = args,
             } };

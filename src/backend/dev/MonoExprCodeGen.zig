@@ -540,6 +540,15 @@ pub const MonoExprCodeGen = struct {
             },
             .field_access => |fa| self.evalFieldAccessI64(fa, env),
             .if_then_else => |ite| self.evalIfThenElseI64(ite, env),
+            .nominal => |nom| self.evalConstantI64(nom.backing_expr, env),
+            .call => |call| blk: {
+                // Check if this is a call to a zero-arg function that returns a constant
+                const fn_result = self.evalConstantI64(call.fn_expr, env);
+                if (fn_result != null) break :blk fn_result;
+                // Try evaluating the call's result if it's a known pattern
+                break :blk null;
+            },
+            .block => |block| self.evalConstantI64(block.final_expr, env),
             else => null,
         };
     }
@@ -815,7 +824,78 @@ pub const MonoExprCodeGen = struct {
                     return self.generateCodeForExpr(branch.body, result_layout, env);
                 }
             } else {
-                return error.UnsupportedExpression;
+                // Try to generate code for the condition and body for non-constant cases
+                // This handles runtime conditionals like string refcount tests
+                const cond_expr = self.mono_store.getExpr(branch.cond);
+                switch (cond_expr) {
+                    .zero_arg_tag => |tag| {
+                        // This should have been handled by evalConstantI64
+                        if (tag.discriminant != 0) {
+                            return self.generateCodeForExpr(branch.body, result_layout, env);
+                        }
+                        // discriminant == 0 (False), continue to next branch
+                        continue;
+                    },
+                    .bool_literal => |val| {
+                        if (val) {
+                            return self.generateCodeForExpr(branch.body, result_layout, env);
+                        }
+                        // val is false, continue to next branch
+                        continue;
+                    },
+                    .tag => |tag| {
+                        // Tag with no args used as boolean - check discriminant
+                        if (tag.discriminant != 0) {
+                            return self.generateCodeForExpr(branch.body, result_layout, env);
+                        }
+                        // discriminant == 0 (False), continue to next branch
+                        continue;
+                    },
+                    .nominal => |nom| {
+                        // Unwrap nominal and try to evaluate
+                        const nom_cond = self.evalConstantI64(nom.backing_expr, env);
+                        if (nom_cond) |val| {
+                            if (val != 0) {
+                                return self.generateCodeForExpr(branch.body, result_layout, env);
+                            }
+                            continue;
+                        }
+                        return error.UnsupportedExpression;
+                    },
+                    .lookup => |lookup| {
+                        // Try to look up the value in the environment
+                        if (env.lookup(lookup.symbol)) |val| {
+                            if (val != 0) {
+                                return self.generateCodeForExpr(branch.body, result_layout, env);
+                            }
+                            continue;
+                        }
+                        return error.UnsupportedExpression;
+                    },
+                    .call => {
+                        // Try to evaluate the call result
+                        const call_result = self.evalConstantI64(branch.cond, env);
+                        if (call_result) |val| {
+                            if (val != 0) {
+                                return self.generateCodeForExpr(branch.body, result_layout, env);
+                            }
+                            continue;
+                        }
+                        return error.UnsupportedExpression;
+                    },
+                    .binop => |binop| {
+                        // Try to evaluate the binop result
+                        const binop_result = self.evalBinopI64(binop, env);
+                        if (binop_result) |val| {
+                            if (val != 0) {
+                                return self.generateCodeForExpr(branch.body, result_layout, env);
+                            }
+                            continue;
+                        }
+                        return error.UnsupportedExpression;
+                    },
+                    else => return error.UnsupportedExpression,
+                }
             }
         }
 
