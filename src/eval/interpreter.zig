@@ -10153,7 +10153,6 @@ pub const Interpreter = struct {
             unify.unifyAssumeOk(
                 self.runtime_layout_store.env,
                 self.runtime_types,
-
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
                 params[i],
@@ -12681,7 +12680,6 @@ pub const Interpreter = struct {
                     unify.unifyAssumeOk(
                         self.runtime_layout_store.env,
                         self.runtime_types,
-
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         call_ret_rt_var,
@@ -17987,7 +17985,7 @@ pub const Interpreter = struct {
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
                             unify.unifyAssumeOk(
-                                self.env,
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
@@ -18288,7 +18286,6 @@ pub const Interpreter = struct {
                                 unify.unifyAssumeOk(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
-
                                     &self.unify_scratch,
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
@@ -18370,9 +18367,8 @@ pub const Interpreter = struct {
                     const recv_resolved = self.runtime_types.resolveVarAndCompressPath(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
                     unify.unifyAssumeOk(
-                        self.env,
+                        self.runtime_layout_store.env,
                         self.runtime_types,
-
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         fn_args[0],
