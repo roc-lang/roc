@@ -42,6 +42,12 @@ for fx_file in $FX_FILES; do
     filename=$(basename "$fx_file")
     echo "--- Benchmarking: $filename ---"
 
+    # Allow non-zero exit codes for files that are expected to fail
+    EXTRA_ARGS=""
+    if [ "$filename" = "division_by_zero.roc" ]; then
+        EXTRA_ARGS="--ignore-failure"
+    fi
+
     # Run hyperfine comparison
     if ! hyperfine \
         --warmup 1 \
@@ -49,6 +55,7 @@ for fx_file in $FX_FILES; do
         --shell=none \
         --show-output \
         --export-json "/tmp/bench_${filename}.json" \
+        $EXTRA_ARGS \
         -n "main" "$MAIN_ROC $fx_file" \
         -n "pr" "$PR_ROC $fx_file" \
         2>&1; then
