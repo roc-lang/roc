@@ -10150,7 +10150,7 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            unify.unifyAssumeOk(
+            unify.unifyForInterpreter(
                 self.runtime_layout_store.env,
                 self.runtime_types,
                 &self.unify_scratch,
@@ -11701,7 +11701,7 @@ pub const Interpreter = struct {
                                 break :blk try self.runtime_types.freshFromContent(dec_content);
                             };
                             const dec_var = target_var;
-                            unify.unifyAssumeOk(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
@@ -11709,7 +11709,7 @@ pub const Interpreter = struct {
                                 lhs_rt_var,
                                 dec_var,
                             );
-                            unify.unifyAssumeOk(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
@@ -11719,7 +11719,7 @@ pub const Interpreter = struct {
                             );
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
-                            unify.unifyAssumeOk(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
@@ -11729,7 +11729,7 @@ pub const Interpreter = struct {
                             );
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
-                            unify.unifyAssumeOk(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
@@ -12677,7 +12677,7 @@ pub const Interpreter = struct {
                 // call_ret_rt_var (fresh translation) because the function's return var
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
-                    unify.unifyAssumeOk(
+                    unify.unifyForInterpreter(
                         self.runtime_layout_store.env,
                         self.runtime_types,
                         &self.unify_scratch,
@@ -17984,7 +17984,7 @@ pub const Interpreter = struct {
                         // Unify the method's first parameter with the receiver type
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
-                            unify.unifyAssumeOk(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
                                 &self.unify_scratch,
@@ -18283,7 +18283,7 @@ pub const Interpreter = struct {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVarAndCompressPath(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
-                                unify.unifyAssumeOk(
+                                unify.unifyForInterpreter(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
                                     &self.unify_scratch,
@@ -18356,17 +18356,15 @@ pub const Interpreter = struct {
                 // This is the same approach used for no-args method dispatch.
                 // IMPORTANT: Create a copy of the receiver type before unification because
                 // unification modifies BOTH sides, which would corrupt the receiver's type.
-                const fn_args = switch (lambda_resolved.desc.content.structure) {
-                    .fn_pure => |f| self.runtime_types.sliceVars(f.args),
-                    .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
-                    .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                    else => &[_]types.Var{},
-                };
+
+                const func = lambda_resolved.desc.content.unwrapFunc();
+                const fn_args = if (func) |f| self.runtime_types.sliceVars(f.args) else &[_]types.Var{};
+
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVarAndCompressPath(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
-                    unify.unifyAssumeOk(
+                    unify.unifyForInterpreter(
                         self.runtime_layout_store.env,
                         self.runtime_types,
                         &self.unify_scratch,

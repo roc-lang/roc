@@ -41,24 +41,17 @@
 //! subsequent unification runs.
 
 const std = @import("std");
+
 const base = @import("base");
-const tracy = @import("tracy");
-const collections = @import("collections");
-const types_mod = @import("types");
-const can = @import("can");
-
-const problem_mod = @import("problem.zig");
-const occurs = @import("occurs.zig");
-const snapshot_mod = @import("snapshot.zig");
-
-const ModuleEnv = can.ModuleEnv;
-
 const Ident = base.Ident;
+const can = @import("can");
+const ModuleEnv = can.ModuleEnv;
+const collections = @import("collections");
 const MkSafeList = collections.SafeList;
-
+const tracy = @import("tracy");
+const types_mod = @import("types");
 const ResolvedVarDesc = types_mod.ResolvedVarDesc;
 const ResolvedVarDescs = types_mod.ResolvedVarDescs;
-
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
@@ -78,7 +71,6 @@ const Tag = types_mod.Tag;
 const TwoTags = types_mod.TwoTags;
 const StaticDispatchConstraint = types_mod.StaticDispatchConstraint;
 const TwoStaticDispatchConstraints = types_mod.TwoStaticDispatchConstraints;
-
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const RecordFieldSafeList = RecordField.SafeList;
@@ -87,7 +79,10 @@ const TagSafeList = Tag.SafeList;
 const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
+const occurs = @import("occurs.zig");
+const problem_mod = @import("problem.zig");
 const Problem = problem_mod.Problem;
+const snapshot_mod = @import("snapshot.zig");
 
 /// The result of unification
 pub const Result = union(enum) {
@@ -150,14 +145,10 @@ pub const Conf = struct {
     pub const Ctx = enum { anon, anno };
 };
 
-/// Unify two type variables ignoring any errors
-/// Only us this, if you know the unification will succeed! (e.g in the interpreter)
-///
-/// This function
-/// * Resolves type variables & compresses paths
-/// * Compares variable contents for equality
-/// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unifyAssumeOk(
+/// Unify two type variables for use in the interpreter
+/// It assumes that the type checker has already done its job, so it can skip some checks
+/// and be more lenient about nominal type mismatches
+pub fn unifyForInterpreter(
     module_env: *ModuleEnv,
     types: *types_mod.Store,
     unify_scratch: *Scratch,
@@ -173,8 +164,8 @@ pub fn unifyAssumeOk(
     // First reset the scratch store
     unify_scratch.reset();
 
-    // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    // Use the standard unifier with interpreter mode for nominal types
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, .interpreter);
     unifier.unifyGuarded(a, b) catch unreachable;
 }
 
@@ -212,7 +203,7 @@ pub fn unifyWithConf(
     errdefer type_store_snapshot.deinit(types.gpa);
 
     // Unify
-    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
+    var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch, .standard);
     unifier.unifyGuarded(a, b) catch |err| {
         // Rollback to restore original types before capturing error snapshots
         types.rollbackTo(&type_store_snapshot);
@@ -367,6 +358,13 @@ pub fn unifyWithConf(
     return .ok;
 }
 
+const UnifyMode = enum {
+    /// Standard mode: strict type checking
+    standard,
+    /// Interpreter mode: allow opaque/transparent nominal type mismatches
+    interpreter,
+};
+
 /// A temporary unification context used to unify two type variables within a `Store`.
 ///
 /// `Unifier` is created per unification call and:
@@ -392,6 +390,7 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    mode: UnifyMode,
 
     /// Init unifier
     pub fn init(
@@ -399,12 +398,14 @@ const Unifier = struct {
         types_store: *types_mod.Store,
         scratch: *Scratch,
         occurs_scratch: *occurs.Scratch,
-    ) Unifier {
+        mode: UnifyMode,
+    ) Self {
         return .{
             .module_env = module_env,
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
+            .mode = mode,
         };
     }
 
@@ -707,6 +708,8 @@ const Unifier = struct {
                 self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
             },
             .structure => |b_flat_type| {
+                // No need to go deeper in the interpreter, type checker did the work already
+                if (self.mode == .interpreter) return;
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
             .err => self.merge(vars, .err),
@@ -1112,8 +1115,17 @@ const Unifier = struct {
             return;
         }
 
-        if (!TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident)) {
-            return error.TypeMismatch;
+        // Check if identifiers match
+        const idents_match = TypeIdent.eql(self.module_env.getIdentStore(), a_type.ident, b_type.ident);
+
+        if (!idents_match) {
+            // In interpreter mode, allow opaque/transparent mismatches from the same origin module
+            if (self.mode == .interpreter and a_type.origin_module.idx == b_type.origin_module.idx) {
+                // Same origin module - likely an opaque/transparent mismatch
+                // Continue with unification
+            } else {
+                return error.TypeMismatch;
+            }
         }
 
         if (a_type.vars.nonempty.count != b_type.vars.nonempty.count) {
