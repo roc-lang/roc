@@ -38,14 +38,11 @@ for fx_file in $FX_FILES; do
     echo "--- Benchmarking: $filename ---"
 
     # Run hyperfine comparison
-    # --warmup 1: 1 warmup run before timing
-    # --min-runs 3: at least 3 timed runs
-    # --shell=none: direct execution without shell
-    # --export-json: export for parsing
     if ! hyperfine \
         --warmup 1 \
         --min-runs 3 \
         --shell=none \
+        --show-output \
         --export-json "/tmp/bench_${filename}.json" \
         -n "main" "$MAIN_ROC $fx_file" \
         -n "pr" "$PR_ROC $fx_file" \
@@ -55,18 +52,20 @@ for fx_file in $FX_FILES; do
     fi
 
     # Parse JSON to detect slower execution (PR slower than main by >5%)
-    # Using median for robustness against outliers
+    # Using median for robustness against outliers.
+    # Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
+    # summary because hyperfine uses mean while we use median.
     if [ -f "/tmp/bench_${filename}.json" ]; then
         main_median=$(jq -r '.results[] | select(.command | contains("main")) | .median' "/tmp/bench_${filename}.json")
         pr_median=$(jq -r '.results[] | select(.command | contains("pr")) | .median' "/tmp/bench_${filename}.json")
 
-        # Calculate percentage change
+        # Calculate percentage change (using awk for floating point precision)
         if [ -n "$main_median" ] && [ -n "$pr_median" ] && [ "$main_median" != "null" ] && [ "$pr_median" != "null" ]; then
-            pct_change=$(echo "scale=2; (($pr_median - $main_median) / $main_median) * 100" | bc)
+            pct_change=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
             echo "  Change: ${pct_change}%"
 
             # Check for >5% slower execution
-            is_slower=$(echo "$pct_change > 5" | bc)
+            is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
             if [ "$is_slower" = "1" ]; then
                 echo "  SLOWER EXECUTION in $filename (${pct_change}% slower)"
                 SLOWER_DETECTED=1

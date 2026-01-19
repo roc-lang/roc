@@ -24,7 +24,9 @@ hyperfine \
     -n "pr" "$PR_SNAPSHOT"
 
 # Parse JSON to detect slower execution (PR slower than main by >5%)
-# Using median for robustness against outliers
+# Using median for robustness against outliers.
+# Note: Our "Change" percentage may differ slightly from hyperfine's "X times faster"
+# summary because hyperfine uses mean while we use median.
 main_median=$(jq -r '.results[] | select(.command | contains("main")) | .median' "/tmp/snapshot_bench.json")
 pr_median=$(jq -r '.results[] | select(.command | contains("pr")) | .median' "/tmp/snapshot_bench.json")
 
@@ -32,12 +34,12 @@ echo ""
 echo "Main median: ${main_median}s"
 echo "PR median: ${pr_median}s"
 
-# Calculate percentage change
-pct_change=$(echo "scale=2; (($pr_median - $main_median) / $main_median) * 100" | bc)
+# Calculate percentage change (using awk for floating point precision)
+pct_change=$(awk "BEGIN {printf \"%.2f\", (($pr_median - $main_median) / $main_median) * 100}")
 echo "Change: ${pct_change}%"
 
 # Check for >5% slower execution
-is_slower=$(echo "$pct_change > 5" | bc)
+is_slower=$(awk "BEGIN {print ($pct_change > 5) ? 1 : 0}")
 if [ "$is_slower" = "1" ]; then
     echo ""
     echo "SLOWER EXECUTION detected (${pct_change}% slower)"
@@ -69,8 +71,8 @@ if [ "$is_slower" = "1" ]; then
             file_pr=$(jq -r '.results[] | select(.command | contains("pr")) | .median' "/tmp/snap_${filename}.json")
 
             if [ -n "$file_main" ] && [ -n "$file_pr" ] && [ "$file_main" != "null" ] && [ "$file_pr" != "null" ]; then
-                file_pct=$(echo "scale=2; (($file_pr - $file_main) / $file_main) * 100" | bc)
-                file_is_slower=$(echo "$file_pct > 5" | bc)
+                file_pct=$(awk "BEGIN {printf \"%.2f\", (($file_pr - $file_main) / $file_main) * 100}")
+                file_is_slower=$(awk "BEGIN {print ($file_pct > 5) ? 1 : 0}")
                 if [ "$file_is_slower" = "1" ]; then
                     echo "  $filename: ${file_pct}% slower"
                     SLOWEST_FILES="$SLOWEST_FILES $filename"
