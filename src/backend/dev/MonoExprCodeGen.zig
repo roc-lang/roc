@@ -17,6 +17,7 @@ const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
 const mono = @import("mono");
+const StaticDataInterner = @import("StaticDataInterner.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -165,6 +166,11 @@ pub const MonoExprCodeGen = struct {
     /// All module environments for string/ident lookups
     all_module_envs: []const *ModuleEnv,
 
+    /// Global static data interner for string literals and other static data.
+    /// When set, big strings are interned here instead of heap-allocated.
+    /// This enables deduplication and proper static storage.
+    static_interner: ?*StaticDataInterner = null,
+
     /// Crash message from crash expression (if any)
     crash_message: ?[]const u8 = null,
 
@@ -186,6 +192,22 @@ pub const MonoExprCodeGen = struct {
             .allocator = allocator,
             .mono_store = mono_store,
             .all_module_envs = all_module_envs,
+            .static_interner = null,
+        };
+    }
+
+    /// Initialize with a static data interner for proper string literal handling
+    pub fn initWithInterner(
+        allocator: Allocator,
+        mono_store: *const MonoExprStore,
+        all_module_envs: []const *ModuleEnv,
+        static_interner: *StaticDataInterner,
+    ) MonoExprCodeGen {
+        return MonoExprCodeGen{
+            .allocator = allocator,
+            .mono_store = mono_store,
+            .all_module_envs = all_module_envs,
+            .static_interner = static_interner,
         };
     }
 
@@ -295,6 +317,20 @@ pub const MonoExprCodeGen = struct {
 
             // Nominal (transparent wrapper)
             .nominal => |nom| try self.generateCodeForExpr(nom.backing_expr, nom.nominal_layout, env),
+
+            // Inspect operations (str_inspekt support)
+            .str_concat => |parts| try self.generateStrConcatCode(parts, result_layout, env),
+            .int_to_str => |info| try self.generateIntToStrCode(info, result_layout, env),
+            .float_to_str => |info| try self.generateFloatToStrCode(info, result_layout, env),
+            .dec_to_str => |value_expr| try self.generateDecToStrCode(value_expr, result_layout, env),
+            .str_escape_and_quote => |inner| try self.generateStrEscapeAndQuoteCode(inner, result_layout, env),
+            .discriminant_switch => |sw| try self.generateDiscriminantSwitchCode(sw, result_layout, env),
+
+            // Reference counting operations
+            .incref => |rc| try self.generateIncrefCode(rc, env),
+            .decref => |rc| try self.generateDecrefCode(rc, env),
+            // free is a no-op - memory is managed by arenas in compile-time evaluation
+            .free => try self.generateNoOpCode(),
         };
     }
 
@@ -811,24 +847,133 @@ pub const MonoExprCodeGen = struct {
 
     /// Generate code for field access
     fn generateFieldAccessCode(
-        _: *MonoExprCodeGen,
+        self: *MonoExprCodeGen,
         fa: anytype,
-        _: *MonoScope,
+        env: *MonoScope,
     ) Error![]const u8 {
-        _ = fa;
-        // Field access not fully supported yet
-        return error.UnsupportedExpression;
+        // Get the record expression
+        const record_expr = self.mono_store.getExpr(fa.record_expr);
+
+        switch (record_expr) {
+            .record => |rec| {
+                // Record literal - look up the field by name
+                const fields = self.mono_store.getExprSpan(rec.fields);
+                const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                // Find the field index by matching the field name
+                const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse {
+                    return error.UnsupportedExpression;
+                };
+
+                if (field_idx >= fields.len) {
+                    return error.UnsupportedExpression;
+                }
+                const field_expr_id = fields[field_idx];
+                // Infer the actual layout from the field expression
+                const actual_layout = self.inferExprLayout(field_expr_id, fa.field_layout);
+                return self.generateCodeForExpr(field_expr_id, actual_layout, env);
+            },
+            .empty_record => {
+                // Empty record - no fields to access
+                return error.UnsupportedExpression;
+            },
+            .lookup => |lookup| {
+                // Lookup - check if it's bound to a record expression
+                if (env.lookupBinding(lookup.symbol)) |binding| {
+                    if (binding == .expr_ref) {
+                        const bound_expr = self.mono_store.getExpr(binding.expr_ref);
+                        if (bound_expr == .record) {
+                            const fields = self.mono_store.getExprSpan(bound_expr.record.fields);
+                            const field_names = self.mono_store.getFieldNameSpan(bound_expr.record.field_names);
+
+                            // Find the field index by matching the field name
+                            const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse {
+                                return error.UnsupportedExpression;
+                            };
+
+                            if (field_idx >= fields.len) {
+                                return error.UnsupportedExpression;
+                            }
+                            const field_expr_id = fields[field_idx];
+                            // Infer the actual layout from the field expression
+                            const actual_layout = self.inferExprLayout(field_expr_id, fa.field_layout);
+                            return self.generateCodeForExpr(field_expr_id, actual_layout, env);
+                        }
+                    }
+                }
+                return error.UnsupportedExpression;
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Infer the layout of an expression from its type
+    fn inferExprLayout(self: *MonoExprCodeGen, expr_id: MonoExprId, fallback: LayoutIdx) LayoutIdx {
+        const expr = self.mono_store.getExpr(expr_id);
+        return switch (expr) {
+            .str_literal => .str,
+            .i64_literal => .i64,
+            .i128_literal => .i128,
+            .f64_literal => .f64,
+            .f32_literal => .f32,
+            .dec_literal => .dec,
+            .bool_literal => .bool,
+            .empty_list => |el| el.elem_layout,
+            .list => |l| l.elem_layout,
+            else => fallback,
+        };
+    }
+
+    /// Find field index by matching field name
+    fn findFieldIndexByName(self: *MonoExprCodeGen, field_names: []const base.Ident.Idx, target_name: base.Ident.Idx) ?usize {
+        _ = self;
+        for (field_names, 0..) |name, idx| {
+            // Compare the packed u32 representation of Ident.Idx
+            if (@as(u32, @bitCast(name)) == @as(u32, @bitCast(target_name))) {
+                return idx;
+            }
+        }
+        return null;
     }
 
     /// Generate code for tuple access
     fn generateTupleAccessCode(
-        _: *MonoExprCodeGen,
+        self: *MonoExprCodeGen,
         ta: anytype,
-        _: *MonoScope,
+        env: *MonoScope,
     ) Error![]const u8 {
-        _ = ta;
-        // Tuple access not fully supported yet
-        return error.UnsupportedExpression;
+        // Get the tuple expression
+        const tuple_expr = self.mono_store.getExpr(ta.tuple_expr);
+
+        switch (tuple_expr) {
+            .tuple => |tup| {
+                // Tuple literal - get the element directly from the elems span
+                const elems = self.mono_store.getExprSpan(tup.elems);
+                if (ta.elem_idx >= elems.len) {
+                    return error.UnsupportedExpression;
+                }
+                const elem_expr_id = elems[ta.elem_idx];
+                return self.generateCodeForExpr(elem_expr_id, ta.elem_layout, env);
+            },
+            .lookup => |lookup| {
+                // Lookup - check if it's bound to a tuple expression
+                if (env.lookupBinding(lookup.symbol)) |binding| {
+                    if (binding == .expr_ref) {
+                        const bound_expr = self.mono_store.getExpr(binding.expr_ref);
+                        if (bound_expr == .tuple) {
+                            const elems = self.mono_store.getExprSpan(bound_expr.tuple.elems);
+                            if (ta.elem_idx >= elems.len) {
+                                return error.UnsupportedExpression;
+                            }
+                            const elem_expr_id = elems[ta.elem_idx];
+                            return self.generateCodeForExpr(elem_expr_id, ta.elem_layout, env);
+                        }
+                    }
+                }
+                return error.UnsupportedExpression;
+            },
+            else => return error.UnsupportedExpression,
+        }
     }
 
     /// Generate code for low-level operations
@@ -870,24 +1015,491 @@ pub const MonoExprCodeGen = struct {
         }
     }
 
+    /// RocStr constants for small string optimization
+    const ROCSTR_SIZE: usize = 24;
+    const SMALL_STR_CAPACITY: usize = ROCSTR_SIZE - 1; // 23 bytes
+    const SMALL_STR_MASK: u8 = 0x80;
+
     /// Generate code for string literal
     fn generateStrLiteralCode(self: *MonoExprCodeGen, lit_idx: base.StringLiteral.Idx) Error![]const u8 {
-        _ = self;
-        _ = lit_idx;
-        // String literals not fully supported yet
-        return error.UnsupportedExpression;
+        const str_text = self.getStringLiteral(lit_idx);
+        return self.generateRocStrCode(str_text);
     }
 
-    /// Get a string literal from any module
+    /// Generate code that creates a RocStr from the given text
+    fn generateRocStrCode(self: *MonoExprCodeGen, str_text: []const u8) Error![]const u8 {
+        if (str_text.len <= SMALL_STR_CAPACITY) {
+            return self.generateSmallStrCode(str_text);
+        } else {
+            return self.generateBigStrCode(str_text);
+        }
+    }
+
+    /// Refcount value indicating static data that should never be freed
+    /// This is isize::MIN as usize, matching Roc's REFCOUNT_CONSTANT
+    const REFCOUNT_STATIC: usize = @as(usize, @bitCast(@as(isize, std.math.minInt(isize))));
+
+    /// Generate code for a big string (>23 bytes)
+    /// Uses static interner when available for proper static storage.
+    /// Falls back to heap allocation with static refcount for compatibility.
+    /// Layout: [refcount: 8 bytes][string data: N bytes]
+    /// RocStr: { bytes: ptr to data, length: N, capacity: N }
+    fn generateBigStrCode(self: *MonoExprCodeGen, str_text: []const u8) Error![]const u8 {
+        const length = str_text.len;
+
+        // Get the data pointer - either from interner or heap allocation
+        const data_ptr: [*]const u8 = blk: {
+            if (self.static_interner) |interner| {
+                // Use the static data interner for proper static storage
+                // String literals are interned and deduplicated
+                const interned = interner.internString(str_text) orelse return error.OutOfMemory;
+                break :blk interned.ptr;
+            } else {
+                // Fallback: heap allocation with static refcount (legacy behavior)
+                // This path is used when no interner is configured
+                const alloc_size = @sizeOf(usize) + length;
+                const allocation = self.allocator.alloc(u8, alloc_size) catch return error.OutOfMemory;
+                // Note: This memory is intentionally NOT freed here - it will be used by the returned RocStr
+                // The refcount is set to static so Roc runtime won't try to free it either
+
+                // Write static refcount at the start
+                const refcount_ptr: *usize = @ptrCast(@alignCast(allocation.ptr));
+                refcount_ptr.* = REFCOUNT_STATIC;
+
+                // Copy string data after refcount
+                const heap_data_ptr = allocation.ptr + @sizeOf(usize);
+                @memcpy(heap_data_ptr[0..length], str_text);
+                break :blk heap_data_ptr;
+            }
+        };
+
+        // Build the RocStr structure:
+        // bytes (8 bytes): pointer to data
+        // length (8 bytes): string length
+        // capacity_or_alloc_ptr (8 bytes): capacity (same as length for exact allocation)
+        var roc_str_bytes: [ROCSTR_SIZE]u8 = undefined;
+        const bytes_field: *u64 = @ptrCast(@alignCast(&roc_str_bytes[0]));
+        const length_field: *u64 = @ptrCast(@alignCast(&roc_str_bytes[8]));
+        const capacity_field: *u64 = @ptrCast(@alignCast(&roc_str_bytes[16]));
+
+        bytes_field.* = @intFromPtr(data_ptr);
+        length_field.* = length;
+        capacity_field.* = length;
+
+        // Generate code that writes these 24 bytes to the result pointer
+        return switch (builtin.cpu.arch) {
+            .x86_64 => self.generateX64WriteBytes(&roc_str_bytes),
+            .aarch64 => self.generateArm64WriteBytes(&roc_str_bytes),
+            else => error.UnsupportedExpression,
+        };
+    }
+
+    /// Generate code for a small string (≤23 bytes)
+    /// Layout: [23 bytes of data][1 byte: len | 0x80]
+    fn generateSmallStrCode(self: *MonoExprCodeGen, str_text: []const u8) Error![]const u8 {
+        // Build the 24-byte small string representation
+        var roc_str_bytes: [ROCSTR_SIZE]u8 = [_]u8{0} ** ROCSTR_SIZE;
+
+        // Copy string data to bytes[0..len]
+        @memcpy(roc_str_bytes[0..str_text.len], str_text);
+
+        // Set length byte with high bit set to indicate small string
+        roc_str_bytes[ROCSTR_SIZE - 1] = @as(u8, @intCast(str_text.len)) | SMALL_STR_MASK;
+
+        // Generate code that writes these 24 bytes to the result pointer
+        return switch (builtin.cpu.arch) {
+            .x86_64 => self.generateX64WriteBytes(&roc_str_bytes),
+            .aarch64 => self.generateArm64WriteBytes(&roc_str_bytes),
+            else => error.UnsupportedExpression,
+        };
+    }
+
+    /// Generate x86_64 code to write 24 bytes to [rdi]
+    fn generateX64WriteBytes(self: *MonoExprCodeGen, bytes: *const [ROCSTR_SIZE]u8) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Write 3 qwords (24 bytes) to [rdi], [rdi+8], [rdi+16]
+        // movabs rax, qword0; mov [rdi], rax
+        const qword0: u64 = @bitCast(bytes[0..8].*);
+        try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+        try code.appendSlice(&@as([8]u8, @bitCast(qword0)));
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x07 }); // mov [rdi], rax
+
+        // movabs rax, qword1; mov [rdi+8], rax
+        const qword1: u64 = @bitCast(bytes[8..16].*);
+        try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+        try code.appendSlice(&@as([8]u8, @bitCast(qword1)));
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x47, 0x08 }); // mov [rdi+8], rax
+
+        // movabs rax, qword2; mov [rdi+16], rax
+        const qword2: u64 = @bitCast(bytes[16..24].*);
+        try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+        try code.appendSlice(&@as([8]u8, @bitCast(qword2)));
+        try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x47, 0x10 }); // mov [rdi+16], rax
+
+        try code.append(0xC3); // ret
+        return code.toOwnedSlice();
+    }
+
+    /// Generate ARM64 code to write 24 bytes to [x0]
+    fn generateArm64WriteBytes(self: *MonoExprCodeGen, bytes: *const [ROCSTR_SIZE]u8) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        // Write 3 qwords to [x0], [x0+8], [x0+16]
+        const qword0: u64 = @bitCast(bytes[0..8].*);
+        const qword1: u64 = @bitCast(bytes[8..16].*);
+        const qword2: u64 = @bitCast(bytes[16..24].*);
+
+        // Load qword0 into x1, store to [x0]
+        try self.generateArm64LoadImm64(&code, 1, qword0);
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xF9000001)))); // str x1, [x0]
+
+        // Load qword1 into x1, store to [x0, #8]
+        try self.generateArm64LoadImm64(&code, 1, qword1);
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xF9000401)))); // str x1, [x0, #8]
+
+        // Load qword2 into x1, store to [x0, #16]
+        try self.generateArm64LoadImm64(&code, 1, qword2);
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xF9000801)))); // str x1, [x0, #16]
+
+        // ret
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD65F03C0))));
+
+        return code.toOwnedSlice();
+    }
+
+    /// Get a string literal from the mono store
+    /// All string literals are copied to the mono store during lowering
     fn getStringLiteral(self: *MonoExprCodeGen, lit_idx: base.StringLiteral.Idx) []const u8 {
-        // Try each module to find the string
-        for (self.all_module_envs) |module| {
-            const str = module.common.getString(lit_idx);
-            if (str.len > 0) {
-                return str;
+        return self.mono_store.getString(lit_idx);
+    }
+
+    // ========== str_inspekt Code Generation ==========
+    //
+    // These functions generate code for str_inspekt-related expressions.
+    // Currently, they return UnsupportedExpression because generating actual
+    // machine code for string operations requires runtime support (RocStr allocation,
+    // concatenation, etc.) that isn't available in the dev backend yet.
+    //
+    // The str_inspekt lowering creates a tree of MonoExprs with all field names,
+    // tag names, and structure baked in as string literals. Full code generation
+    // would involve emitting calls to RocStr runtime functions.
+
+    /// Generate code for string concatenation (compile-time)
+    fn generateStrConcatCode(
+        self: *MonoExprCodeGen,
+        parts_span: MonoExprSpan,
+        _: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        const parts = self.mono_store.getExprSpan(parts_span);
+
+        // Collect all string parts at compile time
+        var total_len: usize = 0;
+        var string_parts: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer string_parts.deinit(self.allocator);
+
+        for (parts) |part_id| {
+            const part_str = self.evalStringExpr(part_id, env) orelse return error.UnsupportedExpression;
+            try string_parts.append(self.allocator, part_str);
+            total_len += part_str.len;
+        }
+
+        // Concatenate all parts into a single string
+        var result = try self.allocator.alloc(u8, total_len);
+        defer self.allocator.free(result);
+
+        var offset: usize = 0;
+        for (string_parts.items) |part| {
+            @memcpy(result[offset..][0..part.len], part);
+            offset += part.len;
+        }
+
+        // Generate code for the concatenated string
+        return self.generateRocStrCode(result);
+    }
+
+    /// Evaluate a string expression at compile time
+    /// Returns null if the expression can't be evaluated to a string at compile time
+    fn evalStringExpr(self: *MonoExprCodeGen, expr_id: MonoExprId, env: *MonoScope) ?[]const u8 {
+        if (expr_id.isNone()) return null;
+        const expr = self.mono_store.getExpr(expr_id);
+
+        return switch (expr) {
+            .str_literal => |lit_idx| self.getStringLiteral(lit_idx),
+            .str_concat => |parts_span| blk: {
+                const parts = self.mono_store.getExprSpan(parts_span);
+
+                var total_len: usize = 0;
+                var string_parts: std.ArrayListUnmanaged([]const u8) = .empty;
+                defer string_parts.deinit(self.allocator);
+
+                for (parts) |part_id| {
+                    const part_str = self.evalStringExpr(part_id, env) orelse break :blk null;
+                    string_parts.append(self.allocator, part_str) catch break :blk null;
+                    total_len += part_str.len;
+                }
+
+                var result = self.allocator.alloc(u8, total_len) catch break :blk null;
+                // Note: this leaks memory, but for compile-time evaluation it's acceptable
+                var offset: usize = 0;
+                for (string_parts.items) |part| {
+                    @memcpy(result[offset..][0..part.len], part);
+                    offset += part.len;
+                }
+                break :blk result;
+            },
+            .int_to_str => |info| blk: {
+                // Evaluate the integer at compile time and format it
+                const int_val = self.evalConstantI64(info.value, env) orelse break :blk null;
+                // Format the integer as a string
+                var buf: [32]u8 = undefined;
+                const formatted = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch break :blk null;
+                const result = self.allocator.dupe(u8, formatted) catch break :blk null;
+                break :blk result;
+            },
+            .bool_literal => |val| blk: {
+                // Format boolean as "Bool.true" or "Bool.false"
+                break :blk if (val) "Bool.true" else "Bool.false";
+            },
+            .str_escape_and_quote => |inner_id| blk: {
+                const inner_str = self.evalStringExpr(inner_id, env) orelse break :blk null;
+                // Escape and quote the string
+                const escaped = self.escapeAndQuoteString(inner_str) catch break :blk null;
+                break :blk escaped;
+            },
+            .discriminant_switch => |sw| blk: {
+                // Evaluate the discriminant and pick the right branch
+                const disc = self.evalConstantI64(sw.value, env) orelse break :blk null;
+                const branches = self.mono_store.getExprSpan(sw.branches);
+                if (disc < 0 or @as(usize, @intCast(disc)) >= branches.len) break :blk null;
+                const branch_id = branches[@intCast(disc)];
+                break :blk self.evalStringExpr(branch_id, env);
+            },
+            else => null,
+        };
+    }
+
+    /// Escape special characters in a string and wrap in quotes
+    fn escapeAndQuoteString(self: *MonoExprCodeGen, str: []const u8) ![]const u8 {
+        // Calculate the required buffer size
+        var needed: usize = 2; // for the quotes
+        for (str) |c| {
+            needed += switch (c) {
+                '\\', '"', '\n', '\r', '\t' => 2,
+                else => 1,
+            };
+        }
+
+        var result = try self.allocator.alloc(u8, needed);
+        var i: usize = 0;
+        result[i] = '"';
+        i += 1;
+
+        for (str) |c| {
+            switch (c) {
+                '\\' => {
+                    result[i] = '\\';
+                    result[i + 1] = '\\';
+                    i += 2;
+                },
+                '"' => {
+                    result[i] = '\\';
+                    result[i + 1] = '"';
+                    i += 2;
+                },
+                '\n' => {
+                    result[i] = '\\';
+                    result[i + 1] = 'n';
+                    i += 2;
+                },
+                '\r' => {
+                    result[i] = '\\';
+                    result[i + 1] = 'r';
+                    i += 2;
+                },
+                '\t' => {
+                    result[i] = '\\';
+                    result[i + 1] = 't';
+                    i += 2;
+                },
+                else => {
+                    result[i] = c;
+                    i += 1;
+                },
             }
         }
-        return "<unknown>";
+
+        result[i] = '"';
+        return result;
+    }
+
+    /// Generate code for integer to string conversion (compile-time)
+    fn generateIntToStrCode(
+        self: *MonoExprCodeGen,
+        info: anytype,
+        _: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        const int_val = self.evalConstantI64(info.value, env) orelse return error.UnsupportedExpression;
+        var buf: [32]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch return error.UnsupportedExpression;
+        return self.generateRocStrCode(formatted);
+    }
+
+    /// Generate code for float to string conversion (compile-time)
+    fn generateFloatToStrCode(
+        self: *MonoExprCodeGen,
+        info: anytype,
+        _: LayoutIdx,
+        _: *MonoScope,
+    ) Error![]const u8 {
+        // Try to evaluate the float at compile time
+        if (info.value.isNone()) return error.UnsupportedExpression;
+        const expr = self.mono_store.getExpr(info.value);
+
+        const float_val: f64 = switch (expr) {
+            .f64_literal => |v| v,
+            .f32_literal => |v| @as(f64, v),
+            else => return error.UnsupportedExpression,
+        };
+
+        var buf: [64]u8 = undefined;
+        const formatted = std.fmt.bufPrint(&buf, "{d}", .{float_val}) catch return error.UnsupportedExpression;
+        return self.generateRocStrCode(formatted);
+    }
+
+    /// Generate code for Dec to string conversion (compile-time)
+    fn generateDecToStrCode(
+        self: *MonoExprCodeGen,
+        value_expr: MonoExprId,
+        _: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        const dec_val = self.evalConstantI128(value_expr, env) orelse return error.UnsupportedExpression;
+
+        // Dec is stored as i128 with 18 decimal places
+        const dec_scale: i128 = 1_000_000_000_000_000_000;
+
+        // Format the decimal value
+        var buf: [64]u8 = undefined;
+        const sign: []const u8 = if (dec_val < 0) "-" else "";
+        const abs_val: u128 = if (dec_val < 0) @intCast(-dec_val) else @intCast(dec_val);
+        const whole = abs_val / @as(u128, @intCast(dec_scale));
+        const frac = abs_val % @as(u128, @intCast(dec_scale));
+
+        const formatted = if (frac == 0)
+            std.fmt.bufPrint(&buf, "{s}{d}", .{ sign, whole }) catch return error.UnsupportedExpression
+        else
+            std.fmt.bufPrint(&buf, "{s}{d}.{d:0>18}", .{ sign, whole, frac }) catch return error.UnsupportedExpression;
+
+        // Trim trailing zeros after decimal point
+        var trimmed = formatted;
+        if (std.mem.indexOf(u8, trimmed, ".")) |_| {
+            while (trimmed.len > 0 and trimmed[trimmed.len - 1] == '0') {
+                trimmed = trimmed[0 .. trimmed.len - 1];
+            }
+            if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '.') {
+                trimmed = trimmed[0 .. trimmed.len - 1];
+            }
+        }
+
+        return self.generateRocStrCode(trimmed);
+    }
+
+    /// Generate code for string escaping and quoting (compile-time)
+    fn generateStrEscapeAndQuoteCode(
+        self: *MonoExprCodeGen,
+        inner_expr: MonoExprId,
+        _: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        const inner_str = self.evalStringExpr(inner_expr, env) orelse return error.UnsupportedExpression;
+        const escaped = self.escapeAndQuoteString(inner_str) catch return error.OutOfMemory;
+        return self.generateRocStrCode(escaped);
+    }
+
+    /// Generate code for discriminant switch
+    fn generateDiscriminantSwitchCode(
+        self: *MonoExprCodeGen,
+        sw: anytype,
+        result_layout: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        // Try to evaluate the discriminant value at compile time
+        const discriminant = self.evalConstantI64(sw.value, env) orelse return error.UnsupportedExpression;
+
+        // Get the appropriate branch
+        const branches = self.mono_store.getExprSpan(sw.branches);
+        if (discriminant < 0 or @as(usize, @intCast(discriminant)) >= branches.len) {
+            return error.UnsupportedExpression;
+        }
+
+        const branch_id = branches[@intCast(discriminant)];
+        return self.generateCodeForExpr(branch_id, result_layout, env);
+    }
+
+    // ========== Reference Counting Operations ==========
+    //
+    // For compile-time evaluation in the REPL/evaluator context, RC operations
+    // are no-ops because:
+    // - Memory is managed by arenas (freed in bulk when evaluation completes)
+    // - Static string literals have REFCOUNT_STATIC and are never freed
+    // - We're not running long-lived code where GC pressure matters
+    //
+    // The values being RC'd still get evaluated (for their side effects),
+    // but the actual RC manipulation is skipped.
+
+    /// Generate code for incref operation.
+    /// In compile-time evaluation context, this is a no-op since arenas manage memory.
+    fn generateIncrefCode(
+        self: *MonoExprCodeGen,
+        rc: anytype,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        // Evaluate the value expression for any side effects, but discard result
+        // The value might be a complex expression that needs evaluation
+        _ = try self.generateCodeForExpr(rc.value, rc.layout_idx, env);
+
+        // RC operations don't produce a value - just return a no-op
+        return self.generateNoOpCode();
+    }
+
+    /// Generate code for decref operation.
+    /// In compile-time evaluation context, this is a no-op since arenas manage memory.
+    fn generateDecrefCode(
+        self: *MonoExprCodeGen,
+        rc: anytype,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        // Evaluate the value expression for any side effects, but discard result
+        _ = try self.generateCodeForExpr(rc.value, rc.layout_idx, env);
+
+        // RC operations don't produce a value - just return a no-op
+        return self.generateNoOpCode();
+    }
+
+    /// Generate machine code that does nothing (just returns).
+    /// Used for no-op expressions like RC operations in compile-time evaluation.
+    fn generateNoOpCode(self: *MonoExprCodeGen) Error![]const u8 {
+        return switch (builtin.cpu.arch) {
+            .x86_64 => blk: {
+                // Just return immediately - x86_64: ret
+                const code = try self.allocator.alloc(u8, 1);
+                code[0] = 0xC3; // ret
+                break :blk code;
+            },
+            .aarch64 => blk: {
+                // Just return immediately - ARM64: ret
+                const code = try self.allocator.alloc(u8, 4);
+                const ret_instr: u32 = 0xD65F03C0;
+                @as(*[4]u8, @ptrCast(code.ptr)).* = @bitCast(ret_instr);
+                break :blk code;
+            },
+            else => error.UnsupportedExpression,
+        };
     }
 
     // ========== Machine Code Generation ==========
