@@ -16,9 +16,14 @@ echo "Main binary: $MAIN_ROC"
 echo "PR binary: $PR_ROC"
 echo ""
 
-# Collect all fx files, excluding those that use Stdin
+# Collect all fx files, excluding those that use Stdin or don't have main! entry point
 FX_FILES=""
 for fx_file in test/fx/*.roc; do
+    # Skip files that don't have a main! entry point (app [ main! ])
+    if ! grep -qE '^app[[:space:]]*\[[[:space:]]*main![[:space:]]*\]' "$fx_file" 2>/dev/null; then
+        echo "Skipping $fx_file (no main! entry point)"
+        continue
+    fi
     # Skip files that import Stdin (they require interactive input)
     if grep -q "import pf.Stdin" "$fx_file" 2>/dev/null; then
         echo "Skipping $fx_file (uses Stdin)"
