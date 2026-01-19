@@ -43,10 +43,22 @@ for fx_file in $FX_FILES; do
     echo "--- Benchmarking: $filename ---"
 
     # Allow non-zero exit codes for files that are expected to fail
+    # (compilation errors, runtime errors, or expected test failures)
     EXTRA_ARGS=""
-    if [ "$filename" = "division_by_zero.roc" ]; then
-        EXTRA_ARGS="--ignore-failure"
-    fi
+    case "$filename" in
+        division_by_zero.roc|\
+        issue8433.roc|\
+        test_type_mismatch.roc|\
+        run_allow_errors.roc|\
+        parse_error.roc|\
+        run_warning_only.roc|\
+        issue8517.roc|\
+        stack_overflow_runtime.roc|\
+        issue8826_full.roc|\
+        issue8943.roc)
+            EXTRA_ARGS="--ignore-failure"
+            ;;
+    esac
 
     # Run hyperfine comparison
     if ! hyperfine \
