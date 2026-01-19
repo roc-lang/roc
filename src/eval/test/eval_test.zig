@@ -809,9 +809,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
         };
         defer writer.deinit(arena_alloc);
 
-        // Allocate space for ModuleEnv and serialize
-        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
+        // Allocate space for ModuleEnv.Serialized (NOT ModuleEnv!) and serialize
+        // IMPORTANT: ModuleEnv.Serialized may be larger than ModuleEnv. Allocating only
+        // @sizeOf(ModuleEnv) bytes causes a buffer overflow that corrupts subsequent data.
+        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv.Serialized);
         const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
@@ -846,6 +848,20 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
+            // Enable runtime inserts on all deserialized interners so the interpreter can add new idents.
+            // Both the test module and the builtin module were deserialized (via loadCompiledModule).
+            try deserialized_env.common.idents.interner.enableRuntimeInserts(gpa);
+            try @constCast(builtin_module.env).common.idents.interner.enableRuntimeInserts(gpa);
+
+            // Fix up module_name_idx for deserialized modules (critical for method dispatch).
+            // Deserialized modules have module_name_idx set to NONE - we need to re-intern the name.
+            if (deserialized_env.module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
+                deserialized_env.module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+            }
+            if (builtin_module.env.module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
+                @constCast(builtin_module.env).module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+            }
+
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
             defer interpreter.deinit();
