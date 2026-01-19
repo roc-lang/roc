@@ -47,8 +47,8 @@ for fx_file in $FX_FILES; do
         -n "main" "$MAIN_ROC $fx_file" \
         -n "pr" "$PR_ROC $fx_file" \
         2>&1; then
-        echo "  Warning: Benchmark failed for $filename, skipping"
-        continue
+        echo "ERROR: Benchmark failed for $filename"
+        exit 1
     fi
 
     # Parse JSON to detect slower execution (PR slower than main by >5%)
