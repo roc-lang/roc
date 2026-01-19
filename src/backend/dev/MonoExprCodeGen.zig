@@ -393,6 +393,11 @@ pub const MonoExprCodeGen = struct {
                 }
                 return error.UnsupportedExpression;
             },
+            .call => |inner_call| {
+                // Curried function: (inner_fn)(inner_args)(outer_args)
+                // Resolve the inner call to get the function it returns
+                return self.applyCurriedCall(inner_call, call.args, result_layout, env);
+            },
             else => return error.UnsupportedExpression,
         }
     }
@@ -464,6 +469,544 @@ pub const MonoExprCodeGen = struct {
             },
             else => return error.UnsupportedExpression,
         }
+    }
+
+    /// Apply a curried call: when fn_expr is itself a call
+    /// For (|a| |b| a * b)(5)(10):
+    /// - inner_call is (|a| |b| a * b)(5)
+    /// - outer_args is (10)
+    fn applyCurriedCall(
+        self: *MonoExprCodeGen,
+        inner_call: anytype,
+        outer_args: MonoExprSpan,
+        result_layout: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        const inner_fn_expr = self.mono_store.getExpr(inner_call.fn_expr);
+
+        switch (inner_fn_expr) {
+            .lambda => |lambda| {
+                // Apply the inner lambda, then the result (body) should be a function
+                // that we can apply to the outer args
+                const inner_arg_ids = self.mono_store.getExprSpan(inner_call.args);
+                const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+                if (inner_arg_ids.len != param_ids.len) {
+                    return error.UnsupportedExpression;
+                }
+
+                // Create environment with inner bindings
+                var inner_env = env.child();
+                defer inner_env.deinit();
+
+                for (inner_arg_ids, param_ids) |arg_id, param_id| {
+                    try self.bindArgumentToParam(arg_id, param_id, env, &inner_env);
+                }
+
+                // Now lambda.body should be a lambda/closure that we apply to outer_args
+                const body_expr = self.mono_store.getExpr(lambda.body);
+                switch (body_expr) {
+                    .lambda => |inner_lambda| {
+                        return self.applyLambda(inner_lambda, outer_args, result_layout, &inner_env);
+                    },
+                    .closure => |inner_closure| {
+                        return self.applyClosure(inner_closure, outer_args, result_layout, &inner_env);
+                    },
+                    .block => |block| {
+                        // The body might be a block that ends with a lambda
+                        // Process block statements to build environment, then apply final expr
+                        var block_env = inner_env.child();
+                        defer block_env.deinit();
+
+                        const stmts = self.mono_store.getStmts(block.stmts);
+                        for (stmts) |stmt| {
+                            const stmt_pattern = self.mono_store.getPattern(stmt.pattern);
+                            const stmt_symbol: ?MonoSymbol = switch (stmt_pattern) {
+                                .bind => |b| b.symbol,
+                                .wildcard => null,
+                                else => null,
+                            };
+
+                            if (stmt_symbol) |symbol| {
+                                const stmt_expr = self.mono_store.getExpr(stmt.expr);
+                                switch (stmt_expr) {
+                                    .lambda, .closure => {
+                                        try block_env.bindClosure(symbol, stmt.expr);
+                                    },
+                                    else => {
+                                        if (self.evalConstantI64(stmt.expr, &block_env)) |val| {
+                                            try block_env.bind(symbol, val);
+                                        } else if (self.evalConstantI128(stmt.expr, &block_env)) |val| {
+                                            try block_env.bindI128(symbol, val);
+                                        } else {
+                                            try block_env.bindExpr(symbol, stmt.expr);
+                                        }
+                                    },
+                                }
+                            }
+                        }
+
+                        // Now apply the final expression to outer args
+                        const final_expr = self.mono_store.getExpr(block.final_expr);
+                        switch (final_expr) {
+                            .lambda => |final_lambda| {
+                                return self.applyLambda(final_lambda, outer_args, result_layout, &block_env);
+                            },
+                            .closure => |final_closure| {
+                                return self.applyClosure(final_closure, outer_args, result_layout, &block_env);
+                            },
+                            else => return error.UnsupportedExpression,
+                        }
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
+            .closure => |closure| {
+                // Apply the inner closure, then apply result to outer args
+                const lambda_expr = self.mono_store.getExpr(closure.lambda);
+                switch (lambda_expr) {
+                    .lambda => |lambda| {
+                        const inner_arg_ids = self.mono_store.getExprSpan(inner_call.args);
+                        const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+                        if (inner_arg_ids.len != param_ids.len) {
+                            return error.UnsupportedExpression;
+                        }
+
+                        var inner_env = env.child();
+                        defer inner_env.deinit();
+
+                        // Bind captures first
+                        const captures = self.mono_store.getCaptures(closure.captures);
+                        for (captures) |capture| {
+                            if (env.lookup(capture.symbol)) |cv| {
+                                try inner_env.bind(capture.symbol, cv);
+                            } else if (env.lookupClosure(capture.symbol)) |closure_id| {
+                                try inner_env.bindClosure(capture.symbol, closure_id);
+                            } else {
+                                return error.UnsupportedExpression;
+                            }
+                        }
+
+                        // Then bind arguments
+                        for (inner_arg_ids, param_ids) |arg_id, param_id| {
+                            try self.bindArgumentToParam(arg_id, param_id, env, &inner_env);
+                        }
+
+                        // Now lambda.body should be the next function
+                        const body_expr = self.mono_store.getExpr(lambda.body);
+                        switch (body_expr) {
+                            .lambda => |inner_lambda| {
+                                return self.applyLambda(inner_lambda, outer_args, result_layout, &inner_env);
+                            },
+                            .closure => |inner_closure| {
+                                return self.applyClosure(inner_closure, outer_args, result_layout, &inner_env);
+                            },
+                            else => return error.UnsupportedExpression,
+                        }
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
+            .call => {
+                // Triple+ curried: use flattenCurriedCall to handle arbitrary depth
+                // The call chain is: outer_args -> inner_call -> deeper calls -> base lambda
+                // flattenCurriedCall collects all args and applies them in order
+
+                // We need to reconstruct the full call expression to flatten it
+                // The current call is: call(fn_expr=inner_call.fn_expr, args=inner_call.args)
+                // And we're applying outer_args to the result
+
+                // Build a synthetic expression that represents call(call(...), outer_args)
+                // But we can't easily do that, so instead we flatten from inner_call's expr
+                // and then apply outer_args at the end
+
+                // Actually, the simplest approach: collect all args including outer_args
+                // and flatten the entire chain
+
+                // Collect args from the call chain
+                var all_args: std.ArrayListUnmanaged(MonoExprSpan) = .empty;
+                defer all_args.deinit(self.allocator);
+
+                // Add outer_args first (will be applied last)
+                try all_args.append(self.allocator, outer_args);
+                // Add inner_call's args
+                try all_args.append(self.allocator, inner_call.args);
+
+                // Walk the deeper calls to collect more args and find base lambda
+                var current = inner_call.fn_expr;
+                while (true) {
+                    const expr = self.mono_store.getExpr(current);
+                    switch (expr) {
+                        .call => |call| {
+                            try all_args.append(self.allocator, call.args);
+                            current = call.fn_expr;
+                        },
+                        .lambda, .closure => break,
+                        else => return error.UnsupportedExpression,
+                    }
+                }
+
+                // Now flatten using our helper
+                return self.flattenCallChain(current, all_args.items, result_layout, env);
+            },
+            .lookup => |lookup| {
+                // Inner fn is looked up - resolve it
+                if (env.lookupClosure(lookup.symbol)) |closure_id| {
+                    const closure_expr = self.mono_store.getExpr(closure_id);
+                    // Construct a synthetic call with the resolved closure
+                    const resolved_call = .{
+                        .fn_expr = closure_id,
+                        .args = inner_call.args,
+                    };
+                    _ = resolved_call;
+
+                    switch (closure_expr) {
+                        .lambda => |lambda| {
+                            // Apply this lambda to inner_call.args, then apply result to outer_args
+                            const inner_arg_ids = self.mono_store.getExprSpan(inner_call.args);
+                            const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+                            if (inner_arg_ids.len != param_ids.len) {
+                                return error.UnsupportedExpression;
+                            }
+
+                            var inner_env = env.child();
+                            defer inner_env.deinit();
+
+                            for (inner_arg_ids, param_ids) |arg_id, param_id| {
+                                try self.bindArgumentToParam(arg_id, param_id, env, &inner_env);
+                            }
+
+                            const body_expr = self.mono_store.getExpr(lambda.body);
+                            switch (body_expr) {
+                                .lambda => |inner_lambda| {
+                                    return self.applyLambda(inner_lambda, outer_args, result_layout, &inner_env);
+                                },
+                                .closure => |inner_closure| {
+                                    return self.applyClosure(inner_closure, outer_args, result_layout, &inner_env);
+                                },
+                                else => return error.UnsupportedExpression,
+                            }
+                        },
+                        .closure => |inner_closure| {
+                            // Similar for closures
+                            const lambda_expr_inner = self.mono_store.getExpr(inner_closure.lambda);
+                            switch (lambda_expr_inner) {
+                                .lambda => |lambda| {
+                                    const inner_arg_ids = self.mono_store.getExprSpan(inner_call.args);
+                                    const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+                                    if (inner_arg_ids.len != param_ids.len) {
+                                        return error.UnsupportedExpression;
+                                    }
+
+                                    var inner_env = env.child();
+                                    defer inner_env.deinit();
+
+                                    // Bind captures
+                                    const captures = self.mono_store.getCaptures(inner_closure.captures);
+                                    for (captures) |capture| {
+                                        if (env.lookup(capture.symbol)) |cv| {
+                                            try inner_env.bind(capture.symbol, cv);
+                                        } else if (env.lookupClosure(capture.symbol)) |closure_id2| {
+                                            try inner_env.bindClosure(capture.symbol, closure_id2);
+                                        }
+                                    }
+
+                                    for (inner_arg_ids, param_ids) |arg_id, param_id| {
+                                        try self.bindArgumentToParam(arg_id, param_id, env, &inner_env);
+                                    }
+
+                                    const body_expr = self.mono_store.getExpr(lambda.body);
+                                    switch (body_expr) {
+                                        .lambda => |inner_lambda| {
+                                            return self.applyLambda(inner_lambda, outer_args, result_layout, &inner_env);
+                                        },
+                                        .closure => |inner_clos| {
+                                            return self.applyClosure(inner_clos, outer_args, result_layout, &inner_env);
+                                        },
+                                        else => return error.UnsupportedExpression,
+                                    }
+                                },
+                                else => return error.UnsupportedExpression,
+                            }
+                        },
+                        else => return error.UnsupportedExpression,
+                    }
+                }
+                return error.UnsupportedExpression;
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Flatten a deeply nested curried call by collecting all argument spans
+    /// and applying them in order through the nested lambda/closure structure.
+    /// For (((|a| |b| |c| a+b+c)(100))(20))(3):
+    /// 1. Collect args: [[3], [20], [100]] (outer to inner)
+    /// 2. Find base lambda |a|
+    /// 3. Apply [100] to |a| → env has a=100, body is closure(|b|...)
+    /// 4. Apply [20] to |b| → env has b=20, body is closure(|c|...)
+    /// 5. Apply [3] to |c| → env has c=3, body is a+b+c
+    /// 6. Generate code for a+b+c
+    fn flattenCurriedCall(
+        self: *MonoExprCodeGen,
+        expr_id: MonoExprId,
+        final_args: MonoExprSpan,
+        result_layout: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        // Collect all the argument spans from the call chain (outer to inner)
+        var arg_spans: std.ArrayListUnmanaged(MonoExprSpan) = .empty;
+        defer arg_spans.deinit(self.allocator);
+
+        // Add the outermost args first
+        try arg_spans.append(self.allocator, final_args);
+
+        // Walk up the chain collecting args
+        var current = expr_id;
+        while (true) {
+            const expr = self.mono_store.getExpr(current);
+            switch (expr) {
+                .call => |call| {
+                    try arg_spans.append(self.allocator, call.args);
+                    current = call.fn_expr;
+                },
+                .lambda, .closure => break,
+                else => return error.UnsupportedExpression,
+            }
+        }
+
+        // Now we have args in order [outer, ..., inner] and current points to base lambda/closure
+        // Apply them in reverse order (innermost first)
+        var current_env = env.child();
+        defer current_env.deinit();
+
+        var current_fn_expr_id = current;
+        var i: usize = arg_spans.items.len;
+        while (i > 0) {
+            i -= 1;
+            const args = arg_spans.items[i];
+
+            const fn_expr = self.mono_store.getExpr(current_fn_expr_id);
+
+            // Get the lambda and optional captures from this function expression
+            var lambda: @TypeOf(self.mono_store.getExpr(current_fn_expr_id).lambda) = undefined;
+            var captures: ?[]const MonoIR.MonoCapture = null;
+
+            switch (fn_expr) {
+                .lambda => |l| {
+                    lambda = l;
+                },
+                .closure => |closure| {
+                    const lambda_expr = self.mono_store.getExpr(closure.lambda);
+                    switch (lambda_expr) {
+                        .lambda => |l| {
+                            lambda = l;
+                            captures = self.mono_store.getCaptures(closure.captures);
+                        },
+                        else => return error.UnsupportedExpression,
+                    }
+                },
+                else => return error.UnsupportedExpression,
+            }
+
+            // Bind captures if this is a closure
+            if (captures) |caps| {
+                for (caps) |capture| {
+                    if (current_env.lookup(capture.symbol)) |cv| {
+                        try current_env.bind(capture.symbol, cv);
+                    } else if (current_env.lookupClosure(capture.symbol)) |closure_id| {
+                        try current_env.bindClosure(capture.symbol, closure_id);
+                    } else if (env.lookup(capture.symbol)) |cv| {
+                        try current_env.bind(capture.symbol, cv);
+                    } else if (env.lookupClosure(capture.symbol)) |closure_id| {
+                        try current_env.bindClosure(capture.symbol, closure_id);
+                    }
+                }
+            }
+
+            // Bind arguments to parameters
+            const arg_ids = self.mono_store.getExprSpan(args);
+            const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+            if (arg_ids.len != param_ids.len) {
+                return error.UnsupportedExpression;
+            }
+
+            for (arg_ids, param_ids) |arg_id, param_id| {
+                try self.bindArgumentToParam(arg_id, param_id, env, &current_env);
+            }
+
+            // Move to the body for the next iteration
+            if (i > 0) {
+                // More args to apply - body should be lambda/closure (possibly wrapped in a block)
+                const body_expr = self.mono_store.getExpr(lambda.body);
+                switch (body_expr) {
+                    .lambda, .closure => {
+                        current_fn_expr_id = lambda.body;
+                    },
+                    .block => |block| {
+                        // Process block statements to add bindings to environment
+                        const stmts = self.mono_store.getStmts(block.stmts);
+                        for (stmts) |stmt| {
+                            const stmt_pattern = self.mono_store.getPattern(stmt.pattern);
+                            const stmt_symbol: ?MonoSymbol = switch (stmt_pattern) {
+                                .bind => |b| b.symbol,
+                                .wildcard => null,
+                                else => null,
+                            };
+
+                            if (stmt_symbol) |symbol| {
+                                const stmt_expr = self.mono_store.getExpr(stmt.expr);
+                                switch (stmt_expr) {
+                                    .lambda, .closure => {
+                                        try current_env.bindClosure(symbol, stmt.expr);
+                                    },
+                                    else => {
+                                        if (self.evalConstantI64(stmt.expr, &current_env)) |val| {
+                                            try current_env.bind(symbol, val);
+                                        } else if (self.evalConstantI128(stmt.expr, &current_env)) |val| {
+                                            try current_env.bindI128(symbol, val);
+                                        } else {
+                                            try current_env.bindExpr(symbol, stmt.expr);
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        // The block's final_expr should be a lambda/closure
+                        current_fn_expr_id = block.final_expr;
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            } else {
+                // Last args - generate code for the body
+                return self.generateCodeForExpr(lambda.body, result_layout, &current_env);
+            }
+        }
+
+        return error.UnsupportedExpression;
+    }
+
+    /// Apply a pre-collected chain of argument spans to a base lambda/closure.
+    /// arg_spans is in outer-to-inner order, so we apply from the end (innermost first).
+    fn flattenCallChain(
+        self: *MonoExprCodeGen,
+        base_fn_expr_id: MonoExprId,
+        arg_spans: []const MonoExprSpan,
+        result_layout: LayoutIdx,
+        env: *MonoScope,
+    ) Error![]const u8 {
+        var current_env = env.child();
+        defer current_env.deinit();
+
+        var current_fn_expr_id = base_fn_expr_id;
+        var i: usize = arg_spans.len;
+        while (i > 0) {
+            i -= 1;
+            const args = arg_spans[i];
+
+            const fn_expr = self.mono_store.getExpr(current_fn_expr_id);
+
+            // Get the lambda and optional captures from this function expression
+            var lambda: @TypeOf(self.mono_store.getExpr(current_fn_expr_id).lambda) = undefined;
+            var captures: ?[]const MonoIR.MonoCapture = null;
+
+            switch (fn_expr) {
+                .lambda => |l| {
+                    lambda = l;
+                },
+                .closure => |closure| {
+                    const lambda_expr = self.mono_store.getExpr(closure.lambda);
+                    switch (lambda_expr) {
+                        .lambda => |l| {
+                            lambda = l;
+                            captures = self.mono_store.getCaptures(closure.captures);
+                        },
+                        else => return error.UnsupportedExpression,
+                    }
+                },
+                else => return error.UnsupportedExpression,
+            }
+
+            // Bind captures if this is a closure
+            if (captures) |caps| {
+                for (caps) |capture| {
+                    if (current_env.lookup(capture.symbol)) |cv| {
+                        try current_env.bind(capture.symbol, cv);
+                    } else if (current_env.lookupClosure(capture.symbol)) |closure_id| {
+                        try current_env.bindClosure(capture.symbol, closure_id);
+                    } else if (env.lookup(capture.symbol)) |cv| {
+                        try current_env.bind(capture.symbol, cv);
+                    } else if (env.lookupClosure(capture.symbol)) |closure_id| {
+                        try current_env.bindClosure(capture.symbol, closure_id);
+                    }
+                }
+            }
+
+            // Bind arguments to parameters
+            const arg_ids = self.mono_store.getExprSpan(args);
+            const param_ids = self.mono_store.getPatternSpan(lambda.params);
+
+            if (arg_ids.len != param_ids.len) {
+                return error.UnsupportedExpression;
+            }
+
+            for (arg_ids, param_ids) |arg_id, param_id| {
+                try self.bindArgumentToParam(arg_id, param_id, env, &current_env);
+            }
+
+            // Move to the body for the next iteration
+            if (i > 0) {
+                // More args to apply - body should be lambda/closure (possibly wrapped in a block)
+                const body_expr = self.mono_store.getExpr(lambda.body);
+                switch (body_expr) {
+                    .lambda, .closure => {
+                        current_fn_expr_id = lambda.body;
+                    },
+                    .block => |block| {
+                        // Process block statements to add bindings to environment
+                        const stmts = self.mono_store.getStmts(block.stmts);
+                        for (stmts) |stmt| {
+                            const stmt_pattern = self.mono_store.getPattern(stmt.pattern);
+                            const stmt_symbol: ?MonoSymbol = switch (stmt_pattern) {
+                                .bind => |b| b.symbol,
+                                .wildcard => null,
+                                else => null,
+                            };
+
+                            if (stmt_symbol) |symbol| {
+                                const stmt_expr = self.mono_store.getExpr(stmt.expr);
+                                switch (stmt_expr) {
+                                    .lambda, .closure => {
+                                        try current_env.bindClosure(symbol, stmt.expr);
+                                    },
+                                    else => {
+                                        if (self.evalConstantI64(stmt.expr, &current_env)) |val| {
+                                            try current_env.bind(symbol, val);
+                                        } else if (self.evalConstantI128(stmt.expr, &current_env)) |val| {
+                                            try current_env.bindI128(symbol, val);
+                                        } else {
+                                            try current_env.bindExpr(symbol, stmt.expr);
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        // The block's final_expr should be a lambda/closure
+                        current_fn_expr_id = block.final_expr;
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            } else {
+                // Last args - generate code for the body
+                return self.generateCodeForExpr(lambda.body, result_layout, &current_env);
+            }
+        }
+
+        return error.UnsupportedExpression;
     }
 
     /// Bind an argument expression to a parameter pattern

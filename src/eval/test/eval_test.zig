@@ -364,11 +364,14 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
-    // Curried functions still have interpreter issues with TypeMismatch
-    // try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
-    // try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
-    // try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
-    // try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    // Curried functions - lambdas returning lambdas
+    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    // Triple curried
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    // Multi-param lambda returning lambda
+    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    // Nested lambda calls with captures
+    try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
 }
 
 test "lambdas with capture" {
@@ -391,16 +394,16 @@ test "lambdas with capture" {
 }
 
 test "lambdas nested closures" {
-    // Nested closures still have interpreter issues with TypeMismatch
-    // try runExpectI64(
-    //     \\(((|a| {
-    //     \\    a_loc = a * 2
-    //     \\    |b| {
-    //     \\        b_loc = a_loc + b
-    //     \\        |c| b_loc + c
-    //     \\    }
-    //     \\})(100))(20))(3)
-    // , 223, .no_trace);
+    // Nested closures with block locals
+    try runExpectI64(
+        \\(((|a| {
+        \\    a_loc = a * 2
+        \\    |b| {
+        \\        b_loc = a_loc + b
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100))(20))(3)
+    , 223, .no_trace);
 }
 
 // Helper function to test that evaluation succeeds without checking specific values
