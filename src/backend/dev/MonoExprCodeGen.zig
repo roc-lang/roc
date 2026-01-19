@@ -1161,14 +1161,91 @@ pub const MonoExprCodeGen = struct {
     fn generateTupleCode(
         self: *MonoExprCodeGen,
         tuple: anytype,
-        result_layout: LayoutIdx,
+        _: LayoutIdx, // unused - tuple layout is determined by element count
         env: *MonoScope,
     ) Error![]const u8 {
-        _ = self;
-        _ = tuple;
-        _ = result_layout;
-        _ = env;
-        return error.UnsupportedExpression;
+        const elems = self.mono_store.getExprSpan(tuple.elems);
+
+        // First evaluate all elements
+        var values: [16]i64 = undefined; // Support up to 16-element tuples
+        if (elems.len > 16) return error.UnsupportedExpression;
+
+        for (elems, 0..) |elem_id, i| {
+            values[i] = self.evalConstantI64(elem_id, env) orelse return error.UnsupportedExpression;
+        }
+
+        // Generate machine code to store all elements at result pointer
+        return switch (builtin.cpu.arch) {
+            .aarch64 => self.generateArm64Tuple(values[0..elems.len]),
+            .x86_64 => self.generateX64Tuple(values[0..elems.len]),
+            else => error.UnsupportedExpression,
+        };
+    }
+
+    /// Generate ARM64 code for tuple - stores elements at [x0], [x0+8], etc.
+    fn generateArm64Tuple(self: *MonoExprCodeGen, values: []const i64) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        for (values, 0..) |value, i| {
+            const uvalue = @as(u64, @bitCast(value));
+
+            // Load value into x1
+            try self.generateArm64LoadImm64(&code, 1, uvalue);
+
+            // str x1, [x0, #offset]
+            const offset: u12 = @intCast(i * 8);
+            // STR (immediate) unsigned offset: 1111 1001 00ii iiii iiii iinn nnnt tttt
+            // where i = offset/8, n = x0 = 0, t = x1 = 1
+            const str_instr: u32 = 0xF9000001 | (@as(u32, offset / 8) << 10);
+            try code.appendSlice(&@as([4]u8, @bitCast(str_instr)));
+        }
+
+        // ret
+        try code.appendSlice(&@as([4]u8, @bitCast(@as(u32, 0xD65F03C0))));
+
+        return code.toOwnedSlice();
+    }
+
+    /// Generate x86-64 code for tuple - stores elements at [rdi], [rdi+8], etc.
+    fn generateX64Tuple(self: *MonoExprCodeGen, values: []const i64) Error![]const u8 {
+        var code = std.array_list.Managed(u8).init(self.allocator);
+        errdefer code.deinit();
+
+        for (values, 0..) |value, i| {
+            const offset: i32 = @intCast(i * 8);
+
+            if (value >= std.math.minInt(i32) and value <= std.math.maxInt(i32)) {
+                // mov qword [rdi+offset], imm32 (sign-extended)
+                if (offset == 0) {
+                    try code.appendSlice(&[_]u8{ 0x48, 0xC7, 0x07 }); // REX.W mov [rdi], imm32
+                } else if (offset < 128) {
+                    try code.appendSlice(&[_]u8{ 0x48, 0xC7, 0x47, @intCast(offset) }); // REX.W mov [rdi+disp8], imm32
+                } else {
+                    try code.appendSlice(&[_]u8{ 0x48, 0xC7, 0x87 }); // REX.W mov [rdi+disp32], imm32
+                    try code.appendSlice(&@as([4]u8, @bitCast(offset)));
+                }
+                const val32: i32 = @intCast(value);
+                try code.appendSlice(&@as([4]u8, @bitCast(val32)));
+            } else {
+                // movabs rax, imm64; mov [rdi+offset], rax
+                try code.appendSlice(&[_]u8{ 0x48, 0xB8 }); // movabs rax, imm64
+                try code.appendSlice(&@as([8]u8, @bitCast(value)));
+                if (offset == 0) {
+                    try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x07 }); // mov [rdi], rax
+                } else if (offset < 128) {
+                    try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x47, @intCast(offset) }); // mov [rdi+disp8], rax
+                } else {
+                    try code.appendSlice(&[_]u8{ 0x48, 0x89, 0x87 }); // mov [rdi+disp32], rax
+                    try code.appendSlice(&@as([4]u8, @bitCast(offset)));
+                }
+            }
+        }
+
+        // ret
+        try code.appendSlice(&[_]u8{0xC3});
+
+        return code.toOwnedSlice();
     }
 
     /// Generate code for field access
