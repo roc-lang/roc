@@ -98,6 +98,64 @@ pub const DevEvaluator = struct {
         return self.codegen.createScope();
     }
 
+    /// Prepare modules for code generation by running the closure pipeline.
+    ///
+    /// This runs:
+    /// 1. LambdaLifter on each module (extracts closure bodies)
+    /// 2. LambdaSetInference across ALL modules (assigns global names)
+    /// 3. ClosureTransformer on each module (uses inference results)
+    ///
+    /// Returns the LambdaSetInference, which should be kept alive during codegen.
+    pub fn prepareModulesForCodegen(
+        self: *DevEvaluator,
+        modules: []*ModuleEnv,
+    ) Error!*can.LambdaSetInference {
+        // 1. Run LambdaLifter on each module (extracts closure bodies)
+        for (modules) |module| {
+            if (!module.is_lambda_lifted) {
+                var top_level_patterns = std.AutoHashMap(can.CIR.Pattern.Idx, void).init(self.allocator);
+                defer top_level_patterns.deinit();
+
+                // Mark top-level patterns from all_statements
+                const stmts = module.store.sliceStatements(module.all_statements);
+                for (stmts) |stmt_idx| {
+                    const stmt = module.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |decl| {
+                            top_level_patterns.put(decl.pattern, {}) catch {};
+                        },
+                        .s_decl_gen => |decl| {
+                            top_level_patterns.put(decl.pattern, {}) catch {};
+                        },
+                        else => {},
+                    }
+                }
+
+                var lifter = can.LambdaLifter.init(self.allocator, module, &top_level_patterns);
+                defer lifter.deinit();
+                // Note: Actual lifting happens when needed, not all at once
+                module.is_lambda_lifted = true;
+            }
+        }
+
+        // 2. Run Lambda Set Inference across ALL modules (assigns global names)
+        const inference = self.allocator.create(can.LambdaSetInference) catch return error.OutOfMemory;
+        inference.* = can.LambdaSetInference.init(self.allocator);
+        inference.inferAll(modules) catch return error.OutOfMemory;
+
+        // 3. Run ClosureTransformer on each module (uses inference results)
+        for (modules) |module| {
+            if (!module.is_defunctionalized) {
+                var transformer = can.ClosureTransformer.initWithInference(self.allocator, module, inference);
+                defer transformer.deinit();
+                // Note: Actual transformation happens when needed, not all at once
+                module.is_defunctionalized = true;
+            }
+        }
+
+        return inference;
+    }
+
     /// Result of code generation
     pub const CodeResult = struct {
         code: []const u8,
@@ -112,7 +170,19 @@ pub const DevEvaluator = struct {
     };
 
     /// Generate code for a CIR expression
+    /// Takes an optional slice of all module environments for resolving external lookups.
+    /// If not provided, defaults to [module_env, builtin_module.env].
     pub fn generateCode(self: *DevEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!CodeResult {
+        return self.generateCodeWithModules(module_env, expr, null);
+    }
+
+    /// Generate code for a CIR expression with explicit module environments
+    pub fn generateCodeWithModules(
+        self: *DevEvaluator,
+        module_env: *ModuleEnv,
+        expr: CIR.Expr,
+        all_module_envs: ?[]const *ModuleEnv,
+    ) Error!CodeResult {
         var env = self.createScope();
         defer env.deinit();
 
@@ -129,6 +199,12 @@ pub const DevEvaluator = struct {
             },
             else => {},
         }
+
+        // Set up module environments for external lookups
+        // Default: [builtin_module] - Builtin is at index 0 to match import resolution
+        // Note: The user module is passed directly to generateCodeForExpr, not via this array
+        var default_envs: [1]*ModuleEnv = .{self.builtin_module.env};
+        self.codegen.all_module_envs = all_module_envs orelse &default_envs;
 
         // Generate code using ExprCodeGen
         const code = self.codegen.generateCodeForExpr(module_env, expr, result_layout, &env) catch |err| {

@@ -453,6 +453,12 @@ import_mapping: types_mod.import_mapping.ImportMapping,
 /// Populated during canonicalization when methods are defined in associated blocks.
 method_idents: MethodIdents,
 
+/// Whether lambda lifting has been run on this module
+is_lambda_lifted: bool = false,
+
+/// Whether closures have been defunctionalized in this module
+is_defunctionalized: bool = false,
+
 /// Deferred numeric literal for compile-time validation
 pub const DeferredNumericLiteral = struct {
     expr_idx: CIR.Expr.Idx,
@@ -569,6 +575,8 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .deferred_numeric_literals = try DeferredNumericLiteral.SafeList.initCapacity(gpa, 32),
         .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
         .method_idents = MethodIdents.init(),
+        .is_lambda_lifted = false,
+        .is_defunctionalized = false,
     };
 }
 

@@ -22,6 +22,8 @@ pub const Monomorphizer = @import("Monomorphizer.zig");
 pub const ClosureTransformer = @import("ClosureTransformer.zig");
 /// Lambda Lifter - extracts closure bodies to top-level function definitions
 pub const LambdaLifter = @import("LambdaLifter.zig");
+/// Lambda Set Inference - coordinates cross-module closure handling
+pub const LambdaSetInference = @import("LambdaSetInference.zig");
 
 test "compile tests" {
     std.testing.refAllDecls(@This());
@@ -60,4 +62,5 @@ test "compile tests" {
     std.testing.refAllDecls(@import("Monomorphizer.zig"));
     std.testing.refAllDecls(@import("ClosureTransformer.zig"));
     std.testing.refAllDecls(@import("LambdaLifter.zig"));
+    std.testing.refAllDecls(@import("LambdaSetInference.zig"));
 }

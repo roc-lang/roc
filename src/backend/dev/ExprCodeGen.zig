@@ -143,6 +143,10 @@ pub const LayoutIdx = layout.Idx;
 pub const ExprCodeGen = struct {
     allocator: Allocator,
 
+    /// All available module environments for resolving external lookups.
+    /// Index 0 is typically the user module, subsequent indices are imports.
+    all_module_envs: []const *ModuleEnv = &.{},
+
     /// Crash message from e_crash expression (if any)
     crash_message: ?[]const u8 = null,
 
@@ -222,9 +226,8 @@ pub const ExprCodeGen = struct {
 
             // Lookups
             .e_lookup_local => |lookup| try self.generateLookupLocalCode(module_env, lookup, result_layout, env),
-            .e_lookup_external => {
-                self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
-                return error.Crash;
+            .e_lookup_external => |lookup| {
+                return self.generateLookupExternalCode(module_env, lookup, result_layout, env);
             },
             .e_lookup_required => {
                 self.setCrashMessage("Dev evaluator: required value lookup not yet supported") catch return error.OutOfMemory;
@@ -451,6 +454,38 @@ pub const ExprCodeGen = struct {
                     }
                 }
             },
+            .e_lookup_external => |lookup| {
+                // Resolve the import to find the target module
+                const resolved_idx = module_env.imports.getResolvedModule(lookup.module_idx) orelse {
+                    self.setCrashMessage("e_lookup_external call: unresolved import") catch {};
+                    return error.Crash;
+                };
+
+                if (resolved_idx >= self.all_module_envs.len) {
+                    self.setCrashMessage("e_lookup_external call: module index out of bounds") catch {};
+                    return error.Crash;
+                }
+
+                const target_module = self.all_module_envs[resolved_idx];
+                const target_def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                const target_def = target_module.store.getDef(target_def_idx);
+                const target_expr = target_module.store.getExpr(target_def.expr);
+
+                // Now handle the target expression (should be a lambda, closure, or low_level_lambda)
+                // Note: Arguments are in the caller's module (module_env), but the lambda is in target_module
+                switch (target_expr) {
+                    .e_lambda => |lambda| {
+                        return self.applyExternalLambda(module_env, target_module, lambda, call.args, result_layout, env);
+                    },
+                    .e_closure => |closure| {
+                        return self.applyExternalClosure(module_env, target_module, closure, call.args, result_layout, env);
+                    },
+                    .e_low_level_lambda => |ll| {
+                        return self.generateLowLevelCallCode(module_env, ll, call.args, result_layout, env);
+                    },
+                    else => return error.UnsupportedExpression,
+                }
+            },
             else => return error.UnsupportedExpression,
         }
     }
@@ -545,6 +580,133 @@ pub const ExprCodeGen = struct {
                 return self.generateCodeForExpr(module_env, body_expr, result_layout, &new_env);
             },
             else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Apply an external lambda (cross-module call)
+    /// Arguments are in caller_module, lambda is in target_module
+    fn applyExternalLambda(
+        self: *ExprCodeGen,
+        caller_module: *ModuleEnv,
+        target_module: *ModuleEnv,
+        lambda: CIR.Expr.Lambda,
+        args_span: CIR.Expr.Span,
+        result_layout: LayoutIdx,
+        env: *Scope,
+    ) Error![]const u8 {
+        // Get arguments from caller's module
+        const arg_indices = caller_module.store.sliceExpr(args_span);
+        // Get parameters from target module
+        const param_indices = target_module.store.slicePatterns(lambda.args);
+
+        if (arg_indices.len != param_indices.len) {
+            return error.UnsupportedExpression;
+        }
+
+        var new_env = env.child();
+        defer new_env.deinit();
+
+        // Bind arguments (from caller) to parameters (from target)
+        for (arg_indices, param_indices) |arg_idx, param_idx| {
+            try self.bindExternalArgumentToParam(caller_module, arg_idx, param_idx, env, &new_env);
+        }
+
+        // Evaluate body in target module's context
+        const body_expr = target_module.store.getExpr(lambda.body);
+        return self.generateCodeForExpr(target_module, body_expr, result_layout, &new_env);
+    }
+
+    /// Apply an external closure (cross-module call)
+    /// Arguments are in caller_module, closure is in target_module
+    fn applyExternalClosure(
+        self: *ExprCodeGen,
+        caller_module: *ModuleEnv,
+        target_module: *ModuleEnv,
+        closure: CIR.Expr.Closure,
+        args_span: CIR.Expr.Span,
+        result_layout: LayoutIdx,
+        env: *Scope,
+    ) Error![]const u8 {
+        const lambda_expr = target_module.store.getExpr(closure.lambda_idx);
+        switch (lambda_expr) {
+            .e_lambda => |lambda| {
+                // Get arguments from caller's module
+                const arg_indices = caller_module.store.sliceExpr(args_span);
+                // Get parameters from target module
+                const param_indices = target_module.store.slicePatterns(lambda.args);
+
+                if (arg_indices.len != param_indices.len) {
+                    return error.UnsupportedExpression;
+                }
+
+                var new_env = env.child();
+                defer new_env.deinit();
+
+                // Bind captures from target module
+                const capture_indices = target_module.store.sliceCaptures(closure.captures);
+                for (capture_indices) |capture_idx| {
+                    const capture = target_module.store.getCapture(capture_idx);
+                    const pattern_key = @intFromEnum(capture.pattern_idx);
+
+                    if (env.lookup(pattern_key)) |cv| {
+                        try new_env.bind(pattern_key, cv);
+                    } else if (env.lookupClosure(pattern_key)) |closure_expr_idx| {
+                        try new_env.bindClosure(pattern_key, closure_expr_idx);
+                    } else {
+                        return error.UnsupportedExpression;
+                    }
+                }
+
+                // Bind arguments (from caller) to parameters (from target)
+                for (arg_indices, param_indices) |arg_idx, param_idx| {
+                    try self.bindExternalArgumentToParam(caller_module, arg_idx, param_idx, env, &new_env);
+                }
+
+                // Evaluate body in target module's context
+                const body_expr = target_module.store.getExpr(lambda.body);
+                return self.generateCodeForExpr(target_module, body_expr, result_layout, &new_env);
+            },
+            else => return error.UnsupportedExpression,
+        }
+    }
+
+    /// Bind an argument from caller module to a parameter
+    fn bindExternalArgumentToParam(
+        self: *ExprCodeGen,
+        caller_module: *ModuleEnv,
+        arg_idx: CIR.Expr.Idx,
+        param_idx: CIR.Pattern.Idx,
+        env: *Scope,
+        new_env: *Scope,
+    ) Error!void {
+        const arg_expr = caller_module.store.getExpr(arg_idx);
+        const param_key = @intFromEnum(param_idx);
+
+        switch (arg_expr) {
+            .e_lambda, .e_closure => {
+                try new_env.bindClosure(param_key, arg_idx);
+            },
+            .e_lookup_local => |lookup| {
+                const lookup_key = @intFromEnum(lookup.pattern_idx);
+                if (env.lookupClosure(lookup_key)) |closure_idx| {
+                    try new_env.bindClosure(param_key, closure_idx);
+                } else if (env.lookup(lookup_key)) |cv| {
+                    try new_env.bind(param_key, cv);
+                } else {
+                    return error.UnsupportedExpression;
+                }
+            },
+            else => {
+                if (self.evalConstantI64(caller_module, arg_expr, env)) |arg_val| {
+                    try new_env.bind(param_key, arg_val);
+                    return;
+                }
+                if (self.evalConstantI128(caller_module, arg_expr, env)) |arg_val| {
+                    try new_env.bindI128(param_key, arg_val);
+                    return;
+                }
+                try new_env.bindExpr(param_key, arg_idx);
+            },
         }
     }
 
@@ -686,7 +848,7 @@ pub const ExprCodeGen = struct {
         if (env.lookupBinding(pattern_key)) |binding| {
             switch (binding) {
                 .expr_ref => |expr_idx| {
-                    const expr = module_env.store.getExpr(expr_idx);
+                    const expr = tryGetExpr(module_env, expr_idx) orelse return error.UnsupportedExpression;
                     return self.generateCodeForExpr(module_env, expr, result_layout, env);
                 },
                 .i64_val => |value| {
@@ -702,6 +864,36 @@ pub const ExprCodeGen = struct {
         }
 
         return error.UnsupportedExpression;
+    }
+
+    /// Generate code for external module lookup (cross-module references)
+    fn generateLookupExternalCode(
+        self: *ExprCodeGen,
+        module_env: *ModuleEnv,
+        lookup: anytype,
+        result_layout: LayoutIdx,
+        env: *Scope,
+    ) Error![]const u8 {
+        // Resolve the import to find the target module environment
+        const resolved_idx = module_env.imports.getResolvedModule(lookup.module_idx) orelse {
+            self.setCrashMessage("e_lookup_external: unresolved import") catch {};
+            return error.Crash;
+        };
+
+        if (resolved_idx >= self.all_module_envs.len) {
+            self.setCrashMessage("e_lookup_external: module index out of bounds") catch {};
+            return error.Crash;
+        }
+
+        const target_module = self.all_module_envs[resolved_idx];
+
+        // Get the definition from the target module
+        const target_def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+        const target_def = target_module.store.getDef(target_def_idx);
+
+        // Generate code for the definition's expression in the target module context
+        const target_expr = target_module.store.getExpr(target_def.expr);
+        return self.generateCodeForExpr(target_module, target_expr, result_layout, env);
     }
 
     /// Binary operation with environment support
@@ -950,6 +1142,19 @@ pub const ExprCodeGen = struct {
         return self.generateCodeForExpr(module_env, else_expr, result_layout, env);
     }
 
+    /// Safely try to get an expression from an index, returning null if it's not an expression node.
+    /// This handles cases where an expression index might actually point to a type annotation or other node type.
+    fn tryGetExpr(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?CIR.Expr {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const node = module_env.store.nodes.get(node_idx);
+        // Check if the tag is an expression tag (they all start with "expr_")
+        const tag_name = @tagName(node.tag);
+        if (tag_name.len >= 5 and std.mem.eql(u8, tag_name[0..5], "expr_")) {
+            return module_env.store.getExpr(expr_idx);
+        }
+        return null;
+    }
+
     /// Evaluate constant i64
     pub fn evalConstantI64(self: *ExprCodeGen, module_env: *ModuleEnv, expr: CIR.Expr, env: *Scope) ?i64 {
         return switch (expr) {
@@ -965,7 +1170,7 @@ pub const ExprCodeGen = struct {
                 if (env.lookupBinding(pattern_key)) |binding| {
                     switch (binding) {
                         .expr_ref => |expr_idx| {
-                            const deferred_expr = module_env.store.getExpr(expr_idx);
+                            const deferred_expr = tryGetExpr(module_env, expr_idx) orelse return null;
                             return self.evalConstantI64(module_env, deferred_expr, env);
                         },
                         .i64_val => |val| return val,
@@ -1781,6 +1986,13 @@ pub const ExprCodeGen = struct {
                 // While loop - execute while condition is true
                 try self.executeWhileLoop(module_env, while_stmt.cond, while_stmt.body, env);
             },
+            // Type-related statements - skip during code generation (no runtime code)
+            .s_type_anno,
+            .s_type_var_alias,
+            .s_alias_decl,
+            .s_nominal_decl,
+            .s_import,
+            => {},
             else => {
                 return error.UnsupportedExpression;
             },
@@ -1808,7 +2020,7 @@ pub const ExprCodeGen = struct {
                 if (env.lookupBinding(pattern_key)) |binding| {
                     switch (binding) {
                         .expr_ref => |expr_idx| {
-                            const bound_expr = module_env.store.getExpr(expr_idx);
+                            const bound_expr = tryGetExpr(module_env, expr_idx) orelse return error.UnsupportedExpression;
                             switch (bound_expr) {
                                 .e_empty_list => break :blk &[_]CIR.Expr.Idx{},
                                 .e_list => |list| break :blk module_env.store.sliceExpr(list.elems),
