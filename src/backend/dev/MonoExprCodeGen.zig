@@ -538,6 +538,8 @@ pub const MonoExprCodeGen = struct {
                 // Boolean tags: discriminant 0 = False, 1 = True
                 break :blk @as(i64, tag.discriminant);
             },
+            .field_access => |fa| self.evalFieldAccessI64(fa, env),
+            .if_then_else => |ite| self.evalIfThenElseI64(ite, env),
             else => null,
         };
     }
@@ -576,6 +578,128 @@ pub const MonoExprCodeGen = struct {
             .@"and" => if (lhs != 0 and rhs != 0) @as(i64, 1) else @as(i64, 0),
             .@"or" => if (lhs != 0 or rhs != 0) @as(i64, 1) else @as(i64, 0),
         };
+    }
+
+    /// Evaluate field access for i64 - used for compile-time field access evaluation
+    fn evalFieldAccessI64(self: *MonoExprCodeGen, fa: anytype, env: *MonoScope) ?i64 {
+        // Get the record expression
+        const record_expr = self.mono_store.getExpr(fa.record_expr);
+
+        switch (record_expr) {
+            .record => |rec| {
+                // Record literal - look up the field by name
+                const fields = self.mono_store.getExprSpan(rec.fields);
+                const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                // Find the field index by matching the field name
+                const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+
+                if (field_idx >= fields.len) return null;
+                const field_expr_id = fields[field_idx];
+                return self.evalConstantI64(field_expr_id, env);
+            },
+            .field_access => |inner_fa| {
+                // Nested field access - first resolve the inner access to get the record
+                const inner_record_expr_id = self.resolveFieldAccessToRecord(inner_fa, env) orelse return null;
+                const inner_record = self.mono_store.getExpr(inner_record_expr_id);
+                if (inner_record == .record) {
+                    const rec = inner_record.record;
+                    const fields = self.mono_store.getExprSpan(rec.fields);
+                    const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                    const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+                    if (field_idx >= fields.len) return null;
+                    const field_expr_id = fields[field_idx];
+                    return self.evalConstantI64(field_expr_id, env);
+                }
+                return null;
+            },
+            .lookup => |lookup| {
+                // Lookup - check if it's bound to a record expression
+                if (env.lookupBinding(lookup.symbol)) |binding| {
+                    if (binding == .expr_ref) {
+                        const bound_expr = self.mono_store.getExpr(binding.expr_ref);
+                        if (bound_expr == .record) {
+                            const rec = bound_expr.record;
+                            const fields = self.mono_store.getExprSpan(rec.fields);
+                            const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                            const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+                            if (field_idx >= fields.len) return null;
+                            const field_expr_id = fields[field_idx];
+                            return self.evalConstantI64(field_expr_id, env);
+                        }
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+
+    /// Resolve a field access expression to the underlying record expression ID
+    fn resolveFieldAccessToRecord(self: *MonoExprCodeGen, fa: anytype, env: *MonoScope) ?MonoExprId {
+        const record_expr = self.mono_store.getExpr(fa.record_expr);
+
+        switch (record_expr) {
+            .record => |rec| {
+                // Get the field value from this record
+                const fields = self.mono_store.getExprSpan(rec.fields);
+                const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+                if (field_idx >= fields.len) return null;
+                return fields[field_idx];
+            },
+            .field_access => |inner_fa| {
+                // Recursively resolve nested field access
+                const inner_record_expr_id = self.resolveFieldAccessToRecord(inner_fa, env) orelse return null;
+                const inner_record = self.mono_store.getExpr(inner_record_expr_id);
+                if (inner_record == .record) {
+                    const rec = inner_record.record;
+                    const fields = self.mono_store.getExprSpan(rec.fields);
+                    const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                    const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+                    if (field_idx >= fields.len) return null;
+                    return fields[field_idx];
+                }
+                return null;
+            },
+            .lookup => |lookup| {
+                // Lookup - check if it's bound to a record expression
+                if (env.lookupBinding(lookup.symbol)) |binding| {
+                    if (binding == .expr_ref) {
+                        const bound_expr = self.mono_store.getExpr(binding.expr_ref);
+                        if (bound_expr == .record) {
+                            const rec = bound_expr.record;
+                            const fields = self.mono_store.getExprSpan(rec.fields);
+                            const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                            const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse return null;
+                            if (field_idx >= fields.len) return null;
+                            return fields[field_idx];
+                        }
+                    }
+                }
+                return null;
+            },
+            else => return null,
+        }
+    }
+
+    /// Evaluate if-then-else for i64 - used for compile-time conditional evaluation
+    fn evalIfThenElseI64(self: *MonoExprCodeGen, ite: anytype, env: *MonoScope) ?i64 {
+        const branches = self.mono_store.getIfBranches(ite.branches);
+
+        for (branches) |branch| {
+            const cond_val = self.evalConstantI64(branch.cond, env) orelse return null;
+            if (cond_val != 0) {
+                return self.evalConstantI64(branch.body, env);
+            }
+        }
+
+        return self.evalConstantI64(ite.final_else, env);
     }
 
     /// Generate code for binary operations
@@ -900,6 +1024,29 @@ pub const MonoExprCodeGen = struct {
                             return self.generateCodeForExpr(field_expr_id, actual_layout, env);
                         }
                     }
+                }
+                return error.UnsupportedExpression;
+            },
+            .field_access => |inner_fa| {
+                // Nested field access - first resolve the inner access to get the record
+                const inner_record_expr_id = self.resolveFieldAccessToRecord(inner_fa, env) orelse {
+                    return error.UnsupportedExpression;
+                };
+                const inner_record = self.mono_store.getExpr(inner_record_expr_id);
+                if (inner_record == .record) {
+                    const rec = inner_record.record;
+                    const fields = self.mono_store.getExprSpan(rec.fields);
+                    const field_names = self.mono_store.getFieldNameSpan(rec.field_names);
+
+                    const field_idx = self.findFieldIndexByName(field_names, fa.field_name) orelse {
+                        return error.UnsupportedExpression;
+                    };
+                    if (field_idx >= fields.len) {
+                        return error.UnsupportedExpression;
+                    }
+                    const field_expr_id = fields[field_idx];
+                    const actual_layout = self.inferExprLayout(field_expr_id, fa.field_layout);
+                    return self.generateCodeForExpr(field_expr_id, actual_layout, env);
                 }
                 return error.UnsupportedExpression;
             },
