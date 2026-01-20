@@ -22,6 +22,7 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
+const constant_eval = @import("constant_eval.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -405,10 +406,7 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // TODO: Use lowered_constants for compile-time evaluation
-        // For now, the mapping is available but not yet used.
-        // Future work will generate code for each constant and execute it.
-
+        // Lower main expression to Mono IR
         const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch |err| {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
@@ -425,8 +423,25 @@ pub const DevEvaluator = struct {
         );
         defer mono_codegen.deinit();
 
+        // Create scope for code generation
         var mono_env = mono_codegen.createScope();
         defer mono_env.deinit();
+
+        // Evaluate constants at compile time and bind their values to the scope
+        // This enables constant folding: lookups to constants will resolve to
+        // pre-computed values instead of re-evaluating at runtime.
+        if (lowered_constants) |lc| {
+            constant_eval.evaluateAndBindConstants(
+                self.allocator,
+                &mono_codegen,
+                lc,
+                all_module_envs,
+                &mono_env,
+            ) catch {
+                // Continue even if constant evaluation fails
+                // Constants will be evaluated at runtime as fallback
+            };
+        }
 
         const code = mono_codegen.generateCodeForExpr(mono_expr_id, result_layout, &mono_env) catch |err| {
             if (err == error.Crash or err == error.RuntimeError) {

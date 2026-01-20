@@ -19,6 +19,10 @@ const layout = @import("layout");
 const mono = @import("mono");
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
+// Architecture-specific instruction emission
+const x86_64 = @import("x86_64/mod.zig");
+const aarch64 = @import("aarch64/mod.zig");
+
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 

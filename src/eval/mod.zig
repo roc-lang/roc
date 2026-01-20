@@ -25,6 +25,8 @@ pub const BuiltinTypes = @import("builtins.zig").BuiltinTypes;
 const crash_context = @import("crash_context.zig");
 pub const CrashContext = crash_context.CrashContext;
 pub const CrashState = crash_context.CrashState;
+/// Compile-time constant evaluation
+pub const constant_eval = @import("constant_eval.zig");
 /// Compile-time expression evaluator for constant folding
 pub const ComptimeEvaluator = @import("comptime_evaluator.zig").ComptimeEvaluator;
 /// Interpreter for running CIR expressions
@@ -42,6 +44,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("BuiltinModules.zig"));
     std.testing.refAllDecls(@import("builtins.zig"));
     std.testing.refAllDecls(@import("crash_context.zig"));
+    std.testing.refAllDecls(@import("constant_eval.zig"));
     std.testing.refAllDecls(@import("comptime_evaluator.zig"));
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
