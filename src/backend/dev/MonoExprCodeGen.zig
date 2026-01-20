@@ -2169,6 +2169,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn compileProc(self: *Self, proc: MonoProc) Error!void {
             const code_start = self.codegen.currentOffset();
 
+            // Generate function prologue (save frame, allocate stack)
+            try self.emitPrologue();
+
             // Set up recursive context
             const old_recursive_symbol = self.current_recursive_symbol;
             const old_recursive_join_point = self.current_recursive_join_point;
@@ -2185,6 +2188,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             try self.bindProcParams(proc.args, proc.arg_layouts);
 
             // Generate the body (control flow statements)
+            // Note: .ret statements in the body will emit epilogue+ret
             try self.generateStmt(proc.body);
 
             // Restore recursive context
@@ -2200,6 +2204,44 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .code_end = code_end,
                 .name = proc.name,
             });
+        }
+
+        /// Emit function prologue (architecture-specific).
+        /// Sets up the stack frame for the function.
+        fn emitPrologue(self: *Self) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // AArch64 prologue:
+                // stp x29, x30, [sp, #-16]!  ; Save frame pointer and link register
+                // mov x29, sp                 ; Set up new frame pointer
+                try self.codegen.emit.stpPreIndex(.x64, .X29, .X30, .SP, -16);
+                try self.codegen.emit.movRegReg(.x64, .X29, .SP);
+            } else {
+                // x86_64 prologue:
+                // push rbp                    ; Save frame pointer
+                // mov rbp, rsp                ; Set up new frame pointer
+                try self.codegen.emit.push(.RBP);
+                try self.codegen.emit.movRegReg(.x64, .RBP, .RSP);
+            }
+        }
+
+        /// Emit function epilogue (architecture-specific).
+        /// Tears down the stack frame and returns.
+        fn emitEpilogue(self: *Self) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // AArch64 epilogue:
+                // ldp x29, x30, [sp], #16     ; Restore frame pointer and link register
+                // ret                          ; Return to caller
+                try self.codegen.emit.ldpPostIndex(.x64, .X29, .X30, .SP, 16);
+                try self.codegen.emit.ret();
+            } else {
+                // x86_64 epilogue:
+                // mov rsp, rbp                ; Restore stack pointer
+                // pop rbp                     ; Restore frame pointer
+                // ret                          ; Return to caller
+                try self.codegen.emit.movRegReg(.x64, .RSP, .RBP);
+                try self.codegen.emit.pop(.RBP);
+                try self.codegen.emit.retq();
+            }
         }
 
         /// Bind procedure parameters to argument registers
@@ -2298,8 +2340,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     if (value_reg != return_reg) {
                         try self.emitMovRegReg(return_reg, value_reg);
                     }
-                    // Emit return instruction
-                    try self.emitRet();
+                    // Emit epilogue (restores frame and returns)
+                    try self.emitEpilogue();
                 },
 
                 .expr_stmt => |e| {
