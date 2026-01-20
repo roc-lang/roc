@@ -50,6 +50,16 @@ const JoinPointId = ir.JoinPointId;
 const MonoIfBranch = ir.MonoIfBranch;
 const MonoStmt = ir.MonoStmt;
 
+// Control flow statement types (for tail recursion)
+const CFStmt = ir.CFStmt;
+const CFStmtId = ir.CFStmtId;
+const CFSwitchBranch = ir.CFSwitchBranch;
+const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
+const LayoutIdxSpan = ir.LayoutIdxSpan;
+const MonoProc = ir.MonoProc;
+
+const TailRecursion = @import("TailRecursion.zig");
+
 const ClosureTransformer = can.ClosureTransformer;
 
 const MonoExprStore = store_mod;
@@ -1821,6 +1831,250 @@ fn getTupleElemLayout(
     }
     // Fallback to a default layout
     return .i64;
+}
+
+// ============ Statement-Based Lowering (for tail recursion) ============
+
+/// Lower an expression to a control flow statement.
+/// This is used for function bodies where we need explicit control flow.
+///
+/// The key insight: every expression either:
+/// - Returns a value (becomes a `ret` statement)
+/// - Has subexpressions that might contain returns (recursively lowered)
+fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, ret_layout: LayoutIdx) Error!CFStmtId {
+    const expr = module_env.store.getExpr(expr_idx);
+    const region = module_env.store.getExprRegion(expr_idx);
+
+    return switch (expr) {
+        .e_block => |block| try self.lowerBlockToStmt(module_env, block, ret_layout),
+        .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
+        else => {
+            // For other expressions, wrap in a return statement
+            const expr_id = try self.lowerExprInner(module_env, expr, region);
+            return try self.store.addCFStmt(.{
+                .ret = .{ .value = expr_id },
+            });
+        },
+    };
+}
+
+/// Lower a block to a chain of let statements.
+/// The final expression is lowered to a statement (which might be ret, switch, etc.)
+fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: CIR.Expr.Block, ret_layout: LayoutIdx) Error!CFStmtId {
+    const stmt_slice = module_env.store.sliceStatements(block.stmts);
+
+    // First, lower the final expression to a statement
+    var current_stmt = try self.lowerExprToStmt(module_env, block.final_expr, ret_layout);
+
+    // Then prepend each statement (in reverse order to build the chain)
+    var i = stmt_slice.len;
+    while (i > 0) {
+        i -= 1;
+        const stmt_idx = stmt_slice[i];
+        const stmt = module_env.store.getStatement(stmt_idx);
+
+        switch (stmt) {
+            .s_decl => |decl| {
+                const pattern_id = try self.lowerPattern(module_env, decl.pattern);
+                // Set binding pattern for recursive closure detection
+                const old_binding = self.current_binding_pattern;
+                self.current_binding_pattern = decl.pattern;
+                const value_id = try self.lowerExprFromIdx(module_env, decl.expr);
+                self.current_binding_pattern = old_binding;
+
+                current_stmt = try self.store.addCFStmt(.{
+                    .let_stmt = .{
+                        .pattern = pattern_id,
+                        .value = value_id,
+                        .next = current_stmt,
+                    },
+                });
+            },
+            .s_decl_gen => |decl| {
+                const pattern_id = try self.lowerPattern(module_env, decl.pattern);
+                const old_binding = self.current_binding_pattern;
+                self.current_binding_pattern = decl.pattern;
+                const value_id = try self.lowerExprFromIdx(module_env, decl.expr);
+                self.current_binding_pattern = old_binding;
+
+                current_stmt = try self.store.addCFStmt(.{
+                    .let_stmt = .{
+                        .pattern = pattern_id,
+                        .value = value_id,
+                        .next = current_stmt,
+                    },
+                });
+            },
+            else => {}, // Skip other statement types for now
+        }
+    }
+
+    return current_stmt;
+}
+
+/// Lower if-then-else to a switch statement.
+/// This makes branch structure explicit for tail call analysis.
+fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: CIR.Expr.If, ret_layout: LayoutIdx) Error!CFStmtId {
+    const branch_indices = module_env.store.sliceIfBranches(ite.branches);
+
+    // For a simple if-then-else with one condition:
+    // if cond then thenBranch else elseBranch
+    // becomes:
+    // switch cond { 1 => thenStmt, default => elseStmt }
+
+    if (branch_indices.len == 1) {
+        const branch = module_env.store.getIfBranch(branch_indices[0]);
+
+        // Lower condition
+        const cond_id = try self.lowerExprFromIdx(module_env, branch.cond);
+
+        // Lower branches as statements (so tail calls become jumps)
+        const then_stmt = try self.lowerExprToStmt(module_env, branch.body, ret_layout);
+        const else_stmt = try self.lowerExprToStmt(module_env, ite.final_else, ret_layout);
+
+        // Create switch with true branch (value 1)
+        const branches = try self.store.addCFSwitchBranches(&[_]CFSwitchBranch{
+            .{ .value = 1, .body = then_stmt }, // true = 1
+        });
+
+        return try self.store.addCFStmt(.{
+            .switch_stmt = .{
+                .cond = cond_id,
+                .cond_layout = .bool,
+                .branches = branches,
+                .default_branch = else_stmt, // false = default
+                .ret_layout = ret_layout,
+            },
+        });
+    }
+
+    // For multiple conditions (elif chains), build nested switches
+    // We process from last to first, building up the else chain
+    var else_stmt = try self.lowerExprToStmt(module_env, ite.final_else, ret_layout);
+
+    var i = branch_indices.len;
+    while (i > 0) {
+        i -= 1;
+        const branch = module_env.store.getIfBranch(branch_indices[i]);
+
+        const cond_id = try self.lowerExprFromIdx(module_env, branch.cond);
+        const then_stmt = try self.lowerExprToStmt(module_env, branch.body, ret_layout);
+
+        const branches = try self.store.addCFSwitchBranches(&[_]CFSwitchBranch{
+            .{ .value = 1, .body = then_stmt },
+        });
+
+        else_stmt = try self.store.addCFStmt(.{
+            .switch_stmt = .{
+                .cond = cond_id,
+                .cond_layout = .bool,
+                .branches = branches,
+                .default_branch = else_stmt,
+                .ret_layout = ret_layout,
+            },
+        });
+    }
+
+    return else_stmt;
+}
+
+/// Lower a closure to a complete procedure (MonoProc).
+/// This creates a procedure that can be compiled as a complete unit.
+///
+/// The procedure includes:
+/// - Parameter patterns and their layouts
+/// - Body lowered to control flow statements
+/// - Tail recursion transformation if applicable
+fn lowerClosureToProc(
+    self: *Self,
+    module_env: *ModuleEnv,
+    closure: CIR.Expr.Closure,
+    binding_symbol: MonoSymbol,
+) Error!MonoProc {
+    // Get the lambda from the closure
+    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+    const lambda = switch (lambda_expr) {
+        .e_lambda => |l| l,
+        else => return error.InvalidExpression,
+    };
+
+    // Lower parameters first, then extract their layouts
+    const params = try self.lowerPatternSpan(module_env, lambda.args);
+    const param_layouts = try self.extractParamLayouts(params);
+    const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
+
+    // Detect if this closure is recursive
+    const is_recursive = self.exprContainsPatternRef(module_env, lambda.body, self.current_binding_pattern orelse return error.InvalidExpression);
+
+    // Generate a join point ID if recursive
+    const join_point_id: JoinPointId = if (is_recursive) blk: {
+        const id: JoinPointId = @enumFromInt(self.next_join_point_id);
+        self.next_join_point_id += 1;
+        break :blk id;
+    } else JoinPointId.none;
+
+    // Lower body to statements
+    var body_stmt = try self.lowerExprToStmt(module_env, lambda.body, ret_layout);
+
+    // Apply tail recursion transformation if recursive
+    if (is_recursive and !join_point_id.isNone()) {
+        if (try TailRecursion.makeTailRecursive(
+            self.store,
+            binding_symbol,
+            join_point_id,
+            body_stmt,
+            params,
+            param_layouts,
+            self.allocator,
+        )) |transformed| {
+            body_stmt = transformed;
+        }
+    }
+
+    return MonoProc{
+        .name = binding_symbol,
+        .args = params,
+        .arg_layouts = param_layouts,
+        .body = body_stmt,
+        .ret_layout = ret_layout,
+        .closure_data_layout = null, // TODO: compute from captures
+        .is_self_recursive = if (is_recursive)
+            .{ .self_recursive = join_point_id }
+        else
+            .not_self_recursive,
+    };
+}
+
+/// Extract layouts from already-lowered parameter patterns.
+/// Returns an error if a pattern type doesn't carry layout information.
+fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan {
+    const pattern_ids = self.store.getPatternSpan(params);
+    if (pattern_ids.len == 0) return LayoutIdxSpan.empty();
+
+    var layouts = std.ArrayList(LayoutIdx).empty;
+    defer layouts.deinit(self.allocator);
+
+    for (pattern_ids) |pattern_id| {
+        const pattern = self.store.getPattern(pattern_id);
+        const layout_idx: LayoutIdx = switch (pattern) {
+            .bind => |b| b.layout_idx,
+            .int_literal => |i| i.layout_idx,
+            .float_literal => |f| f.layout_idx,
+            .record => |r| r.record_layout,
+            .tuple => |t| t.tuple_layout,
+            .tag => |t| t.union_layout,
+            .as_pattern => |a| a.layout_idx,
+            .list => |l| l.elem_layout,
+            .str_literal => .str, // String literals have string layout
+            // Wildcard patterns don't carry layout information in MonoPattern.
+            // This is a design gap - wildcard should have a layout field.
+            // For now, surface this as an error rather than silently defaulting.
+            .wildcard => return error.InvalidExpression,
+        };
+        try layouts.append(self.allocator, layout_idx);
+    }
+
+    return self.store.addLayoutIdxSpan(layouts.items);
 }
 
 // ============ Public API ============
