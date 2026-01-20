@@ -388,6 +388,30 @@ const Unifier = struct {
         return var_;
     }
 
+    /// Check if we're already unifying this pair of descriptors (recursion guard).
+    /// This prevents infinite recursion on self-referential types.
+    /// We check pairs because unifying (A, B) shouldn't block unifying (A, C).
+    fn isPairVisited(self: *Self, a_var: Var, b_var: Var) bool {
+        const a_resolved = self.types_store.resolveVar(a_var);
+        const b_resolved = self.types_store.resolveVar(b_var);
+
+        // Visited vars are stored as pairs: [a1, b1, a2, b2, ...]
+        const items = self.scratch.visited_vars.items.items;
+        var i: usize = 0;
+        while (i + 1 < items.len) : (i += 2) {
+            const visited_a = self.types_store.resolveVar(items[i]);
+            const visited_b = self.types_store.resolveVar(items[i + 1]);
+
+            // Check both orderings since unify(A,B) is symmetric with unify(B,A)
+            if ((a_resolved.desc_idx == visited_a.desc_idx and b_resolved.desc_idx == visited_b.desc_idx) or
+                (a_resolved.desc_idx == visited_b.desc_idx and b_resolved.desc_idx == visited_a.desc_idx))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // unification
 
     const Error = error{
@@ -414,6 +438,17 @@ const Unifier = struct {
                 return;
             },
             .not_equiv => |vars| {
+                // Check if we're already unifying this pair (recursion guard).
+                // This prevents infinite recursion on self-referential types.
+                if (self.isPairVisited(a_var, b_var)) {
+                    return;
+                }
+
+                // Track these vars as being unified
+                _ = self.scratch.visited_vars.append(self.scratch.gpa, a_var) catch return Error.AllocatorError;
+                _ = self.scratch.visited_vars.append(self.scratch.gpa, b_var) catch return Error.AllocatorError;
+                defer self.scratch.visited_vars.items.items.len -= 2;
+
                 try self.unifyVars(&vars);
             },
         }
@@ -959,7 +994,7 @@ const Unifier = struct {
                         }
                     },
                     .tag_union => |b_tag_union| {
-                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union, true);
+                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
                     },
                     .nominal_type => |b_type| {
                         // If this nominal is opaque and we're not in the origin module, error
@@ -1035,14 +1070,15 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Early merge so self-referential types don't infinitely recurse
-        self.merge(vars, vars.b.desc.content);
-
+        // Unify element types first (recursion guard in unifyGuarded prevents infinite loops)
         const a_elems = self.types_store.sliceVars(a_tuple.elems);
         const b_elems = self.types_store.sliceVars(b_tuple.elems);
         for (a_elems, b_elems) |a_elem, b_elem| {
             try self.unifyGuarded(a_elem, b_elem);
         }
+
+        // Merge after all checks pass
+        self.merge(vars, vars.b.desc.content);
     }
 
     // Unify nominal type //
@@ -1077,22 +1113,16 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Early merge so self-referential types don't infinitely recurse.
-        // This is critical for recursive nominal types like:
-        //   Node(a) := [One(a), Many(List(Node(a)))]
-        // Without early merge, unifying the type arguments can trigger
-        // unification of the backing types, which recursively unifies
-        // the nominal type with itself, creating infinite recursion.
-        self.merge(vars, vars.b.desc.content);
-
-        // Unify each pair of arguments using iterators
+        // Unify each pair of arguments first (recursion guard in unifyGuarded prevents infinite loops)
         const a_slice = self.types_store.sliceNominalArgs(a_type);
         const b_slice = self.types_store.sliceNominalArgs(b_type);
         for (a_slice, b_slice) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
 
+        // Merge after all checks pass
         // Note that we *do not* unify backing variable
+        self.merge(vars, vars.b.desc.content);
     }
 
     fn unifyTagUnionWithNominal(
@@ -1178,8 +1208,7 @@ const Unifier = struct {
         }
 
         // Now safe to proceed with full unification.
-        // Don't do early merge here - preserve types for error messages if payload unification fails.
-        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union, false);
+        try self.unifyTwoTagUnions(vars, anon_tag_union, nominal_backing_tag_union);
 
         // If we get here, unification succeeded!
         // Merge to the NOMINAL type (not the tag union)
@@ -1847,7 +1876,6 @@ const Unifier = struct {
         vars: *const ResolvedVarDescs,
         a_tag_union: TagUnion,
         b_tag_union: TagUnion,
-        comptime do_early_merge: bool,
     ) Error!void {
         const trace = tracy.trace(@src());
         defer trace.end();
@@ -1901,14 +1929,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        // Early merge so self-referential types don't infinitely recurse.
-        // Only do this when the caller expects it (e.g., general tag union unification).
-        // Don't do this when called from nominal type checking, to preserve type info for errors.
-        if (do_early_merge) {
-            self.merge(vars, vars.b.desc.content);
-        }
-
-        // Unify tags
+        // Unify tags (recursion guard in unifyGuarded prevents infinite loops,
+        // and unifySharedTags handles the final merge)
         switch (tags_ext) {
             .exactly_the_same => {
                 // Unify exts
@@ -2528,6 +2550,9 @@ pub const Scratch = struct {
     // err
     err: ?UnifyErrCtx,
 
+    // Vars currently being unified (recursion guard for self-referential types)
+    visited_vars: VarSafeList,
+
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         // Initial capacities are conservative estimates. Lists grow dynamically as needed.
@@ -2552,6 +2577,7 @@ pub const Scratch = struct {
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .err = null,
+            .visited_vars = try VarSafeList.initCapacity(gpa, 16),
         };
     }
 
@@ -2571,6 +2597,7 @@ pub const Scratch = struct {
         self.only_in_b_static_dispatch_constraints.deinit(self.gpa);
         self.in_both_static_dispatch_constraints.deinit(self.gpa);
         self.occurs_scratch.deinit();
+        self.visited_vars.deinit(self.gpa);
     }
 
     /// Reset the scratch arrays, retaining the allocated memory
@@ -2590,6 +2617,7 @@ pub const Scratch = struct {
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.err = null;
+        self.visited_vars.items.clearRetainingCapacity();
     }
 
     // helpers //
