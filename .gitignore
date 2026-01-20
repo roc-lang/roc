@@ -149,3 +149,5 @@ src/snapshots/**/*.html
 
 *.bak
 kcov-output/
+
+.direnv
