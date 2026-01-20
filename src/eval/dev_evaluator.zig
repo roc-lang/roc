@@ -321,19 +321,59 @@ pub const DevEvaluator = struct {
 
     /// Generate code for a CIR expression
     ///
-    /// NOTE: Native code generation is not currently implemented.
-    /// This function exists to maintain the API but always returns an error.
+    /// This lowers CIR to Mono IR and then generates native machine code.
     pub fn generateCode(
         self: *DevEvaluator,
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
-        _ = self;
-        _ = module_env;
-        _ = expr_idx;
-        _ = all_module_envs;
-        return error.UnsupportedExpression;
+        // Create a Mono IR store for lowered expressions
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
+
+        // Find the module index for this module
+        var module_idx: u16 = 0;
+        for (all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                module_idx = @intCast(i);
+                break;
+            }
+        }
+
+        // Create the lowerer
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, null);
+        defer lowerer.deinit();
+
+        // Lower the CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.UnsupportedExpression;
+        };
+
+        // Determine the result layout
+        var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
+        defer type_env.deinit();
+        const cir_expr = module_env.store.getExpr(expr_idx);
+        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+
+        // Create the code generator
+        var codegen = backend.MonoExprCodeGen.init(
+            self.allocator,
+            &mono_store,
+            &self.static_interner,
+        );
+        defer codegen.deinit();
+
+        // Generate code for the expression
+        const gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
+            return error.UnsupportedExpression;
+        };
+
+        return CodeResult{
+            .code = gen_result.code,
+            .allocator = self.allocator,
+            .result_layout = result_layout,
+        };
     }
 
     /// Generate native code from source code string (full pipeline)

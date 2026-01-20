@@ -40,6 +40,9 @@ pub const JitCode = ExecutableMemory;
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
 
+/// Mono IR code generator for x86_64
+pub const MonoExprCodeGen = @import("MonoExprCodeGen.zig").MonoExprCodeGen;
+
 /// Generic development backend parameterized by architecture-specific types.
 ///
 /// This struct provides the common code generation logic shared across
