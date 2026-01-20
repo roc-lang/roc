@@ -2738,14 +2738,19 @@ pub const SyntaxChecker = struct {
             pos -= 1;
         }
 
-        // Check what's immediately before
+        // Skip whitespace to find the actual context character
+        while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t')) {
+            pos -= 1;
+        }
+
+        // Check what's immediately before (after skipping whitespace)
         if (pos > 0) {
             const prev_char = source[pos - 1];
 
             if (prev_char == '.') {
                 // After a dot - could be module access
                 // Look for module name before the dot
-                var module_end = pos - 1;
+                const module_end = pos - 1;
                 var module_start = module_end;
 
                 while (module_start > 0 and (std.ascii.isAlphanumeric(source[module_start - 1]) or source[module_start - 1] == '_')) {
@@ -2769,6 +2774,7 @@ pub const SyntaxChecker = struct {
 
     /// Get completion suggestions at a specific position in a document.
     /// Returns completions from the current module's exposed items and imports.
+    /// If the build fails, still provides basic completions (builtin modules, types).
     pub fn getCompletionsAtPosition(
         self: *SyntaxChecker,
         uri: []const u8,
@@ -2809,33 +2815,22 @@ pub const SyntaxChecker = struct {
         std.process.changeCurDir(dir_owned) catch {};
 
         self.logDebug(.build, "completion: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "completion: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
-            return null;
+        const build_succeeded = blk: {
+            env.build(absolute_path) catch |err| {
+                self.logDebug(.build, "completion: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+                break :blk false;
+            };
+            break :blk true;
         };
 
-        // Drain reports but ignore them for completion
-        const drained = env.drainReports() catch return null;
-        defer self.freeDrainedWithReports(drained);
-
-        // Get the module environment
-        const app_sched = env.schedulers.get("app") orelse blk: {
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.env != null) {
-                        break :blk sched;
-                    }
-                }
-            }
-            return null;
-        };
-        const root_module = app_sched.getRootModule() orelse return null;
-        const module_env = if (root_module.env) |*e| e else return null;
+        // Drain reports even on failure to avoid leaks
+        if (build_succeeded) {
+            const drained = env.drainReports() catch return null;
+            self.freeDrainedWithReports(drained);
+        }
 
         // Detect completion context from source
-        const source = override_text orelse module_env.common.source;
+        const source = override_text orelse "";
         const context = detectCompletionContext(source, line, character);
 
         // Collect completions based on context
@@ -2847,6 +2842,24 @@ pub const SyntaxChecker = struct {
             items.deinit(self.allocator);
         }
 
+        // Try to get the module environment for richer completions
+        const module_env_opt: ?*ModuleEnv = if (build_succeeded) blk: {
+            const app_sched = env.schedulers.get("app") orelse inner: {
+                var sched_it = env.schedulers.iterator();
+                while (sched_it.next()) |entry| {
+                    const sched = entry.value_ptr.*;
+                    if (sched.getRootModule()) |rm| {
+                        if (rm.env != null) {
+                            break :inner sched;
+                        }
+                    }
+                }
+                break :blk null;
+            };
+            const root_module = app_sched.getRootModule() orelse break :blk null;
+            break :blk if (root_module.env) |*e| e else null;
+        } else null;
+
         switch (context) {
             .after_module_dot => |module_name| {
                 // Get completions from the specified module
@@ -2854,12 +2867,22 @@ pub const SyntaxChecker = struct {
             },
             .after_colon => {
                 // Type annotation context - add type names
-                try self.addTypeCompletions(&items, module_env);
+                if (module_env_opt) |module_env| {
+                    try self.addTypeCompletions(&items, module_env);
+                } else {
+                    // Fallback: just add builtin types
+                    try self.addBuiltinTypeCompletions(&items);
+                }
             },
             .expression => {
                 // General expression context - add local definitions + module names
-                try self.addLocalCompletions(&items, module_env);
-                try self.addModuleNameCompletions(&items, module_env);
+                if (module_env_opt) |module_env| {
+                    try self.addLocalCompletions(&items, module_env);
+                    try self.addModuleNameCompletions(&items, module_env);
+                } else {
+                    // Fallback: just add builtin module names
+                    try self.addBuiltinModuleNameCompletions(&items);
+                }
             },
         }
 
@@ -2867,6 +2890,35 @@ pub const SyntaxChecker = struct {
             .items = try items.toOwnedSlice(self.allocator),
             .is_incomplete = false,
         };
+    }
+
+    /// Add just builtin type completions (fallback when build fails)
+    fn addBuiltinTypeCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem)) !void {
+        const builtin_types = [_][]const u8{
+            "Str",    "U8",  "U16",  "U32",  "U64",  "U128",
+            "I8",     "I16", "I32",  "I64",  "I128", "F32",
+            "F64",    "Dec", "Bool", "List", "Dict", "Set",
+            "Result", "Try",
+        };
+
+        for (builtin_types) |type_name| {
+            try items.append(self.allocator, .{
+                .label = type_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.class),
+                .detail = null,
+            });
+        }
+    }
+
+    /// Add just builtin module name completions (fallback when build fails)
+    fn addBuiltinModuleNameCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem)) !void {
+        for (BUILTIN_MODULES) |module_name| {
+            try items.append(self.allocator, .{
+                .label = module_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.module),
+                .detail = null,
+            });
+        }
     }
 
     /// Add completions for members of a specific module (e.g., Str.concat)
@@ -2955,9 +3007,10 @@ pub const SyntaxChecker = struct {
     fn addTypeCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv) !void {
         // Add builtin types
         const builtin_types = [_][]const u8{
-            "Str", "U8", "U16", "U32", "U64", "U128",
-            "I8", "I16", "I32", "I64", "I128",
-            "F32", "F64", "Dec", "Bool", "List", "Dict", "Set", "Result", "Try",
+            "Str",    "U8",  "U16",  "U32",  "U64",  "U128",
+            "I8",     "I16", "I32",  "I64",  "I128", "F32",
+            "F64",    "Dec", "Bool", "List", "Dict", "Set",
+            "Result", "Try",
         };
 
         for (builtin_types) |type_name| {
