@@ -243,7 +243,11 @@ pub const SyntaxChecker = struct {
     /// Returns null if no matching module is found.
     pub fn getModuleEnvByPath(self: *SyntaxChecker, path: []const u8) ?*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
+        return self.getModuleEnvByPathInEnv(env, path);
+    }
 
+    /// Look up a ModuleEnv by its file path from a specific BuildEnv.
+    fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
         // Iterate through all schedulers (packages)
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
@@ -2872,9 +2876,17 @@ pub const SyntaxChecker = struct {
             break :blk true;
         };
 
+        var build_has_reports = false;
+
         // Drain reports even on failure to avoid leaks
         if (build_succeeded) {
             const drained = env.drainReports() catch return null;
+            for (drained) |entry| {
+                if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
+                    build_has_reports = true;
+                    break;
+                }
+            }
             self.freeDrainedWithReports(drained);
         }
 
@@ -2895,7 +2907,21 @@ pub const SyntaxChecker = struct {
         }
 
         // Try to get the module environment for richer completions
-        const module_env_opt: ?*ModuleEnv = if (build_succeeded) blk: {
+        const module_env_opt: ?*ModuleEnv = blk: {
+            if (!build_succeeded or build_has_reports) {
+                if (self.previous_build_env) |previous_env| {
+                    const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, absolute_path);
+                    if (prev_module_env) |module_env| {
+                        break :blk module_env;
+                    }
+                }
+                break :blk null;
+            }
+
+            if (self.getModuleEnvByPath(absolute_path)) |module_env| {
+                break :blk module_env;
+            }
+
             const app_sched = env.schedulers.get("app") orelse inner: {
                 var sched_it = env.schedulers.iterator();
                 while (sched_it.next()) |entry| {
@@ -2910,7 +2936,7 @@ pub const SyntaxChecker = struct {
             };
             const root_module = app_sched.getRootModule() orelse break :blk null;
             break :blk if (root_module.env) |*e| e else null;
-        } else null;
+        };
 
         std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}", .{ context, module_env_opt != null, build_succeeded });
 
@@ -3235,11 +3261,31 @@ pub const SyntaxChecker = struct {
     ) !void {
         const type_store = &module_env.types;
 
-        // Resolve the type variable to get its content
-        const resolved = type_store.resolveVar(type_var);
-        const content = resolved.desc.content;
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
 
         std.debug.print("addFieldsFromTypeVar: type_var={}, content tag={s}", .{ type_var, @tagName(content) });
+
+        var steps: usize = 0;
+        while (true) : (steps += 1) {
+            if (steps > 8) break;
+
+            if (content.unwrapRecord()) |record| {
+                std.debug.print("addFieldsFromTypeVar: found record after resolve", .{});
+                try self.addFieldsFromRecord(items, module_env, record);
+                return;
+            }
+
+            switch (content) {
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
 
         // Try to get record fields, handling aliases that wrap records
         try self.addFieldsFromContent(items, module_env, content);
@@ -3390,6 +3436,16 @@ pub const SyntaxChecker = struct {
 
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
+
+            // Check if already in items (avoid duplicates)
+            var already_added = false;
+            for (items.items) |item| {
+                if (std.mem.eql(u8, item.label, name)) {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (already_added) continue;
 
             // Determine completion kind based on the expression type
             const expr = module_env.store.getExpr(def.expr);
@@ -3610,38 +3666,34 @@ pub const SyntaxChecker = struct {
     ) !void {
         const type_store = &module_env.types;
 
-        // Resolve the type variable to get its content
-        const resolved = type_store.resolveVar(type_var);
-        const content = resolved.desc.content;
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
 
-        // Try to extract the type identifier from the content
-        const type_ident_opt: ?base.Ident.Idx = switch (content) {
-            .alias => |alias| alias.ident.ident_idx,
-            .structure => |flat_type| switch (flat_type) {
-                .nominal_type => |nominal| nominal.ident.ident_idx,
+        var steps: usize = 0;
+        while (true) : (steps += 1) {
+            if (steps > 8) break;
+
+            const type_ident_opt: ?base.Ident.Idx = switch (content) {
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    else => null,
+                },
                 else => null,
-            },
-            else => null,
-        };
+            };
 
-        if (type_ident_opt) |type_ident| {
-            // Look up methods registered for this type in method_idents
-            try self.addMethodsForTypeIdent(items, module_env, type_ident);
-        }
+            if (type_ident_opt) |type_ident| {
+                try self.addMethodsForTypeIdent(items, module_env, type_ident);
+            }
 
-        // Also handle alias types by recursively checking the backing type
-        if (content == .alias) {
-            const alias = content.alias;
-            const backing_var = type_store.getAliasBackingVar(alias);
-            const backing_resolved = type_store.resolveVar(backing_var);
-
-            // Check if the backing type is a nominal type with methods
-            if (backing_resolved.desc.content == .structure) {
-                const flat_type = backing_resolved.desc.content.structure;
-                if (flat_type == .nominal_type) {
-                    const nominal = flat_type.nominal_type;
-                    try self.addMethodsForTypeIdent(items, module_env, nominal.ident.ident_idx);
-                }
+            switch (content) {
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
             }
         }
     }
