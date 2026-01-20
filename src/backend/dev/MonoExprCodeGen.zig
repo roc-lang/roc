@@ -42,6 +42,14 @@ const JoinPointId = mono.JoinPointId;
 const LambdaSetMember = mono.LambdaSetMember;
 const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
 
+// Control flow statement types (for two-pass compilation)
+const CFStmt = mono.CFStmt;
+const CFStmtId = mono.CFStmtId;
+const CFSwitchBranch = mono.CFSwitchBranch;
+const CFSwitchBranchSpan = mono.CFSwitchBranchSpan;
+const LayoutIdxSpan = mono.LayoutIdxSpan;
+const MonoProc = mono.MonoProc;
+
 const Allocator = std.mem.Allocator;
 
 /// Code generator for Mono IR expressions
@@ -90,6 +98,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Used to pass the bound symbol to emitLambdaFunction for recursion tracking.
         current_binding_symbol: ?MonoSymbol,
 
+        // ============ Two-Pass Compilation Fields ============
+
+        /// Registry of compiled procedures (symbol -> CompiledProc)
+        /// Used to find call targets during second pass
+        proc_registry: std.AutoHashMap(u48, CompiledProc),
+
+        /// Pending calls that need to be patched after all procedures are compiled
+        pending_calls: std.ArrayList(PendingCall),
+
+        /// Map from JoinPointId to list of jumps that target it (for patching)
+        join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
+
         /// Tracks a function that is currently being emitted.
         /// Used for Roc-style InProgress tracking to handle recursive functions.
         pub const InProgressFunction = struct {
@@ -110,6 +130,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             param_count: u16,
             /// Whether the function expects a capture struct pointer as first argument
             has_captures: bool,
+        };
+
+        /// Compiled procedure information for two-pass compilation.
+        /// After a procedure is fully compiled (including RET), it's registered here.
+        pub const CompiledProc = struct {
+            /// Offset into the code buffer where this procedure starts
+            code_start: usize,
+            /// Offset where this procedure ends
+            code_end: usize,
+            /// The symbol this procedure is bound to
+            name: MonoSymbol,
+        };
+
+        /// A pending call that needs to be patched after all procedures are compiled.
+        pub const PendingCall = struct {
+            /// Offset where the call instruction is (needs patching)
+            call_site: usize,
+            /// The function being called
+            target_symbol: MonoSymbol,
+        };
+
+        /// Record of a jump instruction that needs patching to a join point.
+        pub const JumpRecord = struct {
+            /// Offset of the jump instruction
+            location: usize,
         };
 
         /// Where a value is stored
@@ -165,6 +210,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .current_recursive_join_point = null,
                 .current_recursive_params = null,
                 .current_binding_symbol = null,
+                .proc_registry = std.AutoHashMap(u48, CompiledProc).init(allocator),
+                .pending_calls = std.ArrayList(PendingCall).empty,
+                .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
             };
         }
 
@@ -176,6 +224,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.join_points.deinit();
             self.emitted_functions.deinit();
             self.in_progress_functions.deinit();
+            self.proc_registry.deinit();
+            self.pending_calls.deinit(self.allocator);
+            // Clean up the nested ArrayLists in join_point_jumps
+            var it = self.join_point_jumps.valueIterator();
+            while (it.next()) |list| {
+                list.deinit(self.allocator);
+            }
+            self.join_point_jumps.deinit();
         }
 
         /// Reset the code generator for generating a new expression
@@ -190,6 +246,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.current_recursive_join_point = null;
             self.current_recursive_params = null;
             self.current_binding_symbol = null;
+            self.proc_registry.clearRetainingCapacity();
+            self.pending_calls.clearRetainingCapacity();
+            // Clear nested ArrayLists
+            var it = self.join_point_jumps.valueIterator();
+            while (it.next()) |list| {
+                list.clearRetainingCapacity();
+            }
+            self.join_point_jumps.clearRetainingCapacity();
         }
 
         /// Generate code for a Mono IR expression
@@ -2087,6 +2151,322 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.fstrRegMemUoff(.double, src_reg, ptr_reg, 0);
             } else {
                 try self.codegen.emit.movsdMemReg(ptr_reg, 0, src_reg);
+            }
+        }
+
+        // ============ Two-Pass Compilation (for proper recursion support) ============
+
+        /// Compile all procedures first, before generating any calls.
+        /// This ensures all call targets are known before we need to patch calls.
+        pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Error!void {
+            for (procs) |proc| {
+                try self.compileProc(proc);
+            }
+        }
+
+        /// Compile a single procedure as a complete unit.
+        /// Generates prologue, body, and epilogue (including RET).
+        fn compileProc(self: *Self, proc: MonoProc) Error!void {
+            const code_start = self.codegen.currentOffset();
+
+            // Set up recursive context
+            const old_recursive_symbol = self.current_recursive_symbol;
+            const old_recursive_join_point = self.current_recursive_join_point;
+
+            switch (proc.is_self_recursive) {
+                .self_recursive => |join_point_id| {
+                    self.current_recursive_symbol = proc.name;
+                    self.current_recursive_join_point = join_point_id;
+                },
+                .not_self_recursive => {},
+            }
+
+            // Bind parameters to argument registers
+            try self.bindProcParams(proc.args, proc.arg_layouts);
+
+            // Generate the body (control flow statements)
+            try self.generateStmt(proc.body);
+
+            // Restore recursive context
+            self.current_recursive_symbol = old_recursive_symbol;
+            self.current_recursive_join_point = old_recursive_join_point;
+
+            const code_end = self.codegen.currentOffset();
+
+            // Register this procedure
+            const key: u48 = @bitCast(proc.name);
+            try self.proc_registry.put(key, .{
+                .code_start = code_start,
+                .code_end = code_end,
+                .name = proc.name,
+            });
+        }
+
+        /// Bind procedure parameters to argument registers
+        fn bindProcParams(self: *Self, params: mono.MonoPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
+            const pattern_ids = self.store.getPatternSpan(params);
+            _ = param_layouts; // Layout info for proper ABI handling
+
+            for (pattern_ids, 0..) |pattern_id, i| {
+                const pattern = self.store.getPattern(pattern_id);
+                switch (pattern) {
+                    .bind => |bind| {
+                        const arg_reg = self.getArgumentRegister(@intCast(i));
+                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                    },
+                    else => {
+                        // Complex parameter patterns not yet supported
+                    },
+                }
+            }
+        }
+
+        /// Generate code for a control flow statement
+        fn generateStmt(self: *Self, stmt_id: CFStmtId) Error!void {
+            const stmt = self.store.getCFStmt(stmt_id);
+
+            switch (stmt) {
+                .let_stmt => |let_s| {
+                    // Evaluate the value
+                    const value_loc = try self.generateExpr(let_s.value);
+                    // Bind to pattern
+                    try self.bindPattern(let_s.pattern, value_loc);
+                    // Continue with next statement
+                    try self.generateStmt(let_s.next);
+                },
+
+                .join => |j| {
+                    // Set up storage for join point parameters (they'll be rebound on each jump)
+                    try self.setupJoinPointParams(j.id, j.params);
+
+                    // Initialize jump record list for this join point
+                    const jp_key = @intFromEnum(j.id);
+                    if (!self.join_point_jumps.contains(jp_key)) {
+                        try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).init(self.allocator));
+                    }
+
+                    // Generate REMAINDER first (code that eventually jumps TO the join point)
+                    try self.generateStmt(j.remainder);
+
+                    // Record where join point body starts (this is where jumps will target)
+                    const join_location = self.codegen.currentOffset();
+                    try self.join_points.put(jp_key, join_location);
+
+                    // Generate BODY (what happens when jumped to)
+                    try self.generateStmt(j.body);
+
+                    // Patch all jumps to this join point
+                    if (self.join_point_jumps.get(jp_key)) |jumps| {
+                        for (jumps.items) |jump_record| {
+                            self.codegen.patchJump(jump_record.location, join_location);
+                        }
+                    }
+                },
+
+                .jump => |jmp| {
+                    // Evaluate all arguments first (before rebinding, in case args reference params)
+                    const args = self.store.getExprSpan(jmp.args);
+                    var arg_locs: std.ArrayListUnmanaged(ValueLocation) = .empty;
+                    defer arg_locs.deinit(self.allocator);
+
+                    for (args) |arg_id| {
+                        const loc = try self.generateExpr(arg_id);
+                        try arg_locs.append(self.allocator, loc);
+                    }
+
+                    // Rebind join point parameters to new argument values
+                    try self.rebindJoinPointParams(jmp.target, arg_locs.items);
+
+                    // Emit jump instruction with placeholder offset
+                    const jump_location = self.codegen.currentOffset();
+                    try self.emitJumpPlaceholder();
+
+                    // Record for patching
+                    const jp_key = @intFromEnum(jmp.target);
+                    if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
+                        try jumps.append(.{ .location = jump_location });
+                    }
+                },
+
+                .ret => |r| {
+                    // Evaluate the return value
+                    const value_loc = try self.generateExpr(r.value);
+                    // Move to return register
+                    const return_reg = self.getReturnRegister();
+                    const value_reg = try self.ensureInGeneralReg(value_loc);
+                    if (value_reg != return_reg) {
+                        try self.emitMovRegReg(return_reg, value_reg);
+                    }
+                    // Emit return instruction
+                    try self.emitRet();
+                },
+
+                .expr_stmt => |e| {
+                    // Evaluate expression for side effects
+                    _ = try self.generateExpr(e.value);
+                    // Continue with next
+                    try self.generateStmt(e.next);
+                },
+
+                .switch_stmt => |sw| {
+                    try self.generateSwitchStmt(sw);
+                },
+            }
+        }
+
+        /// Set up storage locations for join point parameters
+        fn setupJoinPointParams(self: *Self, join_id: JoinPointId, params: mono.MonoPatternSpan) Error!void {
+            _ = join_id;
+            const pattern_ids = self.store.getPatternSpan(params);
+
+            // For each parameter, allocate a register or stack slot
+            for (pattern_ids, 0..) |pattern_id, i| {
+                const pattern = self.store.getPattern(pattern_id);
+                switch (pattern) {
+                    .bind => |bind| {
+                        // Use argument registers for parameters
+                        const reg = self.getArgumentRegister(@intCast(i));
+                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        try self.symbol_locations.put(symbol_key, .{ .general_reg = reg });
+                    },
+                    else => {},
+                }
+            }
+        }
+
+        /// Rebind join point parameters to new argument values (for jump)
+        fn rebindJoinPointParams(self: *Self, join_id: JoinPointId, arg_locs: []const ValueLocation) Error!void {
+            _ = join_id;
+            // Move argument values to their parameter registers
+            // This needs to be done carefully to avoid clobbering values we still need
+            // For now, simple sequential assignment (works when args don't alias params)
+            for (arg_locs, 0..) |loc, i| {
+                const dst_reg = self.getArgumentRegister(@intCast(i));
+                const src_reg = try self.ensureInGeneralReg(loc);
+                if (src_reg != dst_reg) {
+                    try self.emitMovRegReg(dst_reg, src_reg);
+                }
+            }
+        }
+
+        /// Emit a jump placeholder (will be patched later)
+        fn emitJumpPlaceholder(self: *Self) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // B instruction with offset 0 (will be patched)
+                try self.codegen.emit.b(0);
+            } else {
+                // JMP rel32 with offset 0 (will be patched)
+                try self.codegen.emit.jmp(0);
+            }
+        }
+
+        /// Generate code for a switch statement
+        fn generateSwitchStmt(self: *Self, sw: anytype) Error!void {
+            // Evaluate condition
+            const cond_loc = try self.generateExpr(sw.cond);
+            const cond_reg = try self.ensureInGeneralReg(cond_loc);
+
+            const branches = self.store.getCFSwitchBranches(sw.branches);
+
+            // For single branch (bool switch): compare and branch
+            if (branches.len == 1) {
+                const branch = branches[0];
+
+                // Compare with branch value and jump if NOT equal (to default)
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, cond_reg, @intCast(branch.value));
+                } else {
+                    try self.codegen.emit.cmpRegImm32(.w64, cond_reg, @intCast(branch.value));
+                }
+
+                // Jump to default if not equal
+                const else_patch = try self.emitJumpIfNotEqual();
+
+                self.codegen.freeGeneral(cond_reg);
+
+                // Generate branch body (recursively generates statements)
+                try self.generateStmt(branch.body);
+
+                // Patch else jump to here
+                const else_offset = self.codegen.currentOffset();
+                self.codegen.patchJump(else_patch, else_offset);
+
+                // Generate default branch
+                try self.generateStmt(sw.default_branch);
+            } else {
+                // Multiple branches - generate cascading comparisons
+                var end_patches = std.ArrayList(usize).empty;
+                defer end_patches.deinit(self.allocator);
+
+                for (branches, 0..) |branch, i| {
+                    if (i < branches.len - 1) {
+                        // Compare and skip if not match
+                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
+                        const skip_patch = try self.emitJumpIfNotEqual();
+
+                        // Generate branch body
+                        try self.generateStmt(branch.body);
+
+                        // Jump to end
+                        const end_patch = try self.codegen.emitJump();
+                        try end_patches.append(self.allocator, end_patch);
+
+                        // Patch skip
+                        const skip_offset = self.codegen.currentOffset();
+                        self.codegen.patchJump(skip_patch, skip_offset);
+                    } else {
+                        // Last branch before default
+                        try self.emitCmpImm(cond_reg, @intCast(branch.value));
+                        const skip_patch = try self.emitJumpIfNotEqual();
+
+                        try self.generateStmt(branch.body);
+
+                        const end_patch = try self.codegen.emitJump();
+                        try end_patches.append(self.allocator, end_patch);
+
+                        self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+                    }
+                }
+
+                self.codegen.freeGeneral(cond_reg);
+
+                // Generate default branch
+                try self.generateStmt(sw.default_branch);
+
+                // Patch all end jumps
+                const end_offset = self.codegen.currentOffset();
+                for (end_patches.items) |patch| {
+                    self.codegen.patchJump(patch, end_offset);
+                }
+            }
+        }
+
+        /// Patch all pending calls after all procedures are compiled
+        pub fn patchPendingCalls(self: *Self) Error!void {
+            for (self.pending_calls.items) |pending| {
+                const key: u48 = @bitCast(pending.target_symbol);
+                const proc = self.proc_registry.get(key) orelse {
+                    return Error.LocalNotFound; // Function not found
+                };
+                self.patchCallTarget(pending.call_site, proc.code_start);
+            }
+        }
+
+        /// Patch a call instruction to target a specific offset
+        fn patchCallTarget(self: *Self, call_site: usize, target_offset: usize) void {
+            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(call_site)));
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // BL instruction: patch the immediate offset
+                // BL uses 26-bit signed offset in instructions (multiply by 4)
+                const instr_offset = @divTrunc(rel_offset, 4);
+                self.codegen.patchBL(call_site, instr_offset);
+            } else {
+                // CALL rel32: patch the 32-bit relative offset
+                // Offset is relative to instruction after CALL (call_site + 5)
+                const call_rel = rel_offset - 5;
+                self.codegen.patchCall(call_site, call_rel);
             }
         }
     };
