@@ -53,6 +53,8 @@ pub const MonoCapture = MonoIR.MonoCapture;
 pub const Recursive = MonoIR.Recursive;
 pub const SelfRecursive = MonoIR.SelfRecursive;
 pub const JoinPointId = MonoIR.JoinPointId;
+pub const LambdaSetMember = MonoIR.LambdaSetMember;
+pub const LambdaSetMemberSpan = MonoIR.LambdaSetMemberSpan;
 
 test "mono tests" {
     std.testing.refAllDecls(@This());

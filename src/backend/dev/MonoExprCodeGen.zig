@@ -39,6 +39,8 @@ const MonoCapture = mono.MonoCapture;
 const Recursive = mono.Recursive;
 const SelfRecursive = mono.SelfRecursive;
 const JoinPointId = mono.JoinPointId;
+const LambdaSetMember = mono.LambdaSetMember;
+const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
 
 const Allocator = std.mem.Allocator;
 
@@ -820,8 +822,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             ret_layout: layout.Idx,
             symbol: MonoSymbol,
         ) Error!ValueLocation {
-            // Bind the captured values based on representation (same as generateClosureCall)
+            // Check for lambda set dispatch (enum_dispatch or union_repr)
             switch (closure.representation) {
+                .enum_dispatch => |repr| {
+                    // Multiple functions with no captures - generate switch dispatch
+                    return try self.generateEnumDispatchCall(repr.lambda_set, symbol, args_span, ret_layout);
+                },
+                .union_repr => |repr| {
+                    // Multiple functions with captures - generate switch dispatch with captures
+                    return try self.generateUnionReprCall(repr.lambda_set, symbol, args_span, ret_layout);
+                },
                 .direct_call => {},
                 .unwrapped_capture => {
                     const captures = self.store.getCaptures(closure.captures);
@@ -848,18 +858,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     }
                 },
-                .enum_dispatch, .union_repr => {
-                    const captures = self.store.getCaptures(closure.captures);
-                    for (captures) |cap| {
-                        const sym_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(sym_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(sym_key, loc);
-                            }
-                        }
-                    }
-                },
             }
 
             // Get the lambda from the closure and call it with symbol tracking
@@ -875,6 +873,196 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 ),
                 else => return Error.UnsupportedExpression,
             };
+        }
+
+        /// Generate code for enum dispatch call (multiple non-capturing functions)
+        /// Generates a switch on the runtime tag value to call the correct lambda.
+        fn generateEnumDispatchCall(
+            self: *Self,
+            lambda_set: mono.LambdaSetMemberSpan,
+            symbol: MonoSymbol,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            const members = self.store.getLambdaSetMembers(lambda_set);
+            if (members.len == 0) {
+                return Error.UnsupportedExpression;
+            }
+
+            // Get the runtime tag value from the symbol's location
+            const symbol_key: u48 = @bitCast(symbol);
+            const tag_loc = self.symbol_locations.get(symbol_key) orelse return Error.LocalNotFound;
+
+            // For 2 functions, use a simple conditional branch (Bool dispatch)
+            if (members.len == 2) {
+                return try self.generateBoolDispatchCall(members, tag_loc, args_span, ret_layout);
+            }
+
+            // For 3+ functions, generate a switch (U8 dispatch)
+            return try self.generateU8DispatchCall(members, tag_loc, args_span, ret_layout);
+        }
+
+        /// Generate code for union_repr call (multiple functions with captures)
+        fn generateUnionReprCall(
+            self: *Self,
+            lambda_set: mono.LambdaSetMemberSpan,
+            symbol: MonoSymbol,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            // For now, use the same dispatch as enum_dispatch
+            // TODO: Handle capture extraction from the union payload
+            return try self.generateEnumDispatchCall(lambda_set, symbol, args_span, ret_layout);
+        }
+
+        /// Generate Bool dispatch (2 functions in lambda set)
+        fn generateBoolDispatchCall(
+            self: *Self,
+            members: []const mono.LambdaSetMember,
+            tag_loc: ValueLocation,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            _ = ret_layout;
+
+            // Allocate result register
+            const result_reg = try self.codegen.allocGeneralFor(0);
+
+            // Get tag into a register
+            const tag_reg = try self.ensureInGeneralReg(tag_loc);
+
+            // Compare tag with zero and branch
+            const else_patch = try self.emitCmpZeroAndJump(tag_reg);
+            self.codegen.freeGeneral(tag_reg);
+
+            // Tag == 0: Call first lambda (members[0])
+            const first_member = members[0];
+            const first_lambda_expr = self.store.getExpr(first_member.lambda_body);
+            if (first_lambda_expr == .lambda) {
+                const result0 = try self.generateLambdaCall(first_lambda_expr.lambda, args_span, .i64);
+                const result0_reg = try self.ensureInGeneralReg(result0);
+                try self.emitMovRegReg(result_reg, result0_reg);
+                self.codegen.freeGeneral(result0_reg);
+            }
+
+            // Jump to end
+            const end_patch = try self.codegen.emitJump();
+
+            // Patch else jump
+            const else_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(else_patch, else_offset);
+
+            // Tag != 0: Call second lambda (members[1])
+            if (members.len > 1) {
+                const second_member = members[1];
+                const second_lambda_expr = self.store.getExpr(second_member.lambda_body);
+                if (second_lambda_expr == .lambda) {
+                    const result1 = try self.generateLambdaCall(second_lambda_expr.lambda, args_span, .i64);
+                    const result1_reg = try self.ensureInGeneralReg(result1);
+                    try self.emitMovRegReg(result_reg, result1_reg);
+                    self.codegen.freeGeneral(result1_reg);
+                }
+            }
+
+            // Patch end jump
+            const end_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(end_patch, end_offset);
+
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Generate U8 dispatch (3+ functions in lambda set)
+        fn generateU8DispatchCall(
+            self: *Self,
+            members: []const mono.LambdaSetMember,
+            tag_loc: ValueLocation,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            _ = ret_layout;
+
+            // Allocate result register
+            const result_reg = try self.codegen.allocGeneralFor(0);
+
+            // Get tag into a register
+            const tag_reg = try self.ensureInGeneralReg(tag_loc);
+
+            // Generate cascading comparisons for each member
+            var end_patches = std.ArrayList(usize).empty;
+            defer end_patches.deinit(self.allocator);
+
+            for (members, 0..) |member, i| {
+                // Compare tag with member's tag value
+                if (i < members.len - 1) {
+                    // Not the last - need comparison and jump
+                    try self.emitCmpImm(tag_reg, @intCast(member.tag));
+                    const skip_patch = try self.emitJumpIfNotEqual();
+
+                    // Tag matches - call this lambda
+                    const lambda_expr = self.store.getExpr(member.lambda_body);
+                    if (lambda_expr == .lambda) {
+                        const result = try self.generateLambdaCall(lambda_expr.lambda, args_span, .i64);
+                        const res_reg = try self.ensureInGeneralReg(result);
+                        try self.emitMovRegReg(result_reg, res_reg);
+                        self.codegen.freeGeneral(res_reg);
+                    }
+
+                    // Jump to end
+                    const end_patch = try self.codegen.emitJump();
+                    try end_patches.append(self.allocator, end_patch);
+
+                    // Patch skip to here
+                    const skip_offset = self.codegen.currentOffset();
+                    self.codegen.patchJump(skip_patch, skip_offset);
+                } else {
+                    // Last member - default case, no comparison needed
+                    const lambda_expr = self.store.getExpr(member.lambda_body);
+                    if (lambda_expr == .lambda) {
+                        const result = try self.generateLambdaCall(lambda_expr.lambda, args_span, .i64);
+                        const res_reg = try self.ensureInGeneralReg(result);
+                        try self.emitMovRegReg(result_reg, res_reg);
+                        self.codegen.freeGeneral(res_reg);
+                    }
+                }
+            }
+
+            // Patch all end jumps
+            const end_offset = self.codegen.currentOffset();
+            for (end_patches.items) |patch| {
+                self.codegen.patchJump(patch, end_offset);
+            }
+
+            self.codegen.freeGeneral(tag_reg);
+
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Emit compare immediate instruction
+        fn emitCmpImm(self: *Self, reg: GeneralReg, value: i64) !void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // CMP reg, #imm12
+                try self.codegen.emit.cmpRegImm12(.w64, reg, @intCast(value));
+            } else {
+                // x86_64: CMP reg, imm32
+                // Load immediate into temporary register and compare
+                const temp = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(temp, value);
+                try self.codegen.emit.cmpRegReg(reg, temp);
+                self.codegen.freeGeneral(temp);
+            }
+        }
+
+        /// Emit jump if not equal (after comparison)
+        fn emitJumpIfNotEqual(self: *Self) !usize {
+            const patch_loc = self.codegen.currentOffset();
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // B.NE with placeholder offset (will be patched)
+                try self.codegen.emit.bcond(.ne, 0);
+            } else {
+                // JNE with placeholder offset
+                try self.codegen.emit.jne(@bitCast(@as(i32, 0)));
+            }
+            return patch_loc;
         }
 
         /// Generate code for calling a lambda, handling recursive closures with join points
