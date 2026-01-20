@@ -161,8 +161,10 @@ pub const ClosureRepresentation = union(enum) {
     enum_dispatch: struct {
         /// Number of functions in the set
         num_functions: u16,
-        /// This function's tag value
+        /// This function's tag value (position in lambda set)
         tag: u8,
+        /// All members of the lambda set (for dispatch at call sites)
+        lambda_set: LambdaSetMemberSpan,
     },
 
     /// N functions, some with captures → tagged union.
@@ -174,6 +176,8 @@ pub const ClosureRepresentation = union(enum) {
         captures: MonoCaptureSpan,
         /// Layout of the full union (tag + max payload)
         union_layout: layout.Idx,
+        /// All members of the lambda set (for dispatch at call sites)
+        lambda_set: LambdaSetMemberSpan,
     },
 
     /// No representation needed - function is called directly.

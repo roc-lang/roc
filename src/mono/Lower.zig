@@ -456,13 +456,37 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         // ============ Control flow ============
         .e_if => |if_expr| blk: {
-            const branches = try self.lowerIfBranches(module_env, if_expr.branches);
-            const final_else = try self.lowerExprFromIdx(module_env, if_expr.final_else);
-            break :blk .{ .if_then_else = .{
-                .branches = branches,
-                .final_else = final_else,
-                .result_layout = self.getExprLayout(module_env, expr),
-            } };
+            // Check if this if-then-else returns closures (lambda set dispatch case)
+            const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
+
+            if (lambda_set_result.has_closure_branches) {
+                // Branches are closures - lower with lambda set info
+                const branches = try self.lowerIfBranchesWithLambdaSet(
+                    module_env,
+                    if_expr.branches,
+                    lambda_set_result.lambda_set_members,
+                );
+                const final_else = try self.lowerExprWithLambdaSet(
+                    module_env,
+                    if_expr.final_else,
+                    lambda_set_result.lambda_set_members,
+                    lambda_set_result.else_tag,
+                );
+                break :blk .{ .if_then_else = .{
+                    .branches = branches,
+                    .final_else = final_else,
+                    .result_layout = self.getExprLayout(module_env, expr),
+                } };
+            } else {
+                // Normal if-then-else (no closures)
+                const branches = try self.lowerIfBranches(module_env, if_expr.branches);
+                const final_else = try self.lowerExprFromIdx(module_env, if_expr.final_else);
+                break :blk .{ .if_then_else = .{
+                    .branches = branches,
+                    .final_else = final_else,
+                    .result_layout = self.getExprLayout(module_env, expr),
+                } };
+            }
         },
 
         .e_match => |match_expr| blk: {
@@ -1001,6 +1025,282 @@ fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBra
     }
 
     return self.store.addIfBranches(lowered.items);
+}
+
+/// Result of collecting closures from if-then-else branches
+const IfClosureLambdaSetResult = struct {
+    /// Whether the branches contain closures
+    has_closure_branches: bool,
+    /// Lambda set members (all closures in the if-then-else)
+    lambda_set_members: ir.LambdaSetMemberSpan,
+    /// Tag for the else branch (last tag in sequence)
+    else_tag: u16,
+};
+
+/// Collect all closures from if-then-else branches to create a lambda set.
+/// This implements Roc's approach: closures in the same if-then-else share a lambda set.
+fn collectIfClosureLambdaSet(
+    self: *Self,
+    module_env: *ModuleEnv,
+    if_expr: anytype,
+) Error!IfClosureLambdaSetResult {
+    var members = std.ArrayList(ir.LambdaSetMember).empty;
+    defer members.deinit(self.allocator);
+
+    var has_closures = false;
+    var tag: u16 = 0;
+
+    // Check each branch body
+    const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+    for (branch_indices) |branch_idx| {
+        const branch = module_env.store.getIfBranch(branch_idx);
+        const body_expr = module_env.store.getExpr(branch.body);
+
+        switch (body_expr) {
+            .e_closure => |closure| {
+                has_closures = true;
+                // Lower the lambda body to get MonoExprId
+                const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
+                const captures = try self.lowerCaptures(module_env, closure.captures);
+
+                try members.append(self.allocator, .{
+                    .lambda_symbol = self.createClosureSymbol(tag),
+                    .captures = captures,
+                    .lambda_body = lambda_id,
+                    .tag = tag,
+                });
+                tag += 1;
+            },
+            .e_lambda => {
+                has_closures = true;
+                const lambda_id = try self.lowerExprFromIdx(module_env, branch.body);
+
+                try members.append(self.allocator, .{
+                    .lambda_symbol = self.createClosureSymbol(tag),
+                    .captures = ir.MonoCaptureSpan.empty(),
+                    .lambda_body = lambda_id,
+                    .tag = tag,
+                });
+                tag += 1;
+            },
+            else => {
+                // Not a closure - add placeholder
+                tag += 1;
+            },
+        }
+    }
+
+    // Check final else
+    const else_tag = tag;
+    const else_expr = module_env.store.getExpr(if_expr.final_else);
+    switch (else_expr) {
+        .e_closure => |closure| {
+            has_closures = true;
+            const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
+            const captures = try self.lowerCaptures(module_env, closure.captures);
+
+            try members.append(self.allocator, .{
+                .lambda_symbol = self.createClosureSymbol(tag),
+                .captures = captures,
+                .lambda_body = lambda_id,
+                .tag = tag,
+            });
+        },
+        .e_lambda => {
+            has_closures = true;
+            const lambda_id = try self.lowerExprFromIdx(module_env, if_expr.final_else);
+
+            try members.append(self.allocator, .{
+                .lambda_symbol = self.createClosureSymbol(tag),
+                .captures = ir.MonoCaptureSpan.empty(),
+                .lambda_body = lambda_id,
+                .tag = tag,
+            });
+        },
+        else => {},
+    }
+
+    if (!has_closures) {
+        return .{
+            .has_closure_branches = false,
+            .lambda_set_members = ir.LambdaSetMemberSpan.empty(),
+            .else_tag = 0,
+        };
+    }
+
+    // Store the lambda set members
+    const member_span = try self.store.addLambdaSetMembers(members.items);
+
+    return .{
+        .has_closure_branches = true,
+        .lambda_set_members = member_span,
+        .else_tag = else_tag,
+    };
+}
+
+/// Create a unique symbol for a closure in a lambda set
+fn createClosureSymbol(self: *Self, tag: u16) ir.MonoSymbol {
+    // Create a synthetic symbol for this closure
+    // Using module index and a unique identifier based on tag
+    return .{
+        .module_idx = self.current_module_idx,
+        .ident_idx = @bitCast(@as(u32, tag) | 0x80000000), // High bit marks as synthetic
+    };
+}
+
+/// Lower if branches with lambda set info for closures
+fn lowerIfBranchesWithLambdaSet(
+    self: *Self,
+    module_env: *ModuleEnv,
+    branches: CIR.Expr.IfBranch.Span,
+    lambda_set_members: ir.LambdaSetMemberSpan,
+) Error!ir.MonoIfBranchSpan {
+    const branch_indices = module_env.store.sliceIfBranches(branches);
+
+    var lowered = std.ArrayList(MonoIfBranch).empty;
+    defer lowered.deinit(self.allocator);
+
+    var tag: u16 = 0;
+    for (branch_indices) |branch_idx| {
+        const branch = module_env.store.getIfBranch(branch_idx);
+        const cond = try self.lowerExprFromIdx(module_env, branch.cond);
+
+        // Lower body with lambda set info if it's a closure
+        const body = try self.lowerExprWithLambdaSet(module_env, branch.body, lambda_set_members, tag);
+
+        try lowered.append(self.allocator, .{
+            .cond = cond,
+            .body = body,
+        });
+        tag += 1;
+    }
+
+    return self.store.addIfBranches(lowered.items);
+}
+
+/// Lower an expression with lambda set info (for closures in if-then-else)
+fn lowerExprWithLambdaSet(
+    self: *Self,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    lambda_set_members: ir.LambdaSetMemberSpan,
+    tag: u16,
+) Error!MonoExprId {
+    const expr = module_env.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_closure => |closure| {
+            // Lower with lambda set representation
+            const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
+            const captures = try self.lowerCaptures(module_env, closure.captures);
+
+            // Determine representation based on lambda set
+            const representation = self.selectLambdaSetRepresentation(lambda_set_members, captures, tag);
+
+            // Detect recursion
+            const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
+
+            const mono_expr: MonoExpr = .{ .closure = .{
+                .closure_layout = .i64, // TODO
+                .lambda = lambda_id,
+                .captures = captures,
+                .representation = representation,
+                .recursion = recursion_info.recursion,
+                .self_recursive = recursion_info.self_recursive,
+            } };
+
+            return self.store.addExpr(mono_expr, Region.zero());
+        },
+        .e_lambda => |lambda| {
+            // Lambda without captures - use enum_dispatch
+            const params = try self.lowerPatternSpan(module_env, lambda.args);
+            const body = try self.lowerExprFromIdx(module_env, lambda.body);
+
+            const lambda_expr: MonoExpr = .{ .lambda = .{
+                .fn_layout = .i64, // TODO
+                .params = params,
+                .body = body,
+                .ret_layout = .i64, // TODO
+            } };
+            const lambda_id = try self.store.addExpr(lambda_expr, Region.zero());
+
+            // Wrap in closure with enum_dispatch representation
+            const num_members = self.store.getLambdaSetMembers(lambda_set_members).len;
+            const closure_expr: MonoExpr = .{ .closure = .{
+                .closure_layout = .i64,
+                .lambda = lambda_id,
+                .captures = ir.MonoCaptureSpan.empty(),
+                .representation = .{ .enum_dispatch = .{
+                    .num_functions = @intCast(num_members),
+                    .tag = @intCast(tag),
+                    .lambda_set = lambda_set_members,
+                } },
+                .recursion = .not_recursive,
+                .self_recursive = .not_self_recursive,
+            } };
+
+            return self.store.addExpr(closure_expr, Region.zero());
+        },
+        else => {
+            // Not a closure - lower normally
+            return self.lowerExprFromIdx(module_env, expr_idx);
+        },
+    }
+}
+
+/// Select representation for a closure based on its lambda set
+fn selectLambdaSetRepresentation(
+    self: *Self,
+    lambda_set_members: ir.LambdaSetMemberSpan,
+    captures: ir.MonoCaptureSpan,
+    tag: u16,
+) ClosureRepresentation {
+    const members = self.store.getLambdaSetMembers(lambda_set_members);
+    const capture_list = self.store.getCaptures(captures);
+
+    if (members.len <= 1) {
+        // Single function - use normal representation
+        if (capture_list.len == 0) {
+            return .{ .direct_call = {} };
+        } else if (capture_list.len == 1) {
+            return .{ .unwrapped_capture = .{
+                .capture_layout = capture_list[0].layout_idx,
+            } };
+        } else {
+            return .{ .struct_captures = .{
+                .captures = captures,
+                .struct_layout = .i64,
+            } };
+        }
+    }
+
+    // Multiple functions in lambda set
+    // Check if any function has captures
+    var any_captures = false;
+    for (members) |member| {
+        const member_captures = self.store.getCaptures(member.captures);
+        if (member_captures.len > 0) {
+            any_captures = true;
+            break;
+        }
+    }
+
+    if (!any_captures) {
+        // All functions have no captures - use enum_dispatch
+        return .{ .enum_dispatch = .{
+            .num_functions = @intCast(members.len),
+            .tag = @intCast(tag),
+            .lambda_set = lambda_set_members,
+        } };
+    } else {
+        // Some functions have captures - use union_repr
+        return .{ .union_repr = .{
+            .tag = tag,
+            .captures = captures,
+            .union_layout = .i64, // TODO: compute actual union layout
+            .lambda_set = lambda_set_members,
+        } };
+    }
 }
 
 /// Lower when/match branches
