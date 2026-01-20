@@ -59,7 +59,7 @@ Implement full closure support with:
 
 ### Priority 2: Closures Passed as Arguments - COMPLETED
 
-### Priority 3: Lambda Set Dispatch (enum_dispatch, union_repr)
+### Priority 3: Lambda Set Dispatch (enum_dispatch, union_repr) - COMPLETED
 
 **Problem:** Multiple closures with same signature need runtime dispatch
 
@@ -71,52 +71,43 @@ f(5)  // Should be 6
 g(5)  // Should be 10
 ```
 
-**REQUIRED Implementation (from Roc crates/):**
+**Implementation:**
+- Added `collectIfClosureLambdaSet` to detect closure branches in if-then-else
+- Added `lowerIfBranchesWithLambdaSet` to collect lambda set members
+- Added `generateEnumDispatchCall` with Bool dispatch (2 fns) and U8 dispatch (3+ fns)
+- Added `generateBoolDispatchCall` using conditional branch on tag
+- Added `generateU8DispatchCall` using cascading comparisons
 
-1. **LambdaSet must track ALL closures** - Not just the current one, but all possible closures at each call site
+### Priority 4: Stack vs Heap - NOT NEEDED
 
-2. **Tag value computation** (from `construct_closure_data` in ir.rs):
-   - EnumDispatch::Bool (2 closures): `tag = name != first_in_set` (true/false)
-   - EnumDispatch::U8 (3-256 closures): `tag = position_in_set` (0-255)
+**Finding:** The dev backend inlines closure calls at call sites (evaluates lambda body
+directly with captures bound from symbol_locations). Closures never need to be passed
+around as standalone values, so stack vs heap allocation decisions don't apply.
 
-3. **Switch dispatch at call sites** (from `enum_lambda_set_to_switch`):
-   ```
-   switch(closure_tag) {
-       0 => call first_lambda(args)
-       1 => call second_lambda(args)
-       ...
-   }
-   ```
+**Roc's approach:** 4 machine words threshold (32 bytes on 64-bit), but this is for
+passing closures by reference vs by value - not heap allocation.
 
-4. **ClosureCallOptions enum** for dispatch:
-   - Void: Empty lambda set (error)
-   - Union(UnionLayout): Multiple capturing functions
-   - Struct(field_layouts): Single function with struct captures
-   - UnwrappedCapture(layout): Single function capturing one value
-   - EnumDispatch(Bool/U8): Multiple non-capturing functions
+### Priority 5: Multimorphic Lambdas - ALREADY HANDLED
 
-**Files to Reference:**
-- `crates/compiler/mono/src/layout.rs:1434-1774` - LambdaSet, ClosureCallOptions
-- `crates/compiler/mono/src/ir.rs` - construct_closure_data, enum_lambda_set_to_switch
+**Finding:** Our approach of creating separate LambdaSetMember entries per branch
+handles multimorphic lambdas correctly. Each entry has its own `lambda_body` and
+`captures`, so dispatch works even when the same function appears with different
+capture layouts.
 
-### Priority 4: Stack vs Heap (Roc-style)
+**Roc's deduplication** is for catching edge cases where unification creates subtle
+duplicates - not needed for our current lowering approach.
 
-**Roc's Approach:**
-- Depends on size/representation
-- Small closures (unwrapped, small structs) stay on stack
-- Large closures or those that escape may need heap allocation
+### Priority 6: Empty Lambda Sets - ALREADY HANDLED
 
-### Priority 5: Multimorphic Lambdas (Roc-style deduplication)
+**Finding:** Already handled in `generateEnumDispatchCall`:
+```zig
+if (members.len == 0) {
+    return Error.UnsupportedExpression;
+}
+```
 
-**Roc's Approach (from layout.rs:1903-1950):**
-- Detect when same function appears multiple times in lambda set
-- Deduplicate specializations to avoid code bloat
-
-### Priority 6: Empty Lambda Sets (Roc-style)
-
-**Roc's Approach (from layout.rs:1974-1985):**
-- Give empty representation to unbound lambda sets
-- Handle void/unit cases gracefully
+This returns an error when dispatching on empty lambda sets, matching Roc's approach
+of returning a runtime error for void lambda sets.
 
 ### Priority 7: Boxed/Erased Closures
 
