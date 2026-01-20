@@ -40,6 +40,9 @@ pub const MonoExprStore = @import("MonoExprStore.zig");
 /// CIR → Mono IR lowering pass
 pub const Lower = @import("Lower.zig");
 
+/// Tail recursion detection and transformation
+pub const TailRecursion = @import("TailRecursion.zig");
+
 // Re-export commonly used types
 pub const MonoExpr = MonoIR.MonoExpr;
 pub const MonoPattern = MonoIR.MonoPattern;
@@ -69,4 +72,5 @@ test "mono tests" {
     std.testing.refAllDecls(MonoIR);
     std.testing.refAllDecls(MonoExprStore);
     std.testing.refAllDecls(Lower);
+    std.testing.refAllDecls(TailRecursion);
 }
