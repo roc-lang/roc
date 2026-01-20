@@ -53,6 +53,7 @@ test "eval tests" {
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
     std.testing.refAllDecls(@import("test/eval_test.zig"));
+    std.testing.refAllDecls(@import("test/constant_eval_test.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_basic.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_simple.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_nested.zig"));
