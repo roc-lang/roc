@@ -28,6 +28,8 @@ const MonoCaptureSpan = ir.MonoCaptureSpan;
 const MonoCapture = ir.MonoCapture;
 const MonoWhenBranch = ir.MonoWhenBranch;
 const MonoWhenBranchSpan = ir.MonoWhenBranchSpan;
+const LambdaSetMember = ir.LambdaSetMember;
+const LambdaSetMemberSpan = ir.LambdaSetMemberSpan;
 const MonoIfBranch = ir.MonoIfBranch;
 const MonoIfBranchSpan = ir.MonoIfBranchSpan;
 const MonoStmt = ir.MonoStmt;
@@ -64,6 +66,9 @@ stmts: std.ArrayList(MonoStmt),
 /// Captures (symbols captured by closures)
 captures: std.ArrayList(MonoCapture),
 
+/// Lambda set members (for closure dispatch)
+lambda_set_members: std.ArrayList(LambdaSetMember),
+
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u48, MonoExprId),
@@ -87,6 +92,7 @@ pub fn init(allocator: Allocator) Self {
         .if_branches = std.ArrayList(MonoIfBranch).empty,
         .stmts = std.ArrayList(MonoStmt).empty,
         .captures = std.ArrayList(MonoCapture).empty,
+        .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
         .symbol_defs = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -115,6 +121,7 @@ pub fn deinit(self: *Self) void {
     self.if_branches.deinit(self.allocator);
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
+    self.lambda_set_members.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
 }
@@ -328,6 +335,29 @@ pub fn addCaptures(self: *Self, capture_list: []const MonoCapture) Allocator.Err
 pub fn getCaptures(self: *const Self, span: MonoCaptureSpan) []const MonoCapture {
     if (span.len == 0) return &.{};
     return self.captures.items[span.start..][0..span.len];
+}
+
+// ============ Lambda set member operations ============
+
+/// Add lambda set members and return a span
+pub fn addLambdaSetMembers(self: *Self, members: []const LambdaSetMember) Allocator.Error!LambdaSetMemberSpan {
+    if (members.len == 0) {
+        return LambdaSetMemberSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.lambda_set_members.items.len));
+    try self.lambda_set_members.appendSlice(self.allocator, members);
+
+    return .{
+        .start = start,
+        .len = @intCast(members.len),
+    };
+}
+
+/// Get lambda set members from a span
+pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const LambdaSetMember {
+    if (span.len == 0) return &.{};
+    return self.lambda_set_members.items[span.start..][0..span.len];
 }
 
 // ============ Symbol definition operations ============

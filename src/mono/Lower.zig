@@ -43,8 +43,14 @@ const MonoSymbol = ir.MonoSymbol;
 const MonoCapture = ir.MonoCapture;
 const MonoCaptureSpan = ir.MonoCaptureSpan;
 const MonoWhenBranch = ir.MonoWhenBranch;
+const ClosureRepresentation = ir.ClosureRepresentation;
+const Recursive = ir.Recursive;
+const SelfRecursive = ir.SelfRecursive;
+const JoinPointId = ir.JoinPointId;
 const MonoIfBranch = ir.MonoIfBranch;
 const MonoStmt = ir.MonoStmt;
+
+const ClosureTransformer = can.ClosureTransformer;
 
 const MonoExprStore = store_mod;
 const LayoutIdx = layout_mod.Idx;
@@ -76,6 +82,14 @@ lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
 /// Current module index during lowering
 current_module_idx: u16 = 0,
+
+/// Current binding pattern (for detecting recursive closures)
+/// When lowering a statement like `f = |x| ...`, this holds the pattern for `f`
+/// so we can detect if the closure body references itself.
+current_binding_pattern: ?CIR.Pattern.Idx = null,
+
+/// Counter for generating unique join point IDs
+next_join_point_id: u32 = 0,
 
 /// Errors that can occur during lowering
 pub const Error = error{
@@ -325,10 +339,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_closure => |closure| blk: {
             const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
             const captures = try self.lowerCaptures(module_env, closure.captures);
+
+            // Select the closure representation based on captures
+            const representation = self.selectClosureRepresentation(captures);
+
+            // Detect if this closure is recursive (references itself)
+            const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
+
             break :blk .{ .closure = .{
-                .closure_layout = .i64, // TODO
+                .closure_layout = .i64, // TODO: compute from representation
                 .lambda = lambda_id,
                 .captures = captures,
+                .representation = representation,
+                .recursion = recursion_info.recursion,
+                .self_recursive = recursion_info.self_recursive,
             } };
         },
 
@@ -798,6 +822,167 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
     return self.store.addCaptures(lowered.items);
 }
 
+/// Select the optimal closure representation based on captures.
+/// This implements Roc-style representation selection:
+/// - 0 captures: direct_call (no runtime representation needed)
+/// - 1 capture: unwrapped_capture (zero overhead)
+/// - N captures: struct_captures (sorted by alignment)
+///
+/// For lambda sets with multiple functions, we'd use enum_dispatch or union_repr,
+/// but that requires lambda set inference results which we'll add later.
+fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) ClosureRepresentation {
+    const capture_list = self.store.getCaptures(captures);
+
+    if (capture_list.len == 0) {
+        // No captures - function can be called directly
+        return .{ .direct_call = {} };
+    } else if (capture_list.len == 1) {
+        // Single capture - unwrapped, zero overhead
+        return .{ .unwrapped_capture = .{
+            .capture_layout = capture_list[0].layout_idx,
+        } };
+    } else {
+        // Multiple captures - store in a struct
+        // TODO: Sort captures by alignment (largest first) for memory efficiency
+        // For now, just use the captures as-is
+        return .{ .struct_captures = .{
+            .captures = captures,
+            .struct_layout = .i64, // TODO: compute actual struct layout
+        } };
+    }
+}
+
+/// Result of recursion detection for a closure
+const RecursionInfo = struct {
+    recursion: Recursive,
+    self_recursive: SelfRecursive,
+};
+
+/// Detect if a closure is recursive (references itself).
+///
+/// Uses the ClosureTransformer's detectRecursion functionality to check
+/// if the closure body contains a reference to the binding pattern.
+/// If recursive, generates a join point ID for the recursive entry.
+fn detectClosureRecursion(self: *Self, module_env: *ModuleEnv, lambda_idx: CIR.Expr.Idx) RecursionInfo {
+    // If we have a current binding pattern, check if the closure body references it
+    if (self.current_binding_pattern) |binding_pattern| {
+        // Get the lambda body to check for self-references
+        const lambda_expr = module_env.store.getExpr(lambda_idx);
+        if (lambda_expr == .e_lambda) {
+            const body_expr = lambda_expr.e_lambda.body;
+
+            // Check if the body contains a reference to the binding pattern
+            if (self.exprContainsPatternRef(module_env, body_expr, binding_pattern)) {
+                // Generate a unique join point ID for this recursive closure
+                const join_point_id: JoinPointId = @enumFromInt(self.next_join_point_id);
+                self.next_join_point_id += 1;
+
+                // Check if this is tail-recursive
+                // TODO: Proper tail-recursion detection (check if all recursive calls are in tail position)
+                // For now, just mark as recursive
+                return .{
+                    .recursion = .recursive,
+                    .self_recursive = .{ .self_recursive = join_point_id },
+                };
+            }
+        }
+    }
+
+    // Not recursive
+    return .{
+        .recursion = .not_recursive,
+        .self_recursive = .not_self_recursive,
+    };
+}
+
+/// Check if an expression contains a reference to the given pattern.
+/// Used for recursive closure detection.
+fn exprContainsPatternRef(
+    self: *Self,
+    module_env: *ModuleEnv,
+    expr_idx: CIR.Expr.Idx,
+    target_pattern: CIR.Pattern.Idx,
+) bool {
+    const expr = module_env.store.getExpr(expr_idx);
+
+    switch (expr) {
+        .e_lookup_local => |lookup| {
+            return lookup.pattern_idx == target_pattern;
+        },
+        .e_call => |call| {
+            // Check function expression
+            if (self.exprContainsPatternRef(module_env, call.func, target_pattern)) {
+                return true;
+            }
+            // Check arguments
+            const args = module_env.store.sliceExpr(call.args);
+            for (args) |arg_idx| {
+                if (self.exprContainsPatternRef(module_env, arg_idx, target_pattern)) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        .e_lambda => |lambda| {
+            return self.exprContainsPatternRef(module_env, lambda.body, target_pattern);
+        },
+        .e_closure => |closure| {
+            const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+            if (lambda_expr == .e_lambda) {
+                return self.exprContainsPatternRef(module_env, lambda_expr.e_lambda.body, target_pattern);
+            }
+            return false;
+        },
+        .e_block => |block| {
+            // Check statements
+            const stmts = module_env.store.sliceStatements(block.stmts);
+            for (stmts) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                switch (stmt) {
+                    .s_decl => |decl| {
+                        if (self.exprContainsPatternRef(module_env, decl.expr, target_pattern)) {
+                            return true;
+                        }
+                    },
+                    .s_decl_gen => |decl| {
+                        if (self.exprContainsPatternRef(module_env, decl.expr, target_pattern)) {
+                            return true;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            // Check final expression
+            return self.exprContainsPatternRef(module_env, block.final_expr, target_pattern);
+        },
+        .e_if => |if_expr| {
+            // Check all branches
+            const branches = module_env.store.sliceIfBranches(if_expr.branches);
+            for (branches) |branch_idx| {
+                const branch = module_env.store.getIfBranch(branch_idx);
+                if (self.exprContainsPatternRef(module_env, branch.cond, target_pattern) or
+                    self.exprContainsPatternRef(module_env, branch.body, target_pattern))
+                {
+                    return true;
+                }
+            }
+            return self.exprContainsPatternRef(module_env, if_expr.final_else, target_pattern);
+        },
+        .e_binop => |binop| {
+            return self.exprContainsPatternRef(module_env, binop.lhs, target_pattern) or
+                self.exprContainsPatternRef(module_env, binop.rhs, target_pattern);
+        },
+        .e_unary_minus => |unary| {
+            return self.exprContainsPatternRef(module_env, unary.expr, target_pattern);
+        },
+        .e_unary_not => |unary| {
+            return self.exprContainsPatternRef(module_env, unary.expr, target_pattern);
+        },
+        // Leaf expressions that can't contain references
+        else => return false,
+    }
+}
+
 /// Lower if branches
 fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBranch.Span) Error!ir.MonoIfBranchSpan {
     const branch_indices = module_env.store.sliceIfBranches(branches);
@@ -865,7 +1050,11 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
         switch (stmt) {
             .s_decl => |decl| {
                 const pattern = try self.lowerPattern(module_env, decl.pattern);
+                // Set current binding pattern for recursive closure detection
+                const old_binding = self.current_binding_pattern;
+                self.current_binding_pattern = decl.pattern;
                 const value = try self.lowerExprFromIdx(module_env, decl.expr);
+                self.current_binding_pattern = old_binding;
                 try lowered.append(self.allocator, .{
                     .pattern = pattern,
                     .expr = value,
@@ -873,7 +1062,11 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
             },
             .s_decl_gen => |decl| {
                 const pattern = try self.lowerPattern(module_env, decl.pattern);
+                // Set current binding pattern for recursive closure detection
+                const old_binding = self.current_binding_pattern;
+                self.current_binding_pattern = decl.pattern;
                 const value = try self.lowerExprFromIdx(module_env, decl.expr);
+                self.current_binding_pattern = old_binding;
                 try lowered.append(self.allocator, .{
                     .pattern = pattern,
                     .expr = value,

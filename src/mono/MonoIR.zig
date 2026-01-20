@@ -136,6 +136,136 @@ pub const MonoCapture = struct {
     layout_idx: layout.Idx,
 };
 
+/// How a closure is represented at runtime (like Roc's ClosureRepresentation).
+/// The representation is chosen based on the lambda set shape:
+/// - Number of functions that share the same call site
+/// - Whether they have captures and how many
+pub const ClosureRepresentation = union(enum) {
+    /// 1 function, 1 capture → no wrapper, capture passed directly.
+    /// Zero overhead - the closure IS the captured value.
+    unwrapped_capture: struct {
+        capture_layout: layout.Idx,
+    },
+
+    /// 1 function, N captures → struct with captures sorted by alignment.
+    /// Captures stored largest-alignment-first for memory efficiency.
+    struct_captures: struct {
+        /// Captures in alignment order (largest first)
+        captures: MonoCaptureSpan,
+        /// Total layout of the capture struct
+        struct_layout: layout.Idx,
+    },
+
+    /// N functions, 0 captures → single byte tag.
+    /// No payload needed, just Bool (2 fns) or U8 (3+ fns).
+    enum_dispatch: struct {
+        /// Number of functions in the set
+        num_functions: u16,
+        /// This function's tag value
+        tag: u8,
+    },
+
+    /// N functions, some with captures → tagged union.
+    /// Tag identifies which function, payload contains captures.
+    union_repr: struct {
+        /// This function's tag value
+        tag: u16,
+        /// Captures for this variant (may be empty)
+        captures: MonoCaptureSpan,
+        /// Layout of the full union (tag + max payload)
+        union_layout: layout.Idx,
+    },
+
+    /// No representation needed - function is called directly.
+    /// Used when a lambda is immediately called and never stored.
+    direct_call: void,
+};
+
+/// Lambda set - all possible lambdas at a call site.
+/// When a function parameter or variable can hold different closures,
+/// this tracks all the possibilities for dispatch.
+pub const LambdaSet = struct {
+    /// Span into the lambda set members storage
+    members: LambdaSetMemberSpan,
+    /// The representation chosen for this lambda set
+    representation: LambdaSetRepresentation,
+};
+
+/// How a lambda set is represented at runtime
+pub const LambdaSetRepresentation = enum {
+    /// Single function, single capture - unwrapped
+    unwrapped_capture,
+    /// Single function, multiple captures - struct
+    struct_captures,
+    /// Multiple functions, no captures - enum dispatch
+    enum_dispatch,
+    /// Multiple functions, some with captures - tagged union
+    union_repr,
+    /// Direct call, no runtime representation
+    direct_call,
+};
+
+/// A member of a lambda set
+pub const LambdaSetMember = struct {
+    /// Global symbol for this lambda (from LambdaSetInference)
+    lambda_symbol: MonoSymbol,
+    /// Captures for this member
+    captures: MonoCaptureSpan,
+    /// The lambda body expression
+    lambda_body: MonoExprId,
+    /// This member's tag in the lambda set (for dispatch)
+    tag: u16,
+};
+
+/// Span of lambda set members
+pub const LambdaSetMemberSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() LambdaSetMemberSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LambdaSetMemberSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Whether a closure is recursive (like Roc's Recursive enum in expr.rs).
+/// This tracks if a closure calls itself, enabling tail-call optimization
+/// and proper handling of recursive lambda sets.
+pub const Recursive = enum {
+    /// Not a recursive closure
+    not_recursive,
+    /// Recursive closure (calls itself)
+    recursive,
+    /// Tail-recursive closure (all recursive calls are in tail position)
+    /// Enables tail-call optimization
+    tail_recursive,
+};
+
+/// Identifier for a join point (used for recursive closure entry).
+/// Join points are labels that recursive calls can jump to instead of
+/// creating new stack frames, enabling efficient recursion.
+pub const JoinPointId = enum(u32) {
+    _,
+
+    pub const none: JoinPointId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: JoinPointId) bool {
+        return self == none;
+    }
+};
+
+/// Whether a closure captures itself (for recursive closures).
+/// Like Roc's SelfRecursive enum in ir.rs.
+pub const SelfRecursive = union(enum) {
+    /// Not a self-recursive closure
+    not_self_recursive,
+    /// Self-recursive closure with a join point for the recursive entry
+    self_recursive: JoinPointId,
+};
+
 /// Span of when branches
 pub const MonoWhenBranchSpan = extern struct {
     start: u32,
@@ -265,6 +395,12 @@ pub const MonoExpr = union(enum) {
         lambda: MonoExprId,
         /// Captured symbols and their layouts
         captures: MonoCaptureSpan,
+        /// How this closure is represented at runtime
+        representation: ClosureRepresentation,
+        /// Whether this closure is recursive (calls itself)
+        recursion: Recursive,
+        /// Whether this closure captures itself (for recursive closures)
+        self_recursive: SelfRecursive,
     },
 
     // ============ Data structures ============

@@ -48,6 +48,11 @@ pub const MonoExprId = MonoIR.MonoExprId;
 pub const MonoPatternId = MonoIR.MonoPatternId;
 pub const MonoExprSpan = MonoIR.MonoExprSpan;
 pub const MonoPatternSpan = MonoIR.MonoPatternSpan;
+pub const ClosureRepresentation = MonoIR.ClosureRepresentation;
+pub const MonoCapture = MonoIR.MonoCapture;
+pub const Recursive = MonoIR.Recursive;
+pub const SelfRecursive = MonoIR.SelfRecursive;
+pub const JoinPointId = MonoIR.JoinPointId;
 
 test "mono tests" {
     std.testing.refAllDecls(@This());
