@@ -634,7 +634,6 @@ pub const Repl = struct {
             const LayoutIdx = eval_mod.layout.Idx;
 
             // Execute using result pointer calling convention
-            // (MonoExprCodeGen generates code that writes result to [x0])
             // Format: {value} : {type}
             const output = switch (code_result.result_layout) {
                 LayoutIdx.str => blk: {

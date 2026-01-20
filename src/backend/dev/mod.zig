@@ -37,12 +37,6 @@ pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 /// Backwards compatibility alias
 pub const JitCode = ExecutableMemory;
 
-// Mono IR code generation (global symbol references, no cross-module collisions)
-const mono_expr_codegen = @import("MonoExprCodeGen.zig");
-pub const MonoExprCodeGen = mono_expr_codegen.MonoExprCodeGen;
-pub const MonoScope = mono_expr_codegen.MonoScope;
-pub const MonoBindingValue = mono_expr_codegen.BindingValue;
-
 // Static data interner for string literals and other static data
 pub const StaticDataInterner = @import("StaticDataInterner.zig");
 

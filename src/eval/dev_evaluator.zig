@@ -22,7 +22,6 @@ const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
-const constant_eval = @import("constant_eval.zig");
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -142,11 +141,6 @@ const DevRocEnv = struct {
     }
 };
 
-// Re-export types from backend MonoExprCodeGen
-pub const MonoExprCodeGen = backend.MonoExprCodeGen;
-pub const MonoScope = backend.MonoScope;
-pub const BindingValue = backend.MonoBindingValue;
-
 /// Layout index for result types
 pub const LayoutIdx = layout.Idx;
 
@@ -155,9 +149,8 @@ pub const LayoutIdx = layout.Idx;
 /// Orchestrates the compilation pipeline:
 /// - Initializes with builtin modules
 /// - Parses, canonicalizes, and type-checks expressions
-/// - Lowers CIR to Mono IR (global symbols)
-/// - Generates native machine code via MonoExprCodeGen
-/// - Executes generated code
+///
+/// NOTE: Native code generation is not currently implemented.
 pub const DevEvaluator = struct {
     allocator: Allocator,
 
@@ -326,220 +319,31 @@ pub const DevEvaluator = struct {
         }
     };
 
-    /// Generate code for a CIR expression using Mono IR
+    /// Generate code for a CIR expression
     ///
-    /// Pipeline:
-    /// 1. Lowers CIR to Mono IR (globally unique symbols)
-    /// 2. Uses MonoExprCodeGen to generate machine code
-    ///
-    /// This solves the cross-module index collision issue where module-local
-    /// CIR.Expr.Idx values get confused across module boundaries.
+    /// NOTE: Native code generation is not currently implemented.
+    /// This function exists to maintain the API but always returns an error.
     pub fn generateCode(
         self: *DevEvaluator,
         module_env: *ModuleEnv,
         expr_idx: CIR.Expr.Idx,
         all_module_envs: []const *ModuleEnv,
     ) Error!CodeResult {
-        // Get the CIR expression to determine layout
-        const expr = module_env.store.getExpr(expr_idx);
-
-        // Determine result layout
-        var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
-        defer type_env.deinit();
-        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, expr, &type_env);
-
-        // Determine tuple length
-        var tuple_len: usize = 1;
-        switch (expr) {
-            .e_tuple => |tuple| {
-                const elems = module_env.store.sliceExpr(tuple.elems);
-                tuple_len = elems.len;
-            },
-            else => {},
-        }
-
-        // Create Mono IR store
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
-        // Find module index for the current module
-        var module_idx: u16 = 0;
-        for (all_module_envs, 0..) |env, i| {
-            if (env == module_env) {
-                module_idx = @intCast(i);
-                break;
-            }
-        }
-
-        // Lower CIR to Mono IR
-        var lowerer = MonoLower.init(
-            self.allocator,
-            &mono_store,
-            all_module_envs,
-            null, // lambda_inference - not needed for simple expressions
-            null, // layout_store - using default layouts
-        );
-        defer lowerer.deinit();
-
-        // Lower all top-level constants as entrypoints (prerequisite for compile-time evaluation)
-        // This processes constants in dependency order so each constant is lowered after its dependencies
-        var lowered_constants: ?MonoLower.LoweredConstants = null;
-        defer if (lowered_constants) |*lc| lc.deinit();
-
-        if (module_env.all_defs.span.len > 0) {
-            var constants_order = can.DependencyGraph.getConstantsInDependencyOrder(
-                module_env,
-                module_env.all_defs,
-                self.allocator,
-            ) catch |err| {
-                switch (err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                }
-            };
-            defer constants_order.deinit();
-
-            // Lower each constant in dependency order and track the mapping
-            if (lowerer.lowerConstants(module_idx, constants_order.sccs, self.allocator)) |lc| {
-                lowered_constants = lc;
-            } else |_| {
-                // Continue even if constants fail to lower
-            }
-        }
-
-        // Lower main expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch |err| {
-            switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                else => return error.UnsupportedExpression,
-            }
-        };
-
-        // Generate code from Mono IR, using the static interner for string literals
-        var mono_codegen = MonoExprCodeGen.initWithInterner(
-            self.allocator,
-            &mono_store,
-            all_module_envs,
-            &self.static_interner,
-        );
-        defer mono_codegen.deinit();
-
-        // Create scope for code generation
-        var mono_env = mono_codegen.createScope();
-        defer mono_env.deinit();
-
-        // Evaluate constants at compile time and bind their values to the scope
-        // This enables constant folding: lookups to constants will resolve to
-        // pre-computed values instead of re-evaluating at runtime.
-        if (lowered_constants) |lc| {
-            constant_eval.evaluateAndBindConstants(
-                self.allocator,
-                &mono_codegen,
-                lc,
-                all_module_envs,
-                &mono_env,
-            ) catch {
-                // Continue even if constant evaluation fails
-                // Constants will be evaluated at runtime as fallback
-            };
-        }
-
-        const code = mono_codegen.generateCodeForExpr(mono_expr_id, result_layout, &mono_env) catch |err| {
-            if (err == error.Crash or err == error.RuntimeError) {
-                const crash_msg = mono_codegen.getCrashMessage();
-                return CodeResult{
-                    .code = &[_]u8{},
-                    .allocator = self.allocator,
-                    .result_layout = result_layout,
-                    .tuple_len = tuple_len,
-                    .crash_message = crash_msg,
-                };
-            }
-            return err;
-        };
-
-        return CodeResult{
-            .code = code,
-            .allocator = self.allocator,
-            .result_layout = result_layout,
-            .tuple_len = tuple_len,
-            .crash_message = null,
-        };
+        _ = self;
+        _ = module_env;
+        _ = expr_idx;
+        _ = all_module_envs;
+        return error.UnsupportedExpression;
     }
 
     /// Generate native code from source code string (full pipeline)
+    ///
+    /// NOTE: Native code generation is not currently implemented.
+    /// This function exists to maintain the API but always returns an error.
     pub fn generateCodeFromSource(self: *DevEvaluator, source: []const u8) Error!CodeResult {
-        // Step 1: Create module environment and parse
-        var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
-        defer module_env.deinit();
-
-        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch {
-            return error.ParseError;
-        };
-        defer parse_ast.deinit(self.allocator);
-
-        if (parse_ast.hasErrors()) {
-            return error.ParseError;
-        }
-
-        parse_ast.store.emptyScratch();
-
-        // Step 2: Initialize CIR and canonicalize
-        module_env.initCIRFields("dev_eval") catch return error.OutOfMemory;
-
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        Can.populateModuleEnvs(
-            &module_envs_map,
-            &module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        ) catch return error.OutOfMemory;
-
-        var czer = Can.init(&module_env, &parse_ast, &module_envs_map) catch {
-            return error.CanonicalizeError;
-        };
-        defer czer.deinit();
-
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const canonical_expr = czer.canonicalizeExpr(expr_idx) catch {
-            return error.CanonicalizeError;
-        } orelse {
-            return error.CanonicalizeError;
-        };
-        const final_expr_idx = canonical_expr.get_idx();
-
-        // Step 3: Type check
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
-        module_env.imports.resolveImports(&module_env, &imported_modules);
-
-        const builtin_ctx: Check.BuiltinContext = .{
-            .module_name = module_env.insertIdent(base.Ident.for_text("dev_eval")) catch return error.OutOfMemory,
-            .bool_stmt = self.builtin_indices.bool_type,
-            .try_stmt = self.builtin_indices.try_type,
-            .str_stmt = self.builtin_indices.str_type,
-            .builtin_module = self.builtin_module.env,
-            .builtin_indices = self.builtin_indices,
-        };
-
-        var checker = Check.init(
-            self.allocator,
-            &module_env.types,
-            &module_env,
-            &imported_modules,
-            &module_envs_map,
-            &module_env.store.regions,
-            builtin_ctx,
-        ) catch return error.OutOfMemory;
-        defer checker.deinit();
-
-        _ = checker.checkExprRepl(final_expr_idx) catch {
-            return error.TypeError;
-        };
-
-        // Step 4: Generate native code using Mono IR
-        var all_module_envs = [_]*ModuleEnv{ &module_env, self.builtin_module.env };
-        return self.generateCode(&module_env, final_expr_idx, &all_module_envs);
+        _ = self;
+        _ = source;
+        return error.UnsupportedExpression;
     }
 
     /// Result of evaluation
@@ -563,7 +367,7 @@ pub const DevEvaluator = struct {
         }
     };
 
-    /// RocStr constants (must match MonoExprCodeGen)
+    /// RocStr constants
     const ROCSTR_SIZE: usize = 24;
     const SMALL_STR_MASK: u8 = 0x80;
 
@@ -649,38 +453,6 @@ pub const DevEvaluator = struct {
             },
             else => return error.UnsupportedType,
         };
-    }
-
-    // Public methods for direct code generation (used by tests)
-    pub fn generateReturnI64Code(self: *DevEvaluator, value: i64, result_layout: LayoutIdx) Error![]const u8 {
-        // Create a temporary MonoExprStore and codegen
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
-        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
-        defer mono_codegen.deinit();
-
-        return mono_codegen.generateReturnI64Code(value, result_layout);
-    }
-
-    pub fn generateReturnF64Code(self: *DevEvaluator, value: f64) Error![]const u8 {
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
-        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
-        defer mono_codegen.deinit();
-
-        return mono_codegen.generateReturnF64Code(value);
-    }
-
-    pub fn generateReturnI128Code(self: *DevEvaluator, value: i128) Error![]const u8 {
-        var mono_store = MonoExprStore.init(self.allocator);
-        defer mono_store.deinit();
-
-        var mono_codegen = MonoExprCodeGen.init(self.allocator, &mono_store, &.{});
-        defer mono_codegen.deinit();
-
-        return mono_codegen.generateReturnI128Code(value);
     }
 };
 
