@@ -455,10 +455,16 @@ pub const AArch64CodeGen = struct {
     pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) !void {
         if (offset >= -256 and offset <= 255) {
             try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
-        } else {
-            // For larger offsets, need scaled unsigned offset
-            const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> (if (width == .w64) 3 else 2));
+        } else if (offset > 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
             try self.emit.ldrRegMemUoff(width, dst, .FP, uoffset);
+        } else {
+            // Large negative offset - add offset to FP, then load
+            // Use IP0 as scratch register
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
         }
     }
 
@@ -466,23 +472,45 @@ pub const AArch64CodeGen = struct {
     pub fn emitStoreStack(self: *Self, width: RegisterWidth, offset: i32, src: GeneralReg) !void {
         if (offset >= -256 and offset <= 255) {
             try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
-        } else {
-            const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> (if (width == .w64) 3 else 2));
+        } else if (offset > 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
             try self.emit.strRegMemUoff(width, src, .FP, uoffset);
+        } else {
+            // Large negative offset - add offset to FP, then store
+            // Use IP0 as scratch register
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.strRegMemUoff(width, src, .IP0, 0);
         }
     }
 
     /// Load float64 from stack slot
     pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
-        // Use unsigned offset form (scaled by 8 for 64-bit)
-        const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> 3);
-        try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
+        if (offset >= 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
+            try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
+        } else {
+            // Negative offset - add offset to FP, then load
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.fldrRegMemUoff(.double, dst, .IP0, 0);
+        }
     }
 
     /// Store float64 to stack slot
     pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
-        const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> 3);
-        try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
+        if (offset >= 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
+            try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
+        } else {
+            // Negative offset - add offset to FP, then store
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.fstrRegMemUoff(.double, src, .IP0, 0);
+        }
     }
 
     // Immediate loading
