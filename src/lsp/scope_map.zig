@@ -165,10 +165,7 @@ pub const ScopeMap = struct {
 
                 // Process statements in order - each binding is visible to subsequent statements
                 const stmts = module_env.store.sliceStatements(block.stmts);
-                for (stmts, 0..) |stmt_idx, i| {
-                    // Calculate the scope end for this statement's bindings:
-                    // They're visible until the end of the block
-                    _ = i;
+                for (stmts) |stmt_idx| {
                     try self.processStatement(module_env, stmt_idx, block_end);
                 }
 

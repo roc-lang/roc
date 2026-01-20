@@ -37,7 +37,7 @@ test "ScopeMap init and deinit" {
 test "ScopeMap.isVisibleAt returns true for offset within range" {
     const binding = Binding{
         .ident = testIdent(0),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 50,
         .is_parameter = false,
@@ -52,7 +52,7 @@ test "ScopeMap.isVisibleAt returns true for offset within range" {
 test "ScopeMap.isVisibleAt returns false for offset outside range" {
     const binding = Binding{
         .ident = testIdent(0),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 50,
         .is_parameter = false,
@@ -68,7 +68,7 @@ test "ScopeMap.isVisibleAt returns false for offset outside range" {
 test "ScopeMap.isVisibleAt handles zero-width binding" {
     const binding = Binding{
         .ident = testIdent(0),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 10,
         .visible_to = 10, // Zero width
         .is_parameter = false,
@@ -83,7 +83,7 @@ test "ScopeMap.isVisibleAt handles zero-width binding" {
 test "ScopeMap.isVisibleAt handles parameter flag correctly" {
     const param_binding = Binding{
         .ident = testIdent(0),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
         .is_parameter = true,
@@ -107,7 +107,7 @@ test "ScopeMap.isVisibleAt handles parameter flag correctly" {
 test "ScopeMap.isVisibleAt handles max offset" {
     const binding = Binding{
         .ident = testIdent(0),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = std.math.maxInt(u32),
         .is_parameter = false,
@@ -137,7 +137,7 @@ test "ScopeMap manually added bindings are queryable" {
     // Manually add bindings (simulating what build() would do)
     try sm.bindings.append(allocator, .{
         .ident = testIdent(1),
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
         .is_parameter = false,
@@ -212,7 +212,7 @@ test "ScopeMap bindings can track nested scopes" {
     // Outer scope variable
     try sm.bindings.append(allocator, .{
         .ident = testIdent(1), // x
-        .pattern_idx = @enumFromInt(0),
+        .pattern_idx = undefined, // not read in isVisibleAt tests
         .visible_from = 0,
         .visible_to = 100,
         .is_parameter = false,

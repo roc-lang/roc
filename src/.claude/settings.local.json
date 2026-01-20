@@ -6,7 +6,8 @@
       "Bash(grep:*)",
       "Bash(xargs:*)",
       "Bash(ls:*)",
-      "Bash(zig build:*)"
+      "Bash(zig build:*)",
+      "Bash(./ci/zig_lints.sh:*)"
     ]
   }
 }

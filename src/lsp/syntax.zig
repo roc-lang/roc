@@ -2718,7 +2718,9 @@ pub const SyntaxChecker = struct {
     };
 
     /// Detect completion context from source text at the given position
-    fn detectCompletionContext(source: []const u8, line: u32, character: u32) CompletionContext {
+    pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) CompletionContext {
+        std.debug.print("detectCompletionContext: line={d}, character={d}, source.len={d}\n", .{ line, character, source.len });
+
         // Convert line/character to byte offset
         var current_line: u32 = 0;
         var line_start: usize = 0;
@@ -2734,26 +2736,37 @@ pub const SyntaxChecker = struct {
         }
 
         const cursor_offset = line_start + character;
+        std.debug.print("detectCompletionContext: line_start={d}, cursor_offset={d}\n", .{ line_start, cursor_offset });
+
         if (cursor_offset == 0 or cursor_offset > source.len) {
+            std.debug.print("detectCompletionContext: cursor out of bounds, returning .expression\n", .{});
             return .expression;
         }
 
         // Look backwards from cursor to find context
         var pos = cursor_offset;
 
+        // Show what's around the cursor
+        const start_show = if (pos > 20) pos - 20 else 0;
+        const end_show = if (pos + 5 < source.len) pos + 5 else source.len;
+        std.debug.print("detectCompletionContext: source around cursor [{d}..{d}]: '{s}'\n", .{ start_show, end_show, source[start_show..end_show] });
+
         // Skip any partial identifier being typed
         while (pos > 0 and (std.ascii.isAlphanumeric(source[pos - 1]) or source[pos - 1] == '_')) {
             pos -= 1;
         }
+        std.debug.print("detectCompletionContext: after skipping identifier, pos={d}\n", .{pos});
 
         // Skip whitespace to find the actual context character
         while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t')) {
             pos -= 1;
         }
+        std.debug.print("detectCompletionContext: after skipping whitespace, pos={d}\n", .{pos});
 
         // Check what's immediately before (after skipping whitespace)
         if (pos > 0) {
             const prev_char = source[pos - 1];
+            std.debug.print("detectCompletionContext: prev_char='{c}' (0x{x})\n", .{ prev_char, prev_char });
 
             if (prev_char == '.') {
                 // After a dot - could be module access or record field access
@@ -2849,12 +2862,13 @@ pub const SyntaxChecker = struct {
         };
         std.process.changeCurDir(dir_owned) catch {};
 
-        self.logDebug(.build, "completion: building {s}", .{absolute_path});
+        std.debug.print("completion: building {s}\n", .{absolute_path});
         const build_succeeded = blk: {
             env.build(absolute_path) catch |err| {
-                self.logDebug(.build, "completion: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+                std.debug.print("completion: build FAILED for {s}: {s}\n", .{ absolute_path, @errorName(err) });
                 break :blk false;
             };
+            std.debug.print("completion: build SUCCEEDED\n", .{});
             break :blk true;
         };
 
@@ -2898,17 +2912,29 @@ pub const SyntaxChecker = struct {
             break :blk if (root_module.env) |*e| e else null;
         } else null;
 
+        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}", .{ context, module_env_opt != null, build_succeeded });
+
         switch (context) {
             .after_module_dot => |module_name| {
+                std.debug.print("completion: after_module_dot for '{s}'", .{module_name});
                 // Get completions from the specified module
                 try self.addModuleMemberCompletions(&items, env, module_name);
             },
             .after_record_dot => |record_access| {
-                // Record field access - get fields from the record type
+                std.debug.print("completion: after_record_dot for '{s}' at offset {d}", .{ record_access.variable_name, record_access.variable_start });
+                // Record field access and method completions
                 if (module_env_opt) |module_env| {
+                    std.debug.print("completion: have module_env, calling addRecordFieldCompletions", .{});
+                    // Add record field completions
                     try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                    std.debug.print("completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
+                    // Add method completions for static dispatch
+                    try self.addMethodCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                    std.debug.print("completion: after addMethodCompletions, items={d}", .{items.items.len});
+                } else {
+                    std.debug.print("completion: NO module_env for record/method completions", .{});
                 }
-                // No fallback for record completions - we need type info
+                // No fallback for these completions - we need type info
             },
             .after_colon => {
                 // Type annotation context - add type names
@@ -3107,17 +3133,27 @@ pub const SyntaxChecker = struct {
         variable_name: []const u8,
         variable_start: u32,
     ) !void {
+        std.debug.print("addRecordFieldCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
+
         // Find the binding for this variable name
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
-        scope.build(module_env) catch return;
+        scope.build(module_env) catch |err| {
+            std.debug.print("addRecordFieldCompletions: scope.build failed: {}", .{err});
+            return;
+        };
+
+        std.debug.print("addRecordFieldCompletions: scope has {d} bindings", .{scope.bindings.items.len});
 
         // Find the binding with matching name that's visible at the variable position
         var found_binding: ?scope_map.Binding = null;
         for (scope.bindings.items) |binding| {
-            if (!scope_map.ScopeMap.isVisibleAt(binding, variable_start)) continue;
-            const name = module_env.getIdentText(binding.ident);
-            if (std.mem.eql(u8, name, variable_name)) {
+            const binding_name = module_env.getIdentText(binding.ident);
+            const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
+            std.debug.print("addRecordFieldCompletions: binding '{s}' visible_from={d} visible_to={d} is_visible={}", .{ binding_name, binding.visible_from, binding.visible_to, is_visible });
+            if (!is_visible) continue;
+            if (std.mem.eql(u8, binding_name, variable_name)) {
+                std.debug.print("addRecordFieldCompletions: FOUND binding '{s}'", .{binding_name});
                 found_binding = binding;
                 break;
             }
@@ -3126,6 +3162,7 @@ pub const SyntaxChecker = struct {
         // Also check top-level definitions
         if (found_binding == null) {
             const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+            std.debug.print("addRecordFieldCompletions: checking {d} top-level defs", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
                 const pattern = module_env.store.getPattern(def.pattern);
@@ -3137,7 +3174,9 @@ pub const SyntaxChecker = struct {
                 };
 
                 const name = module_env.getIdentText(ident_idx);
+                std.debug.print("addRecordFieldCompletions: def '{s}'", .{name});
                 if (std.mem.eql(u8, name, variable_name)) {
+                    std.debug.print("addRecordFieldCompletions: FOUND def '{s}'", .{name});
                     // Found the definition - get its type and extract record fields
                     const type_var = ModuleEnv.varFrom(def.pattern);
                     try self.addFieldsFromTypeVar(items, module_env, type_var);
@@ -3146,10 +3185,44 @@ pub const SyntaxChecker = struct {
             }
         }
 
+        // Also check statements (apps use statements for definitions)
+        if (found_binding == null) {
+            const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+            std.debug.print("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
+            for (statements_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                const pattern_idx = switch (stmt) {
+                    .s_decl => |decl| decl.pattern,
+                    .s_decl_gen => |decl| decl.pattern,
+                    else => continue,
+                };
+
+                const pattern = module_env.store.getPattern(pattern_idx);
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                std.debug.print("addRecordFieldCompletions: stmt '{s}'", .{name});
+                if (std.mem.eql(u8, name, variable_name)) {
+                    std.debug.print("addRecordFieldCompletions: FOUND stmt '{s}'", .{name});
+                    // Found the definition - get its type and extract record fields
+                    const type_var = ModuleEnv.varFrom(pattern_idx);
+                    try self.addFieldsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
         if (found_binding) |binding| {
+            std.debug.print("addRecordFieldCompletions: using found_binding", .{});
             // Get the type of this binding
             const type_var = ModuleEnv.varFrom(binding.pattern_idx);
             try self.addFieldsFromTypeVar(items, module_env, type_var);
+        } else {
+            std.debug.print("addRecordFieldCompletions: NO binding found for '{s}'", .{variable_name});
         }
     }
 
@@ -3166,6 +3239,8 @@ pub const SyntaxChecker = struct {
         const resolved = type_store.resolveVar(type_var);
         const content = resolved.desc.content;
 
+        std.debug.print("addFieldsFromTypeVar: type_var={}, content tag={s}", .{ type_var, @tagName(content) });
+
         // Try to get record fields, handling aliases that wrap records
         try self.addFieldsFromContent(items, module_env, content);
     }
@@ -3179,8 +3254,11 @@ pub const SyntaxChecker = struct {
     ) !void {
         const type_store = &module_env.types;
 
+        std.debug.print("addFieldsFromContent: content tag={s}", .{@tagName(content)});
+
         // Check if this is directly a record
         if (content.unwrapRecord()) |record| {
+            std.debug.print("addFieldsFromContent: found record!", .{});
             try self.addFieldsFromRecord(items, module_env, record);
             return;
         }
@@ -3188,13 +3266,17 @@ pub const SyntaxChecker = struct {
         // Check if this is an alias (e.g., a type alias wrapping a record)
         switch (content) {
             .alias => |alias| {
+                std.debug.print("addFieldsFromContent: unwrapping alias", .{});
                 // Get the backing type of the alias
                 const backing_var = type_store.getAliasBackingVar(alias);
                 const backing_resolved = type_store.resolveVar(backing_var);
                 try self.addFieldsFromContent(items, module_env, backing_resolved.desc.content);
             },
+            .structure => |flat_type| {
+                std.debug.print("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
+            },
             else => {
-                // Not a record or alias - no fields to add
+                std.debug.print("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
             },
         }
     }
@@ -3434,6 +3516,245 @@ pub const SyntaxChecker = struct {
                 }
             }
         }
+    }
+
+    /// Add method completions for static dispatch (e.g., "value.method()")
+    /// This finds methods available on the type of the variable before the dot.
+    fn addMethodCompletions(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        variable_name: []const u8,
+        variable_start: u32,
+    ) !void {
+        // Find the binding for this variable name (same as record field completion)
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch return;
+
+        // Find the binding with matching name that's visible at the variable position
+        var found_binding: ?scope_map.Binding = null;
+        for (scope.bindings.items) |binding| {
+            if (!scope_map.ScopeMap.isVisibleAt(binding, variable_start)) continue;
+            const name = module_env.getIdentText(binding.ident);
+            if (std.mem.eql(u8, name, variable_name)) {
+                found_binding = binding;
+                break;
+            }
+        }
+
+        // Also check top-level definitions
+        if (found_binding == null) {
+            const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+            for (defs_slice) |def_idx| {
+                const def = module_env.store.getDef(def_idx);
+                const pattern = module_env.store.getPattern(def.pattern);
+
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, name, variable_name)) {
+                    // Found the definition - get its type and find methods
+                    const type_var = ModuleEnv.varFrom(def.pattern);
+                    try self.addMethodsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
+        // Also check statements (apps use statements for definitions)
+        if (found_binding == null) {
+            const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+            for (statements_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                const pattern_idx = switch (stmt) {
+                    .s_decl => |decl| decl.pattern,
+                    .s_decl_gen => |decl| decl.pattern,
+                    else => continue,
+                };
+
+                const pattern = module_env.store.getPattern(pattern_idx);
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, name, variable_name)) {
+                    // Found the definition - get its type and find methods
+                    const type_var = ModuleEnv.varFrom(pattern_idx);
+                    try self.addMethodsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
+        if (found_binding) |binding| {
+            // Get the type of this binding and find methods
+            const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+            try self.addMethodsFromTypeVar(items, module_env, type_var);
+        }
+    }
+
+    /// Extract methods available for a type variable and add them as completions.
+    fn addMethodsFromTypeVar(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_var: types.Var,
+    ) !void {
+        const type_store = &module_env.types;
+
+        // Resolve the type variable to get its content
+        const resolved = type_store.resolveVar(type_var);
+        const content = resolved.desc.content;
+
+        // Try to extract the type identifier from the content
+        const type_ident_opt: ?base.Ident.Idx = switch (content) {
+            .alias => |alias| alias.ident.ident_idx,
+            .structure => |flat_type| switch (flat_type) {
+                .nominal_type => |nominal| nominal.ident.ident_idx,
+                else => null,
+            },
+            else => null,
+        };
+
+        if (type_ident_opt) |type_ident| {
+            // Look up methods registered for this type in method_idents
+            try self.addMethodsForTypeIdent(items, module_env, type_ident);
+        }
+
+        // Also handle alias types by recursively checking the backing type
+        if (content == .alias) {
+            const alias = content.alias;
+            const backing_var = type_store.getAliasBackingVar(alias);
+            const backing_resolved = type_store.resolveVar(backing_var);
+
+            // Check if the backing type is a nominal type with methods
+            if (backing_resolved.desc.content == .structure) {
+                const flat_type = backing_resolved.desc.content.structure;
+                if (flat_type == .nominal_type) {
+                    const nominal = flat_type.nominal_type;
+                    try self.addMethodsForTypeIdent(items, module_env, nominal.ident.ident_idx);
+                }
+            }
+        }
+    }
+
+    /// Add methods for a specific type identifier by searching method_idents.
+    fn addMethodsForTypeIdent(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_ident: base.Ident.Idx,
+    ) !void {
+        // Initialize type writer for formatting method signatures
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Get the type name for display purposes
+        const type_name = module_env.getIdentText(type_ident);
+
+        // Iterate through method_idents to find all methods for this type.
+        // The method_idents maps (type_ident, method_ident) -> qualified_ident.
+        // We need to find all entries where the type_ident matches.
+        const entries = module_env.method_idents.entries.items;
+        for (entries) |entry| {
+            // Check if this method is for our type
+            if (entry.key.type_ident == type_ident) {
+                const method_ident = entry.key.method_ident;
+                const method_name = module_env.getIdentText(method_ident);
+
+                if (method_name.len == 0) continue;
+
+                // Skip if already added (avoid duplicates)
+                var already_added = false;
+                for (items.items) |item| {
+                    if (std.mem.eql(u8, item.label, method_name)) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (already_added) continue;
+
+                // Try to get the method's type signature
+                var detail: ?[]const u8 = null;
+                const qualified_ident = entry.value;
+                const qualified_name = module_env.getIdentText(qualified_ident);
+
+                // Look up the method definition to get its type
+                if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
+                    if (type_writer) |*tw| {
+                        tw.write(method_type_var, .one_line) catch {};
+                        const type_str = tw.get();
+                        if (type_str.len > 0) {
+                            detail = self.allocator.dupe(u8, type_str) catch null;
+                        }
+                        tw.reset();
+                    }
+                }
+
+                // If we couldn't get the type signature, at least show which type it's from
+                if (detail == null and type_name.len > 0 and qualified_name.len > 0) {
+                    detail = std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name}) catch null;
+                }
+
+                try items.append(self.allocator, .{
+                    .label = method_name,
+                    .kind = @intFromEnum(completion_handler.CompletionItemKind.method),
+                    .detail = detail,
+                });
+            }
+        }
+    }
+
+    /// Find the type of a method definition by its qualified identifier.
+    fn findMethodType(_: *SyntaxChecker, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        // Look through definitions to find the method
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return ModuleEnv.varFrom(def.pattern);
+            }
+        }
+
+        // Also check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_decl_gen => |decl| decl.pattern,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return ModuleEnv.varFrom(pattern_idx);
+            }
+        }
+
+        return null;
     }
 };
 

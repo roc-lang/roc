@@ -174,3 +174,186 @@ test "syntax checker reports diagnostics for invalid source" {
     }
     try std.testing.expect(total_diags > 0);
 }
+
+test "completion context detects after_record_dot for lowercase identifier" {
+    // Test that detectCompletionContext correctly identifies record/method access
+    const SyntaxModule = @import("../syntax.zig");
+
+    // Test case: "my_var." should be detected as after_record_dot
+    const source = "main = my_var.";
+    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 14);
+
+    switch (context) {
+        .after_record_dot => |access| {
+            try std.testing.expectEqualStrings("my_var", access.variable_name);
+        },
+        else => try std.testing.expect(false), // Should be after_record_dot
+    }
+}
+
+test "completion context detects after_module_dot for uppercase identifier" {
+    // Test that detectCompletionContext correctly identifies module access
+    const SyntaxModule = @import("../syntax.zig");
+
+    // Test case: "Str." should be detected as after_module_dot
+    const source = "main = Str.";
+    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 11);
+
+    switch (context) {
+        .after_module_dot => |module_name| {
+            try std.testing.expectEqualStrings("Str", module_name);
+        },
+        else => try std.testing.expect(false), // Should be after_module_dot
+    }
+}
+
+test "completion context detects expression context" {
+    // Test that detectCompletionContext correctly identifies general expression context
+    const SyntaxModule = @import("../syntax.zig");
+
+    // Test case: "main = " should be detected as expression
+    const source = "main = ";
+    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 7);
+
+    switch (context) {
+        .expression => {}, // Expected
+        else => try std.testing.expect(false), // Should be expression
+    }
+}
+
+test "completion context detects after_colon for type annotation" {
+    // Test that detectCompletionContext correctly identifies type annotation context
+    const SyntaxModule = @import("../syntax.zig");
+
+    // Test case: "foo : " should be detected as after_colon
+    const source = "foo : ";
+    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 6);
+
+    switch (context) {
+        .after_colon => {}, // Expected
+        else => try std.testing.expect(false), // Should be after_colon
+    }
+}
+
+test "getCompletionsAtPosition returns basic completions" {
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create a simple app with a definition
+    const contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_value = "hello"
+        \\
+        \\main = my_
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(contents);
+
+    try tmp.dir.writeFile(.{ .sub_path = "completion.roc", .data = contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "completion.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // Request completion at the position after "main = my_"
+    // Line 4 (0-indexed), character 10
+    const result = try checker.getCompletionsAtPosition(uri, contents, 4, 10);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        // Should have at least some completions (builtin modules and local defs)
+        try std.testing.expect(completion_result.items.len > 0);
+    }
+}
+
+test "record field completion works for app definitions" {
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create an app with a record definition
+    const contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\
+        \\main = my_record.
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(contents);
+
+    std.debug.print("\n=== TEST: record field completion ===\n", .{});
+    std.debug.print("Contents:\n{s}\n", .{contents});
+
+    try tmp.dir.writeFile(.{ .sub_path = "record_completion.roc", .data = contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "record_completion.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // Request completion after "my_record."
+    // Line 4: "main = my_record."
+    // Character positions: m(0) a(1) i(2) n(3) ' '(4) =(5) ' '(6) m(7) y(8) _(9) r(10) e(11) c(12) o(13) r(14) d(15) .(16)
+    // So character 17 is right after the dot
+    std.debug.print("Requesting completion at line 4, char 17\n", .{});
+    const result = try checker.getCompletionsAtPosition(uri, contents, 4, 17);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        std.debug.print("Got {d} completion items:\n", .{completion_result.items.len});
+        for (completion_result.items) |item| {
+            std.debug.print("  - {s} (kind={?})\n", .{ item.label, item.kind });
+        }
+
+        // Should have record field completions (foo, bar)
+        var found_foo = false;
+        var found_bar = false;
+        for (completion_result.items) |item| {
+            if (std.mem.eql(u8, item.label, "foo")) found_foo = true;
+            if (std.mem.eql(u8, item.label, "bar")) found_bar = true;
+        }
+
+        std.debug.print("found_foo={}, found_bar={}\n", .{ found_foo, found_bar });
+
+        // These should be true for record field completion to work
+        try std.testing.expect(found_foo);
+        try std.testing.expect(found_bar);
+    } else {
+        std.debug.print("Got null result\n", .{});
+        try std.testing.expect(false); // Should have got a result
+    }
+}
