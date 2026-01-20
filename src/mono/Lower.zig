@@ -340,6 +340,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const lambda_id = try self.lowerExprFromIdx(module_env, closure.lambda_idx);
             const captures = try self.lowerCaptures(module_env, closure.captures);
 
+            // Determine if this closure is bound to a variable.
+            // If current_binding_pattern is set, we're in a let statement like `f = |x| ...`
+            // which means the closure may have multiple call sites.
+            // If not set, the closure is used directly (e.g., `map(|x| x + 1, list)`)
+            // and is safe to inline at its single call site.
+            const is_bound = self.current_binding_pattern != null;
+
             // Select the closure representation based on captures
             const representation = self.selectClosureRepresentation(captures);
 
@@ -353,6 +360,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .representation = representation,
                 .recursion = recursion_info.recursion,
                 .self_recursive = recursion_info.self_recursive,
+                .is_bound_to_variable = is_bound,
             } };
         },
 
@@ -1200,6 +1208,9 @@ fn lowerExprWithLambdaSet(
             // Detect recursion
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
 
+            // Check if bound to variable (same logic as regular closure lowering)
+            const is_bound = self.current_binding_pattern != null;
+
             const mono_expr: MonoExpr = .{ .closure = .{
                 .closure_layout = .i64, // TODO
                 .lambda = lambda_id,
@@ -1207,6 +1218,7 @@ fn lowerExprWithLambdaSet(
                 .representation = representation,
                 .recursion = recursion_info.recursion,
                 .self_recursive = recursion_info.self_recursive,
+                .is_bound_to_variable = is_bound,
             } };
 
             return self.store.addExpr(mono_expr, Region.zero());
@@ -1225,6 +1237,8 @@ fn lowerExprWithLambdaSet(
             const lambda_id = try self.store.addExpr(lambda_expr, Region.zero());
 
             // Wrap in closure with enum_dispatch representation
+            // Check if bound to variable (same logic as regular closure lowering)
+            const is_bound = self.current_binding_pattern != null;
             const num_members = self.store.getLambdaSetMembers(lambda_set_members).len;
             const closure_expr: MonoExpr = .{ .closure = .{
                 .closure_layout = .i64,
@@ -1237,6 +1251,7 @@ fn lowerExprWithLambdaSet(
                 } },
                 .recursion = .not_recursive,
                 .self_recursive = .not_self_recursive,
+                .is_bound_to_variable = is_bound,
             } };
 
             return self.store.addExpr(closure_expr, Region.zero());

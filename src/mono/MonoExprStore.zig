@@ -36,6 +36,14 @@ const MonoStmt = ir.MonoStmt;
 const MonoStmtSpan = ir.MonoStmtSpan;
 const MonoSymbol = ir.MonoSymbol;
 
+// Control flow statement types (for tail recursion)
+const CFStmt = ir.CFStmt;
+const CFStmtId = ir.CFStmtId;
+const CFSwitchBranch = ir.CFSwitchBranch;
+const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
+const LayoutIdxSpan = ir.LayoutIdxSpan;
+const MonoProc = ir.MonoProc;
+
 const Self = @This();
 
 /// All expressions in the store
@@ -69,6 +77,15 @@ captures: std.ArrayList(MonoCapture),
 /// Lambda set members (for closure dispatch)
 lambda_set_members: std.ArrayList(LambdaSetMember),
 
+/// Control flow statements (for tail recursion optimization)
+cf_stmts: std.ArrayList(CFStmt),
+
+/// Control flow switch branches
+cf_switch_branches: std.ArrayList(CFSwitchBranch),
+
+/// Complete procedures (for two-pass compilation)
+procs: std.ArrayList(MonoProc),
+
 /// Map from global symbol to its definition expression
 /// Used for looking up top-level definitions
 symbol_defs: std.AutoHashMap(u48, MonoExprId),
@@ -93,6 +110,9 @@ pub fn init(allocator: Allocator) Self {
         .stmts = std.ArrayList(MonoStmt).empty,
         .captures = std.ArrayList(MonoCapture).empty,
         .lambda_set_members = std.ArrayList(LambdaSetMember).empty,
+        .cf_stmts = std.ArrayList(CFStmt).empty,
+        .cf_switch_branches = std.ArrayList(CFSwitchBranch).empty,
+        .procs = std.ArrayList(MonoProc).empty,
         .symbol_defs = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .strings = base.StringLiteral.Store{},
         .allocator = allocator,
@@ -122,6 +142,9 @@ pub fn deinit(self: *Self) void {
     self.stmts.deinit(self.allocator);
     self.captures.deinit(self.allocator);
     self.lambda_set_members.deinit(self.allocator);
+    self.cf_stmts.deinit(self.allocator);
+    self.cf_switch_branches.deinit(self.allocator);
+    self.procs.deinit(self.allocator);
     self.symbol_defs.deinit();
     self.strings.deinit(self.allocator);
 }
@@ -382,6 +405,95 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
 /// Get a string literal by index
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
+}
+
+// ============ Control Flow Statement operations (for tail recursion) ============
+
+/// Add a control flow statement and return its ID
+pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
+    const idx = self.cf_stmts.items.len;
+    try self.cf_stmts.append(self.allocator, stmt);
+    return @enumFromInt(@as(u32, @intCast(idx)));
+}
+
+/// Get a control flow statement by ID
+pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
+    return self.cf_stmts.items[@intFromEnum(id)];
+}
+
+/// Get a mutable reference to a control flow statement (for patching)
+pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
+    return &self.cf_stmts.items[@intFromEnum(id)];
+}
+
+/// Add control flow switch branches and return a span
+pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
+    if (branches.len == 0) {
+        return CFSwitchBranchSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.cf_switch_branches.items.len));
+    try self.cf_switch_branches.appendSlice(self.allocator, branches);
+
+    return .{
+        .start = start,
+        .len = @intCast(branches.len),
+    };
+}
+
+/// Get control flow switch branches from a span
+pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) []const CFSwitchBranch {
+    if (span.len == 0) return &.{};
+    return self.cf_switch_branches.items[span.start..][0..span.len];
+}
+
+/// Add a span of layout indices
+pub fn addLayoutIdxSpan(self: *Self, layouts: []const layout.Idx) Allocator.Error!LayoutIdxSpan {
+    if (layouts.len == 0) {
+        return LayoutIdxSpan.empty();
+    }
+
+    const start = @as(u32, @intCast(self.extra_data.items.len));
+
+    for (layouts) |idx| {
+        try self.extra_data.append(self.allocator, @intFromEnum(idx));
+    }
+
+    return .{
+        .start = start,
+        .len = @intCast(layouts.len),
+    };
+}
+
+/// Get layout indices from a span
+pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.Idx {
+    if (span.len == 0) return &.{};
+    const slice = self.extra_data.items[span.start..][0..span.len];
+    return @ptrCast(slice);
+}
+
+// ============ Procedure operations (for two-pass compilation) ============
+
+/// Add a procedure and return its index
+pub fn addProc(self: *Self, proc: MonoProc) Allocator.Error!usize {
+    const idx = self.procs.items.len;
+    try self.procs.append(self.allocator, proc);
+    return idx;
+}
+
+/// Get a procedure by index
+pub fn getProc(self: *const Self, idx: usize) MonoProc {
+    return self.procs.items[idx];
+}
+
+/// Get all procedures
+pub fn getProcs(self: *const Self) []const MonoProc {
+    return self.procs.items;
+}
+
+/// Get the number of procedures
+pub fn procCount(self: *const Self) usize {
+    return self.procs.items.len;
 }
 
 // ============ Statistics ============

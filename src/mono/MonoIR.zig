@@ -405,6 +405,11 @@ pub const MonoExpr = union(enum) {
         recursion: Recursive,
         /// Whether this closure captures itself (for recursive closures)
         self_recursive: SelfRecursive,
+        /// Whether this closure is bound to a variable (vs. used directly as an argument).
+        /// Used by the inlining heuristic:
+        /// - true: Closure may have multiple call sites, emit as separate function
+        /// - false: Closure is used directly (e.g., passed to map), safe to inline
+        is_bound_to_variable: bool,
     },
 
     // ============ Data structures ============
@@ -810,6 +815,148 @@ pub const MonoPattern = union(enum) {
         layout_idx: layout.Idx,
         inner: MonoPatternId,
     },
+};
+
+// ============ Control Flow Statement IR (for tail recursion) ============
+
+/// Index into control flow statements storage
+pub const CFStmtId = enum(u32) {
+    _,
+
+    pub const none: CFStmtId = @enumFromInt(std.math.maxInt(u32));
+
+    pub fn isNone(self: CFStmtId) bool {
+        return self == none;
+    }
+};
+
+/// Span of layout indices (for parameter layouts in join points)
+pub const LayoutIdxSpan = extern struct {
+    /// Starting index into extra_data where layout.Idx values are stored
+    start: u32,
+    /// Number of layouts in this span
+    len: u16,
+
+    pub fn empty() LayoutIdxSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: LayoutIdxSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// A branch in a control flow switch statement
+pub const CFSwitchBranch = struct {
+    /// The discriminant value for this branch
+    value: u64,
+    /// The statement body for this branch
+    body: CFStmtId,
+};
+
+/// Span of control flow switch branches
+pub const CFSwitchBranchSpan = extern struct {
+    start: u32,
+    len: u16,
+
+    pub fn empty() CFSwitchBranchSpan {
+        return .{ .start = 0, .len = 0 };
+    }
+
+    pub fn isEmpty(self: CFSwitchBranchSpan) bool {
+        return self.len == 0;
+    }
+};
+
+/// Control Flow Statement IR - for tail recursion optimization
+/// This mirrors Roc's Stmt enum in ir.rs
+///
+/// The key insight: function bodies are represented as chains of statements
+/// where each statement explicitly specifies what happens next. This makes
+/// tail position explicit and enables Join/Jump for tail recursion.
+pub const CFStmt = union(enum) {
+    /// Let binding: let pattern = expr in next
+    /// The fundamental statement that binds a value and continues
+    let_stmt: struct {
+        pattern: MonoPatternId,
+        value: MonoExprId,
+        next: CFStmtId,
+    },
+
+    /// Join point definition (loop entry point for tail recursion)
+    /// join id(params) = body in remainder
+    ///
+    /// A join point is a labeled location that can be jumped to.
+    /// When a tail-recursive call is detected, it becomes a Jump to the Join.
+    join: struct {
+        /// Unique identifier for this join point
+        id: JoinPointId,
+        /// Parameters that get rebound on each jump
+        params: MonoPatternSpan,
+        /// Layout of each parameter
+        param_layouts: LayoutIdxSpan,
+        /// The body (executed when jumped to)
+        body: CFStmtId,
+        /// The remainder (executed after join is defined, typically an initial jump)
+        remainder: CFStmtId,
+    },
+
+    /// Jump to join point (tail call optimization)
+    /// This replaces a tail-recursive call with a jump back to the join point
+    jump: struct {
+        /// The join point to jump to
+        target: JoinPointId,
+        /// Arguments to pass (will be bound to join point params)
+        args: MonoExprSpan,
+    },
+
+    /// Return a value (function exit)
+    ret: struct {
+        value: MonoExprId,
+    },
+
+    /// Expression statement (for side effects or intermediate computation)
+    expr_stmt: struct {
+        value: MonoExprId,
+        next: CFStmtId,
+    },
+
+    /// Switch/match statement (for conditional control flow)
+    switch_stmt: struct {
+        /// Condition expression to switch on
+        cond: MonoExprId,
+        /// Layout of the condition
+        cond_layout: layout.Idx,
+        /// Branches for specific values
+        branches: CFSwitchBranchSpan,
+        /// Default branch (if no match)
+        default_branch: CFStmtId,
+        /// Layout of the result
+        ret_layout: layout.Idx,
+    },
+};
+
+/// A complete procedure/function ready for code generation
+/// This mirrors Roc's Proc struct in ir.rs
+///
+/// Key insight: procedures are compiled as complete units BEFORE any
+/// calls to them are processed. This ensures the function is fully
+/// defined (including RET instruction) before recursion can occur.
+pub const MonoProc = struct {
+    /// The symbol this procedure is bound to
+    name: MonoSymbol,
+    /// Parameter patterns
+    args: MonoPatternSpan,
+    /// Layout of each argument
+    arg_layouts: LayoutIdxSpan,
+    /// The procedure body as a control flow statement
+    body: CFStmtId,
+    /// Return type layout
+    ret_layout: layout.Idx,
+    /// Layout of closure data (if this is a closure), null otherwise
+    closure_data_layout: ?layout.Idx,
+    /// Whether this procedure is self-recursive
+    is_self_recursive: SelfRecursive,
 };
 
 // ============ Tests ============

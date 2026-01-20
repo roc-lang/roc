@@ -56,6 +56,14 @@ pub const JoinPointId = MonoIR.JoinPointId;
 pub const LambdaSetMember = MonoIR.LambdaSetMember;
 pub const LambdaSetMemberSpan = MonoIR.LambdaSetMemberSpan;
 
+// Control flow statement types (for tail recursion)
+pub const CFStmt = MonoIR.CFStmt;
+pub const CFStmtId = MonoIR.CFStmtId;
+pub const CFSwitchBranch = MonoIR.CFSwitchBranch;
+pub const CFSwitchBranchSpan = MonoIR.CFSwitchBranchSpan;
+pub const LayoutIdxSpan = MonoIR.LayoutIdxSpan;
+pub const MonoProc = MonoIR.MonoProc;
+
 test "mono tests" {
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(MonoIR);
