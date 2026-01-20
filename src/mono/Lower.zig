@@ -1337,6 +1337,87 @@ pub const EntryPoint = struct {
     expr_idx: CIR.Expr.Idx,
 };
 
+/// A lowered constant: maps a definition to its Mono IR expression.
+/// This is used to track constants after lowering so they can be
+/// evaluated at compile time.
+pub const LoweredConstant = struct {
+    /// The module this constant belongs to
+    module_idx: u16,
+    /// The original CIR definition index
+    def_idx: CIR.Def.Idx,
+    /// The Mono IR expression ID for this constant's value
+    mono_expr_id: MonoExprId,
+};
+
+/// Result of lowering all constants in a module.
+pub const LoweredConstants = struct {
+    /// Array of lowered constants in dependency order
+    constants: []LoweredConstant,
+    allocator: Allocator,
+
+    pub fn deinit(self: *LoweredConstants) void {
+        self.allocator.free(self.constants);
+    }
+};
+
+/// Lower all constants from the given SCCs and return the mapping.
+///
+/// This lowers each constant definition to Mono IR and tracks the mapping
+/// from def index to MonoExprId, enabling later compile-time evaluation.
+///
+/// Parameters:
+/// - lowerer: The initialized lowerer to use
+/// - module_idx: The module these constants belong to
+/// - sccs: The SCCs containing constant definitions in dependency order
+/// - allocator: Allocator for the result
+///
+/// Returns a LoweredConstants struct containing the mapping from each
+/// constant's def_idx to its mono_expr_id.
+pub fn lowerConstants(
+    lowerer: *Self,
+    module_idx: u16,
+    sccs: []const can.DependencyGraph.SCC,
+    allocator: Allocator,
+) Error!LoweredConstants {
+    // Count total constants across all SCCs
+    var total_constants: usize = 0;
+    for (sccs) |scc| {
+        total_constants += scc.defs.len;
+    }
+
+    if (total_constants == 0) {
+        return LoweredConstants{
+            .constants = &[_]LoweredConstant{},
+            .allocator = allocator,
+        };
+    }
+
+    var constants = allocator.alloc(LoweredConstant, total_constants) catch return error.OutOfMemory;
+    errdefer allocator.free(constants);
+
+    const module_env = lowerer.getModuleEnv(module_idx) orelse return error.ModuleNotFound;
+
+    var i: usize = 0;
+    for (sccs) |scc| {
+        for (scc.defs) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const mono_expr_id = try lowerer.lowerExpr(module_idx, def.expr);
+
+            constants[i] = .{
+                .module_idx = module_idx,
+                .def_idx = def_idx,
+                .mono_expr_id = mono_expr_id,
+            };
+            i += 1;
+        }
+    }
+
+    return LoweredConstants{
+        .constants = constants,
+        .allocator = allocator,
+    };
+}
+
 /// Lower all reachable expressions from entry points (for roc build)
 pub fn lowerFromEntryPoints(
     allocator: Allocator,

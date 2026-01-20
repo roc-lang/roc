@@ -380,6 +380,35 @@ pub const DevEvaluator = struct {
         );
         defer lowerer.deinit();
 
+        // Lower all top-level constants as entrypoints (prerequisite for compile-time evaluation)
+        // This processes constants in dependency order so each constant is lowered after its dependencies
+        var lowered_constants: ?MonoLower.LoweredConstants = null;
+        defer if (lowered_constants) |*lc| lc.deinit();
+
+        if (module_env.all_defs.span.len > 0) {
+            var constants_order = can.DependencyGraph.getConstantsInDependencyOrder(
+                module_env,
+                module_env.all_defs,
+                self.allocator,
+            ) catch |err| {
+                switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                }
+            };
+            defer constants_order.deinit();
+
+            // Lower each constant in dependency order and track the mapping
+            if (lowerer.lowerConstants(module_idx, constants_order.sccs, self.allocator)) |lc| {
+                lowered_constants = lc;
+            } else |_| {
+                // Continue even if constants fail to lower
+            }
+        }
+
+        // TODO: Use lowered_constants for compile-time evaluation
+        // For now, the mapping is available but not yet used.
+        // Future work will generate code for each constant and execute it.
+
         const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch |err| {
             switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
