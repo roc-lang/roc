@@ -728,7 +728,7 @@ const Unifier = struct {
                 const a_backing_var = self.types_store.getNominalBackingVar(a_type);
                 const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
                 if (a_backing_resolved.desc.content == .err) {
-                    self.merge(vars, vars.b.desc.content);
+                    self.merge(vars, .err);
                     return;
                 }
 
@@ -737,7 +737,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
 
@@ -879,7 +879,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_record.fields, .{ .ext = a_record.ext }, .b_is_nominal);
@@ -925,7 +925,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
                         try self.unifyRecordWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_fields, .unbound, .b_is_nominal);
@@ -958,7 +958,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
 
@@ -1006,7 +1006,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
                         try self.unifyTagUnionWithNominal(vars, b_type, b_backing_var, b_backing_resolved, a_tag_union, .b_is_nominal);
@@ -1031,7 +1031,7 @@ const Unifier = struct {
                         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
                         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
                         if (b_backing_resolved.desc.content == .err) {
-                            self.merge(vars, vars.a.desc.content);
+                            self.merge(vars, .err);
                             return;
                         }
 
@@ -1091,17 +1091,11 @@ const Unifier = struct {
         // Check if either nominal type has an invalid backing variable
         const a_backing_var = self.types_store.getNominalBackingVar(a_type);
         const a_backing_resolved = self.types_store.resolveVar(a_backing_var);
-        if (a_backing_resolved.desc.content == .err) {
-            // Invalid nominal type - treat as transparent
-            self.merge(vars, vars.b.desc.content);
-            return;
-        }
-
         const b_backing_var = self.types_store.getNominalBackingVar(b_type);
         const b_backing_resolved = self.types_store.resolveVar(b_backing_var);
-        if (b_backing_resolved.desc.content == .err) {
-            // Invalid nominal type - treat as transparent
-            self.merge(vars, vars.a.desc.content);
+        if (a_backing_resolved.desc.content == .err or b_backing_resolved.desc.content == .err) {
+            // Invalid nominal type - propagate the error
+            self.merge(vars, .err);
             return;
         }
 
