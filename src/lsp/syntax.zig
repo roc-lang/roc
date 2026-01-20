@@ -40,6 +40,9 @@ pub const SyntaxChecker = struct {
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
     /// This is swapped with build_env after each successful build.
     previous_build_env: ?*BuildEnv = null,
+    /// Snapshot of the most recent successful build per module (kept for completions).
+    snapshot_envs: std.StringHashMapUnmanaged(*BuildEnv) = .{},
+    snapshot_env_ref_counts: std.AutoHashMapUnmanaged(*BuildEnv, usize) = .{},
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
@@ -56,6 +59,8 @@ pub const SyntaxChecker = struct {
     }
 
     pub fn deinit(self: *SyntaxChecker) void {
+        self.clearSnapshots();
+
         if (self.build_env) |env| {
             env.deinit();
             self.allocator.destroy(env);
@@ -66,6 +71,7 @@ pub const SyntaxChecker = struct {
             self.allocator.destroy(env);
             self.previous_build_env = null;
         }
+
         self.dependency_graph.deinit();
     }
 
@@ -152,6 +158,10 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
+        if (self.shouldSnapshotBuild(absolute_path, drained)) {
+            self.storeSnapshotEnv(env, absolute_path);
+        }
+
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
@@ -226,6 +236,60 @@ pub const SyntaxChecker = struct {
         return env_ptr;
     }
 
+    fn shouldSnapshotBuild(self: *SyntaxChecker, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {
+        _ = self;
+        var saw_entry = false;
+        for (drained) |entry| {
+            if (!std.mem.eql(u8, entry.abs_path, absolute_path)) continue;
+            saw_entry = true;
+            if (entry.reports.len > 0) return false;
+        }
+        return saw_entry;
+    }
+
+    fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
+        if (self.snapshot_envs.get(absolute_path)) |existing| {
+            self.releaseSnapshotEnv(existing);
+            _ = self.snapshot_envs.remove(absolute_path);
+        }
+
+        const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
+        self.snapshot_envs.put(self.allocator, owned_path, env) catch {
+            self.allocator.free(owned_path);
+            return;
+        };
+        self.retainSnapshotEnv(env);
+    }
+
+    fn retainSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
+        const entry = self.snapshot_env_ref_counts.get(env);
+        const next_count = if (entry) |count| count + 1 else 1;
+        _ = self.snapshot_env_ref_counts.put(self.allocator, env, next_count) catch {};
+    }
+
+    fn releaseSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
+        if (self.snapshot_env_ref_counts.get(env)) |count| {
+            if (count <= 1) {
+                _ = self.snapshot_env_ref_counts.remove(env);
+                env.deinit();
+                self.allocator.destroy(env);
+            } else {
+                _ = self.snapshot_env_ref_counts.put(self.allocator, env, count - 1) catch {};
+            }
+        }
+    }
+
+    fn clearSnapshots(self: *SyntaxChecker) void {
+        var it = self.snapshot_envs.iterator();
+        while (it.next()) |entry| {
+            const env = entry.value_ptr.*;
+            self.releaseSnapshotEnv(env);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.snapshot_envs.clearRetainingCapacity();
+        self.snapshot_env_ref_counts.clearRetainingCapacity();
+    }
+
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
@@ -237,6 +301,11 @@ pub const SyntaxChecker = struct {
         }
         // Fall back to previous_build_env
         return self.previous_build_env;
+    }
+
+    /// Get the cached snapshot BuildEnv for completions.
+    pub fn getSnapshotEnv(self: *SyntaxChecker) ?*BuildEnv {
+        return self.snapshot_build_env;
     }
 
     /// Look up a ModuleEnv by its file path from the cached BuildEnv.
@@ -2909,6 +2978,12 @@ pub const SyntaxChecker = struct {
         // Try to get the module environment for richer completions
         const module_env_opt: ?*ModuleEnv = blk: {
             if (!build_succeeded or build_has_reports) {
+                if (self.snapshot_envs.get(absolute_path)) |snapshot_env| {
+                    const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_env, absolute_path);
+                    if (snapshot_module_env) |module_env| {
+                        break :blk module_env;
+                    }
+                }
                 if (self.previous_build_env) |previous_env| {
                     const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, absolute_path);
                     if (prev_module_env) |module_env| {
@@ -2948,19 +3023,20 @@ pub const SyntaxChecker = struct {
             },
             .after_record_dot => |record_access| {
                 std.debug.print("completion: after_record_dot for '{s}' at offset {d}", .{ record_access.variable_name, record_access.variable_start });
-                // Record field access and method completions
                 if (module_env_opt) |module_env| {
-                    std.debug.print("completion: have module_env, calling addRecordFieldCompletions", .{});
-                    // Add record field completions
-                    try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
-                    std.debug.print("completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
-                    // Add method completions for static dispatch
-                    try self.addMethodCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
-                    std.debug.print("completion: after addMethodCompletions, items={d}", .{items.items.len});
+                    if (self.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                        try self.addFieldsFromTypeVar(&items, module_env, type_var);
+                        try self.addMethodsFromTypeVar(&items, module_env, type_var);
+                    } else {
+                        std.debug.print("completion: have module_env, calling addRecordFieldCompletions", .{});
+                        try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                        std.debug.print("completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
+                        try self.addMethodCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                        std.debug.print("completion: after addMethodCompletions, items={d}", .{items.items.len});
+                    }
                 } else {
                     std.debug.print("completion: NO module_env for record/method completions", .{});
                 }
-                // No fallback for these completions - we need type info
             },
             .after_colon => {
                 // Type annotation context - add type names
@@ -3244,6 +3320,10 @@ pub const SyntaxChecker = struct {
 
         if (found_binding) |binding| {
             std.debug.print("addRecordFieldCompletions: using found_binding", .{});
+            if (self.findExprTypeForPattern(module_env, binding.pattern_idx)) |type_var| {
+                try self.addFieldsFromTypeVar(items, module_env, type_var);
+                return;
+            }
             // Get the type of this binding
             const type_var = ModuleEnv.varFrom(binding.pattern_idx);
             try self.addFieldsFromTypeVar(items, module_env, type_var);
@@ -3574,6 +3654,260 @@ pub const SyntaxChecker = struct {
         }
     }
 
+    fn findDotReceiverTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, cursor_offset: u32) ?types.Var {
+        var best_size: u32 = std.math.maxInt(u32);
+        var best_var: ?types.Var = null;
+
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (self.findDotReceiverTypeVarInExpr(module_env, def.expr, cursor_offset, &best_size)) |var_| {
+                best_var = var_;
+            }
+        }
+
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+            if (stmt_parts.expr) |expr_idx| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expr_idx, cursor_offset, &best_size)) |var_| {
+                    best_var = var_;
+                }
+            }
+            if (stmt_parts.expr2) |expr_idx| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expr_idx, cursor_offset, &best_size)) |var_| {
+                    best_var = var_;
+                }
+            }
+        }
+
+        return best_var;
+    }
+
+    fn findDotReceiverTypeVarInExpr(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        cursor_offset: u32,
+        best_size: *u32,
+    ) ?types.Var {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const region = module_env.store.getRegionAt(node_idx);
+
+        if (!regionContainsOffset(region, cursor_offset)) {
+            return null;
+        }
+
+        const expr = module_env.store.getExpr(expr_idx);
+        var result: ?types.Var = null;
+
+        if (expr == .e_dot_access) {
+            const dot = expr.e_dot_access;
+            if (regionContainsOffset(dot.field_name_region, cursor_offset)) {
+                const size = dot.field_name_region.end.offset - dot.field_name_region.start.offset;
+                if (size < best_size.*) {
+                    best_size.* = size;
+                    result = ModuleEnv.varFrom(dot.receiver);
+                }
+            }
+        }
+
+        switch (expr) {
+            .e_lambda => |lambda| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, lambda.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_closure => |closure| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, closure.lambda_idx, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_block => |block| {
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt_parts = getStatementParts(stmt);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, stmt_expr, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                    if (stmt_parts.expr2) |stmt_expr| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, stmt_expr, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, block.final_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_if => |if_expr| {
+                const branches = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.cond, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.body, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, if_expr.final_else, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_match => |match_expr| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, match_expr.cond, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                const branches = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.value, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                    if (branch.guard) |guard| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, guard, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+            },
+            .e_call => |call| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, call.func, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_binop => |binop| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, binop.lhs, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, binop.rhs, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_unary_minus => |unary| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, unary.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_unary_not => |unary| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, unary.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_list => |list| {
+                const elems = module_env.store.sliceExpr(list.elems);
+                for (elems) |elem| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, elem, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, elem, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_record => |record| {
+                const fields = module_env.store.sliceRecordFields(record.fields);
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, field.value, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+                if (record.ext) |ext| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, ext, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_dot_access => |dot| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, dot.receiver, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (dot.args) |args_span| {
+                    const args = module_env.store.sliceExpr(args_span);
+                    for (args) |arg| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+            },
+            .e_str => |str| {
+                const segments = module_env.store.sliceExpr(str.span);
+                for (segments) |segment| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, segment, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_tag => |tag| {
+                const args = module_env.store.sliceExpr(tag.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_nominal => |nominal| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, nominal.backing_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_nominal_external => |nominal| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, nominal.backing_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_dbg => |dbg| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, dbg.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_expect => |expect| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expect.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_return => |ret| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, ret.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_for => |for_expr| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, for_expr.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, for_expr.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_type_var_dispatch => |dispatch| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, dispatch.value, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            else => {},
+        }
+
+        return result;
+    }
+
     /// Add method completions for static dispatch (e.g., "value.method()")
     /// This finds methods available on the type of the variable before the dot.
     fn addMethodCompletions(
@@ -3651,6 +3985,10 @@ pub const SyntaxChecker = struct {
         }
 
         if (found_binding) |binding| {
+            if (self.findExprTypeForPattern(module_env, binding.pattern_idx)) |type_var| {
+                try self.addMethodsFromTypeVar(items, module_env, type_var);
+                return;
+            }
             // Get the type of this binding and find methods
             const type_var = ModuleEnv.varFrom(binding.pattern_idx);
             try self.addMethodsFromTypeVar(items, module_env, type_var);
@@ -3696,6 +4034,32 @@ pub const SyntaxChecker = struct {
                 else => break,
             }
         }
+    }
+
+    fn findExprTypeForPattern(self: *SyntaxChecker, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?types.Var {
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (def.pattern == pattern_idx) {
+                return ModuleEnv.varFrom(def.expr);
+            }
+        }
+
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+            if (stmt_parts.pattern) |stmt_pattern_idx| {
+                if (stmt_pattern_idx == pattern_idx) {
+                    if (stmt_parts.expr) |expr_idx| {
+                        return ModuleEnv.varFrom(expr_idx);
+                    }
+                }
+            }
+        }
+
+        _ = self;
+        return null;
     }
 
     /// Add methods for a specific type identifier by searching method_idents.

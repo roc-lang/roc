@@ -357,3 +357,78 @@ test "record field completion works for app definitions" {
         try std.testing.expect(false); // Should have got a result
     }
 }
+
+test "record completion uses snapshot env when builds fail" {
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\
+        \\main = my_record.foo
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(clean_contents);
+
+    try tmp.dir.writeFile(.{ .sub_path = "record_completion_snapshot.roc", .data = clean_contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "record_completion_snapshot.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    const publish_sets = try checker.check(uri, null, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(allocator);
+        allocator.free(publish_sets);
+    }
+
+    const error_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\
+        \\main = my_record.
+        \\broken =
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(error_contents);
+
+    const result = try checker.getCompletionsAtPosition(uri, error_contents, 4, 17);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        var found_foo = false;
+        var found_bar = false;
+        for (completion_result.items) |item| {
+            if (std.mem.eql(u8, item.label, "foo")) found_foo = true;
+            if (std.mem.eql(u8, item.label, "bar")) found_bar = true;
+        }
+
+        try std.testing.expect(found_foo);
+        try std.testing.expect(found_bar);
+    } else {
+        try std.testing.expect(false);
+    }
+}
