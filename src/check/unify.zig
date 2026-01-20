@@ -62,7 +62,6 @@ const ResolvedVarDescs = types_mod.ResolvedVarDescs;
 const TypeIdent = types_mod.TypeIdent;
 const Var = types_mod.Var;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Flex = types_mod.Flex;
 const Rigid = types_mod.Rigid;
 const Content = types_mod.Content;
@@ -316,7 +315,6 @@ pub fn unifyWithConf(
         types.union_(a, b, .{
             .content = .err,
             .rank = Rank.generalized,
-            .mark = Mark.none,
         });
         return Result{ .problem = problem_idx };
     };
@@ -373,7 +371,6 @@ const Unifier = struct {
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .mark = Mark.none,
         });
     }
 
@@ -382,7 +379,6 @@ const Unifier = struct {
         const var_ = try self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
-            .mark = Mark.none,
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -408,6 +404,17 @@ const Unifier = struct {
             {
                 return true;
             }
+        }
+        return false;
+    }
+
+    /// Check if a single var is already being unified in constraint unification (legacy mark-based behavior).
+    /// This is used for constraint unification where we skip if EITHER var is visited.
+    fn hasConstraintVisitedVar(self: *Self, var_: Var) bool {
+        const resolved = self.types_store.resolveVar(var_);
+        for (self.scratch.constraint_visited_vars.items.items) |visited_var| {
+            const visited_resolved = self.types_store.resolveVar(visited_var);
+            if (resolved.desc_idx == visited_resolved.desc_idx) return true;
         }
         return false;
     }
@@ -2317,32 +2324,25 @@ const Unifier = struct {
         defer trace.end();
 
         // Self-referential constraints like `a.plus : a, a -> a` are valid and expected.
-        // To prevent infinite recursion when unifying them, we use variable marks to detect
-        // if we're already in the process of unifying these constraint function variables.
+        // To prevent infinite recursion when unifying them, we track visited constraint
+        // function variables in the scratch visited_vars list.
         //
         // This works together with the occurs check in occurs.zig which follows constraints
         // to detect truly infinite types.
-        const a_desc = self.types_store.resolveVar(a_constraint.fn_var);
-        const b_desc = self.types_store.resolveVar(b_constraint.fn_var);
 
-        // Check if either variable is marked as "visited" (currently being unified)
-        if (a_desc.desc.mark == .visited or b_desc.desc.mark == .visited) {
-            // Already unifying these constraint functions - skip to prevent infinite recursion
+        // Check if EITHER constraint function var is already being unified (legacy mark behavior)
+        if (self.hasConstraintVisitedVar(a_constraint.fn_var) or self.hasConstraintVisitedVar(b_constraint.fn_var)) {
+            // Already unifying one of these constraint functions - skip to prevent infinite recursion
             return;
         }
 
-        // Mark variables as being unified
-        self.types_store.setDescMark(a_desc.desc_idx, .visited);
-        self.types_store.setDescMark(b_desc.desc_idx, .visited);
+        // Track these vars as being unified (in separate list from general unification to match legacy mark semantics)
+        _ = self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var) catch return Error.AllocatorError;
+        _ = self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var) catch return Error.AllocatorError;
+        defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
-        const result = self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
-
-        // Unmark variables
-        self.types_store.setDescMark(a_desc.desc_idx, .none);
-        self.types_store.setDescMark(b_desc.desc_idx, .none);
-
-        try result;
+        try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
     }
 
     const PartitionedStaticDispatchConstraints = struct {
@@ -2547,6 +2547,9 @@ pub const Scratch = struct {
     // Vars currently being unified (recursion guard for self-referential types)
     visited_vars: VarSafeList,
 
+    // Constraint function vars currently being unified (separate from visited_vars to match legacy mark behavior)
+    constraint_visited_vars: VarSafeList,
+
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         // Initial capacities are conservative estimates. Lists grow dynamically as needed.
@@ -2572,6 +2575,7 @@ pub const Scratch = struct {
             .occurs_scratch = try occurs.Scratch.init(gpa),
             .err = null,
             .visited_vars = try VarSafeList.initCapacity(gpa, 16),
+            .constraint_visited_vars = try VarSafeList.initCapacity(gpa, 16),
         };
     }
 
@@ -2592,6 +2596,7 @@ pub const Scratch = struct {
         self.in_both_static_dispatch_constraints.deinit(self.gpa);
         self.occurs_scratch.deinit();
         self.visited_vars.deinit(self.gpa);
+        self.constraint_visited_vars.deinit(self.gpa);
     }
 
     /// Reset the scratch arrays, retaining the allocated memory
@@ -2612,6 +2617,7 @@ pub const Scratch = struct {
         self.occurs_scratch.reset();
         self.err = null;
         self.visited_vars.items.clearRetainingCapacity();
+        self.constraint_visited_vars.items.clearRetainingCapacity();
     }
 
     // helpers //
