@@ -15,6 +15,7 @@ const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
 const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
 const compiled_builtins = @import("compiled_builtins");
+const scope_map = @import("scope_map.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -39,6 +40,9 @@ pub const SyntaxChecker = struct {
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
     /// This is swapped with build_env after each successful build.
     previous_build_env: ?*BuildEnv = null,
+    /// Snapshot of the most recent successful build per module (kept for completions).
+    snapshot_envs: std.StringHashMapUnmanaged(*BuildEnv) = .{},
+    snapshot_env_ref_counts: std.AutoHashMapUnmanaged(*BuildEnv, usize) = .{},
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
@@ -55,6 +59,8 @@ pub const SyntaxChecker = struct {
     }
 
     pub fn deinit(self: *SyntaxChecker) void {
+        self.clearSnapshots();
+
         if (self.build_env) |env| {
             env.deinit();
             self.allocator.destroy(env);
@@ -65,6 +71,7 @@ pub const SyntaxChecker = struct {
             self.allocator.destroy(env);
             self.previous_build_env = null;
         }
+
         self.dependency_graph.deinit();
     }
 
@@ -151,6 +158,10 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
+        if (self.shouldSnapshotBuild(absolute_path, drained)) {
+            self.storeSnapshotEnv(env, absolute_path);
+        }
+
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
         errdefer {
             for (publish_list.items) |*set| set.deinit(self.allocator);
@@ -225,6 +236,60 @@ pub const SyntaxChecker = struct {
         return env_ptr;
     }
 
+    fn shouldSnapshotBuild(self: *SyntaxChecker, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {
+        _ = self;
+        var saw_entry = false;
+        for (drained) |entry| {
+            if (!std.mem.eql(u8, entry.abs_path, absolute_path)) continue;
+            saw_entry = true;
+            if (entry.reports.len > 0) return false;
+        }
+        return saw_entry;
+    }
+
+    fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
+        if (self.snapshot_envs.get(absolute_path)) |existing| {
+            self.releaseSnapshotEnv(existing);
+            _ = self.snapshot_envs.remove(absolute_path);
+        }
+
+        const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
+        self.snapshot_envs.put(self.allocator, owned_path, env) catch {
+            self.allocator.free(owned_path);
+            return;
+        };
+        self.retainSnapshotEnv(env);
+    }
+
+    fn retainSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
+        const entry = self.snapshot_env_ref_counts.get(env);
+        const next_count = if (entry) |count| count + 1 else 1;
+        _ = self.snapshot_env_ref_counts.put(self.allocator, env, next_count) catch {};
+    }
+
+    fn releaseSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
+        if (self.snapshot_env_ref_counts.get(env)) |count| {
+            if (count <= 1) {
+                _ = self.snapshot_env_ref_counts.remove(env);
+                env.deinit();
+                self.allocator.destroy(env);
+            } else {
+                _ = self.snapshot_env_ref_counts.put(self.allocator, env, count - 1) catch {};
+            }
+        }
+    }
+
+    fn clearSnapshots(self: *SyntaxChecker) void {
+        var it = self.snapshot_envs.iterator();
+        while (it.next()) |entry| {
+            const env = entry.value_ptr.*;
+            self.releaseSnapshotEnv(env);
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.snapshot_envs.clearRetainingCapacity();
+        self.snapshot_env_ref_counts.clearRetainingCapacity();
+    }
+
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
@@ -238,11 +303,20 @@ pub const SyntaxChecker = struct {
         return self.previous_build_env;
     }
 
+    /// Get the cached snapshot BuildEnv for completions.
+    pub fn getSnapshotEnv(self: *SyntaxChecker) ?*BuildEnv {
+        return self.snapshot_build_env;
+    }
+
     /// Look up a ModuleEnv by its file path from the cached BuildEnv.
     /// Returns null if no matching module is found.
     pub fn getModuleEnvByPath(self: *SyntaxChecker, path: []const u8) ?*ModuleEnv {
         const env = self.getModuleLookupEnv() orelse return null;
+        return self.getModuleEnvByPathInEnv(env, path);
+    }
 
+    /// Look up a ModuleEnv by its file path from a specific BuildEnv.
+    fn getModuleEnvByPathInEnv(_: *SyntaxChecker, env: *BuildEnv, path: []const u8) ?*ModuleEnv {
         // Iterate through all schedulers (packages)
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
@@ -2280,7 +2354,7 @@ pub const SyntaxChecker = struct {
 
     /// Check if a region contains the given byte offset
     fn regionContainsOffset(region: Region, offset: u32) bool {
-        return offset >= region.start.offset and offset < region.end.offset;
+        return offset >= region.start.offset and offset <= region.end.offset;
     }
 
     /// Result of finding highlights for a symbol
@@ -2682,8 +2756,146 @@ pub const SyntaxChecker = struct {
         return symbols.toOwnedSlice(allocator);
     }
 
+    /// Completion context types
+    pub const CompletionContext = union(enum) {
+        /// After a dot with a module prefix: "Str." or "List."
+        after_module_dot: []const u8,
+        /// After a dot with a record variable: "myRecord."
+        after_record_dot: struct {
+            /// The variable name before the dot
+            variable_name: []const u8,
+            /// Byte offset of the start of the variable name
+            variable_start: u32,
+        },
+        /// After a colon (type annotation context)
+        after_colon,
+        /// General expression context
+        expression,
+    };
+
+    /// Builtin modules available for completion
+    const BUILTIN_MODULES = [_][]const u8{
+        "Str",
+        "List",
+        "Num",
+        "Bool",
+        "Dict",
+        "Set",
+        "Result",
+        "Try",
+        "Box",
+        "Inspect",
+        "Decode",
+        "Encode",
+        "Hash",
+    };
+
+    /// Detect completion context from source text at the given position
+    pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) CompletionContext {
+        std.debug.print("detectCompletionContext: line={d}, character={d}, source.len={d}\n", .{ line, character, source.len });
+
+        // Convert line/character to byte offset
+        var current_line: u32 = 0;
+        var line_start: usize = 0;
+
+        for (source, 0..) |c, i| {
+            if (current_line == line) {
+                line_start = i;
+                break;
+            }
+            if (c == '\n') {
+                current_line += 1;
+            }
+        }
+
+        const cursor_offset = line_start + character;
+        std.debug.print("detectCompletionContext: line_start={d}, cursor_offset={d}\n", .{ line_start, cursor_offset });
+
+        if (cursor_offset == 0 or cursor_offset > source.len) {
+            std.debug.print("detectCompletionContext: cursor out of bounds, returning .expression\n", .{});
+            return .expression;
+        }
+
+        // Look backwards from cursor to find context
+        var pos = cursor_offset;
+
+        // Show what's around the cursor
+        const start_show = if (pos > 20) pos - 20 else 0;
+        const end_show = if (pos + 5 < source.len) pos + 5 else source.len;
+        std.debug.print("detectCompletionContext: source around cursor [{d}..{d}]: '{s}'\n", .{ start_show, end_show, source[start_show..end_show] });
+
+        // Skip any partial identifier being typed
+        while (pos > 0 and (std.ascii.isAlphanumeric(source[pos - 1]) or source[pos - 1] == '_')) {
+            pos -= 1;
+        }
+        std.debug.print("detectCompletionContext: after skipping identifier, pos={d}\n", .{pos});
+
+        // Skip whitespace to find the actual context character
+        while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t')) {
+            pos -= 1;
+        }
+        std.debug.print("detectCompletionContext: after skipping whitespace, pos={d}\n", .{pos});
+
+        // Check what's immediately before (after skipping whitespace)
+        if (pos > 0) {
+            const prev_char = source[pos - 1];
+            std.debug.print("detectCompletionContext: prev_char='{c}' (0x{x})\n", .{ prev_char, prev_char });
+
+            if (prev_char == '.') {
+                // After a dot - could be module access or record field access
+                // Look for identifier before the dot
+                const ident_end = pos - 1;
+                var ident_start = ident_end;
+
+                while (ident_start > 0 and (std.ascii.isAlphanumeric(source[ident_start - 1]) or source[ident_start - 1] == '_')) {
+                    ident_start -= 1;
+                }
+
+                if (ident_start < ident_end) {
+                    const ident_name = source[ident_start..ident_end];
+                    if (ident_name.len > 0) {
+                        if (std.ascii.isUpper(ident_name[0])) {
+                            // Uppercase - module access (e.g., "Str.")
+                            return .{ .after_module_dot = ident_name };
+                        } else {
+                            // Lowercase - record field access (e.g., "myRecord.")
+                            return .{ .after_record_dot = .{
+                                .variable_name = ident_name,
+                                .variable_start = @intCast(ident_start),
+                            } };
+                        }
+                    }
+                }
+            } else if (prev_char == ':') {
+                return .after_colon;
+            }
+        }
+
+        return .expression;
+    }
+
+    /// Compute byte offset from line and character position in source text
+    fn computeOffset(source: []const u8, line: u32, character: u32) u32 {
+        var current_line: u32 = 0;
+        var line_start: usize = 0;
+
+        for (source, 0..) |c, i| {
+            if (current_line == line) {
+                line_start = i;
+                break;
+            }
+            if (c == '\n') {
+                current_line += 1;
+            }
+        }
+
+        const offset = line_start + character;
+        return @intCast(@min(offset, source.len));
+    }
+
     /// Get completion suggestions at a specific position in a document.
     /// Returns completions from the current module's exposed items and imports.
+    /// If the build fails, still provides basic completions (builtin modules, types).
     pub fn getCompletionsAtPosition(
         self: *SyntaxChecker,
         uri: []const u8,
@@ -2691,9 +2903,6 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        _ = line;
-        _ = character;
-
         const path = try uri_util.uriToPath(self.allocator, uri);
         defer self.allocator.free(path);
 
@@ -2726,58 +2935,609 @@ pub const SyntaxChecker = struct {
         };
         std.process.changeCurDir(dir_owned) catch {};
 
-        self.logDebug(.build, "completion: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "completion: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
-            return null;
+        std.debug.print("completion: building {s}\n", .{absolute_path});
+        const build_succeeded = blk: {
+            env.build(absolute_path) catch |err| {
+                std.debug.print("completion: build FAILED for {s}: {s}\n", .{ absolute_path, @errorName(err) });
+                break :blk false;
+            };
+            std.debug.print("completion: build SUCCEEDED\n", .{});
+            break :blk true;
         };
 
-        // Drain reports but ignore them for completion
-        const drained = env.drainReports() catch return null;
-        defer self.freeDrainedWithReports(drained);
+        var build_has_reports = false;
 
-        // Get the module environment
-        const app_sched = env.schedulers.get("app") orelse blk: {
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.env != null) {
-                        break :blk sched;
-                    }
+        // Drain reports even on failure to avoid leaks
+        if (build_succeeded) {
+            const drained = env.drainReports() catch return null;
+            for (drained) |entry| {
+                if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
+                    build_has_reports = true;
+                    break;
                 }
             }
-            return null;
-        };
-        const root_module = app_sched.getRootModule() orelse return null;
-        const module_env = if (root_module.env) |*e| e else return null;
+            self.freeDrainedWithReports(drained);
+        }
 
-        // Collect completions from the module's exposed items
+        // Detect completion context from source
+        const source = override_text orelse "";
+        const context = detectCompletionContext(source, line, character);
+
+        // Compute cursor offset for scope-based completions
+        const cursor_offset = computeOffset(source, line, character);
+
+        // Collect completions based on context
         var items = std.ArrayList(completion_handler.CompletionItem){};
-        errdefer items.deinit(self.allocator);
+        errdefer {
+            for (items.items) |item| {
+                if (item.detail) |d| self.allocator.free(d);
+            }
+            items.deinit(self.allocator);
+        }
 
-        // Get exposed items from the current module
-        const exposed = &module_env.common.exposed_items;
-        var iter = exposed.iterator();
-        while (iter.next()) |entry| {
-            const ident_idx: base.Ident.Idx = @bitCast(entry.ident_idx);
-            const name = module_env.common.idents.getText(ident_idx);
+        // Try to get the module environment for richer completions
+        // ALWAYS try snapshot first for completion - typing usually produces incomplete code
+        var used_snapshot = false;
+        const module_env_opt: ?*ModuleEnv = blk: {
+            if (self.snapshot_envs.get(absolute_path)) |snapshot_env| {
+                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_env, absolute_path);
+                if (snapshot_module_env) |module_env| {
+                    used_snapshot = true;
+                    break :blk module_env;
+                }
+            }
 
-            // Determine if this is a function or variable
-            // For now, assume lowercase starting identifiers are values/functions
-            // and uppercase are types
-            const kind: u32 = if (name.len > 0 and std.ascii.isUpper(name[0]))
-                @intFromEnum(completion_handler.CompletionItemKind.class) // Type
+            // Fall back to previous build env if snapshot not available
+            if (self.previous_build_env) |previous_env| {
+                const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, absolute_path);
+                if (prev_module_env) |module_env| {
+                    used_snapshot = true;
+                    break :blk module_env;
+                }
+            }
+
+            // Fall back to current build only if no snapshot available and build succeeded
+            if (build_succeeded and !build_has_reports) {
+                if (self.getModuleEnvByPath(absolute_path)) |module_env| {
+                    break :blk module_env;
+                }
+
+                const app_sched = env.schedulers.get("app") orelse inner: {
+                    var sched_it = env.schedulers.iterator();
+                    while (sched_it.next()) |entry| {
+                        const sched = entry.value_ptr.*;
+                        if (sched.getRootModule()) |rm| {
+                            if (rm.env != null) {
+                                break :inner sched;
+                            }
+                        }
+                    }
+                    break :blk null;
+                };
+                const root_module = app_sched.getRootModule() orelse break :blk null;
+                break :blk if (root_module.env) |*e| e else null;
+            }
+
+            break :blk null;
+        };
+
+        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}", .{ context, module_env_opt != null, build_succeeded, used_snapshot });
+
+        switch (context) {
+            .after_module_dot => |module_name| {
+                std.debug.print("completion: after_module_dot for '{s}'", .{module_name});
+                // Get completions from the specified module
+                try self.addModuleMemberCompletions(&items, env, module_name);
+            },
+            .after_record_dot => |record_access| {
+                std.debug.print("completion: after_record_dot for '{s}' at offset {d}", .{ record_access.variable_name, record_access.variable_start });
+                if (module_env_opt) |module_env| {
+                    // When using snapshot, cursor positions don't correspond to snapshot CIR
+                    // So we must look up by name instead of analyzing the dot expression
+                    if (used_snapshot or self.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
+                        std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)", .{used_snapshot});
+                        try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                        std.debug.print("completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
+                        try self.addMethodCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                        std.debug.print("completion: after addMethodCompletions, items={d}", .{items.items.len});
+                    } else if (self.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                        std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
+                        try self.addFieldsFromTypeVar(&items, module_env, type_var);
+                        try self.addMethodsFromTypeVar(&items, module_env, type_var);
+                    }
+                } else {
+                    std.debug.print("completion: NO module_env for record/method completions", .{});
+                }
+            },
+            .after_colon => {
+                // Type annotation context - add type names
+                if (module_env_opt) |module_env| {
+                    try self.addTypeCompletions(&items, module_env);
+                } else {
+                    // Fallback: just add builtin types
+                    try self.addBuiltinTypeCompletions(&items);
+                }
+            },
+            .expression => {
+                // General expression context - add local definitions + module names
+                if (module_env_opt) |module_env| {
+                    try self.addLocalCompletions(&items, module_env, cursor_offset);
+                    try self.addModuleNameCompletions(&items, module_env);
+                } else {
+                    // Fallback: just add builtin module names
+                    try self.addBuiltinModuleNameCompletions(&items);
+                }
+            },
+        }
+
+        return .{
+            .items = try items.toOwnedSlice(self.allocator),
+            .is_incomplete = false,
+        };
+    }
+
+    /// Add just builtin type completions (fallback when build fails)
+    fn addBuiltinTypeCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem)) !void {
+        const builtin_types = [_][]const u8{
+            "Str",    "U8",  "U16",  "U32",  "U64",  "U128",
+            "I8",     "I16", "I32",  "I64",  "I128", "F32",
+            "F64",    "Dec", "Bool", "List", "Dict", "Set",
+            "Result", "Try",
+        };
+
+        for (builtin_types) |type_name| {
+            try items.append(self.allocator, .{
+                .label = type_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.class),
+                .detail = null,
+            });
+        }
+    }
+
+    /// Add just builtin module name completions (fallback when build fails)
+    fn addBuiltinModuleNameCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem)) !void {
+        for (BUILTIN_MODULES) |module_name| {
+            try items.append(self.allocator, .{
+                .label = module_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.module),
+                .detail = null,
+            });
+        }
+    }
+
+    /// Add completions for members of a specific module (e.g., Str.concat)
+    fn addModuleMemberCompletions(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        env: *BuildEnv,
+        module_name: []const u8,
+    ) !void {
+        // Check if it's a builtin module
+        const is_builtin = for (BUILTIN_MODULES) |builtin| {
+            if (std.mem.eql(u8, module_name, builtin)) break true;
+        } else false;
+
+        if (is_builtin) {
+            // For builtin modules, add common functions based on the module name
+            try self.addBuiltinModuleMembers(items, module_name);
+            return;
+        }
+
+        // Try to find the module in imported modules
+        var sched_it = env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            for (sched.modules.items) |*module_state| {
+                // Check if this module's name matches
+                if (std.mem.eql(u8, module_state.name, module_name)) {
+                    if (module_state.env) |*imported_env| {
+                        // Get exposed items from this module
+                        const exposed = &imported_env.common.exposed_items;
+                        var iter = exposed.iterator();
+                        while (iter.next()) |exp_entry| {
+                            const ident_idx: base.Ident.Idx = @bitCast(exp_entry.ident_idx);
+                            const name = imported_env.common.idents.getText(ident_idx);
+
+                            // Determine kind based on name convention
+                            const kind: u32 = if (name.len > 0 and std.ascii.isUpper(name[0]))
+                                @intFromEnum(completion_handler.CompletionItemKind.class)
+                            else
+                                @intFromEnum(completion_handler.CompletionItemKind.function);
+
+                            try items.append(self.allocator, .{
+                                .label = name,
+                                .kind = kind,
+                                .detail = null,
+                            });
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Add common builtin module members
+    fn addBuiltinModuleMembers(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_name: []const u8) !void {
+        const members: []const []const u8 = if (std.mem.eql(u8, module_name, "Str"))
+            &.{ "concat", "isEmpty", "join", "split", "trim", "startsWith", "endsWith", "contains", "replaceFirst", "replaceLast", "replaceAll", "toUtf8", "fromUtf8", "len", "repeat", "reverse", "toUppercase", "toLowercase", "toDec", "toU8", "toU16", "toU32", "toU64", "toU128", "toI8", "toI16", "toI32", "toI64", "toI128", "toF32", "toF64" }
+        else if (std.mem.eql(u8, module_name, "List"))
+            &.{ "isEmpty", "len", "get", "set", "append", "prepend", "concat", "first", "last", "map", "map2", "map3", "map4", "mapWithIndex", "sortWith", "sortAsc", "sortDesc", "reverse", "join", "contains", "sum", "product", "any", "all", "keepIf", "dropIf", "takeFirst", "takeLast", "dropFirst", "dropLast", "findFirst", "findLast", "walk", "walkBackwards", "walkUntil", "range", "repeat", "intersperse", "split", "chunksOf", "withCapacity", "reserve", "swap" }
+        else if (std.mem.eql(u8, module_name, "Num"))
+            &.{ "abs", "neg", "add", "sub", "mul", "div", "rem", "isMultipleOf", "sqrt", "log", "pow", "sin", "cos", "tan", "asin", "acos", "atan", "ceiling", "floor", "round", "toStr", "toU8", "toU16", "toU32", "toU64", "toU128", "toI8", "toI16", "toI32", "toI64", "toI128", "toF32", "toF64", "min", "max", "compare", "isNaN", "isInfinite", "isFinite", "isPositive", "isNegative", "isZero", "isEven", "isOdd", "bitwiseAnd", "bitwiseOr", "bitwiseXor", "bitwiseNot", "shiftLeftBy", "shiftRightBy", "shiftRightZfBy" }
+        else if (std.mem.eql(u8, module_name, "Bool"))
+            &.{ "and", "or", "not", "isEq", "isNotEq" }
+        else if (std.mem.eql(u8, module_name, "Dict"))
+            &.{ "empty", "withCapacity", "single", "fromList", "toList", "len", "isEmpty", "get", "contains", "insert", "remove", "update", "walk", "keys", "values", "map", "keepIf", "dropIf" }
+        else if (std.mem.eql(u8, module_name, "Set"))
+            &.{ "empty", "withCapacity", "single", "fromList", "toList", "len", "isEmpty", "contains", "insert", "remove", "walk", "map", "keepIf", "dropIf", "union", "intersection", "difference" }
+        else if (std.mem.eql(u8, module_name, "Result"))
+            &.{ "isOk", "isErr", "map", "mapErr", "try", "onErr", "withDefault" }
+        else if (std.mem.eql(u8, module_name, "Try"))
+            &.{ "ok", "err", "map", "mapErr", "onErr", "withDefault" }
+        else
+            &.{};
+
+        for (members) |member| {
+            try items.append(self.allocator, .{
+                .label = member,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.function),
+                .detail = null,
+            });
+        }
+    }
+
+    /// Add type completions for type annotation context
+    fn addTypeCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv) !void {
+        // Add builtin types
+        const builtin_types = [_][]const u8{
+            "Str",    "U8",  "U16",  "U32",  "U64",  "U128",
+            "I8",     "I16", "I32",  "I64",  "I128", "F32",
+            "F64",    "Dec", "Bool", "List", "Dict", "Set",
+            "Result", "Try",
+        };
+
+        for (builtin_types) |type_name| {
+            try items.append(self.allocator, .{
+                .label = type_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.class),
+                .detail = null,
+            });
+        }
+
+        // Add type definitions from the module's statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            switch (stmt) {
+                .s_alias_decl => |alias| {
+                    const header = module_env.store.getTypeHeader(alias.header);
+                    const name = module_env.getIdentText(header.name);
+                    if (name.len > 0) {
+                        try items.append(self.allocator, .{
+                            .label = name,
+                            .kind = @intFromEnum(completion_handler.CompletionItemKind.class),
+                            .detail = null,
+                        });
+                    }
+                },
+                .s_nominal_decl => |nominal| {
+                    const header = module_env.store.getTypeHeader(nominal.header);
+                    const name = module_env.getIdentText(header.name);
+                    if (name.len > 0) {
+                        try items.append(self.allocator, .{
+                            .label = name,
+                            .kind = @intFromEnum(completion_handler.CompletionItemKind.class),
+                            .detail = null,
+                        });
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    /// Add record field completions for a record variable access (e.g., "myRecord.")
+    /// This finds the variable's type and extracts field names from record types.
+    fn addRecordFieldCompletions(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        variable_name: []const u8,
+        variable_start: u32,
+    ) !void {
+        std.debug.print("addRecordFieldCompletions: looking for '{s}' at offset {d}", .{ variable_name, variable_start });
+
+        // Find the binding for this variable name
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch |err| {
+            std.debug.print("addRecordFieldCompletions: scope.build failed: {}", .{err});
+            return;
+        };
+
+        std.debug.print("addRecordFieldCompletions: scope has {d} bindings", .{scope.bindings.items.len});
+
+        // Find the binding with matching name that's visible at the variable position
+        var found_binding: ?scope_map.Binding = null;
+        for (scope.bindings.items) |binding| {
+            const binding_name = module_env.getIdentText(binding.ident);
+            const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
+            std.debug.print("addRecordFieldCompletions: binding '{s}' visible_from={d} visible_to={d} is_visible={}", .{ binding_name, binding.visible_from, binding.visible_to, is_visible });
+            if (!is_visible) continue;
+            if (std.mem.eql(u8, binding_name, variable_name)) {
+                std.debug.print("addRecordFieldCompletions: FOUND binding '{s}'", .{binding_name});
+                found_binding = binding;
+                break;
+            }
+        }
+
+        // Even if we found a binding in the local scope, we need to look up the definition
+        // by name in top-level defs/statements, because the binding's pattern_idx may be
+        // from incomplete code and not have full type info (especially when using snapshots).
+        // So we ALWAYS try def/stmt lookup below instead of using the binding directly.
+        if (found_binding) |_| {
+            std.debug.print("addRecordFieldCompletions: found binding, but will use def/stmt lookup for better types", .{});
+        } else {
+            std.debug.print("addRecordFieldCompletions: NO binding found for '{s}'", .{variable_name});
+        }
+
+        // Check top-level definitions (not just when found_binding==null)
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        std.debug.print("addRecordFieldCompletions: checking {d} top-level defs\n", .{defs_slice.len});
+
+        // First list ALL defs to understand what we have
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+            const name = module_env.getIdentText(ident_idx);
+            std.debug.print("  ALL DEFS: '{s}' pattern={} def_idx={}\n", .{ name, def.pattern, def_idx });
+        }
+
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            const name = module_env.getIdentText(ident_idx);
+            std.debug.print("addRecordFieldCompletions: def '{s}' pattern={} has_annotation={}\n", .{ name, def.pattern, def.annotation != null });
+            if (std.mem.eql(u8, name, variable_name)) {
+                std.debug.print("addRecordFieldCompletions: FOUND def '{s}' pattern={} annotation={?}\n", .{ name, def.pattern, def.annotation });
+
+                // If there's a type annotation, try to get the type from it first (more accurate than inferred type)
+                if (def.annotation) |anno_idx| {
+                    std.debug.print("addRecordFieldCompletions: def has annotation, trying to get type from it\n", .{});
+                    const annotation = module_env.store.getAnnotation(anno_idx);
+                    const type_anno = module_env.store.getTypeAnno(annotation.anno);
+                    std.debug.print("addRecordFieldCompletions: type_anno={any}\n", .{type_anno});
+
+                    // Try to get the type var from the annotation
+                    // Type annotations should have been checked and have associated type vars
+                    // For now, fall through to using pattern's type var
+                }
+
+                // Found the definition - get its type and extract record fields
+                const type_var = ModuleEnv.varFrom(def.pattern);
+                std.debug.print("addRecordFieldCompletions: type_var for def={}\n", .{type_var});
+                try self.addFieldsFromTypeVar(items, module_env, type_var);
+                return;
+            }
+        }
+
+        // Check statements (apps use statements for definitions)
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        std.debug.print("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_decl_gen => |decl| decl.pattern,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            const name = module_env.getIdentText(ident_idx);
+            std.debug.print("addRecordFieldCompletions: stmt '{s}'", .{name});
+            if (std.mem.eql(u8, name, variable_name)) {
+                std.debug.print("addRecordFieldCompletions: FOUND stmt '{s}'", .{name});
+                // Found the definition - get its type and extract record fields
+                const type_var = ModuleEnv.varFrom(pattern_idx);
+                try self.addFieldsFromTypeVar(items, module_env, type_var);
+                return;
+            }
+        }
+    }
+
+    /// Extract and add record fields from a type variable
+    fn addFieldsFromTypeVar(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_var: types.Var,
+    ) !void {
+        const type_store = &module_env.types;
+
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
+
+        std.debug.print("addFieldsFromTypeVar: type_var={}, content tag={s}", .{ type_var, @tagName(content) });
+
+        var steps: usize = 0;
+        while (true) : (steps += 1) {
+            if (steps > 8) break;
+
+            if (content.unwrapRecord()) |record| {
+                std.debug.print("addFieldsFromTypeVar: found record after resolve", .{});
+                try self.addFieldsFromRecord(items, module_env, record);
+                return;
+            }
+
+            switch (content) {
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
+
+        // Try to get record fields, handling aliases that wrap records
+        try self.addFieldsFromContent(items, module_env, content);
+    }
+
+    /// Recursively extract fields from type content, unwrapping aliases
+    fn addFieldsFromContent(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        content: types.Content,
+    ) !void {
+        const type_store = &module_env.types;
+
+        std.debug.print("addFieldsFromContent: content tag={s}", .{@tagName(content)});
+
+        // Check if this is directly a record
+        if (content.unwrapRecord()) |record| {
+            std.debug.print("addFieldsFromContent: found record!", .{});
+            try self.addFieldsFromRecord(items, module_env, record);
+            return;
+        }
+
+        // Check if this is an alias (e.g., a type alias wrapping a record)
+        switch (content) {
+            .alias => |alias| {
+                std.debug.print("addFieldsFromContent: unwrapping alias", .{});
+                // Get the backing type of the alias
+                const backing_var = type_store.getAliasBackingVar(alias);
+                const backing_resolved = type_store.resolveVar(backing_var);
+                try self.addFieldsFromContent(items, module_env, backing_resolved.desc.content);
+            },
+            .structure => |flat_type| {
+                std.debug.print("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
+            },
+            else => {
+                std.debug.print("addFieldsFromContent: not a record or alias, tag={s}", .{@tagName(content)});
+            },
+        }
+    }
+
+    /// Add completion items for fields in a record type
+    fn addFieldsFromRecord(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        record: types.Record,
+    ) !void {
+        const type_store = &module_env.types;
+
+        // Get the record fields
+        const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        std.debug.print("addFieldsFromRecord: record.fields={}, fields_slice.len={}, field_names.len={d}\n", .{ record.fields, fields_slice.len, field_names.len });
+
+        // Initialize type writer for formatting field types
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Iterate over record fields
+        for (field_names, field_vars) |field_name_idx, field_var| {
+            const field_name = module_env.getIdentText(field_name_idx);
+            std.debug.print("addFieldsFromRecord: field '{s}'\n", .{field_name});
+            if (field_name.len == 0) continue;
+
+            // Get field type for detail
+            var detail: ?[]const u8 = null;
+            if (type_writer) |*tw| {
+                tw.write(field_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
+
+            try items.append(self.allocator, .{
+                .label = field_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.field),
+                .detail = detail,
+            });
+        }
+    }
+
+    /// Add local definition completions
+    fn addLocalCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv, cursor_offset: u32) !void {
+        // Initialize type writer for formatting types
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Build scope map for local variable completions
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch {};
+
+        // Add local variables in scope at cursor position
+        for (scope.bindings.items) |binding| {
+            if (!scope_map.ScopeMap.isVisibleAt(binding, cursor_offset)) continue;
+
+            const name = module_env.getIdentText(binding.ident);
+            if (name.len == 0) continue;
+
+            // Check if already in items (avoid duplicates)
+            var already_added = false;
+            for (items.items) |item| {
+                if (std.mem.eql(u8, item.label, name)) {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (already_added) continue;
+
+            // Determine kind - parameters and local variables
+            const kind: u32 = if (binding.is_parameter)
+                @intFromEnum(completion_handler.CompletionItemKind.variable)
             else
-                @intFromEnum(completion_handler.CompletionItemKind.function);
+                @intFromEnum(completion_handler.CompletionItemKind.variable);
+
+            // Get type information for the binding
+            var detail: ?[]const u8 = null;
+            if (type_writer) |*tw| {
+                const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+                tw.write(type_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
 
             try items.append(self.allocator, .{
                 .label = name,
                 .kind = kind,
+                .detail = detail,
             });
         }
 
-        // Also add definitions from all_defs (for non-exposed items)
+        // Add definitions from all_defs (top-level)
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
@@ -2792,7 +3552,7 @@ pub const SyntaxChecker = struct {
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
 
-            // Check if already in items (from exposed_items)
+            // Check if already in items (avoid duplicates)
             var already_added = false;
             for (items.items) |item| {
                 if (std.mem.eql(u8, item.label, name)) {
@@ -2809,16 +3569,707 @@ pub const SyntaxChecker = struct {
                 else => @intFromEnum(completion_handler.CompletionItemKind.variable),
             };
 
+            // Get type information for the definition
+            var detail: ?[]const u8 = null;
+            if (type_writer) |*tw| {
+                const type_var = ModuleEnv.varFrom(def.pattern);
+                tw.write(type_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
+
             try items.append(self.allocator, .{
                 .label = name,
                 .kind = kind,
+                .detail = detail,
             });
         }
 
-        return .{
-            .items = try items.toOwnedSlice(self.allocator),
-            .is_incomplete = false,
-        };
+        // Also check statements (apps use statements for definitions)
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+
+            if (stmt_parts.pattern) |pattern_idx| {
+                const pattern = module_env.store.getPattern(pattern_idx);
+
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (name.len == 0) continue;
+
+                // Check if already in items
+                var already_added = false;
+                for (items.items) |item| {
+                    if (std.mem.eql(u8, item.label, name)) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (already_added) continue;
+
+                // Determine completion kind
+                var kind: u32 = @intFromEnum(completion_handler.CompletionItemKind.variable);
+                if (stmt_parts.expr) |expr_idx| {
+                    const expr = module_env.store.getExpr(expr_idx);
+                    kind = switch (expr) {
+                        .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(completion_handler.CompletionItemKind.function),
+                        else => @intFromEnum(completion_handler.CompletionItemKind.variable),
+                    };
+                }
+
+                // Get type information
+                var detail: ?[]const u8 = null;
+                if (type_writer) |*tw| {
+                    const type_var = ModuleEnv.varFrom(pattern_idx);
+                    tw.write(type_var, .one_line) catch {};
+                    const type_str = tw.get();
+                    if (type_str.len > 0) {
+                        detail = self.allocator.dupe(u8, type_str) catch null;
+                    }
+                    tw.reset();
+                }
+
+                try items.append(self.allocator, .{
+                    .label = name,
+                    .kind = kind,
+                    .detail = detail,
+                });
+            }
+        }
+    }
+
+    /// Add module name completions
+    fn addModuleNameCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv) !void {
+        // Add builtin module names
+        for (BUILTIN_MODULES) |module_name| {
+            try items.append(self.allocator, .{
+                .label = module_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.module),
+                .detail = null,
+            });
+        }
+
+        // Add imported module names from import statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            if (stmt == .s_import) {
+                const import_stmt = stmt.s_import;
+                // Use alias if available, otherwise use the module name
+                const name_idx = import_stmt.alias_tok orelse import_stmt.module_name_tok;
+                const name = module_env.common.idents.getText(name_idx);
+
+                if (name.len > 0) {
+                    // Check if already added (could be a builtin)
+                    var already_added = false;
+                    for (items.items) |item| {
+                        if (std.mem.eql(u8, item.label, name)) {
+                            already_added = true;
+                            break;
+                        }
+                    }
+                    if (!already_added) {
+                        try items.append(self.allocator, .{
+                            .label = name,
+                            .kind = @intFromEnum(completion_handler.CompletionItemKind.module),
+                            .detail = null,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn findDotReceiverTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, cursor_offset: u32) ?types.Var {
+        var best_size: u32 = std.math.maxInt(u32);
+        var best_var: ?types.Var = null;
+
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (self.findDotReceiverTypeVarInExpr(module_env, def.expr, cursor_offset, &best_size)) |var_| {
+                best_var = var_;
+            }
+        }
+
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+            if (stmt_parts.expr) |expr_idx| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expr_idx, cursor_offset, &best_size)) |var_| {
+                    best_var = var_;
+                }
+            }
+            if (stmt_parts.expr2) |expr_idx| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expr_idx, cursor_offset, &best_size)) |var_| {
+                    best_var = var_;
+                }
+            }
+        }
+
+        return best_var;
+    }
+
+    fn findDotReceiverTypeVarInExpr(
+        self: *SyntaxChecker,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        cursor_offset: u32,
+        best_size: *u32,
+    ) ?types.Var {
+        const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
+        const region = module_env.store.getRegionAt(node_idx);
+
+        if (!regionContainsOffset(region, cursor_offset)) {
+            return null;
+        }
+
+        const expr = module_env.store.getExpr(expr_idx);
+        var result: ?types.Var = null;
+
+        if (expr == .e_dot_access) {
+            const dot = expr.e_dot_access;
+            if (regionContainsOffset(dot.field_name_region, cursor_offset)) {
+                const size = dot.field_name_region.end.offset - dot.field_name_region.start.offset;
+                if (size < best_size.*) {
+                    best_size.* = size;
+                    result = ModuleEnv.varFrom(dot.receiver);
+                }
+            }
+        }
+
+        switch (expr) {
+            .e_lambda => |lambda| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, lambda.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_closure => |closure| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, closure.lambda_idx, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_block => |block| {
+                const stmts = module_env.store.sliceStatements(block.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    const stmt_parts = getStatementParts(stmt);
+                    if (stmt_parts.expr) |stmt_expr| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, stmt_expr, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                    if (stmt_parts.expr2) |stmt_expr| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, stmt_expr, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, block.final_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_if => |if_expr| {
+                const branches = module_env.store.sliceIfBranches(if_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getIfBranch(branch_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.cond, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.body, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, if_expr.final_else, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_match => |match_expr| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, match_expr.cond, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                const branches = module_env.store.sliceMatchBranches(match_expr.branches);
+                for (branches) |branch_idx| {
+                    const branch = module_env.store.getMatchBranch(branch_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, branch.value, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                    if (branch.guard) |guard| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, guard, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+            },
+            .e_call => |call| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, call.func, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                const args = module_env.store.sliceExpr(call.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_binop => |binop| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, binop.lhs, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, binop.rhs, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_unary_minus => |unary| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, unary.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_unary_not => |unary| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, unary.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_list => |list| {
+                const elems = module_env.store.sliceExpr(list.elems);
+                for (elems) |elem| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, elem, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_tuple => |tuple| {
+                const elems = module_env.store.sliceExpr(tuple.elems);
+                for (elems) |elem| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, elem, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_record => |record| {
+                const fields = module_env.store.sliceRecordFields(record.fields);
+                for (fields) |field_idx| {
+                    const field = module_env.store.getRecordField(field_idx);
+                    if (self.findDotReceiverTypeVarInExpr(module_env, field.value, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+                if (record.ext) |ext| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, ext, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_dot_access => |dot| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, dot.receiver, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (dot.args) |args_span| {
+                    const args = module_env.store.sliceExpr(args_span);
+                    for (args) |arg| {
+                        if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                            result = var_;
+                        }
+                    }
+                }
+            },
+            .e_str => |str| {
+                const segments = module_env.store.sliceExpr(str.span);
+                for (segments) |segment| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, segment, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_tag => |tag| {
+                const args = module_env.store.sliceExpr(tag.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            .e_nominal => |nominal| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, nominal.backing_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_nominal_external => |nominal| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, nominal.backing_expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_dbg => |dbg| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, dbg.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_expect => |expect| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, expect.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_return => |ret| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, ret.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_for => |for_expr| {
+                if (self.findDotReceiverTypeVarInExpr(module_env, for_expr.expr, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+                if (self.findDotReceiverTypeVarInExpr(module_env, for_expr.body, cursor_offset, best_size)) |var_| {
+                    result = var_;
+                }
+            },
+            .e_type_var_dispatch => |dispatch| {
+                const args = module_env.store.sliceExpr(dispatch.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
+                }
+            },
+            else => {},
+        }
+
+        return result;
+    }
+
+    /// Add method completions for static dispatch (e.g., "value.method()")
+    /// This finds methods available on the type of the variable before the dot.
+    fn addMethodCompletions(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        variable_name: []const u8,
+        variable_start: u32,
+    ) !void {
+        // Find the binding for this variable name (same as record field completion)
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch return;
+
+        // Find the binding with matching name that's visible at the variable position
+        var found_binding: ?scope_map.Binding = null;
+        for (scope.bindings.items) |binding| {
+            if (!scope_map.ScopeMap.isVisibleAt(binding, variable_start)) continue;
+            const name = module_env.getIdentText(binding.ident);
+            if (std.mem.eql(u8, name, variable_name)) {
+                found_binding = binding;
+                break;
+            }
+        }
+
+        // Also check top-level definitions
+        if (found_binding == null) {
+            const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+            for (defs_slice) |def_idx| {
+                const def = module_env.store.getDef(def_idx);
+                const pattern = module_env.store.getPattern(def.pattern);
+
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, name, variable_name)) {
+                    // Found the definition - get its type and find methods
+                    const type_var = ModuleEnv.varFrom(def.pattern);
+                    try self.addMethodsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
+        // Also check statements (apps use statements for definitions)
+        if (found_binding == null) {
+            const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+            for (statements_slice) |stmt_idx| {
+                const stmt = module_env.store.getStatement(stmt_idx);
+                const pattern_idx = switch (stmt) {
+                    .s_decl => |decl| decl.pattern,
+                    .s_decl_gen => |decl| decl.pattern,
+                    else => continue,
+                };
+
+                const pattern = module_env.store.getPattern(pattern_idx);
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, name, variable_name)) {
+                    // Found the definition - get its type and find methods
+                    const type_var = ModuleEnv.varFrom(pattern_idx);
+                    try self.addMethodsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
+        if (found_binding) |binding| {
+            if (self.findExprTypeForPattern(module_env, binding.pattern_idx)) |type_var| {
+                try self.addMethodsFromTypeVar(items, module_env, type_var);
+                return;
+            }
+            // Get the type of this binding and find methods
+            const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+            try self.addMethodsFromTypeVar(items, module_env, type_var);
+        }
+    }
+
+    /// Extract methods available for a type variable and add them as completions.
+    fn addMethodsFromTypeVar(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_var: types.Var,
+    ) !void {
+        const type_store = &module_env.types;
+
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
+
+        var steps: usize = 0;
+        while (true) : (steps += 1) {
+            if (steps > 8) break;
+
+            const type_ident_opt: ?base.Ident.Idx = switch (content) {
+                .alias => |alias| alias.ident.ident_idx,
+                .structure => |flat_type| switch (flat_type) {
+                    .nominal_type => |nominal| nominal.ident.ident_idx,
+                    else => null,
+                },
+                else => null,
+            };
+
+            if (type_ident_opt) |type_ident| {
+                try self.addMethodsForTypeIdent(items, module_env, type_ident);
+            }
+
+            switch (content) {
+                .flex => |flex| {
+                    // Extract method names from flex constraints
+                    try self.addMethodsFromConstraints(items, module_env, flex.constraints);
+                    break;
+                },
+                .rigid => |rigid| {
+                    // Extract method names from rigid constraints
+                    try self.addMethodsFromConstraints(items, module_env, rigid.constraints);
+                    break;
+                },
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
+    }
+
+    /// Extract method names from static dispatch constraints and add them as completions
+    fn addMethodsFromConstraints(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        constraints: types.StaticDispatchConstraint.SafeList.Range,
+    ) !void {
+        if (constraints.isEmpty()) return;
+
+        const constraints_slice = module_env.types.sliceStaticDispatchConstraints(constraints);
+        for (constraints_slice) |constraint| {
+            const method_name = module_env.getIdentText(constraint.fn_name);
+
+            if (method_name.len == 0) continue;
+
+            // Skip if already added (avoid duplicates)
+            var already_added = false;
+            for (items.items) |item| {
+                if (std.mem.eql(u8, item.label, method_name)) {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (already_added) continue;
+
+            // Add the method completion
+            const label = try self.allocator.dupe(u8, method_name);
+            errdefer self.allocator.free(label);
+
+            // Try to get detail from the constraint's function type
+            var detail: ?[]const u8 = null;
+            var type_writer = module_env.initTypeWriter() catch null;
+            defer if (type_writer) |*tw| tw.deinit();
+
+            if (type_writer) |*tw| {
+                tw.write(constraint.fn_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
+
+            try items.append(self.allocator, .{
+                .label = label,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.method),
+                .detail = detail,
+            });
+        }
+    }
+
+    fn findExprTypeForPattern(self: *SyntaxChecker, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?types.Var {
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            if (def.pattern == pattern_idx) {
+                return ModuleEnv.varFrom(def.expr);
+            }
+        }
+
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt_parts = getStatementParts(stmt);
+            if (stmt_parts.pattern) |stmt_pattern_idx| {
+                if (stmt_pattern_idx == pattern_idx) {
+                    if (stmt_parts.expr) |expr_idx| {
+                        return ModuleEnv.varFrom(expr_idx);
+                    }
+                }
+            }
+        }
+
+        _ = self;
+        return null;
+    }
+
+    /// Add methods for a specific type identifier by searching method_idents.
+    fn addMethodsForTypeIdent(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_ident: base.Ident.Idx,
+    ) !void {
+        // Initialize type writer for formatting method signatures
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Get the type name for display purposes
+        const type_name = module_env.getIdentText(type_ident);
+
+        // Iterate through method_idents to find all methods for this type.
+        // The method_idents maps (type_ident, method_ident) -> qualified_ident.
+        // We need to find all entries where the type_ident matches.
+        const entries = module_env.method_idents.entries.items;
+        for (entries) |entry| {
+            // Check if this method is for our type
+            if (entry.key.type_ident == type_ident) {
+                const method_ident = entry.key.method_ident;
+                const method_name = module_env.getIdentText(method_ident);
+
+                if (method_name.len == 0) continue;
+
+                // Skip if already added (avoid duplicates)
+                var already_added = false;
+                for (items.items) |item| {
+                    if (std.mem.eql(u8, item.label, method_name)) {
+                        already_added = true;
+                        break;
+                    }
+                }
+                if (already_added) continue;
+
+                // Try to get the method's type signature
+                var detail: ?[]const u8 = null;
+                const qualified_ident = entry.value;
+                const qualified_name = module_env.getIdentText(qualified_ident);
+
+                // Look up the method definition to get its type
+                if (self.findMethodType(module_env, qualified_ident)) |method_type_var| {
+                    if (type_writer) |*tw| {
+                        tw.write(method_type_var, .one_line) catch {};
+                        const type_str = tw.get();
+                        if (type_str.len > 0) {
+                            detail = self.allocator.dupe(u8, type_str) catch null;
+                        }
+                        tw.reset();
+                    }
+                }
+
+                // If we couldn't get the type signature, at least show which type it's from
+                if (detail == null and type_name.len > 0 and qualified_name.len > 0) {
+                    detail = std.fmt.allocPrint(self.allocator, "method on {s}", .{type_name}) catch null;
+                }
+
+                try items.append(self.allocator, .{
+                    .label = method_name,
+                    .kind = @intFromEnum(completion_handler.CompletionItemKind.method),
+                    .detail = detail,
+                });
+            }
+        }
+    }
+
+    /// Find the type of a method definition by its qualified identifier.
+    fn findMethodType(_: *SyntaxChecker, module_env: *ModuleEnv, qualified_ident: base.Ident.Idx) ?types.Var {
+        // Look through definitions to find the method
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return ModuleEnv.varFrom(def.pattern);
+            }
+        }
+
+        // Also check statements
+        const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            const pattern_idx = switch (stmt) {
+                .s_decl => |decl| decl.pattern,
+                .s_decl_gen => |decl| decl.pattern,
+                else => continue,
+            };
+
+            const pattern = module_env.store.getPattern(pattern_idx);
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            if (ident_idx == qualified_ident) {
+                return ModuleEnv.varFrom(pattern_idx);
+            }
+        }
+
+        return null;
     }
 };
 

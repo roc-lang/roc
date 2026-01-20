@@ -135,7 +135,13 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             if (completion_result) |result| {
-                defer self.allocator.free(result.items);
+                defer {
+                    // Free allocated detail strings
+                    for (result.items) |item| {
+                        if (item.detail) |d| self.allocator.free(d);
+                    }
+                    self.allocator.free(result.items);
+                }
 
                 // Build the completion response
                 const CompletionResponse = struct {
