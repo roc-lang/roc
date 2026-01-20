@@ -728,8 +728,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Evaluate each argument and bind to the corresponding parameter
             for (params, args) |param_id, arg_id| {
-                const arg_loc = try self.generateExpr(arg_id);
-                try self.bindPattern(param_id, arg_loc);
+                // Check if the argument is a closure/lambda - if so, bind it for later invocation
+                const arg_expr = self.store.getExpr(arg_id);
+                switch (arg_expr) {
+                    .lambda, .closure => {
+                        // This is a closure being passed as an argument
+                        // Bind the expression ID so it can be called later
+                        try self.bindLambdaPattern(param_id, arg_id);
+                        // Also evaluate and bind the value (for captures, etc.)
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPattern(param_id, arg_loc);
+                    },
+                    else => {
+                        // Normal argument - just evaluate and bind
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPattern(param_id, arg_loc);
+                    },
+                }
             }
 
             // Now generate code for the lambda body with arguments bound
@@ -891,8 +906,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Evaluate each argument and bind to the corresponding parameter
             for (params, args) |param_id, arg_id| {
-                const arg_loc = try self.generateExpr(arg_id);
-                try self.bindPattern(param_id, arg_loc);
+                // Check if the argument is a closure/lambda - if so, bind it for later invocation
+                const arg_expr = self.store.getExpr(arg_id);
+                switch (arg_expr) {
+                    .lambda, .closure => {
+                        // This is a closure being passed as an argument
+                        // Bind the expression ID so it can be called later
+                        try self.bindLambdaPattern(param_id, arg_id);
+                        // Also evaluate and bind the value (for captures, etc.)
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPattern(param_id, arg_loc);
+                    },
+                    else => {
+                        // Normal argument - just evaluate and bind
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPattern(param_id, arg_loc);
+                    },
+                }
             }
 
             // Check if this is a recursive closure
