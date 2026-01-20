@@ -390,7 +390,7 @@ pub fn b(self: *Emit, offset_bytes: i32) !void {
     // 0 00101 imm26
     const offset_words = @divExact(offset_bytes, 4);
     const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
-    const inst: u32 = (0b000101 << 26) | imm26;
+    const inst: u32 = (@as(u32, 0b000101) << 26) | imm26;
     try self.emit32(inst);
 }
 

@@ -525,6 +525,11 @@ pub const AArch64CodeGen = struct {
             // B.cond: imm19 in bits [23:5]
             const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
             inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+        } else if (((inst >> 24) & 0b01111111) == 0b0110100 or ((inst >> 24) & 0b01111111) == 0b0110101) {
+            // CBZ/CBNZ: sf 011010 x imm19 Rt
+            // imm19 is in bits [23:5]
+            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
+            inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
         }
 
         std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
