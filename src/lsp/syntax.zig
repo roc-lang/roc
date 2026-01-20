@@ -15,6 +15,7 @@ const Diagnostics = @import("diagnostics.zig");
 const uri_util = @import("uri.zig");
 const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
 const compiled_builtins = @import("compiled_builtins");
+const scope_map = @import("scope_map.zig");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -2772,6 +2773,25 @@ pub const SyntaxChecker = struct {
         return .expression;
     }
 
+    /// Compute byte offset from line and character position in source text
+    fn computeOffset(source: []const u8, line: u32, character: u32) u32 {
+        var current_line: u32 = 0;
+        var line_start: usize = 0;
+
+        for (source, 0..) |c, i| {
+            if (current_line == line) {
+                line_start = i;
+                break;
+            }
+            if (c == '\n') {
+                current_line += 1;
+            }
+        }
+
+        const offset = line_start + character;
+        return @intCast(@min(offset, source.len));
+    }
+
     /// Get completion suggestions at a specific position in a document.
     /// Returns completions from the current module's exposed items and imports.
     /// If the build fails, still provides basic completions (builtin modules, types).
@@ -2833,6 +2853,9 @@ pub const SyntaxChecker = struct {
         const source = override_text orelse "";
         const context = detectCompletionContext(source, line, character);
 
+        // Compute cursor offset for scope-based completions
+        const cursor_offset = computeOffset(source, line, character);
+
         // Collect completions based on context
         var items = std.ArrayList(completion_handler.CompletionItem){};
         errdefer {
@@ -2877,7 +2900,7 @@ pub const SyntaxChecker = struct {
             .expression => {
                 // General expression context - add local definitions + module names
                 if (module_env_opt) |module_env| {
-                    try self.addLocalCompletions(&items, module_env);
+                    try self.addLocalCompletions(&items, module_env, cursor_offset);
                     try self.addModuleNameCompletions(&items, module_env);
                 } else {
                     // Fallback: just add builtin module names
@@ -3054,12 +3077,59 @@ pub const SyntaxChecker = struct {
     }
 
     /// Add local definition completions
-    fn addLocalCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv) !void {
+    fn addLocalCompletions(self: *SyntaxChecker, items: *std.ArrayList(completion_handler.CompletionItem), module_env: *ModuleEnv, cursor_offset: u32) !void {
         // Initialize type writer for formatting types
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
 
-        // Add definitions from all_defs
+        // Build scope map for local variable completions
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch {};
+
+        // Add local variables in scope at cursor position
+        for (scope.bindings.items) |binding| {
+            if (!scope_map.ScopeMap.isVisibleAt(binding, cursor_offset)) continue;
+
+            const name = module_env.getIdentText(binding.ident);
+            if (name.len == 0) continue;
+
+            // Check if already in items (avoid duplicates)
+            var already_added = false;
+            for (items.items) |item| {
+                if (std.mem.eql(u8, item.label, name)) {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (already_added) continue;
+
+            // Determine kind - parameters and local variables
+            const kind: u32 = if (binding.is_parameter)
+                @intFromEnum(completion_handler.CompletionItemKind.variable)
+            else
+                @intFromEnum(completion_handler.CompletionItemKind.variable);
+
+            // Get type information for the binding
+            var detail: ?[]const u8 = null;
+            if (type_writer) |*tw| {
+                const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+                tw.write(type_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
+
+            try items.append(self.allocator, .{
+                .label = name,
+                .kind = kind,
+                .detail = detail,
+            });
+        }
+
+        // Add definitions from all_defs (top-level)
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
