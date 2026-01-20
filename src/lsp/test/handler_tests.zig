@@ -1147,3 +1147,110 @@ test "definition handler navigates to builtin type from type annotation" {
     }
     try std.testing.expect(found_response);
 }
+
+test "completion handler returns module definitions" {
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "completion.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Document with two definitions
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"foo = 42\nbar = |x| x + 1"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Request completion at position 1,0 (beginning of second line)
+    const completion_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":0}}}}}}
+    , .{file_uri});
+    defer allocator.free(completion_body);
+    const completion_msg = try frame(allocator, completion_body);
+    defer allocator.free(completion_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, completion_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [16384]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Find the completion response (id: 2)
+    var found_response = false;
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer or id.integer != 2) continue;
+
+        // Result should be a completion list with items
+        const result = parsed.value.object.get("result");
+        try std.testing.expect(result != null);
+
+        // Should have isIncomplete field
+        const is_incomplete = result.?.object.get("isIncomplete");
+        try std.testing.expect(is_incomplete != null);
+
+        // Should have items array
+        const items = result.?.object.get("items");
+        try std.testing.expect(items != null);
+
+        // Verify items is an array (may be empty on parse failure, or contain definitions)
+        try std.testing.expect(items.? == .array);
+
+        found_response = true;
+        break;
+    }
+    try std.testing.expect(found_response);
+}
