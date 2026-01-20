@@ -2681,8 +2681,148 @@ pub const SyntaxChecker = struct {
         }
         return symbols.toOwnedSlice(allocator);
     }
+
+    /// Get completion suggestions at a specific position in a document.
+    /// Returns completions from the current module's exposed items and imports.
+    pub fn getCompletionsAtPosition(
+        self: *SyntaxChecker,
+        uri: []const u8,
+        override_text: ?[]const u8,
+        line: u32,
+        character: u32,
+    ) !?completion_handler.CompletionResult {
+        _ = line;
+        _ = character;
+
+        const path = try uri_util.uriToPath(self.allocator, uri);
+        defer self.allocator.free(path);
+
+        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
+        defer self.allocator.free(absolute_path);
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var env = try self.createFreshBuildEnv();
+
+        var provider_state = OverrideProvider{
+            .override_path = absolute_path,
+            .override_text = override_text,
+        };
+        const provider: ?FileProvider = if (override_text != null) .{
+            .ctx = &provider_state,
+            .read = OverrideProvider.read,
+        } else null;
+        env.setFileProvider(provider);
+        defer env.setFileProvider(null);
+
+        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
+        const dir_owned = try self.allocator.dupe(u8, dir_slice);
+        defer self.allocator.free(dir_owned);
+        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
+        defer if (prev_cwd) |cwd| {
+            std.process.changeCurDir(cwd) catch {};
+            self.allocator.free(cwd);
+        };
+        std.process.changeCurDir(dir_owned) catch {};
+
+        self.logDebug(.build, "completion: building {s}", .{absolute_path});
+        env.build(absolute_path) catch |err| {
+            self.logDebug(.build, "completion: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+            return null;
+        };
+
+        // Drain reports but ignore them for completion
+        const drained = env.drainReports() catch return null;
+        defer self.freeDrainedWithReports(drained);
+
+        // Get the module environment
+        const app_sched = env.schedulers.get("app") orelse blk: {
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env != null) {
+                        break :blk sched;
+                    }
+                }
+            }
+            return null;
+        };
+        const root_module = app_sched.getRootModule() orelse return null;
+        const module_env = if (root_module.env) |*e| e else return null;
+
+        // Collect completions from the module's exposed items
+        var items = std.ArrayList(completion_handler.CompletionItem){};
+        errdefer items.deinit(self.allocator);
+
+        // Get exposed items from the current module
+        const exposed = &module_env.common.exposed_items;
+        var iter = exposed.iterator();
+        while (iter.next()) |entry| {
+            const ident_idx: base.Ident.Idx = @bitCast(entry.ident_idx);
+            const name = module_env.common.idents.getText(ident_idx);
+
+            // Determine if this is a function or variable
+            // For now, assume lowercase starting identifiers are values/functions
+            // and uppercase are types
+            const kind: u32 = if (name.len > 0 and std.ascii.isUpper(name[0]))
+                @intFromEnum(completion_handler.CompletionItemKind.class) // Type
+            else
+                @intFromEnum(completion_handler.CompletionItemKind.function);
+
+            try items.append(self.allocator, .{
+                .label = name,
+                .kind = kind,
+            });
+        }
+
+        // Also add definitions from all_defs (for non-exposed items)
+        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        for (defs_slice) |def_idx| {
+            const def = module_env.store.getDef(def_idx);
+            const pattern = module_env.store.getPattern(def.pattern);
+
+            const ident_idx = switch (pattern) {
+                .assign => |p| p.ident,
+                .as => |p| p.ident,
+                else => continue,
+            };
+
+            const name = module_env.getIdentText(ident_idx);
+            if (name.len == 0) continue;
+
+            // Check if already in items (from exposed_items)
+            var already_added = false;
+            for (items.items) |item| {
+                if (std.mem.eql(u8, item.label, name)) {
+                    already_added = true;
+                    break;
+                }
+            }
+            if (already_added) continue;
+
+            // Determine completion kind based on the expression type
+            const expr = module_env.store.getExpr(def.expr);
+            const kind: u32 = switch (expr) {
+                .e_closure, .e_lambda, .e_hosted_lambda => @intFromEnum(completion_handler.CompletionItemKind.function),
+                else => @intFromEnum(completion_handler.CompletionItemKind.variable),
+            };
+
+            try items.append(self.allocator, .{
+                .label = name,
+                .kind = kind,
+            });
+        }
+
+        return .{
+            .items = try items.toOwnedSlice(self.allocator),
+            .is_incomplete = false,
+        };
+    }
 };
 
+const completion_handler = @import("handlers/completion.zig");
 const document_symbol_handler = @import("handlers/document_symbol.zig");
 
 fn buildLineOffsets(source: []const u8) LineOffsets {
