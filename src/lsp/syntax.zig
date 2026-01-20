@@ -2687,6 +2687,13 @@ pub const SyntaxChecker = struct {
     pub const CompletionContext = union(enum) {
         /// After a dot with a module prefix: "Str." or "List."
         after_module_dot: []const u8,
+        /// After a dot with a record variable: "myRecord."
+        after_record_dot: struct {
+            /// The variable name before the dot
+            variable_name: []const u8,
+            /// Byte offset of the start of the variable name
+            variable_start: u32,
+        },
         /// After a colon (type annotation context)
         after_colon,
         /// General expression context
@@ -2749,20 +2756,28 @@ pub const SyntaxChecker = struct {
             const prev_char = source[pos - 1];
 
             if (prev_char == '.') {
-                // After a dot - could be module access
-                // Look for module name before the dot
-                const module_end = pos - 1;
-                var module_start = module_end;
+                // After a dot - could be module access or record field access
+                // Look for identifier before the dot
+                const ident_end = pos - 1;
+                var ident_start = ident_end;
 
-                while (module_start > 0 and (std.ascii.isAlphanumeric(source[module_start - 1]) or source[module_start - 1] == '_')) {
-                    module_start -= 1;
+                while (ident_start > 0 and (std.ascii.isAlphanumeric(source[ident_start - 1]) or source[ident_start - 1] == '_')) {
+                    ident_start -= 1;
                 }
 
-                if (module_start < module_end) {
-                    const module_name = source[module_start..module_end];
-                    // Check if it starts with uppercase (module name convention)
-                    if (module_name.len > 0 and std.ascii.isUpper(module_name[0])) {
-                        return .{ .after_module_dot = module_name };
+                if (ident_start < ident_end) {
+                    const ident_name = source[ident_start..ident_end];
+                    if (ident_name.len > 0) {
+                        if (std.ascii.isUpper(ident_name[0])) {
+                            // Uppercase - module access (e.g., "Str.")
+                            return .{ .after_module_dot = ident_name };
+                        } else {
+                            // Lowercase - record field access (e.g., "myRecord.")
+                            return .{ .after_record_dot = .{
+                                .variable_name = ident_name,
+                                .variable_start = @intCast(ident_start),
+                            } };
+                        }
                     }
                 }
             } else if (prev_char == ':') {
@@ -2887,6 +2902,13 @@ pub const SyntaxChecker = struct {
             .after_module_dot => |module_name| {
                 // Get completions from the specified module
                 try self.addModuleMemberCompletions(&items, env, module_name);
+            },
+            .after_record_dot => |record_access| {
+                // Record field access - get fields from the record type
+                if (module_env_opt) |module_env| {
+                    try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
+                }
+                // No fallback for record completions - we need type info
             },
             .after_colon => {
                 // Type annotation context - add type names
@@ -3073,6 +3095,149 @@ pub const SyntaxChecker = struct {
                 },
                 else => {},
             }
+        }
+    }
+
+    /// Add record field completions for a record variable access (e.g., "myRecord.")
+    /// This finds the variable's type and extracts field names from record types.
+    fn addRecordFieldCompletions(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        variable_name: []const u8,
+        variable_start: u32,
+    ) !void {
+        // Find the binding for this variable name
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch return;
+
+        // Find the binding with matching name that's visible at the variable position
+        var found_binding: ?scope_map.Binding = null;
+        for (scope.bindings.items) |binding| {
+            if (!scope_map.ScopeMap.isVisibleAt(binding, variable_start)) continue;
+            const name = module_env.getIdentText(binding.ident);
+            if (std.mem.eql(u8, name, variable_name)) {
+                found_binding = binding;
+                break;
+            }
+        }
+
+        // Also check top-level definitions
+        if (found_binding == null) {
+            const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+            for (defs_slice) |def_idx| {
+                const def = module_env.store.getDef(def_idx);
+                const pattern = module_env.store.getPattern(def.pattern);
+
+                const ident_idx = switch (pattern) {
+                    .assign => |p| p.ident,
+                    .as => |p| p.ident,
+                    else => continue,
+                };
+
+                const name = module_env.getIdentText(ident_idx);
+                if (std.mem.eql(u8, name, variable_name)) {
+                    // Found the definition - get its type and extract record fields
+                    const type_var = ModuleEnv.varFrom(def.pattern);
+                    try self.addFieldsFromTypeVar(items, module_env, type_var);
+                    return;
+                }
+            }
+        }
+
+        if (found_binding) |binding| {
+            // Get the type of this binding
+            const type_var = ModuleEnv.varFrom(binding.pattern_idx);
+            try self.addFieldsFromTypeVar(items, module_env, type_var);
+        }
+    }
+
+    /// Extract and add record fields from a type variable
+    fn addFieldsFromTypeVar(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        type_var: types.Var,
+    ) !void {
+        const type_store = &module_env.types;
+
+        // Resolve the type variable to get its content
+        const resolved = type_store.resolveVar(type_var);
+        const content = resolved.desc.content;
+
+        // Try to get record fields, handling aliases that wrap records
+        try self.addFieldsFromContent(items, module_env, content);
+    }
+
+    /// Recursively extract fields from type content, unwrapping aliases
+    fn addFieldsFromContent(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        content: types.Content,
+    ) !void {
+        const type_store = &module_env.types;
+
+        // Check if this is directly a record
+        if (content.unwrapRecord()) |record| {
+            try self.addFieldsFromRecord(items, module_env, record);
+            return;
+        }
+
+        // Check if this is an alias (e.g., a type alias wrapping a record)
+        switch (content) {
+            .alias => |alias| {
+                // Get the backing type of the alias
+                const backing_var = type_store.getAliasBackingVar(alias);
+                const backing_resolved = type_store.resolveVar(backing_var);
+                try self.addFieldsFromContent(items, module_env, backing_resolved.desc.content);
+            },
+            else => {
+                // Not a record or alias - no fields to add
+            },
+        }
+    }
+
+    /// Add completion items for fields in a record type
+    fn addFieldsFromRecord(
+        self: *SyntaxChecker,
+        items: *std.ArrayList(completion_handler.CompletionItem),
+        module_env: *ModuleEnv,
+        record: types.Record,
+    ) !void {
+        const type_store = &module_env.types;
+
+        // Get the record fields
+        const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        // Initialize type writer for formatting field types
+        var type_writer = module_env.initTypeWriter() catch null;
+        defer if (type_writer) |*tw| tw.deinit();
+
+        // Iterate over record fields
+        for (field_names, field_vars) |field_name_idx, field_var| {
+            const field_name = module_env.getIdentText(field_name_idx);
+            if (field_name.len == 0) continue;
+
+            // Get field type for detail
+            var detail: ?[]const u8 = null;
+            if (type_writer) |*tw| {
+                tw.write(field_var, .one_line) catch {};
+                const type_str = tw.get();
+                if (type_str.len > 0) {
+                    detail = self.allocator.dupe(u8, type_str) catch null;
+                }
+                tw.reset();
+            }
+
+            try items.append(self.allocator, .{
+                .label = field_name,
+                .kind = @intFromEnum(completion_handler.CompletionItemKind.field),
+                .detail = detail,
+            });
         }
     }
 
