@@ -248,9 +248,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for an i128 literal
         fn generateI128Literal(self: *Self, val: i128) Error!ValueLocation {
-            // For i128, we need two registers (low and high 64 bits)
-            // For now, just handle the low 64 bits
-            // TODO: Full i128 support
+            // TODO: PLACEHOLDER - Only handles low 64 bits, discards high 64 bits
+            // WHY: i128 requires two registers (low + high), but our ValueLocation
+            //   only tracks one register. Full i128 support needs:
+            //   1. New ValueLocation variant: .register_pair { .low, .high }
+            //   2. Modified arithmetic ops to use add-with-carry, mul-high, etc.
+            //   3. Modified stores to write both halves to memory
+            // IMPACT: i128 values > 2^63 or < -2^63 get truncated/wrong results
+            // WHEN THIS MATTERS: Large integers, cryptographic code, some timestamps
             const low: i64 = @truncate(val);
             const reg = try self.codegen.allocGeneralFor(0);
             try self.codegen.emitLoadImm(reg, low);
@@ -319,13 +324,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .div => {
-                    // Integer division - use mul as placeholder for now
-                    // TODO: Implement proper idiv
+                    // TODO: PLACEHOLDER - Uses MUL instead of proper division
+                    // WHY: SDIV (AArch64) and IDIV (x86) have complex register requirements:
+                    //   - x86 IDIV uses RDX:RAX for dividend, result in RAX, remainder in RDX
+                    //   - AArch64 SDIV is simpler: sdiv Rd, Rn, Rm
+                    // IMPACT: Division operations return wrong results (a*b instead of a/b)
+                    // PROPER FIX: Add emitDiv to the codegen layer with arch-specific handling
                     try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
                 },
                 .mod => {
-                    // Modulo - use mul as placeholder for now
-                    // TODO: Implement proper idiv remainder
+                    // TODO: PLACEHOLDER - Uses MUL instead of proper modulo
+                    // WHY: Modulo requires division then computing remainder:
+                    //   - x86: IDIV gives remainder in RDX directly
+                    //   - AArch64: Need SDIV + MSUB (result = a - (a/b)*b)
+                    // IMPACT: Modulo operations return wrong results (a*b instead of a%b)
+                    // PROPER FIX: Add emitMod to the codegen layer, or use IDIV/SDIV+MSUB
                     try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
                 },
                 // Comparison operations
@@ -337,8 +350,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
                 .@"and", .@"or" => {
-                    // Just use the result of lhs for now
-                    // TODO: Proper boolean AND/OR
+                    // TODO: PLACEHOLDER - Uses ADD instead of proper boolean logic
+                    // WHY: Boolean values in Roc are represented as 0 (false) or 1 (true).
+                    //   - AND: result = lhs & rhs (bitwise AND, works for 0/1 values)
+                    //   - OR:  result = lhs | rhs (bitwise OR, works for 0/1 values)
+                    // Using ADD is wrong: 1 + 1 = 2 (not 1), so `True and True` = 2
+                    // IMPACT: Boolean AND/OR return incorrect results for True cases
+                    // PROPER FIX: Emit AND/ORR (AArch64) or AND/OR (x86) instructions
                     try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg);
                 },
             }
@@ -397,9 +415,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .mul => try self.codegen.emitMulF64(result_reg, lhs_reg, rhs_reg),
                 .div => try self.codegen.emitDivF64(result_reg, lhs_reg, rhs_reg),
                 else => {
-                    // Comparison and boolean ops for floats
-                    // TODO: Implement float comparisons
-                    try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg); // placeholder
+                    // TODO: PLACEHOLDER - Uses ADD for float comparisons/boolean ops
+                    // WHY: Float comparisons require:
+                    //   - AArch64: FCMP followed by CSET to materialize condition
+                    //   - x86: UCOMISD followed by SETcc to materialize condition
+                    // The result should be an integer (0 or 1), not a float!
+                    // IMPACT: Float comparisons return garbage (sum of operands as float)
+                    // PROPER FIX:
+                    //   1. Emit FCMP/UCOMISD to set condition flags
+                    //   2. Use CSET (AArch64) or SETcc (x86) to get 0/1 into integer reg
+                    //   3. Return that integer register, not a float register
+                    try self.codegen.emitAddF64(result_reg, lhs_reg, rhs_reg);
                 },
             }
 
@@ -421,8 +447,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             if (is_float) {
-                // For floats, XOR with sign bit
-                // TODO: Implement float negation properly
+                // TODO: PLACEHOLDER - Returns the input unchanged (no negation)
+                // WHY: Float negation requires flipping the sign bit (bit 63 for f64):
+                //   - AArch64: FNEG Dd, Dn (single instruction)
+                //   - x86: XORPD with constant 0x8000000000000000 (sign bit mask)
+                // IMPACT: `-x` returns `x` unchanged for floats
+                // PROPER FIX: Add emitNegF64 to codegen layer with arch-specific handling
                 return inner_loc;
             } else {
                 // For integers, use NEG
@@ -438,14 +468,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateUnaryNot(self: *Self, unary: anytype) Error!ValueLocation {
             const inner_loc = try self.generateExpr(unary.expr);
 
-            // Boolean NOT: XOR with 1
             const reg = try self.ensureInGeneralReg(inner_loc);
             const result_reg = try self.codegen.allocGeneralFor(0);
 
-            // Load 1 and XOR to flip the bit
-            // For simplicity, just use NEG and add 1
+            // TODO: PLACEHOLDER - Uses NEG instead of proper boolean NOT
+            // WHY: Boolean NOT should flip 0↔1, but NEG gives: NEG(0)=0, NEG(1)=-1
+            // IMPACT: `not False` = 0 (correct), `not True` = -1 (wrong, should be 0)
+            // PROPER FIX: Use XOR with 1:
+            //   - AArch64: EOR Rd, Rn, #1
+            //   - x86: XOR reg, 1
+            // This correctly flips: 0 XOR 1 = 1, 1 XOR 1 = 0
             try self.codegen.emitNeg(.w64, result_reg, reg);
-            // TODO: Proper boolean NOT implementation
 
             self.codegen.freeGeneral(reg);
             return .{ .general_reg = result_reg };
@@ -531,7 +564,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateWhen(self: *Self, when_expr: anytype) Error!ValueLocation {
             _ = self;
             _ = when_expr;
-            // TODO: Implement pattern matching
+            // TODO: NOT IMPLEMENTED - Pattern matching (when/match expressions)
+            // WHY: Pattern matching requires:
+            //   1. Tag extraction: Load the tag byte from the scrutinee
+            //   2. Tag comparison: Generate switch on tag values
+            //   3. Payload extraction: Load bound variables from union payload
+            //   4. Guard evaluation: If patterns have guards, evaluate them
+            //   5. Branch generation: Like if-then-else but with multiple arms
+            // RELATED CODE:
+            //   - generateIfThenElse shows similar branch/patch logic
+            //   - generateU8DispatchCall shows switch-like code generation
+            //   - Lower.zig pattern handling shows what patterns look like
+            // IMPACT: Any code using `when expr is ...` fails with UnsupportedExpression
             return Error.UnsupportedExpression;
         }
 
@@ -603,7 +647,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Ignore the value
                 },
                 else => {
-                    // TODO: Handle destructuring patterns
+                    // TODO: NOT IMPLEMENTED - Destructuring patterns
+                    // Examples that don't work:
+                    //   { a, b } = some_record       -- record destructuring
+                    //   (x, y) = some_tuple          -- tuple destructuring
+                    //   Cons(head, tail) = some_list -- tag destructuring
+                    // WHAT'S NEEDED:
+                    //   1. For records/tuples: load each field from struct offset, bind to symbol
+                    //   2. For tags: check tag matches, load payload, recursively bind sub-pattern
+                    // IMPACT: Code using destructuring patterns silently fails (no binding happens)
                 },
             }
         }
@@ -626,12 +678,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Generate code for a lambda expression (unevaluated function)
         /// Lambdas are not executed immediately - they're stored for later invocation
         fn generateLambda(self: *Self, lambda: anytype) Error!ValueLocation {
-            // A lambda by itself doesn't produce a value - it's a function definition
-            // When called, we'll inline it. For now, store a reference to the expression.
+            // TODO: PLACEHOLDER - Standalone lambda returns 0 instead of closure value
+            //
+            // CURRENT BEHAVIOR:
+            // Returns 0 because our current calling convention inlines lambdas at call
+            // sites. When `(|x| x + 1)(5)` is evaluated, generateCall detects the lambda
+            // and calls generateLambdaCall directly with the body - no closure value needed.
+            //
+            // WHEN THIS MATTERS:
+            // This placeholder breaks when lambdas aren't immediately called:
+            //   f = |x| x + 1    -- f gets 0, not a callable value
+            //   f(5)             -- lookup finds 0, not the lambda body
+            //
+            // PROPER IMPLEMENTATION:
+            // For lambdas that escape their immediate context, we need to:
+            // 1. Allocate a closure struct (even for non-capturing lambdas, for uniformity)
+            // 2. Store a function pointer or lambda index
+            // 3. Return the closure struct address
+            //
+            // This is handled by closure expressions with direct_call representation,
+            // so most lambdas should be wrapped in closures by Lower.zig before we
+            // reach this point. This function is only called for rare edge cases.
             _ = self;
             _ = lambda;
-            // Lambdas that aren't immediately called should be stored as closure data
-            // For now, return a placeholder
             return .{ .immediate_i64 = 0 };
         }
 
@@ -666,8 +735,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Multiple captures - allocate struct on stack and copy captures
                     const captures = self.store.getCaptures(repr.captures);
 
-                    // For now, just evaluate all captures and return the first one
-                    // TODO: Properly allocate stack space and store all captures
+                    // TODO: PLACEHOLDER - Evaluates captures but doesn't allocate struct
+                    //
+                    // CURRENT BEHAVIOR:
+                    // We evaluate all captured values and store them in symbol_locations,
+                    // but return only the first one. This works for immediate calls where
+                    // the captures are bound before evaluating the lambda body.
+                    //
+                    // WHY THIS IS SUFFICIENT FOR NOW:
+                    // When a closure is called (generateClosureCall), we look up captures
+                    // by symbol from symbol_locations. Since we populate those here, the
+                    // body can access all captured values even though we only return one.
+                    //
+                    // PROPER IMPLEMENTATION (when closures escape):
+                    // When closures are stored or passed around, we need a real struct:
+                    // 1. Calculate struct size: sum of capture sizes with alignment padding
+                    //    (Roc sorts by alignment for optimal packing - see layout.rs)
+                    // 2. Allocate stack space: sub sp, sp, #struct_size
+                    // 3. Store each capture at its offset: str capture_reg, [sp, #offset]
+                    // 4. Return the struct pointer as the closure value
+                    //
+                    // The struct layout must match what generateClosureCall expects when
+                    // unpacking captures for the lambda body.
                     var first_loc: ?ValueLocation = null;
                     for (captures) |cap| {
                         const symbol_key: u48 = @bitCast(cap.symbol);
@@ -687,8 +776,36 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return .{ .immediate_i64 = repr.tag };
                 },
                 .union_repr => |repr| {
-                    // Multiple functions with captures - create tagged union
-                    // For now, just return the tag
+                    // TODO: PLACEHOLDER - Returns 0 instead of tagged union
+                    //
+                    // CURRENT BEHAVIOR:
+                    // Returns 0 (no closure value). This works for immediate calls where
+                    // we resolve the closure at compile time, but breaks when the closure
+                    // is stored or passed around.
+                    //
+                    // WHEN THIS IS NEEDED:
+                    // ```roc
+                    // { a = 10; b = 3; choose = |c| if c |x| x + a else |x| x + b; f = choose(True); f(5) }
+                    // ```
+                    // Here `f` must store: (1) which lambda to call, (2) that lambda's captures.
+                    //
+                    // PROPER IMPLEMENTATION (from Roc's ir.rs):
+                    // union_repr creates a tagged union where:
+                    // 1. Tag byte (Bool for 2 fns, U8 for 3+ fns) identifies which lambda
+                    // 2. Payload contains that specific lambda's captures (different layouts!)
+                    //
+                    // Steps:
+                    // 1. Calculate union size: max(capture_struct_sizes) + tag_size
+                    // 2. Allocate stack space for the union
+                    // 3. Store tag at offset 0: str tag_reg, [sp]
+                    // 4. Store captures at offset 1+: str cap_reg, [sp, #1] (or #2 for alignment)
+                    // 5. Return union pointer
+                    //
+                    // At call site (generateUnionReprCall):
+                    // 1. Load tag: ldr tag_reg, [closure_ptr]
+                    // 2. Switch on tag to select lambda
+                    // 3. Load captures from union payload into symbol_locations
+                    // 4. Call the lambda body
                     _ = repr;
                     return .{ .immediate_i64 = 0 };
                 },
@@ -790,8 +907,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .enum_dispatch, .union_repr => {
-                    // Multiple functions with same signature - need lambda set dispatch
-                    // For now, just bind captures the traditional way
+                    // TODO: PLACEHOLDER - Binds captures from scope instead of closure value
+                    //
+                    // CURRENT BEHAVIOR:
+                    // We bind captures "the traditional way" - looking them up from the
+                    // enclosing scope via symbol definitions. This works when the closure
+                    // is created and called in the same scope.
+                    //
+                    // WHY THIS PATH EXISTS:
+                    // This is called from generateClosureCall (without symbol tracking),
+                    // which handles direct closure calls like `closure(args)`. For lambda
+                    // set dispatch, we typically go through generateClosureCallWithSymbol
+                    // instead, which uses generateEnumDispatchCall/generateUnionReprCall.
+                    //
+                    // WHEN THIS BREAKS:
+                    // When the closure is stored in a variable and called later:
+                    //   choose = |c| if c |x| x + a else |x| x + b
+                    //   f = choose(True)  -- f is now a closure value
+                    //   f(5)              -- this call comes here, but captures aren't in scope!
+                    //
+                    // PROPER IMPLEMENTATION:
+                    // For union_repr, we need to:
+                    // 1. Load the tag from the closure value
+                    // 2. Switch on the tag to determine which lambda
+                    // 3. Load that lambda's captures from the union payload
+                    // 4. Bind them to symbol_locations
+                    // 5. Call the lambda body
                     const captures = self.store.getCaptures(closure.captures);
                     for (captures) |cap| {
                         const symbol_key: u48 = @bitCast(cap.symbol);
@@ -903,6 +1044,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for union_repr call (multiple functions with captures)
+        ///
+        /// TODO: PLACEHOLDER - Delegates to enum_dispatch, ignores capture extraction
+        ///
+        /// DIFFERENCE FROM enum_dispatch:
+        /// enum_dispatch: closures have NO captures, so the tag alone identifies the function
+        /// union_repr: closures HAVE captures, stored in a tagged union alongside the tag
+        ///
+        /// CURRENT BEHAVIOR:
+        /// Delegates to generateEnumDispatchCall, which only handles the tag-based dispatch.
+        /// This works when captures are still bound from the enclosing scope (immediate calls),
+        /// but breaks when the closure escapes and captures need to be loaded from the union.
+        ///
+        /// PROPER IMPLEMENTATION:
+        /// 1. Load the closure pointer from symbol_locations (points to tagged union)
+        /// 2. Load the tag: ldr tag_reg, [closure_ptr]
+        /// 3. Switch on tag (like enum_dispatch)
+        /// 4. FOR EACH BRANCH, before calling the lambda:
+        ///    a. Get that lambda's capture layout from LambdaSetMember.captures
+        ///    b. Load each capture from the union payload:
+        ///       ldr cap_reg, [closure_ptr, #offset]  // offset varies by capture index
+        ///    c. Bind captures to symbol_locations
+        ///    d. Then call the lambda body
+        ///
+        /// This is more complex than enum_dispatch because each lambda in the set may have
+        /// DIFFERENT captures with DIFFERENT layouts. The union payload must be large enough
+        /// to hold the largest capture set, with each lambda knowing its own offsets.
         fn generateUnionReprCall(
             self: *Self,
             lambda_set: mono.LambdaSetMemberSpan,
@@ -910,8 +1077,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             args_span: anytype,
             ret_layout: layout.Idx,
         ) Error!ValueLocation {
-            // For now, use the same dispatch as enum_dispatch
-            // TODO: Handle capture extraction from the union payload
+            // Delegate to enum_dispatch for now - captures are bound from enclosing scope
             return try self.generateEnumDispatchCall(lambda_set, symbol, args_span, ret_layout);
         }
 
@@ -1053,13 +1219,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Emit jump if not equal (after comparison)
+        ///
+        /// BRANCH PATCHING MECHANISM:
+        /// When generating switch dispatch, we don't know the jump target offset until
+        /// we've generated the code for the branch body. So we:
+        /// 1. Emit the branch instruction with offset=0 (placeholder)
+        /// 2. Record the instruction's location (patch_loc)
+        /// 3. Generate the branch body code
+        /// 4. Calculate the actual offset: current_offset - patch_loc
+        /// 5. Patch the instruction at patch_loc with the real offset
+        ///
+        /// WHY OFFSET 0 IS SAFE:
+        /// Offset 0 means "jump to the next instruction" which is harmless if we
+        /// somehow fail to patch. But in normal operation, codegen.patchJump()
+        /// overwrites the placeholder before execution.
+        ///
+        /// RETURNS: The offset of the branch instruction, for later patching.
         fn emitJumpIfNotEqual(self: *Self) !usize {
             const patch_loc = self.codegen.currentOffset();
             if (comptime builtin.cpu.arch == .aarch64) {
-                // B.NE with placeholder offset (will be patched)
+                // B.NE (branch if not equal) with placeholder offset
                 try self.codegen.emit.bcond(.ne, 0);
             } else {
-                // JNE with placeholder offset
+                // JNE (jump if not equal) with placeholder offset
                 try self.codegen.emit.jne(@bitCast(@as(i32, 0)));
             }
             return patch_loc;
@@ -1150,6 +1332,40 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for a recursive jump (tail call to current recursive closure)
+        ///
+        /// TODO: PLACEHOLDER - Doesn't properly rebind parameters before jumping
+        ///
+        /// JOIN POINTS AND RECURSIVE CALLS (Roc-style):
+        /// When a recursive closure calls itself, instead of making a real function call
+        /// (which grows the stack), we use "join points" - labeled positions in the code
+        /// that we can jump back to, like a loop.
+        ///
+        /// HOW IT WORKS:
+        /// 1. When entering a recursive closure, we record the code offset as a "join point"
+        /// 2. When the closure calls itself, we jump back to that offset instead of calling
+        /// 3. This turns recursion into iteration, avoiding stack overflow
+        ///
+        /// CURRENT BEHAVIOR:
+        /// We evaluate the new arguments and jump back to the join point. However, we
+        /// don't properly rebind the parameters to the new argument values - we just
+        /// overwrite the old bindings in symbol_locations before jumping.
+        ///
+        /// WHY THIS WORKS FOR SIMPLE CASES:
+        /// If the recursive call is: `factorial(n - 1)`, we evaluate `n - 1` into a register,
+        /// then jump back to the body. The body still sees `n` bound to the same location
+        /// (the register), but we've updated that register's value. This is a happy accident
+        /// that makes simple tail recursion work.
+        ///
+        /// WHEN THIS BREAKS:
+        /// - Multiple parameters where bindings alias or overlap
+        /// - Complex parameter patterns (destructuring)
+        /// - Non-tail recursive calls (those go through normal call path)
+        ///
+        /// PROPER IMPLEMENTATION:
+        /// Store the parameter patterns when entering the closure, then in this function:
+        /// 1. Evaluate all new arguments into temporary locations
+        /// 2. Rebind each parameter pattern to its new argument value
+        /// 3. Jump back to the join point
         fn generateRecursiveJump(self: *Self, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             _ = ret_layout;
 
@@ -1160,19 +1376,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the arguments
             const args = self.store.getExprSpan(args_span);
 
-            // For a proper recursive jump, we need to:
-            // 1. Evaluate the new arguments
-            // 2. Update the parameter bindings
-            // 3. Jump back to the join point
-            //
-            // However, this requires knowing the parameter patterns, which we don't
-            // have easily accessible here. For now, we evaluate arguments and
-            // use a simpler approach: just emit a jump back to the join point.
-            //
-            // TODO: Store parameter patterns when entering recursive closure
-            // and use them here to properly update bindings.
-
-            // Evaluate arguments (for side effects and to get values)
+            // Evaluate arguments (updates bindings in symbol_locations as a side effect)
             var arg_locations = std.ArrayList(ValueLocation).empty;
             defer arg_locations.deinit(self.allocator);
 
@@ -1182,11 +1386,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Emit unconditional jump back to join point
-            // For now, this is a simple backward jump
             try self.emitJumpToOffset(join_point_offset);
 
-            // Return a placeholder - this code path shouldn't be reached at runtime
-            // because we jumped away
+            // Return placeholder - execution never reaches here, we jumped away.
+            // This value exists only to satisfy the return type. If somehow executed,
+            // returning 0 is safe (it won't crash, just produce wrong results).
             return .{ .immediate_i64 = 0 };
         }
 
@@ -1418,16 +1622,24 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             switch (loc) {
                 .float_reg => |reg| return reg,
                 .immediate_f64 => |val| {
-                    // Load float immediate via memory
-                    // For now, zero the register
+                    // TODO: PLACEHOLDER - Always loads 0.0, ignoring the actual value
+                    // WHY: Float literals can't be loaded as immediates on most architectures.
+                    //   x86: MOVSD from memory, or MOVQ to load bits then MOVQ to float reg
+                    //   AArch64: LDR from literal pool, or FMOV for special values (0.0, 1.0, etc.)
+                    // PROPER IMPLEMENTATION:
+                    //   1. Store float bits in static data section (literal pool)
+                    //   2. PC-relative load: LDR Dn, [PC, #offset] or MOVSD xmm, [rip+disp]
+                    //   Alternatively for small programs:
+                    //   1. Load bits into integer register: MOV reg, float_bits
+                    //   2. Move to float register: MOVQ xmm, reg (x86) or FMOV Dn, Xn (AArch64)
+                    // IMPACT: All float literals become 0.0 (3.14 → 0.0)
                     const reg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
                     _ = val;
-                    // TODO: Proper float literal loading via static data
-                    // For now just zero the register
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        // Load zero for now
+                        // Zero the register (FMOV from zero register)
                         try self.codegen.emit.fmovFloatFromGen(.double, reg, .ZRSP);
                     } else {
+                        // Zero via self-XOR
                         try self.codegen.emit.xorpdRegReg(reg, reg);
                     }
                     return reg;
@@ -1477,11 +1689,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .i128, .u128, .dec => {
-                    // 128-bit values need two 64-bit stores
+                    // TODO: PLACEHOLDER - Only stores low 64 bits, ignores high 64 bits
+                    // WHY: Our ValueLocation only tracks one register, but i128 needs two.
+                    //   Full implementation requires:
+                    //   1. ValueLocation.register_pair { .low, .high } variant
+                    //   2. Store low: STR low_reg, [ptr]
+                    //   3. Store high: STR high_reg, [ptr, #8]
+                    // IMPACT: High 64 bits of 128-bit values are garbage (uninitialized memory)
+                    // NOTE: Same limitation exists in generateI128Literal above
                     const reg = try self.ensureInGeneralReg(loc);
-                    // Store low 64 bits
                     try self.emitStoreToMem(result_ptr_reg, reg);
-                    // TODO: Store high 64 bits
                 },
                 else => {
                     // For other types, just do a basic store

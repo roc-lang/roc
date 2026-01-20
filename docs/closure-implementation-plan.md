@@ -99,7 +99,26 @@ g(5)  // Should be 10
 - `crates/compiler/mono/src/layout.rs:1434-1774` - LambdaSet, ClosureCallOptions
 - `crates/compiler/mono/src/ir.rs` - construct_closure_data, enum_lambda_set_to_switch
 
-### Priority 4: Boxed/Erased Closures
+### Priority 4: Stack vs Heap (Roc-style)
+
+**Roc's Approach:**
+- Depends on size/representation
+- Small closures (unwrapped, small structs) stay on stack
+- Large closures or those that escape may need heap allocation
+
+### Priority 5: Multimorphic Lambdas (Roc-style deduplication)
+
+**Roc's Approach (from layout.rs:1903-1950):**
+- Detect when same function appears multiple times in lambda set
+- Deduplicate specializations to avoid code bloat
+
+### Priority 6: Empty Lambda Sets (Roc-style)
+
+**Roc's Approach (from layout.rs:1974-1985):**
+- Give empty representation to unbound lambda sets
+- Handle void/unit cases gracefully
+
+### Priority 7: Boxed/Erased Closures
 
 **Existing Infrastructure:**
 - `Box(item)` already exists in `src/build/roc/Builtin.roc`
@@ -109,24 +128,10 @@ g(5)  // Should be 10
 - Wire up `Box.unbox` for closures: extract function pointer + environment
 - Calling boxed closure: indirect call through function pointer after unboxing
 
-### Priority 5: Stack vs Heap (Roc-style)
-
-**Roc's Approach:**
-- Depends on size/representation
-- Small closures (unwrapped, small structs) stay on stack
-- Large closures or those that escape may need heap allocation
-
-### Priority 6: Multimorphic Lambdas (Roc-style deduplication)
-
-**Roc's Approach (from layout.rs:1903-1950):**
-- Detect when same function appears multiple times in lambda set
-- Deduplicate specializations to avoid code bloat
-
-### Priority 7: Empty Lambda Sets (Roc-style)
-
-**Roc's Approach (from layout.rs:1974-1985):**
-- Give empty representation to unbound lambda sets
-- Handle void/unit cases gracefully
+**Note:** This requires significant infrastructure work:
+- Lower.zig needs to detect Box method calls and emit `low_level` expressions
+- MonoExprCodeGen.zig needs to handle `low_level` expressions with `box_box`/`box_unbox`
+- Heap allocation support in the dev backend
 
 ---
 
