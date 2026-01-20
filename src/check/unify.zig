@@ -178,22 +178,9 @@ pub fn unifyWithConf(
     // First reset the scratch store
     unify_scratch.reset();
 
-    // Take a snapshot before unification so we can rollback on failure.
-    // This allows us to capture the original (unmerged) types for error messages.
-    var type_store_snapshot = try types.snapshot();
-    errdefer type_store_snapshot.deinit(types.gpa);
-
     // Unify
     var unifier = Unifier.init(module_env, types, unify_scratch, occurs_scratch);
     unifier.unifyGuarded(a, b) catch |err| {
-        // Rollback to restore original types before capturing error snapshots
-        types.rollbackTo(&type_store_snapshot);
-        type_store_snapshot.deinit(types.gpa);
-
-        // Reset scratch state since any fresh variables created during unification
-        // were rolled back and no longer exist in the type store
-        unify_scratch.reset();
-
         const problem: Problem = blk: {
             switch (err) {
                 error.AllocatorError => {
@@ -334,8 +321,6 @@ pub fn unifyWithConf(
         return Result{ .problem = problem_idx };
     };
 
-    // Unification succeeded, discard the snapshot
-    type_store_snapshot.deinit(types.gpa);
     return .ok;
 }
 
