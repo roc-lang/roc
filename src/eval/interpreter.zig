@@ -5979,7 +5979,6 @@ pub const Interpreter = struct {
 
             // Declaration statements: check the expression
             .s_decl => |decl| self.bodyHasExitStatement(decl.expr),
-            .s_decl_gen => |decl| self.bodyHasExitStatement(decl.expr),
             .s_var => |var_stmt| self.bodyHasExitStatement(var_stmt.expr),
             .s_reassign => |reassign| self.bodyHasExitStatement(reassign.expr),
 
@@ -6121,7 +6120,6 @@ pub const Interpreter = struct {
 
         return switch (stmt) {
             .s_decl => |decl| self.conditionInvolvesMutableVariable(decl.expr),
-            .s_decl_gen => |decl| self.conditionInvolvesMutableVariable(decl.expr),
             .s_var => |var_stmt| self.conditionInvolvesMutableVariable(var_stmt.expr),
             .s_reassign => |reassign| self.conditionInvolvesMutableVariable(reassign.expr),
             .s_expr => |expr_stmt| self.conditionInvolvesMutableVariable(expr_stmt.expr),
@@ -7803,9 +7801,21 @@ pub const Interpreter = struct {
         const pat = self.env.store.getPattern(pattern_idx);
         switch (pat) {
             .assign => |_| {
-                // Bind entire value to this pattern
-                const copied = try self.pushCopy(value, roc_ops);
-                // pushCopy preserves rt_var from value
+                // Bind entire value to this pattern.
+                // Prefer value_rt_var when it provides more concrete type info than value.rt_var.
+                // This is critical for method receivers on polymorphic opaque types (issue #9049):
+                // when Container(Bool).run is called, the receiver's value_rt_var is Container(Bool)
+                // but value.rt_var might be a generic flex var. Using the concrete type ensures
+                // that field access inside the method preserves nominal types like Bool.
+                var copied = try self.pushCopy(value, roc_ops);
+                const value_resolved = self.runtime_types.resolveVar(value.rt_var);
+                const param_resolved = self.runtime_types.resolveVar(value_rt_var);
+                // Only override if value's type is flex/rigid AND param type is more concrete
+                if ((value_resolved.desc.content == .flex or value_resolved.desc.content == .rigid) and
+                    param_resolved.desc.content == .structure)
+                {
+                    copied.rt_var = value_rt_var;
+                }
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = copied, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -7816,7 +7826,15 @@ pub const Interpreter = struct {
                     return false;
                 }
 
-                const alias_value = try self.pushCopy(value, roc_ops);
+                var alias_value = try self.pushCopy(value, roc_ops);
+                // Same logic as .assign: prefer value_rt_var when more concrete
+                const value_resolved = self.runtime_types.resolveVar(value.rt_var);
+                const param_resolved = self.runtime_types.resolveVar(value_rt_var);
+                if ((value_resolved.desc.content == .flex or value_resolved.desc.content == .rigid) and
+                    param_resolved.desc.content == .structure)
+                {
+                    alias_value.rt_var = value_rt_var;
+                }
                 try out_binds.append(.{ .pattern_idx = pattern_idx, .value = alias_value, .expr_idx = expr_idx, .source_env = self.env });
                 return true;
             },
@@ -8042,8 +8060,33 @@ pub const Interpreter = struct {
                         self.triggerCrash("record_destructure: field not found in record", false, roc_ops);
                         return error.Crash;
                     };
-                    const field_ct_var = can.ModuleEnv.varFrom(destruct_idx);
-                    const field_var = try self.translateTypeVar(self.env, field_ct_var);
+
+                    // Try to get field type from the value's actual runtime type first.
+                    // This preserves nominal type information (like Bool) that would otherwise
+                    // be lost when the pattern's compile-time variable is a generic flex var.
+                    // This is critical for Str.inspect to render Bool values correctly when
+                    // they are extracted from polymorphic opaque types (issue #9049).
+                    const field_var = blk: {
+                        const value_resolved = self.runtime_types.resolveVar(value.rt_var);
+                        if (value_resolved.desc.content == .structure) {
+                            const fields_range = switch (value_resolved.desc.content.structure) {
+                                .record => |rec| rec.fields,
+                                .record_unbound => |fields| fields,
+                                else => break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(destruct_idx)),
+                            };
+                            const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
+                            var i: usize = 0;
+                            while (i < fields.len) : (i += 1) {
+                                const f = fields.get(i);
+                                // Use translated field name for comparison (both are in runtime ident store)
+                                if (f.name == runtime_label) {
+                                    break :blk f.var_;
+                                }
+                            }
+                        }
+                        // Fall back to pattern's type if value's type doesn't have the field info
+                        break :blk try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(destruct_idx));
+                    };
                     const field_value = try accessor.getFieldByIndex(field_index, field_var);
 
                     const inner_pattern_idx = switch (destruct.kind) {
@@ -14136,14 +14179,6 @@ pub const Interpreter = struct {
                         try self.addClosurePlaceholder(d.pattern, d.expr);
                     }
                 },
-                .s_decl_gen => |d| {
-                    const patt = self.env.store.getPattern(d.pattern);
-                    if (patt != .assign) continue;
-                    const rhs = self.env.store.getExpr(d.expr);
-                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
-                        try self.addClosurePlaceholder(d.pattern, d.expr);
-                    }
-                },
                 .s_var => |v| {
                     const patt = self.env.store.getPattern(v.pattern_idx);
                     if (patt != .assign) continue;
@@ -14228,23 +14263,6 @@ pub const Interpreter = struct {
                     .expected_rt_var = expected_rt_var,
                 } } });
                 // Push expression evaluation
-                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
-                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = d.expr,
-                    .expected_rt_var = expr_rt_var,
-                } });
-            },
-            .s_decl_gen => |d| {
-                // Same as s_decl
-                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
-                    .pattern = d.pattern,
-                    .expr_idx = d.expr,
-                    .remaining_stmts = remaining_stmts,
-                    .final_expr = final_expr,
-                    .bindings_start = bindings_start,
-                    .expected_rt_var = expected_rt_var,
-                } } });
                 const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                 try work_stack.push(.{ .eval_expr = .{
@@ -17395,27 +17413,101 @@ pub const Interpreter = struct {
                         return error.TypeMismatch;
                     };
 
-                    // Get the field's rt_var from the receiver's record type
-                    const receiver_resolved = self.runtime_types.resolveVar(receiver_value.rt_var);
+                    // Get the field's rt_var from the receiver's record type.
+                    // For opaque types with type arguments (like Container(Bool)), we need to:
+                    // 1. Unwrap to get the backing record's field type
+                    // 2. If the field type is a rigid variable, resolve it using the nominal's type args
                     const field_rt_var = blk: {
-                        if (receiver_resolved.desc.content == .structure) {
-                            const flat = receiver_resolved.desc.content.structure;
-                            const fields_range = switch (flat) {
-                                .record => |rec| rec.fields,
-                                .record_unbound => |fields| fields,
+                        var current = self.runtime_types.resolveVar(receiver_value.rt_var);
+                        // Track type argument mappings as we unwrap nominal types
+                        var type_arg_mapping = std.AutoHashMap(types.Var, types.Var).init(self.allocator);
+                        defer type_arg_mapping.deinit();
+
+                        var guard = types.debug.IterationGuard.init("field_access.unwrap");
+                        while (true) {
+                            guard.tick();
+                            switch (current.desc.content) {
+                                .alias => |al| {
+                                    const backing = self.runtime_types.getAliasBackingVar(al);
+                                    current = self.runtime_types.resolveVar(backing);
+                                },
+                                .structure => |st| switch (st) {
+                                    .nominal_type => |nom| {
+                                        // Collect rigid → type arg mappings from this nominal type.
+                                        // For Container(Bool), this maps the rigid `a` in backing type to Bool.
+                                        const backing = self.runtime_types.getNominalBackingVar(nom);
+                                        const type_args = self.runtime_types.sliceNominalArgs(nom);
+
+                                        if (type_args.len > 0) {
+                                            // Collect rigids from backing type
+                                            const backing_resolved = self.runtime_types.resolveVar(backing);
+                                            if (backing_resolved.desc.content == .structure) {
+                                                const fields_range = switch (backing_resolved.desc.content.structure) {
+                                                    .record => |rec| rec.fields,
+                                                    .record_unbound => |fields| fields,
+                                                    else => null,
+                                                };
+                                                if (fields_range) |range| {
+                                                    // Find rigids in field types and map them to type args
+                                                    const fields = self.runtime_types.getRecordFieldsSlice(range);
+                                                    var i: usize = 0;
+                                                    while (i < fields.len) : (i += 1) {
+                                                        const f = fields.get(i);
+                                                        const field_resolved = self.runtime_types.resolveVar(f.var_);
+                                                        if (field_resolved.desc.content == .rigid and type_args.len > 0) {
+                                                            // Map the first rigid to the first type arg (positional)
+                                                            // This is a simplification - for full support we'd need
+                                                            // to match rigids by name or position from the definition
+                                                            type_arg_mapping.put(field_resolved.var_, type_args[0]) catch {};
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        current = self.runtime_types.resolveVar(backing);
+                                    },
+                                    .record => |rec| {
+                                        const fields = self.runtime_types.getRecordFieldsSlice(rec.fields);
+                                        var i: usize = 0;
+                                        while (i < fields.len) : (i += 1) {
+                                            const f = fields.get(i);
+                                            if (f.name == rt_field_name) {
+                                                // If the field type is a rigid, check type arg mappings
+                                                const field_resolved = self.runtime_types.resolveVar(f.var_);
+                                                if (field_resolved.desc.content == .rigid) {
+                                                    if (type_arg_mapping.get(field_resolved.var_)) |mapped_var| {
+                                                        break :blk mapped_var;
+                                                    }
+                                                }
+                                                break :blk f.var_;
+                                            }
+                                        }
+                                        break :blk try self.runtime_types.fresh();
+                                    },
+                                    .record_unbound => |fields_range| {
+                                        const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
+                                        var i: usize = 0;
+                                        while (i < fields.len) : (i += 1) {
+                                            const f = fields.get(i);
+                                            if (f.name == rt_field_name) {
+                                                // If the field type is a rigid, check type arg mappings
+                                                const field_resolved = self.runtime_types.resolveVar(f.var_);
+                                                if (field_resolved.desc.content == .rigid) {
+                                                    if (type_arg_mapping.get(field_resolved.var_)) |mapped_var| {
+                                                        break :blk mapped_var;
+                                                    }
+                                                }
+                                                break :blk f.var_;
+                                            }
+                                        }
+                                        break :blk try self.runtime_types.fresh();
+                                    },
+                                    else => break :blk try self.runtime_types.fresh(),
+                                },
                                 else => break :blk try self.runtime_types.fresh(),
-                            };
-                            const fields = self.runtime_types.getRecordFieldsSlice(fields_range);
-                            var i: usize = 0;
-                            while (i < fields.len) : (i += 1) {
-                                const f = fields.get(i);
-                                // Use translated field name for comparison (both are in runtime ident store)
-                                if (f.name == rt_field_name) {
-                                    break :blk f.var_;
-                                }
                             }
                         }
-                        break :blk try self.runtime_types.fresh();
                     };
 
                     const field_value = try accessor.getFieldByIndex(field_idx, field_rt_var);
@@ -17928,10 +18020,12 @@ pub const Interpreter = struct {
                     const body_ct_var = can.ModuleEnv.varFrom(closure_header.body_idx);
                     try self.propagateFlexMappings(self.env, body_ct_var, da.receiver_rt_var);
 
-                    // Now translate the pattern type with the mappings in place
-                    const receiver_param_rt_var = try self.translateTypeVar(self.env, param_pattern_ct_var);
-
-                    if (!try self.patternMatchesBind(params[0], receiver_value, receiver_param_rt_var, roc_ops, &self.bindings, null)) {
+                    // Use the receiver's actual rt_var for pattern matching, not the translated
+                    // pattern type. This preserves nominal type information (like Bool inside
+                    // opaque types) through the method body. The receiver_rt_var from the call
+                    // site has concrete types, while the pattern's translated type may only have
+                    // generic flex/rigid variables. (Fix for issue #9049)
+                    if (!try self.patternMatchesBind(params[0], receiver_value, da.receiver_rt_var, roc_ops, &self.bindings, null)) {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
                         _ = self.active_closures.pop();

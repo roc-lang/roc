@@ -828,7 +828,6 @@ pub const SyntaxChecker = struct {
             // Check type annotations in statements
             const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                 .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
-                .s_decl_gen => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                 .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                 .s_type_anno => |t| t.anno,
                 .s_alias_decl => |a| a.anno,
@@ -1397,7 +1396,6 @@ pub const SyntaxChecker = struct {
                     // Extract type annotation from statement
                     const maybe_type_anno: ?CIR.TypeAnno.Idx = switch (stmt) {
                         .s_decl => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
-                        .s_decl_gen => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                         .s_var => |d| if (d.anno) |anno_idx| module_env.store.getAnnotation(anno_idx).anno else null,
                         .s_type_anno => |t| t.anno,
                         .s_alias_decl => |a| a.anno,
@@ -1637,7 +1635,6 @@ pub const SyntaxChecker = struct {
             // The TypeAnno region covers the actual type annotation (e.g., "Animal" in "dog : Animal")
             const stmt_anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
                 .s_decl => |d| d.anno,
-                .s_decl_gen => |d| d.anno,
                 else => null,
             };
             if (stmt_anno_idx) |actual_anno_idx| {
@@ -1686,7 +1683,6 @@ pub const SyntaxChecker = struct {
                         const other_stmt = module_env.store.getStatement(other_stmt_idx);
                         const pattern_idx = switch (other_stmt) {
                             .s_decl => |d| d.pattern,
-                            .s_decl_gen => |d| d.pattern,
                             .s_var => |v| v.pattern_idx,
                             else => continue,
                         };
@@ -1752,7 +1748,6 @@ pub const SyntaxChecker = struct {
     fn getStatementParts(stmt: CIR.Statement) StatementParts {
         return switch (stmt) {
             .s_decl => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
-            .s_decl_gen => |d| .{ .pattern = d.pattern, .expr = d.expr, .expr2 = null },
             .s_var => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
             .s_reassign => |d| .{ .pattern = d.pattern_idx, .expr = d.expr, .expr2 = null },
             .s_expr => |e| .{ .pattern = null, .expr = e.expr, .expr2 = null },
@@ -1830,7 +1825,6 @@ pub const SyntaxChecker = struct {
                     // The TypeAnno region covers the actual type annotation (e.g., "Animal" in "dog : Animal")
                     const block_anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
                         .s_decl => |d| d.anno,
-                        .s_decl_gen => |d| d.anno,
                         else => null,
                     };
                     if (block_anno_idx) |anno_idx| {
@@ -1909,7 +1903,6 @@ pub const SyntaxChecker = struct {
                                 const other_stmt = module_env.store.getStatement(other_stmt_idx);
                                 const pattern_idx = switch (other_stmt) {
                                     .s_decl => |d| d.pattern,
-                                    .s_decl_gen => |d| d.pattern,
                                     .s_var => |v| v.pattern_idx,
                                     else => continue,
                                 };
