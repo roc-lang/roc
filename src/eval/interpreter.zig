@@ -9768,13 +9768,10 @@ pub const Interpreter = struct {
                     break :blk rt_rigid_var;
                 },
                 .err => {
-                    // Handle generic type parameters from compiled builtin modules.
-                    // When a generic type variable (like `item` or `state` in List.fold) is
-                    // serialized in the compiled Builtin module, it may have .err content
-                    // because no concrete type was known at compile time.
-                    // Create a fresh unbound variable to represent this generic parameter.
-                    // This will be properly instantiated/unified when the function is called.
-                    break :blk try self.runtime_types.fresh();
+                    // Preserve error content so layout computation can detect it.
+                    // This will cause TypeContainedMismatch error when computing layout,
+                    // which triggers a runtime crash for type errors like I64 + Dec.
+                    break :blk try self.runtime_types.freshFromContent(.err);
                 },
             }
         };
