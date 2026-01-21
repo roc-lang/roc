@@ -142,6 +142,10 @@ pub const Diagnostic = union(enum) {
         nested_name: Ident.Idx,
         region: Region,
     },
+    record_builder_map2_not_found: struct {
+        type_name: Ident.Idx,
+        region: Region,
+    },
     too_many_exports: struct {
         count: u32,
         region: Region,
@@ -258,6 +262,19 @@ pub const Diagnostic = union(enum) {
     break_outside_loop: struct {
         region: Region,
     },
+    return_outside_fn: struct {
+        region: Region,
+        context: ReturnContext,
+
+        pub const ReturnContext = enum(u8) {
+            /// Explicit `return` statement
+            return_statement,
+            /// Return as final expression in a block
+            return_expr,
+            /// `?` suffix operator (try operator)
+            try_suffix,
+        };
+    },
     /// Two or more type aliases form a cycle where each references another.
     /// This is not allowed because type aliases are transparent synonyms.
     /// Use nominal types (:=) for recursive types.
@@ -341,6 +358,7 @@ pub const Diagnostic = union(enum) {
             .type_var_starting_with_dollar => |d| d.region,
             .underscore_in_type_declaration => |d| d.region,
             .break_outside_loop => |d| d.region,
+            .return_outside_fn => |d| d.region,
             .mutually_recursive_type_aliases => |d| d.region,
             .deprecated_number_suffix => |d| d.region,
         };

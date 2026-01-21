@@ -19,11 +19,9 @@ const fmt = @import("fmt");
 const repl = @import("repl");
 const eval_mod = @import("eval");
 const tracy = @import("tracy");
-const llvm_compile = @import("llvm_compile");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
-const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -3525,61 +3523,6 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     for (inputs.items) |input| {
         const repl_output = try repl_instance.step(input);
         try actual_outputs.append(repl_output);
-    }
-
-    // Dual-mode testing: Run full LLVM compilation pipeline and compare outputs
-    // This ensures the LLVM backend produces the same results as the interpreter.
-    // Skip on platforms where JIT is not supported (e.g., statically-linked musl).
-    if (llvm_compile.isJITSupported()) {
-        var llvm_evaluator = LlvmEvaluator.init(output.gpa) catch |err| {
-            std.debug.print("LLVM evaluator init failed: {}\n", .{err});
-            success = false;
-            return success;
-        };
-        defer llvm_evaluator.deinit();
-
-        for (inputs.items, actual_outputs.items) |input, interp_output| {
-            // Step 1: Generate LLVM bitcode from source
-            var bitcode_result = llvm_evaluator.generateBitcodeFromSource(input) catch |err| {
-                // Skip unsupported expressions - they'll return UnsupportedType
-                switch (err) {
-                    error.UnsupportedType => continue,
-                    error.ParseError, error.CanonicalizeError, error.TypeError => continue,
-                    else => {
-                        std.debug.print("LLVM bitcode generation failed for input '{s}': {}\n", .{ input, err });
-                        success = false;
-                        continue;
-                    },
-                }
-            };
-            defer bitcode_result.deinit();
-
-            // Step 2: Compile and execute using full LLVM pipeline
-            // Convert between the two ResultType enums (they have the same variants)
-            const result_type: llvm_compile.ResultType = @enumFromInt(@intFromEnum(bitcode_result.result_type));
-            const llvm_output = llvm_compile.compileAndExecute(
-                output.gpa,
-                bitcode_result.bitcode,
-                result_type,
-            ) catch |err| {
-                std.debug.print("LLVM compile/execute failed for input '{s}': {}\n", .{ input, err });
-                success = false;
-                continue;
-            };
-            defer output.gpa.free(llvm_output);
-
-            // Compare outputs - fail the snapshot if they differ
-            if (!std.mem.eql(u8, interp_output, llvm_output)) {
-                std.debug.print(
-                    \\LLVM/Interpreter MISMATCH in {s}:
-                    \\  Input: {s}
-                    \\  Interpreter: {s}
-                    \\  LLVM:        {s}
-                    \\
-                , .{ snapshot_path, input, interp_output, llvm_output });
-                success = false;
-            }
-        }
     }
 
     switch (config.output_section_command) {

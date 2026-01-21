@@ -1602,6 +1602,40 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .record_builder_map2_not_found => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "RECORD BUILDER NOT SUPPORTED", .runtime_error);
+
+            const type_bytes = self.getIdent(data.type_name);
+            const type_name = try report.addOwnedString(type_bytes);
+
+            // "The type `Foo` is used in a record builder expression, but does not implement `map2`:"
+            try report.document.addReflowingText("The type ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" is used in a record builder expression, but does not implement ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(":");
+            try report.document.addLineBreak();
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addLineBreak();
+
+            // Hint
+            try report.document.addReflowingText("Hint: To use ");
+            try report.document.addInlineCode(type_name);
+            try report.document.addReflowingText(" as a record builder, add a ");
+            try report.document.addInlineCode("map2");
+            try report.document.addReflowingText(" method to its type module.");
+
+            break :blk report;
+        },
         .where_clause_not_allowed_in_type_decl => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -1988,6 +2022,38 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" or ");
             try report.document.addAnnotated("for", .inline_code);
             try report.document.addReflowingText(" to exit the loop early.");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .return_outside_fn => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = switch (data.context) {
+                .try_suffix => r: {
+                    var r = Report.init(allocator, "TRY OPERATOR OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("?", .inline_code);
+                    try r.document.addReflowingText(" operator can only be used inside function bodies because it can cause an early return.");
+                    break :r r;
+                },
+                .return_statement, .return_expr => r: {
+                    var r = Report.init(allocator, "RETURN OUTSIDE FUNCTION", .runtime_error);
+                    try r.document.addReflowingText("The ");
+                    try r.document.addAnnotated("return", .inline_code);
+                    try r.document.addReflowingText(" keyword can only be used inside function bodies.");
+                    break :r r;
+                },
+            };
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
