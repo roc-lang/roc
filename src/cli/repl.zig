@@ -181,6 +181,7 @@ pub fn run(ctx: *CliContext) !void {
 
     // Read-eval-print loop
     var repl_line = ReplLine.init(ctx.gpa);
+    defer repl_line.deinit();
     ctx.io.flush();
     while (true) : ({
         ctx.io.flush();
@@ -188,6 +189,8 @@ pub fn run(ctx: *CliContext) !void {
         // Read line
         const line = try repl_line.readLine(ctx.arena, "» ");
         defer ctx.arena.free(line);
+        // add line to history
+        try repl_line.history.append(line);
 
         // Evaluate and print result
         const result = repl_instance.step(line) catch |err| {

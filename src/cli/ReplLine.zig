@@ -5,14 +5,43 @@ const Allocator = std.mem.Allocator;
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
 
+const History = struct {
+    allocator: Allocator,
+    entries: std.ArrayList([]const u8),
+
+    pub fn init(allocator: Allocator) History {
+        const entries = std.ArrayList([]const u8).empty;
+        return History{
+            .allocator = allocator,
+            .entries = entries,
+        };
+    }
+
+    pub fn deinit(self: *History) void {
+        for (self.entries.items) |line| {
+            self.allocator.free(line);
+        }
+        self.entries.deinit(self.allocator);
+    }
+
+    pub fn append(self: *History, input: []const u8) !void {
+        const input_copy = try self.allocator.alloc(u8, input.len);
+        @memcpy(input_copy, input);
+        try self.entries.append(self.allocator, input_copy);
+    }
+};
+
 const ReplLine = @This();
 
 allocator: Allocator,
+history: History,
 
 pub fn init(allocator: Allocator) ReplLine {
-    return ReplLine{
-        .allocator = allocator,
-    };
+    return ReplLine{ .allocator = allocator, .history = History.init(allocator) };
+}
+
+pub fn deinit(self: *ReplLine) void {
+    self.history.deinit();
 }
 
 const CommandError =
@@ -34,9 +63,14 @@ const LineState = struct {
     line_buffer: std.ArrayList(u8),
     bytes_read: usize,
     in_buffer: [8]u8,
+    history: *History,
+    history_index: ?usize,
 };
 
 fn printChar(state: *LineState) !void {
+    // Reset history navigation on new input
+    state.history_index = null;
+
     // Insert at col_offset, not just append
     try state.line_buffer.insert(state.temp, state.col_offset, state.in_buffer[0]);
     state.col_offset += 1;
@@ -70,6 +104,7 @@ fn acceptLine(_: *LineState) !void {
     return error.NewLine;
 }
 
+// TODO: remove this when done testing
 fn debugInBuffer(state: *LineState) !void {
     _ = try state.out.print("in_buffer = {any}\n", .{state.in_buffer[0..state.bytes_read]});
 }
@@ -95,6 +130,50 @@ fn moveCursorLeft(state: *LineState) !void {
     try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
 }
 
+fn historyBackward(state: *LineState) !void {
+    const hist_len = state.history.entries.items.len;
+    if (hist_len == 0) return;
+
+    if (state.history_index == null) {
+        state.history_index = hist_len - 1;
+    } else if (state.history_index.? > 0) {
+        state.history_index = state.history_index.? - 1;
+    }
+
+    const entry = state.history.entries.items[state.history_index.?];
+    state.line_buffer.clearAndFree(state.temp);
+    try state.line_buffer.appendSlice(state.temp, entry);
+    state.col_offset = entry.len;
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
+fn historyForward(state: *LineState) !void {
+    const hist_len = state.history.entries.items.len;
+    if (hist_len == 0 or state.history_index == null) return;
+
+    if (state.history_index.? < hist_len - 1) {
+        state.history_index = state.history_index.? + 1;
+        const entry = state.history.entries.items[state.history_index.?];
+        state.line_buffer.clearAndFree(state.temp);
+        try state.line_buffer.appendSlice(state.temp, entry);
+        state.col_offset = entry.len;
+    } else {
+        // Past the end, clear line
+        state.history_index = null;
+        state.line_buffer.clearAndFree(state.temp);
+        state.col_offset = 0;
+    }
+
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+    try state.out.writeAll(state.line_buffer.items);
+    try ansi_term.clearFromCursorToLineEnd(state.out); // Clear any ghost text
+    try ansi_term.setCursorColumn(state.out, state.prompt_width + state.col_offset);
+}
+
 fn findCommandFn(state: *LineState) CommandFn {
     const key = state.in_buffer[0];
     return switch (key) {
@@ -108,18 +187,22 @@ fn findCommandFn(state: *LineState) CommandFn {
                 return switch (state.in_buffer[2]) {
                     ansi_term.LEFT => moveCursorLeft,
                     ansi_term.RIGHT => moveCursorRight,
-                    // ansi_term.UP => historyBackward,
-                    // ansi_term.DOWN => historyForward,
-                    else => debugInBuffer,
+                    ansi_term.UP => historyBackward,
+                    ansi_term.DOWN => historyForward,
+                    else => doNothing,
                 };
             } else {
-                state.out.print("got control code\n", .{}) catch unreachable;
-                return debugInBuffer;
+                // TODO: remove these comments
+                // state.out.print("got control code\n", .{}) catch unreachable;
+                // return debugInBuffer;
+                return doNothing;
             }
         },
         else => {
-            state.out.print("got byte: {}\n", .{key}) catch unreachable;
-            return debugInBuffer;
+                // TODO: remove these comments
+            // state.out.print("got byte: {}\n", .{key}) catch unreachable;
+            // return debugInBuffer;
+            return doNothing;
         },
     };
 }
@@ -133,7 +216,6 @@ pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ![]u8 {
 }
 
 fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ![]u8 {
-    _ = self;
     var arena_allocator = std.heap.ArenaAllocator.init(outlive);
     defer arena_allocator.deinit();
     const temp = arena_allocator.allocator();
@@ -151,8 +233,9 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
         .outlive = outlive,
         .bytes_read = undefined,
         .in_buffer = undefined,
+        .history = &self.history,
+        .history_index = null,
     };
-
 
     const old = try Unix.init();
     defer old.deinit();
