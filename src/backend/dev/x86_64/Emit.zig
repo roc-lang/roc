@@ -369,6 +369,17 @@ pub fn callRelocated(self: *Emit, name: []const u8) !void {
     });
 }
 
+/// CALL r64 (call to address in register)
+pub fn callReg(self: *Emit, reg: GeneralReg) !void {
+    // CALL r64: FF /2
+    // REX prefix needed for R8-R15
+    if (reg.enc() >= 8) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0xFF);
+    try self.buf.append(self.allocator, modRM(0b11, 2, reg.enc())); // /2 = CALL
+}
+
 /// JMP rel32 (relative jump)
 pub fn jmpRel32(self: *Emit, rel: i32) !void {
     try self.buf.append(self.allocator, 0xE9);

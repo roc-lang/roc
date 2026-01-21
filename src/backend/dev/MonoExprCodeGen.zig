@@ -21,9 +21,15 @@ const builtin = @import("builtin");
 const base = @import("base");
 const layout = @import("layout");
 const mono = @import("mono");
+const builtins = @import("builtins");
 
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
+
+// Dec builtin functions for calling from generated code
+const RocDec = builtins.dec.RocDec;
+const dec_mulOrPanicC = builtins.dec.mulOrPanicC;
+const dec_divC = builtins.dec.divC;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -583,46 +589,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .mul => {
-                    // 128-bit multiply: (a_lo, a_hi) * (b_lo, b_hi)
-                    // result_lo = low64(a_lo * b_lo)
-                    // result_hi = high64(a_lo * b_lo) + low64(a_lo * b_hi) + low64(a_hi * b_lo)
-
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        // aarch64: Use MUL for low and UMULH for high
-                        // 1. a_lo * b_lo -> result_low (low), temp (high via UMULH)
-                        try self.codegen.emit.mulRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
-                        try self.codegen.emit.umulhRegRegReg(result_high, lhs_parts.low, rhs_parts.low);
-
-                        // 2. a_lo * b_hi -> temp1 (low part only, add to result_high)
-                        const temp1 = try self.codegen.allocGeneralFor(2);
-                        try self.codegen.emit.mulRegRegReg(.w64, temp1, lhs_parts.low, rhs_parts.high);
-                        try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp1);
-                        self.codegen.freeGeneral(temp1);
-
-                        // 3. a_hi * b_lo -> temp2 (low part only, add to result_high)
-                        const temp2 = try self.codegen.allocGeneralFor(2);
-                        try self.codegen.emit.mulRegRegReg(.w64, temp2, rhs_parts.low, lhs_parts.high);
-                        try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp2);
-                        self.codegen.freeGeneral(temp2);
+                    if (result_layout == .dec) {
+                        // Dec multiplication: call builtin function
+                        // mulSaturatedC(RocDec, RocDec) -> RocDec
+                        // RocDec is extern struct { num: i128 }
+                        try self.callDecMul(lhs_parts, rhs_parts, result_low, result_high);
                     } else {
-                        // x86_64: Use MUL which gives RDX:RAX = RAX * src
-                        // Save RAX and RDX if needed (they're clobbered by MUL)
+                        // 128-bit multiply: (a_lo, a_hi) * (b_lo, b_hi)
+                        // result_lo = low64(a_lo * b_lo)
+                        // result_hi = high64(a_lo * b_lo) + low64(a_lo * b_hi) + low64(a_hi * b_lo)
 
-                        // 1. a_lo * b_lo -> RAX (low), RDX (high)
-                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
-                        try self.codegen.emit.mulReg(.w64, rhs_parts.low);
-                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            // aarch64: Use MUL for low and UMULH for high
+                            // 1. a_lo * b_lo -> result_low (low), temp (high via UMULH)
+                            try self.codegen.emit.mulRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                            try self.codegen.emit.umulhRegRegReg(result_high, lhs_parts.low, rhs_parts.low);
 
-                        // 2. a_lo * b_hi -> add low part to result_high
-                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
-                        try self.codegen.emit.mulReg(.w64, rhs_parts.high);
-                        try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+                            // 2. a_lo * b_hi -> temp1 (low part only, add to result_high)
+                            const temp1 = try self.codegen.allocGeneralFor(2);
+                            try self.codegen.emit.mulRegRegReg(.w64, temp1, lhs_parts.low, rhs_parts.high);
+                            try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp1);
+                            self.codegen.freeGeneral(temp1);
 
-                        // 3. a_hi * b_lo -> add low part to result_high
-                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.high);
-                        try self.codegen.emit.mulReg(.w64, rhs_parts.low);
-                        try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+                            // 3. a_hi * b_lo -> temp2 (low part only, add to result_high)
+                            const temp2 = try self.codegen.allocGeneralFor(2);
+                            try self.codegen.emit.mulRegRegReg(.w64, temp2, rhs_parts.low, lhs_parts.high);
+                            try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp2);
+                            self.codegen.freeGeneral(temp2);
+                        } else {
+                            // x86_64: Use MUL which gives RDX:RAX = RAX * src
+                            // Save RAX and RDX if needed (they're clobbered by MUL)
+
+                            // 1. a_lo * b_lo -> RAX (low), RDX (high)
+                            try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
+                            try self.codegen.emit.mulReg(.w64, rhs_parts.low);
+                            try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                            try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+
+                            // 2. a_lo * b_hi -> add low part to result_high
+                            try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
+                            try self.codegen.emit.mulReg(.w64, rhs_parts.high);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+
+                            // 3. a_hi * b_lo -> add low part to result_high
+                            try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.high);
+                            try self.codegen.emit.mulReg(.w64, rhs_parts.low);
+                            try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+                        }
                     }
                 },
                 .div, .mod => {
@@ -652,6 +665,57 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.freeGeneral(result_high);
 
             return .{ .stack_i128 = stack_offset };
+        }
+
+        /// Call Dec multiplication builtin: mulSaturatedC(RocDec, RocDec) -> RocDec
+        /// RocDec is extern struct { num: i128 }, so passed/returned as i128
+        fn callDecMul(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+            // Get the address of the Dec multiply function
+            const fn_addr = @intFromPtr(&builtins.dec.mulSaturatedC);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64 calling convention for i128:
+                // arg1: X0 (low), X1 (high)
+                // arg2: X2 (low), X3 (high)
+                // return: X0 (low), X1 (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
+
+                // Load function address and call
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from X0, X1
+                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
+                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
+            } else {
+                // x86_64 calling convention for i128:
+                // arg1: RDI (low), RSI (high)
+                // arg2: RDX (low), RCX (high)
+                // return: RAX (low), RDX (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .RDI, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RSI, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .RDX, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RCX, rhs_parts.high);
+
+                // Load function address into a register and call
+                const addr_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.callReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from RAX, RDX
+                try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+            }
         }
 
         /// Get low and high 64-bit parts of a 128-bit value

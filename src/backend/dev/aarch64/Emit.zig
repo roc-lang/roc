@@ -487,6 +487,19 @@ pub fn ret(self: *Emit) !void {
     try self.emit32(inst);
 }
 
+/// BLR Xn (branch with link to register - call to address in register)
+pub fn blrReg(self: *Emit, reg: GeneralReg) !void {
+    // BLR <Xn>
+    // 1101011 0001 11111 000000 Rn[4:0] 00000
+    const inst: u32 = (0b1101011 << 25) |
+        (0b0001 << 21) |
+        (0b11111 << 16) |
+        (0b000000 << 10) |
+        (@as(u32, reg.enc()) << 5) |
+        0b00000;
+    try self.emit32(inst);
+}
+
 /// BL (branch with link - function call)
 pub fn bl(self: *Emit, offset_bytes: i32) !void {
     // BL <label>
