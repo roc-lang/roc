@@ -11,6 +11,8 @@ const Repl = repl_mod.Repl;
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
 
+const ReplLine = @import("ReplLine.zig");
+
 /// An implementation of RocOps for the CLI REPL.
 const ReplOps = struct {
     allocator: std.mem.Allocator,
@@ -178,22 +180,20 @@ pub fn run(ctx: *CliContext) !void {
     defer repl_instance.deinit();
 
     // Read-eval-print loop
-    const stdin_file = std.fs.File.stdin();
-    var read_buffer: [4096]u8 = undefined;
-    var stdin = stdin_file.reader(&read_buffer);
-    const stdin_reader = stdin.interface.adaptToOldInterface();
-    var line_buffer: [4096]u8 = undefined;
+    // const stdin_file = std.fs.File.stdin();
+    // var read_buffer: [4096]u8 = undefined;
+    // var stdin = stdin_file.reader(&read_buffer);
+    // const stdin_reader = stdin.interface.adaptToOldInterface();
+    // var line_buffer: [4096]u8 = undefined;
 
-    while (true) {
-        // Print prompt
-        stdout.print("» ", .{}) catch {};
+    var repl_line = ReplLine.init(ctx.gpa);
+
+    while (true) : ({
         ctx.io.flush();
-
+    }) {
         // Read line
-        const line = stdin_reader.readUntilDelimiterOrEof(&line_buffer, '\n') catch |err| {
-            ctx.io.stderr().print("Error reading input: {}\n", .{err}) catch {};
-            break;
-        } orelse break; // EOF (Ctrl+D)
+        const line = try repl_line.readLine(ctx.arena, "» ");
+        defer ctx.arena.free(line);
 
         // Evaluate and print result
         const result = repl_instance.step(line) catch |err| {
