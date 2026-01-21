@@ -1731,6 +1731,11 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                             else => break,
                         }
                     }
+                    // Back up by one so that pushMalformed's advance() puts us at the current position
+                    // (pushMalformed always advances, so we compensate for that)
+                    if (self.pos > 0) {
+                        self.pos -= 1;
+                    }
                 }
                 // If we didn't find matching close paren, just consume the open paren
                 // and fall through to produce an error at start position
