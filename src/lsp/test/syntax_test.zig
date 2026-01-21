@@ -284,7 +284,7 @@ test "getCompletionsAtPosition returns basic completions" {
     }
 }
 
-test "record field completion works for app definitions" {
+test "record field completion works for modules" {
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
     defer checker.deinit();
@@ -292,39 +292,53 @@ test "record field completion works for app definitions" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
-    // Create an app with a record definition
-    const contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+    // First create a clean, valid module file (simpler than app for testing)
+    // Explicitly annotate the record type to ensure all fields are known
+    const clean_contents =
+        \\module []
         \\
-        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\my_record : { foo : Str, bar : I64 }
+        \\my_record = { foo: "hello", bar: 42 }
         \\
-        \\main = my_record.
+        \\get_foo = my_record.foo
+        \\get_bar = my_record.bar
         \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(contents);
+    ;
 
-    std.debug.print("\n=== TEST: record field completion ===\n", .{});
-    std.debug.print("Contents:\n{s}\n", .{contents});
-
-    try tmp.dir.writeFile(.{ .sub_path = "record_completion.roc", .data = contents });
+    try tmp.dir.writeFile(.{ .sub_path = "record_completion.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "record_completion.roc");
     defer allocator.free(file_path);
 
     const uri = try uri_util.pathToUri(allocator, file_path);
     defer allocator.free(uri);
 
+    std.debug.print("\n=== TEST: record field completion ===\n", .{});
+
+    // First do a check with clean code to create snapshot
+    const publish_sets = try checker.check(uri, clean_contents, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(allocator);
+        allocator.free(publish_sets);
+    }
+
+    // Now test completion with incomplete code (cursor after dot)
+    const incomplete_contents =
+        \\module []
+        \\
+        \\my_record = { foo: "hello", bar: 42 }
+        \\
+        \\get_foo = my_record.
+        \\
+    ;
+
+    std.debug.print("Contents:\n{s}\n", .{incomplete_contents});
+
     // Request completion after "my_record."
-    // Line 4: "main = my_record."
-    // Character positions: m(0) a(1) i(2) n(3) ' '(4) =(5) ' '(6) m(7) y(8) _(9) r(10) e(11) c(12) o(13) r(14) d(15) .(16)
-    // So character 17 is right after the dot
-    std.debug.print("Requesting completion at line 4, char 17\n", .{});
-    const result = try checker.getCompletionsAtPosition(uri, contents, 4, 17);
+    // Line 4: "get_foo = my_record."
+    // Character positions: g(0) e(1) t(2) _(3) f(4) o(5) o(6) ' '(7) =(8) ' '(9) m(10) y(11) _(12) r(13) e(14) c(15) o(16) r(17) d(18) .(19)
+    // So character 20 is right after the dot
+    std.debug.print("Requesting completion at line 4, char 20\n", .{});
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 4, 20);
 
     if (result) |completion_result| {
         defer {
@@ -443,22 +457,17 @@ test "record field completion with partial field name" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     // First build with valid code to populate the snapshot env
-    const clean_contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+    const clean_contents =
+        \\module []
         \\
-        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\my_record : { foo : Str, bar : I64 }
+        \\my_record = { foo: "hello", bar: 42 }
         \\
-        \\main = my_record.foo
+        \\get_foo = my_record.foo
+        \\get_bar = my_record.bar
         \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(clean_contents);
+    ;
 
     try tmp.dir.writeFile(.{ .sub_path = "partial_field.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "partial_field.roc");
@@ -468,29 +477,24 @@ test "record field completion with partial field name" {
     defer allocator.free(uri);
 
     // First check to build and cache env
-    const publish_sets = try checker.check(uri, null, null);
+    const publish_sets = try checker.check(uri, clean_contents, null);
     defer {
         for (publish_sets) |*set| set.deinit(allocator);
         allocator.free(publish_sets);
     }
 
     // Now request completion with partial field name "fo"
-    // Line 4: "main = my_record.fo"
-    // Character 19 is right after "fo" (after the 'o')
-    const partial_contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+    // Line 4: "get_foo = my_record.fo"
+    const partial_contents =
+        \\module []
         \\
-        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\my_record = { foo: "hello", bar: 42 }
         \\
-        \\main = my_record.fo
+        \\get_foo = my_record.fo
         \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(partial_contents);
+    ;
 
-    const result = try checker.getCompletionsAtPosition(uri, partial_contents, 4, 19);
+    const result = try checker.getCompletionsAtPosition(uri, partial_contents, 4, 22);
 
     if (result) |completion_result| {
         defer {
@@ -532,43 +536,60 @@ test "static dispatch completion for nominal type methods" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
-    // Create code with a nominal type that has methods
-    const contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+    // First create clean code with complete definition
+    const clean_contents =
+        \\module []
         \\
-        \\Basic := [Val(Str)].{{
+        \\Basic := [Val(Str)].{
         \\  to_str : Basic -> Str
         \\  to_str = |Basic.Val(s)| s
-        \\}}
+        \\}
         \\
         \\val : Basic
         \\val = Basic.Val("hello")
         \\
-        \\main = val.
+        \\result = val.to_str
         \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(contents);
+    ;
 
-    std.debug.print("\n=== TEST: static dispatch completion ===\n", .{});
-    std.debug.print("Contents:\n{s}\n", .{contents});
-
-    try tmp.dir.writeFile(.{ .sub_path = "static_dispatch.roc", .data = contents });
+    try tmp.dir.writeFile(.{ .sub_path = "static_dispatch.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "static_dispatch.roc");
     defer allocator.free(file_path);
 
     const uri = try uri_util.pathToUri(allocator, file_path);
     defer allocator.free(uri);
 
+    std.debug.print("\n=== TEST: static dispatch completion ===\n", .{});
+
+    // First check to build and cache env
+    const publish_sets = try checker.check(uri, clean_contents, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(allocator);
+        allocator.free(publish_sets);
+    }
+
+    // Now test completion with incomplete code (cursor after dot)
+    const incomplete_contents =
+        \\module []
+        \\
+        \\Basic := [Val(Str)].{
+        \\  to_str : Basic -> Str
+        \\  to_str = |Basic.Val(s)| s
+        \\}
+        \\
+        \\val : Basic
+        \\val = Basic.Val("hello")
+        \\
+        \\result = val.
+        \\
+    ;
+
+    std.debug.print("Contents:\n{s}\n", .{incomplete_contents});
+
     // Request completion after "val."
-    // Line 10: "main = val."
-    // Character 11 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, contents, 10, 11);
+    // Line 10: "result = val."
+    // Character 13 is right after the dot
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 10, 13);
 
     if (result) |completion_result| {
         defer {
