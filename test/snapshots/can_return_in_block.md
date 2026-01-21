@@ -15,9 +15,18 @@ type=expr
 }
 ~~~
 # EXPECTED
-NIL
+RETURN OUTSIDE FUNCTION - can_return_in_block.md:4:9:4:17
 # PROBLEMS
-NIL
+**RETURN OUTSIDE FUNCTION**
+The `return` keyword can only be used inside function bodies.
+
+**can_return_in_block.md:4:9:4:17:**
+```roc
+        return 0
+```
+        ^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 OpenCurly,
@@ -74,8 +83,7 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-num (value "10")))
 				(e-block
-					(e-return
-						(e-num (value "0"))))))
+					(e-runtime-error (tag "return_outside_fn")))))
 		(if-else
 			(e-block
 				(e-lookup-local
@@ -83,5 +91,5 @@ EndOfFile,
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_gt : a, a -> Bool]"))
+(expr (type "Error"))
 ~~~
