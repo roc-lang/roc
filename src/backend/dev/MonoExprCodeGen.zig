@@ -419,7 +419,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
             } else {
-                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc);
+                return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             }
         }
 
@@ -443,6 +443,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             op: MonoExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
+            result_layout: layout.Idx,
         ) Error!ValueLocation {
             // IMPORTANT: Load RHS first to protect its register
             // If rhs is in a register (e.g., X0 from a function call result)
@@ -457,19 +458,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Allocate result register
             const result_reg = try self.codegen.allocGeneralFor(0);
 
+            // Determine if this is an unsigned type (for division/modulo)
+            // NOTE: Currently the Mono IR pipeline sets result_layout to i64 for most
+            // integer operations, so unsigned detection doesn't work reliably.
+            // TODO: Fix type preservation in Mono IR to properly track unsigned types.
+            const is_unsigned = switch (result_layout) {
+                layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
+                else => false,
+            };
+
             switch (op) {
                 .add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
                 .sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .div => {
-                    // Use signed division for now (handles most common cases)
-                    // TODO: Detect unsigned types and use emitUDiv
-                    try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
+                    if (is_unsigned) {
+                        try self.codegen.emitUDiv(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
                 },
                 .mod => {
-                    // Use signed modulo for now (handles most common cases)
-                    // TODO: Detect unsigned types and use emitUMod
-                    try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
+                    if (is_unsigned) {
+                        try self.codegen.emitUMod(.w64, result_reg, lhs_reg, rhs_reg);
+                    } else {
+                        try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
+                    }
                 },
                 // Comparison operations
                 .eq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual()),
