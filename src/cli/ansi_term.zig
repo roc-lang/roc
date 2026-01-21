@@ -37,8 +37,7 @@ pub fn computeDisplayWidth(prompt: []const u8) !usize {
     var utf8 = try std.unicode.Utf8View.init(prompt);
     var it = utf8.iterator();
     var width: usize = 0;
-    while (it.nextCodepointSlice()) |codepoint| {
-        _ = codepoint;
+    while (it.nextCodepointSlice()) |_| {
         width += 1;
     }
     return width;
