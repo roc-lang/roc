@@ -104,6 +104,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
 
+        /// Register where RocOps pointer is saved (for calling builtins that need it)
+        roc_ops_reg: ?GeneralReg = null,
 
         /// Compiled procedure information for two-pass compilation.
         /// After a procedure is fully compiled (including RET), it's registered here.
@@ -250,19 +252,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Emit prologue to save callee-saved registers we'll use (X19 for result ptr)
             try self.emitMainPrologue();
 
-            // IMPORTANT: Save the result pointer to a callee-saved register before
-            // generating code that might call procedures (which would clobber X0).
-            // On aarch64: save X0 to X19 (callee-saved)
-            // On x86_64: save RDI to RBX (callee-saved)
+            // IMPORTANT: Save the result pointer and RocOps pointer to callee-saved registers
+            // before generating code that might call procedures (which would clobber them).
+            // On aarch64: save X0 to X19, X1 to X20 (callee-saved)
+            // On x86_64: save RDI to RBX, RSI to R12 (callee-saved)
             const result_ptr_save_reg = if (comptime builtin.cpu.arch == .aarch64)
                 aarch64.GeneralReg.X19
             else
                 x86_64.GeneralReg.RBX;
 
+            const roc_ops_save_reg = if (comptime builtin.cpu.arch == .aarch64)
+                aarch64.GeneralReg.X20
+            else
+                x86_64.GeneralReg.R12;
+
             try self.emitMovRegReg(result_ptr_save_reg, if (comptime builtin.cpu.arch == .aarch64)
                 aarch64.GeneralReg.X0
             else
                 x86_64.GeneralReg.RDI);
+
+            try self.emitMovRegReg(roc_ops_save_reg, if (comptime builtin.cpu.arch == .aarch64)
+                aarch64.GeneralReg.X1
+            else
+                x86_64.GeneralReg.RSI);
+
+            // Store RocOps save reg for use by Dec operations
+            self.roc_ops_reg = roc_ops_save_reg;
 
             // Generate code for the expression - result ends up in a register
             const result_loc = try self.generateExpr(expr_id);
@@ -294,19 +309,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Clear X0 and X1 from the free register mask
                 // X0 = bit 0, X1 = bit 1
                 self.codegen.free_general &= ~@as(u32, 0b11);
-                // Also reserve X19 which we use to save the result pointer
-                // This prevents it from being allocated for temporaries
+                // Reserve X19 (result pointer) and X20 (RocOps pointer)
                 const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                self.codegen.callee_saved_available &= ~x19_bit;
+                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
             } else {
                 // Clear RDI and RSI from the free register mask
                 // RDI = 7, RSI = 6
                 const rdi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDI);
                 const rsi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RSI);
                 self.codegen.free_general &= ~(rdi_bit | rsi_bit);
-                // Also reserve RBX which we use to save the result pointer
+                // Reserve RBX (result pointer) and R12 (RocOps pointer)
                 const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                self.codegen.callee_saved_available &= ~rbx_bit;
+                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
             }
         }
 
@@ -638,8 +654,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                     }
                 },
-                .div, .mod => {
-                    // TODO: 128-bit div/mod requires complex multi-word algorithms
+                .div => {
+                    if (result_layout == .dec) {
+                        // Dec division: call builtin function
+                        // divC(RocDec, RocDec, *RocOps) -> i128
+                        try self.callDecDiv(lhs_parts, rhs_parts, result_low, result_high);
+                    } else {
+                        // TODO: 128-bit div requires complex multi-word algorithms
+                        // For now, return 0 as a placeholder
+                        try self.codegen.emitLoadImm(result_low, 0);
+                        try self.codegen.emitLoadImm(result_high, 0);
+                    }
+                },
+                .mod => {
+                    // TODO: 128-bit mod requires complex multi-word algorithms
                     // For now, return 0 as a placeholder
                     try self.codegen.emitLoadImm(result_low, 0);
                     try self.codegen.emitLoadImm(result_high, 0);
@@ -705,6 +733,63 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, .RSI, lhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .RDX, rhs_parts.low);
                 try self.codegen.emit.movRegReg(.w64, .RCX, rhs_parts.high);
+
+                // Load function address into a register and call
+                const addr_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.callReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from RAX, RDX
+                try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+            }
+        }
+
+        /// Call Dec division builtin: divC(RocDec, RocDec, *RocOps) -> i128
+        fn callDecDiv(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+            // Get the address of the Dec divide function
+            const fn_addr = @intFromPtr(&builtins.dec.divC);
+
+            // Get the saved RocOps register
+            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
+                // arg1 (RocDec): X0 (low), X1 (high)
+                // arg2 (RocDec): X2 (low), X3 (high)
+                // arg3 (*RocOps): X4
+                // return: X0 (low), X1 (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
+
+                // Load function address and call
+                const addr_reg = try self.codegen.allocGeneralFor(5);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from X0, X1
+                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
+                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
+            } else {
+                // x86_64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
+                // arg1 (RocDec): RDI (low), RSI (high)
+                // arg2 (RocDec): RDX (low), RCX (high)
+                // arg3 (*RocOps): R8
+                // return: RAX (low), RDX (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .RDI, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RSI, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .RDX, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RCX, rhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
 
                 // Load function address into a register and call
                 const addr_reg = try self.codegen.allocGeneralFor(0);
