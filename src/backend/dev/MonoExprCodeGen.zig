@@ -1752,25 +1752,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             switch (loc) {
                 .float_reg => |reg| return reg,
                 .immediate_f64 => |val| {
-                    // TODO: PLACEHOLDER - Always loads 0.0, ignoring the actual value
-                    // WHY: Float literals can't be loaded as immediates on most architectures.
-                    //   x86: MOVSD from memory, or MOVQ to load bits then MOVQ to float reg
-                    //   AArch64: LDR from literal pool, or FMOV for special values (0.0, 1.0, etc.)
-                    // PROPER IMPLEMENTATION:
-                    //   1. Store float bits in static data section (literal pool)
-                    //   2. PC-relative load: LDR Dn, [PC, #offset] or MOVSD xmm, [rip+disp]
-                    //   Alternatively for small programs:
-                    //   1. Load bits into integer register: MOV reg, float_bits
-                    //   2. Move to float register: MOVQ xmm, reg (x86) or FMOV Dn, Xn (AArch64)
-                    // IMPACT: All float literals become 0.0 (3.14 → 0.0)
                     const reg = self.codegen.allocFloat() orelse return Error.NoRegisterToSpill;
-                    _ = val;
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        // Zero the register (FMOV from zero register)
-                        try self.codegen.emit.fmovFloatFromGen(.double, reg, .ZRSP);
+                    const bits: u64 = @bitCast(val);
+
+                    if (bits == 0) {
+                        // Special case: 0.0 can be loaded efficiently
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.fmovFloatFromGen(.double, reg, .ZRSP);
+                        } else {
+                            try self.codegen.emit.xorpdRegReg(reg, reg);
+                        }
                     } else {
-                        // Zero via self-XOR
-                        try self.codegen.emit.xorpdRegReg(reg, reg);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            // Load bits into scratch register, then FMOV to float register
+                            try self.codegen.emit.movRegImm64(.IP0, bits);
+                            try self.codegen.emit.fmovFloatFromGen(.double, reg, .IP0);
+                        } else {
+                            // x86_64: Store bits to stack, then load into float register
+                            // Use a temporary stack slot
+                            const stack_offset: i32 = -16; // Below any local variables
+                            try self.codegen.emit.movRegImm64(.R11, bits);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
+                            try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);
+                        }
                     }
                     return reg;
                 },
