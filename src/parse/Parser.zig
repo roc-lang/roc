@@ -1699,6 +1699,36 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
+            } else if (statementType == .top_level) {
+                // At top level, a parenthesized expression like (x + 1) or (x = 5).foo()
+                // is not valid. Skip past the parentheses and any suffix to produce a single error.
+                self.pos = lookahead_pos + 1; // Move past the closing paren
+                // Skip any suffix operators (e.g., .foo(), !(), etc.)
+                while (true) {
+                    switch (self.peek()) {
+                        .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
+                            self.advance();
+                        },
+                        .NoSpaceOpenRound => {
+                            self.advance();
+                            // Skip to matching close paren
+                            var paren_depth: u32 = 1;
+                            while (paren_depth > 0 and self.peek() != .EndOfFile) {
+                                switch (self.peek()) {
+                                    .OpenRound, .NoSpaceOpenRound => paren_depth += 1,
+                                    .CloseRound => paren_depth -= 1,
+                                    else => {},
+                                }
+                                self.advance();
+                            }
+                        },
+                        .OpBang => {
+                            self.advance();
+                        },
+                        else => break,
+                    }
+                }
+                return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, start);
             }
         },
         else => {},
