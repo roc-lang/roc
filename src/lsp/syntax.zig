@@ -158,7 +158,7 @@ pub const SyntaxChecker = struct {
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
-        if (self.shouldSnapshotBuild(absolute_path, drained)) {
+        if (self.shouldSnapshotBuild(env, absolute_path, drained)) {
             self.storeSnapshotEnv(env, absolute_path);
         }
 
@@ -211,10 +211,14 @@ pub const SyntaxChecker = struct {
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
     fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnv {
-        // Move current build_env to previous_build_env (destroy old previous if exists)
+        // Move current build_env to previous_build_env (release old previous if exists)
         if (self.previous_build_env) |old_prev| {
-            old_prev.deinit();
-            self.allocator.destroy(old_prev);
+            // Only free if no snapshot is still referencing it.
+            // Snapshot ref counts are owned by snapshot_envs entries, so don't release here.
+            if (self.snapshot_env_ref_counts.get(old_prev) == null) {
+                old_prev.deinit();
+                self.allocator.destroy(old_prev);
+            }
         }
         self.previous_build_env = self.build_env;
         self.build_env = null;
@@ -236,15 +240,21 @@ pub const SyntaxChecker = struct {
         return env_ptr;
     }
 
-    fn shouldSnapshotBuild(self: *SyntaxChecker, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {
-        _ = self;
-        var saw_entry = false;
-        for (drained) |entry| {
-            if (!std.mem.eql(u8, entry.abs_path, absolute_path)) continue;
-            saw_entry = true;
-            if (entry.reports.len > 0) return false;
+    fn shouldSnapshotBuild(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {
+        // Check if module was processed - if not, don't snapshot
+        if (self.getModuleEnvByPathInEnv(env, absolute_path) == null) {
+            return false;
         }
-        return saw_entry;
+
+        // Check for any reports for this file - if there are reports, don't snapshot
+        for (drained) |entry| {
+            if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
+                return false;
+            }
+        }
+
+        // Module processed with no reports → snapshot
+        return true;
     }
 
     fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
@@ -4135,7 +4145,7 @@ pub const SyntaxChecker = struct {
         }
     }
 
-    fn findExprTypeForPattern(self: *SyntaxChecker, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?types.Var {
+    fn findExprTypeForPattern(_: *SyntaxChecker, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?types.Var {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
@@ -4157,7 +4167,6 @@ pub const SyntaxChecker = struct {
             }
         }
 
-        _ = self;
         return null;
     }
 
