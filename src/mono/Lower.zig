@@ -90,6 +90,12 @@ lowered_patterns: std.AutoHashMap(u64, MonoSymbol),
 /// Track which top-level symbols have been lowered
 lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
+/// Type environment: maps pattern_idx to layout (from type annotations)
+type_env: std.AutoHashMap(u32, LayoutIdx),
+
+/// Pending type annotations: maps ident to layout (waiting to be matched with declarations)
+pending_type_annos: std.AutoHashMap(Ident.Idx, LayoutIdx),
+
 /// Current module index during lowering
 current_module_idx: u16 = 0,
 
@@ -129,6 +135,8 @@ pub fn init(
         .layout_store = layout_store,
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
+        .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
+        .pending_type_annos = std.AutoHashMap(Ident.Idx, LayoutIdx).init(allocator),
     };
 }
 
@@ -136,6 +144,8 @@ pub fn init(
 pub fn deinit(self: *Self) void {
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
+    self.type_env.deinit();
+    self.pending_type_annos.deinit();
 }
 
 /// Get the module environment at the given index
@@ -190,7 +200,6 @@ fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Id
 
 /// Get layout for an expression (placeholder - needs type info)
 fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx {
-    _ = module_env;
     // For now, use a default layout. In full implementation, this would:
     // 1. Get the type variable from the expression
     // 2. Resolve it via the layout store
@@ -220,7 +229,141 @@ fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx 
         .e_dec, .e_dec_small => .dec,
         .e_str, .e_str_segment => .str,
         .e_zero_argument_tag => .bool, // Common case for Bool tags
+        // For binary operations, propagate the type from the left operand
+        // (for arithmetic ops, result type = operand type)
+        .e_binop => |binop| self.getExprLayoutFromIdx(module_env, binop.lhs),
+        // For unary minus, propagate the type from the operand
+        .e_unary_minus => |unary| self.getExprLayoutFromIdx(module_env, unary.expr),
+        // For lookups, check if we have a type annotation in type_env
+        .e_lookup_local => |lookup| blk: {
+            const pattern_key = @intFromEnum(lookup.pattern_idx);
+            break :blk self.type_env.get(pattern_key) orelse .i64;
+        },
+        // For blocks, we need to process type annotations first
+        .e_block => |block| self.getBlockLayout(module_env, block),
         else => .i64, // Default
+    };
+}
+
+/// Get layout for a block expression, processing type annotations
+fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx {
+    // First pass: collect type annotations
+    const stmts = module_env.store.sliceStatements(block.stmts);
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_type_anno => |ta| {
+                // Get the type annotation and convert to layout
+                const type_anno = module_env.store.getTypeAnno(ta.anno);
+                const anno_layout = self.getTypeAnnoLayout(type_anno);
+                // We need to find the pattern that matches this annotation name
+                // by looking at subsequent declarations
+                self.pending_type_annos.put(ta.name, anno_layout) catch {};
+            },
+            .s_decl => |decl| {
+                const pattern_key = @intFromEnum(decl.pattern);
+                if (decl.anno) |anno_idx| {
+                    // Declaration has an inline annotation
+                    const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
+                    self.type_env.put(pattern_key, anno_layout) catch {};
+                } else {
+                    // Check if there's a pending type annotation for this pattern
+                    const pattern = module_env.store.getPattern(decl.pattern);
+                    switch (pattern) {
+                        .assign => |assign| {
+                            if (self.pending_type_annos.get(assign.ident)) |anno_layout| {
+                                self.type_env.put(pattern_key, anno_layout) catch {};
+                            } else {
+                                // Infer from the expression
+                                const decl_expr = module_env.store.getExpr(decl.expr);
+                                const inferred = self.getExprLayout(module_env, decl_expr);
+                                self.type_env.put(pattern_key, inferred) catch {};
+                            }
+                        },
+                        else => {
+                            // Infer from the expression
+                            const decl_expr = module_env.store.getExpr(decl.expr);
+                            const inferred = self.getExprLayout(module_env, decl_expr);
+                            self.type_env.put(pattern_key, inferred) catch {};
+                        },
+                    }
+                }
+            },
+            .s_decl_gen => |decl| {
+                const pattern_key = @intFromEnum(decl.pattern);
+                if (decl.anno) |anno_idx| {
+                    const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
+                    self.type_env.put(pattern_key, anno_layout) catch {};
+                } else {
+                    const pattern = module_env.store.getPattern(decl.pattern);
+                    switch (pattern) {
+                        .assign => |assign| {
+                            if (self.pending_type_annos.get(assign.ident)) |anno_layout| {
+                                self.type_env.put(pattern_key, anno_layout) catch {};
+                            } else {
+                                const decl_expr = module_env.store.getExpr(decl.expr);
+                                const inferred = self.getExprLayout(module_env, decl_expr);
+                                self.type_env.put(pattern_key, inferred) catch {};
+                            }
+                        },
+                        else => {
+                            const decl_expr = module_env.store.getExpr(decl.expr);
+                            const inferred = self.getExprLayout(module_env, decl_expr);
+                            self.type_env.put(pattern_key, inferred) catch {};
+                        },
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Return the layout of the final expression
+    const final_expr = module_env.store.getExpr(block.final_expr);
+    return self.getExprLayout(module_env, final_expr);
+}
+
+/// Get layout from a type annotation
+fn getTypeAnnoLayout(self: *Self, type_anno: CIR.TypeAnno) LayoutIdx {
+    _ = self;
+    return switch (type_anno) {
+        .apply => |apply| layoutFromLocalOrExternal(apply.base),
+        .lookup => |lookup| layoutFromLocalOrExternal(lookup.base),
+        else => .i64,
+    };
+}
+
+/// Get layout from an annotation index
+fn getAnnotationLayout(self: *Self, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
+    const anno = module_env.store.getAnnotation(anno_idx);
+    const type_anno = module_env.store.getTypeAnno(anno.anno);
+    return self.getTypeAnnoLayout(type_anno);
+}
+
+/// Convert a LocalOrExternal to LayoutIdx
+fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
+    return switch (loe) {
+        .builtin => |b| layoutFromBuiltin(b),
+        .local, .external => .i64,
+    };
+}
+
+/// Convert a Builtin type enum to LayoutIdx
+fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
+    return switch (b) {
+        .u8 => .u8,
+        .i8 => .i8,
+        .u16 => .u16,
+        .i16 => .i16,
+        .u32 => .u32,
+        .i32 => .i32,
+        .u64 => .u64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        else => .i64,
     };
 }
 
@@ -537,12 +680,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         // ============ Blocks ============
         .e_block => |block| blk: {
+            // Process type annotations FIRST to populate type_env before lowering
+            const result_layout = self.getBlockLayout(module_env, block);
             const stmts = try self.lowerStmts(module_env, block.stmts);
             const final_expr = try self.lowerExprFromIdx(module_env, block.final_expr);
             break :blk .{ .block = .{
                 .stmts = stmts,
                 .final_expr = final_expr,
-                .result_layout = self.getExprLayout(module_env, expr),
+                .result_layout = result_layout,
             } };
         },
 

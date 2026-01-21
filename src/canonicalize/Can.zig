@@ -8887,7 +8887,8 @@ fn canonicalizeTypeAnnoBasicType(
     if (qualifier_toks.len == 0) {
         // First, check if the type is a builtin type
         // There are always automatically in-scope
-        if (TypeAnno.Builtin.fromBytes(self.env.getIdentText(type_name_ident))) |builtin_type| {
+        const type_text = self.env.getIdentText(type_name_ident);
+        if (TypeAnno.Builtin.fromBytes(type_text)) |builtin_type| {
             return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
                 .name = type_name_ident,
                 .base = .{ .builtin = builtin_type },

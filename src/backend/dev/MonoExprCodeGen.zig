@@ -459,9 +459,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_reg = try self.codegen.allocGeneralFor(0);
 
             // Determine if this is an unsigned type (for division/modulo)
-            // NOTE: Currently the Mono IR pipeline sets result_layout to i64 for most
-            // integer operations, so unsigned detection doesn't work reliably.
-            // TODO: Fix type preservation in Mono IR to properly track unsigned types.
             const is_unsigned = switch (result_layout) {
                 layout.Idx.u8, layout.Idx.u16, layout.Idx.u32, layout.Idx.u64, layout.Idx.u128 => true,
                 else => false,
