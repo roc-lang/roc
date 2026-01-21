@@ -31,6 +31,12 @@ const RocDec = builtins.dec.RocDec;
 const dec_mulOrPanicC = builtins.dec.mulOrPanicC;
 const dec_divC = builtins.dec.divC;
 
+// Num builtin functions for 128-bit integer operations
+const num_divTruncI128 = builtins.num.divTruncI128;
+const num_divTruncU128 = builtins.num.divTruncU128;
+const num_remTruncI128 = builtins.num.remTruncI128;
+const num_remTruncU128 = builtins.num.remTruncU128;
+
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
 
@@ -573,7 +579,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_high = try self.codegen.allocGeneralFor(1);
 
             const is_unsigned = result_layout == .u128;
-            _ = is_unsigned; // Used for div/mod if implemented
 
             switch (op) {
                 .add => {
@@ -660,17 +665,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // divC(RocDec, RocDec, *RocOps) -> i128
                         try self.callDecDiv(lhs_parts, rhs_parts, result_low, result_high);
                     } else {
-                        // TODO: 128-bit div requires complex multi-word algorithms
-                        // For now, return 0 as a placeholder
-                        try self.codegen.emitLoadImm(result_low, 0);
-                        try self.codegen.emitLoadImm(result_high, 0);
+                        // 128-bit integer division: call builtin function
+                        try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
                 .mod => {
-                    // TODO: 128-bit mod requires complex multi-word algorithms
-                    // For now, return 0 as a placeholder
-                    try self.codegen.emitLoadImm(result_low, 0);
-                    try self.codegen.emitLoadImm(result_high, 0);
+                    // 128-bit integer remainder: call builtin function
+                    try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
                 else => {
                     // Comparisons and boolean ops - just use low 64 bits for now
@@ -782,6 +783,74 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // arg1 (RocDec): RDI (low), RSI (high)
                 // arg2 (RocDec): RDX (low), RCX (high)
                 // arg3 (*RocOps): R8
+                // return: RAX (low), RDX (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .RDI, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RSI, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .RDX, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .RCX, rhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
+
+                // Load function address into a register and call
+                const addr_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.callReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from RAX, RDX
+                try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+            }
+        }
+
+        /// Call i128/u128 division or remainder builtin
+        /// Signature: (i128/u128, i128/u128, *RocOps) -> i128/u128
+        fn callI128DivRem(
+            self: *Self,
+            lhs_parts: I128Parts,
+            rhs_parts: I128Parts,
+            result_low: GeneralReg,
+            result_high: GeneralReg,
+            is_unsigned: bool,
+            is_rem: bool,
+        ) Error!void {
+            // Get the address of the appropriate builtin function
+            const fn_addr: usize = if (is_unsigned)
+                if (is_rem) @intFromPtr(&num_remTruncU128) else @intFromPtr(&num_divTruncU128)
+            else if (is_rem) @intFromPtr(&num_remTruncI128) else @intFromPtr(&num_divTruncI128);
+
+            // Get the saved RocOps register
+            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64 calling convention for (i128, i128, *RocOps) -> i128:
+                // arg1: X0 (low), X1 (high)
+                // arg2: X2 (low), X3 (high)
+                // arg3: X4
+                // return: X0 (low), X1 (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
+
+                // Load function address and call
+                const addr_reg = try self.codegen.allocGeneralFor(5);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from X0, X1
+                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
+                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
+            } else {
+                // x86_64 calling convention for (i128, i128, *RocOps) -> i128:
+                // arg1: RDI (low), RSI (high)
+                // arg2: RDX (low), RCX (high)
+                // arg3: R8
                 // return: RAX (low), RDX (high)
 
                 // Move arguments to correct registers
