@@ -177,11 +177,11 @@ test "syntax checker reports diagnostics for invalid source" {
 
 test "completion context detects after_record_dot for lowercase identifier" {
     // Test that detectCompletionContext correctly identifies record/method access
-    const SyntaxModule = @import("../syntax.zig");
+    const completion_context = @import("../completion/context.zig");
 
     // Test case: "my_var." should be detected as after_record_dot
     const source = "main = my_var.";
-    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 14);
+    const context = completion_context.detectCompletionContext(source, 0, 14);
 
     switch (context) {
         .after_record_dot => |access| {
@@ -193,11 +193,11 @@ test "completion context detects after_record_dot for lowercase identifier" {
 
 test "completion context detects after_module_dot for uppercase identifier" {
     // Test that detectCompletionContext correctly identifies module access
-    const SyntaxModule = @import("../syntax.zig");
+    const completion_context = @import("../completion/context.zig");
 
     // Test case: "Str." should be detected as after_module_dot
     const source = "main = Str.";
-    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 11);
+    const context = completion_context.detectCompletionContext(source, 0, 11);
 
     switch (context) {
         .after_module_dot => |module_name| {
@@ -209,11 +209,11 @@ test "completion context detects after_module_dot for uppercase identifier" {
 
 test "completion context detects expression context" {
     // Test that detectCompletionContext correctly identifies general expression context
-    const SyntaxModule = @import("../syntax.zig");
+    const completion_context = @import("../completion/context.zig");
 
     // Test case: "main = " should be detected as expression
     const source = "main = ";
-    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 7);
+    const context = completion_context.detectCompletionContext(source, 0, 7);
 
     switch (context) {
         .expression => {}, // Expected
@@ -223,11 +223,11 @@ test "completion context detects expression context" {
 
 test "completion context detects after_colon for type annotation" {
     // Test that detectCompletionContext correctly identifies type annotation context
-    const SyntaxModule = @import("../syntax.zig");
+    const completion_context = @import("../completion/context.zig");
 
     // Test case: "foo : " should be detected as after_colon
     const source = "foo : ";
-    const context = SyntaxModule.SyntaxChecker.detectCompletionContext(source, 0, 6);
+    const context = completion_context.detectCompletionContext(source, 0, 6);
 
     switch (context) {
         .after_colon => {}, // Expected
