@@ -524,6 +524,22 @@ pub const SystemVCodeGen = struct {
         try self.emit.negReg(width, dst);
     }
 
+    /// Emit bitwise AND: dst = a & b
+    pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.andRegReg(width, dst, b);
+    }
+
+    /// Emit bitwise OR: dst = a | b
+    pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.orRegReg(width, dst, b);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0

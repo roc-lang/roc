@@ -479,6 +479,16 @@ pub const AArch64CodeGen = struct {
         try self.emit.negRegReg(width, dst, src);
     }
 
+    /// Emit bitwise AND: dst = a & b
+    pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.andRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit bitwise OR: dst = a | b
+    pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.orrRegRegReg(width, dst, a, b);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0

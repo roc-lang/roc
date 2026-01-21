@@ -493,16 +493,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .gt => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreater()),
                 .gte => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condGreaterOrEqual()),
                 // Boolean operations - AND/OR two values
-                .@"and", .@"or" => {
-                    // TODO: PLACEHOLDER - Uses ADD instead of proper boolean logic
-                    // WHY: Boolean values in Roc are represented as 0 (false) or 1 (true).
-                    //   - AND: result = lhs & rhs (bitwise AND, works for 0/1 values)
-                    //   - OR:  result = lhs | rhs (bitwise OR, works for 0/1 values)
-                    // Using ADD is wrong: 1 + 1 = 2 (not 1), so `True and True` = 2
-                    // IMPACT: Boolean AND/OR return incorrect results for True cases
-                    // PROPER FIX: Emit AND/ORR (AArch64) or AND/OR (x86) instructions
-                    try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg);
-                },
+                // Boolean values in Roc are represented as 0 (false) or 1 (true).
+                // Bitwise AND/OR work correctly for single-bit boolean values.
+                .@"and" => try self.codegen.emitAnd(.w64, result_reg, lhs_reg, rhs_reg),
+                .@"or" => try self.codegen.emitOr(.w64, result_reg, lhs_reg, rhs_reg),
             }
 
             // Free operand registers if they were temporary
