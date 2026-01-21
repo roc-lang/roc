@@ -223,10 +223,15 @@ pub const SyntaxChecker = struct {
             return false;
         }
 
-        // Check for any reports for this file - if there are reports, don't snapshot
+        // Check for any error-level reports for this file - warnings/info are OK to snapshot
         for (drained) |entry| {
-            if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
-                return false;
+            if (std.mem.eql(u8, entry.abs_path, absolute_path)) {
+                for (entry.reports) |report| {
+                    switch (report.severity) {
+                        .runtime_error, .fatal => return false,
+                        .info, .warning => {},
+                    }
+                }
             }
         }
 
