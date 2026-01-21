@@ -3,6 +3,8 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
+pub const Backend = @import("backend").EvalBackend;
+
 /// The core type representing a parsed command
 /// We could use anonymous structs for the argument types instead of defining one for each command to be more concise,
 /// but defining a struct per command means that we can easily take that type and pass it into the function that implements each command.
@@ -141,7 +143,9 @@ pub const ExperimentalLspArgs = struct {
 };
 
 /// Arguments for `roc repl`
-pub const ReplArgs = struct {};
+pub const ReplArgs = struct {
+    backend: Backend = .interpreter,
+};
 
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
@@ -584,22 +588,34 @@ fn parseTest(args: []const []const u8) CliArgs {
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
+    var backend: Backend = .interpreter;
+
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
             \\Launch the interactive Read Eval Print Loop (REPL)
             \\
-            \\Usage: roc repl
+            \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\  -h, --help  Print help
+            \\      --backend=<interpreter|dev>  Evaluation backend (default: interpreter)
+            \\  -h, --help                       Print help
             \\
         };
+        } else if (mem.startsWith(u8, arg, "--backend=")) {
+            const value = arg["--backend=".len..];
+            backend = Backend.fromString(value) orelse {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{
+                    .value = value,
+                    .flag = "--backend",
+                    .valid_options = "interpreter, dev",
+                } } };
+            };
         } else {
             return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "repl", .arg = arg } } };
         }
     }
-    return CliArgs{ .repl = .{} };
+    return CliArgs{ .repl = .{ .backend = backend } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {

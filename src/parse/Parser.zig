@@ -3576,6 +3576,35 @@ pub fn parseRecord(self: *Parser, start: u32) Error!AST.Expr.Idx {
         }
     };
     const fields = try self.store.recordFieldSpanFrom(scratch_top);
+
+    // Check for record builder suffix: { ... }.TypeName
+    if (self.peek() == .NoSpaceDotUpperIdent) {
+        const suffix_start = self.pos;
+        var final_token = self.pos;
+        self.advance();
+
+        // Parse any additional qualifiers (e.g., .Foo.Bar.Baz)
+        const token_scratch_top = self.store.scratchTokenTop();
+        while (self.peek() == .NoSpaceDotUpperIdent) {
+            try self.store.addScratchToken(final_token);
+            final_token = self.pos;
+            self.advance();
+        }
+        const qualifiers = try self.store.tokenSpanFrom(token_scratch_top);
+
+        const mapper = try self.store.addExpr(.{ .tag = .{
+            .region = .{ .start = suffix_start, .end = self.pos },
+            .token = final_token,
+            .qualifiers = qualifiers,
+        } });
+
+        return try self.store.addExpr(.{ .record_builder = .{
+            .mapper = mapper,
+            .fields = fields,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+
     return try self.store.addExpr(.{ .record = .{
         .fields = fields,
         .ext = null,

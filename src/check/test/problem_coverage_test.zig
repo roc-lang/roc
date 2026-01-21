@@ -587,12 +587,11 @@ test "unused value - expression in block discarded" {
 }
 
 // Tests for ? (try) operator on non-Try types
-// When ? is used on non-Try, the match pattern check fails first with incompatible_match_cond_pattern
-// because ? desugars to a match with Ok/Err patterns
+// When ? is used on non-Try, it triggers invalid_try_operator error
 
 test "try operator on non-result - match pattern error" {
-    // The ? suffix operator desugars to match with Ok/Err patterns
-    // Using it on Str triggers incompatible_match_cond_pattern first
+    // The ? suffix operator expects a Try type
+    // Using it on Str triggers invalid_try_operator
     const source =
         \\str : Str
         \\str = "hello"
@@ -602,8 +601,8 @@ test "try operator on non-result - match pattern error" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // The desugared match checks patterns first, triggering incompatible_match_cond_pattern
-    try test_env.assertAnyTypeMismatchDetail(.incompatible_match_cond_pattern);
+    // Using ? on non-Try triggers invalid_try_operator
+    try test_env.assertAnyTypeMismatchDetail(.invalid_try_operator);
 }
 
 // Tests for UNSUPPORTED WHERE CLAUSE
