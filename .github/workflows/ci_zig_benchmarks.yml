@@ -32,7 +32,7 @@ jobs:
       - name: Build main branch release binary and snapshot tool
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release snapshot'"
+          command: "nix develop ./src/ -c bash -c 'zig build release snapshot  -Doptimize=ReleaseFast'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -51,7 +51,7 @@ jobs:
       - name: Build PR branch release binary and snapshot tool
         uses: ./.github/actions/flaky-retry
         with:
-          command: "nix develop ./src/ -c bash -c 'zig build release snapshot'"
+          command: "nix develop ./src/ -c bash -c 'zig build release snapshot -Doptimize=ReleaseFast'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
