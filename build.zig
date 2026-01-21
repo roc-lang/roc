@@ -2464,6 +2464,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/llvm_compile/mod.zig"),
         .imports = &.{
             .{ .name = "layout", .module = roc_modules.layout },
+            .{ .name = "backend", .module = roc_modules.backend },
         },
     });
 
@@ -2629,6 +2630,24 @@ pub fn build(b: *std.Build) void {
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
 
+        // Add LLVM support for eval tests to enable LLVM evaluator comparison
+        if (std.mem.eql(u8, module_test.test_step.name, "eval")) {
+            if (llvmPaths(b, target, use_system_llvm, user_llvm_path)) |llvm_paths_eval| {
+                module_test.test_step.addLibraryPath(.{ .cwd_relative = llvm_paths_eval.lib });
+                module_test.test_step.addIncludePath(.{ .cwd_relative = llvm_paths_eval.include });
+                addStaticLlvmOptionsToModule(module_test.test_step.root_module) catch {};
+                module_test.test_step.step.dependOn(&copy_builtins_bc.step);
+                module_test.test_step.linkLibrary(zstd.artifact("zstd"));
+                module_test.test_step.root_module.addAnonymousImport("llvm_compile", .{
+                    .root_source_file = b.path("src/llvm_compile/mod.zig"),
+                    .imports = &.{
+                        .{ .name = "layout", .module = roc_modules.layout },
+                        .{ .name = "backend", .module = roc_modules.backend },
+                    },
+                });
+            }
+        }
+
         if (run_args.len != 0) {
             module_test.run_step.addArgs(run_args);
         }
@@ -2677,6 +2696,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/llvm_compile/mod.zig"),
             .imports = &.{
                 .{ .name = "layout", .module = roc_modules.layout },
+                .{ .name = "backend", .module = roc_modules.backend },
             },
         });
 

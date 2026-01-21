@@ -255,14 +255,20 @@ pub fn compileToObject(allocator: Allocator, bitcode: []const u32) Error![]const
 fn createTempPath(allocator: Allocator) ![:0]const u8 {
     // Generate a unique filename using timestamp
     const timestamp = std.time.nanoTimestamp();
-    const random_suffix = @as(u32, @truncate(@as(u64, @bitCast(timestamp))));
+    const timestamp_low: u64 = @truncate(@as(u128, @bitCast(timestamp)));
+    const random_suffix: u32 = @truncate(timestamp_low);
 
     // Use appropriate temp directory for each platform
     const tmp_prefix = if (builtin.os.tag == .windows) "C:\\Windows\\Temp\\roc_llvm_" else "/tmp/roc_llvm_";
 
-    return std.fmt.allocPrintZ(
+    const str = try std.fmt.allocPrint(
         allocator,
         "{s}{x}_{x}.o",
-        .{ tmp_prefix, @as(u64, @bitCast(timestamp)), random_suffix },
+        .{ tmp_prefix, timestamp_low, random_suffix },
     );
+    // Convert to null-terminated by reallocating with extra byte
+    const result = try allocator.allocSentinel(u8, str.len, 0);
+    @memcpy(result, str);
+    allocator.free(str);
+    return result;
 }

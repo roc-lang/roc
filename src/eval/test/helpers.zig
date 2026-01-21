@@ -13,12 +13,17 @@ const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const DevEvaluator = eval_mod.DevEvaluator;
+const LlvmEvaluator = eval_mod.LlvmEvaluator;
 const StackValue = eval_mod.StackValue;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const LoadedModule = builtin_loading_mod.LoadedModule;
 const deserializeBuiltinIndices = builtin_loading_mod.deserializeBuiltinIndices;
 const loadCompiledModule = builtin_loading_mod.loadCompiledModule;
 const backend = @import("backend");
+const layout_mod = @import("layout");
+
+// Import llvm_compile if available (requires LLVM to be linked)
+const llvm_compile = @import("llvm_compile");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -157,7 +162,6 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     defer jit.deinit();
 
     // Execute with result pointer and format result as string based on layout
-    const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
             var result: i64 = undefined;
@@ -199,6 +203,138 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
             .{ interpreter_str, dev_str },
+        );
+        return error.EvaluatorMismatch;
+    }
+}
+
+/// Check if LlvmEvaluator can handle this expression type.
+/// Returns false for expressions that require features not yet implemented.
+fn canLlvmEvaluatorHandle(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) bool {
+    const expr = module_env.store.getExpr(expr_idx);
+    return canLlvmHandleExpr(module_env, expr);
+}
+
+fn canLlvmHandleExpr(module_env: *ModuleEnv, expr: CIR.Expr) bool {
+    return switch (expr) {
+        // Supported expression types
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
+        .e_typed_int, .e_typed_frac => true,
+        .e_zero_argument_tag, .e_tag => true,
+        .e_str, .e_str_segment => true,
+        .e_empty_record, .e_empty_list, .e_list => true,
+        .e_record => true,
+
+        // Compound expressions - check children
+        .e_binop => |binop| {
+            const lhs = module_env.store.getExpr(binop.lhs);
+            const rhs = module_env.store.getExpr(binop.rhs);
+            return canLlvmHandleExpr(module_env, lhs) and canLlvmHandleExpr(module_env, rhs);
+        },
+        .e_unary_minus => |unary| {
+            const inner = module_env.store.getExpr(unary.expr);
+            return canLlvmHandleExpr(module_env, inner);
+        },
+        .e_unary_not => |unary| {
+            const inner = module_env.store.getExpr(unary.expr);
+            return canLlvmHandleExpr(module_env, inner);
+        },
+        .e_if => |if_expr| {
+            // Check all branches
+            const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
+            for (branch_indices) |branch_idx| {
+                const branch = module_env.store.getIfBranch(branch_idx);
+                const cond = module_env.store.getExpr(branch.cond);
+                const body = module_env.store.getExpr(branch.body);
+                if (!canLlvmHandleExpr(module_env, cond) or !canLlvmHandleExpr(module_env, body)) {
+                    return false;
+                }
+            }
+            // Check final else
+            const final_else = module_env.store.getExpr(if_expr.final_else);
+            return canLlvmHandleExpr(module_env, final_else);
+        },
+        .e_dot_access => |dot| {
+            if (dot.args != null) return false; // Method calls not fully supported yet
+            const receiver = module_env.store.getExpr(dot.receiver);
+            return canLlvmHandleExpr(module_env, receiver);
+        },
+        .e_nominal_external => |nom| {
+            const backing = module_env.store.getExpr(nom.backing_expr);
+            return canLlvmHandleExpr(module_env, backing);
+        },
+        .e_lookup_local => true, // LLVM supports local lookups
+        .e_block => true, // LLVM supports blocks
+
+        // Unsupported expression types
+        .e_lambda, .e_closure, .e_call => false,
+        .e_hosted_lambda, .e_low_level_lambda => false,
+        .e_lookup_external, .e_lookup_required => false,
+        .e_match => false,
+        .e_for => false,
+        .e_crash, .e_runtime_error => false,
+        .e_dbg, .e_expect => false,
+        .e_nominal => false,
+        .e_tuple => false, // Not yet implemented in LLVM evaluator
+        else => false,
+    };
+}
+
+/// Evaluate an expression using the LlvmEvaluator and return the result as a string.
+fn llvmEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) ![]const u8 {
+    // Initialize LlvmEvaluator
+    var llvm_eval = LlvmEvaluator.init(allocator) catch |err| {
+        std.debug.print("LlvmEvaluator.init failed: {}\n", .{err});
+        return error.LlvmEvaluatorFailed;
+    };
+    defer llvm_eval.deinit();
+
+    // Generate bitcode
+    var bitcode_result = llvm_eval.generateBitcode(module_env, expr_idx) catch |err| {
+        std.debug.print("LlvmEvaluator.generateBitcode failed: {}\n", .{err});
+        return error.LlvmEvaluatorFailed;
+    };
+    defer bitcode_result.deinit();
+
+    // Compile bitcode to object file
+    const object_bytes = llvm_compile.compileToObject(allocator, bitcode_result.bitcode) catch |err| {
+        std.debug.print("llvm_compile.compileToObject failed: {}\n", .{err});
+        return error.LlvmCompileFailed;
+    };
+    defer allocator.free(object_bytes);
+
+    // Execute and format result
+    const result_str = llvm_compile.llvm_execute.executeAndFormat(
+        allocator,
+        object_bytes,
+        bitcode_result.output_layout,
+        bitcode_result.is_list,
+        bitcode_result.is_record,
+        bitcode_result.record_field_names,
+    ) catch |err| {
+        std.debug.print("llvm_execute.executeAndFormat failed: {}\n", .{err});
+        return error.LlvmExecuteFailed;
+    };
+
+    return result_str;
+}
+
+/// Compare Interpreter result string with LlvmEvaluator result string.
+/// Only compares for expressions that LlvmEvaluator can handle.
+/// Currently skips comparison on errors since the LLVM pipeline is still being developed.
+fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
+    // Skip comparison for expressions LlvmEvaluator can't handle yet
+    if (!canLlvmEvaluatorHandle(module_env, expr_idx)) {
+        return;
+    }
+
+    const llvm_str = try llvmEvaluatorStr(allocator, module_env, expr_idx);
+    defer allocator.free(llvm_str);
+
+    if (!std.mem.eql(u8, interpreter_str, llvm_str)) {
+        std.debug.print(
+            "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
+            .{ interpreter_str, llvm_str },
         );
         return error.EvaluatorMismatch;
     }
@@ -270,10 +406,11 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator and LlvmEvaluator using string representation
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -315,10 +452,11 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
         break :blk @as(i64, bool_ptr.*);
     };
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator and LlvmEvaluator using string representation
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -351,10 +489,11 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
 
     const actual = result.asF32();
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator and LlvmEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -391,10 +530,11 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
 
     const actual = result.asF64();
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator and LlvmEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
     try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -435,11 +575,12 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
+    // Compare with DevEvaluator and LlvmEvaluator using string representation of integer part
     const int_part = @divTrunc(actual_dec.num, dec_scale);
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -477,11 +618,12 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
+    // Compare with DevEvaluator and LlvmEvaluator using string representation of integer part
     const int_part = @divTrunc(actual_dec.num, dec_scale);
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
