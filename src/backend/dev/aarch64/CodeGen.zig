@@ -529,6 +529,31 @@ pub const AArch64CodeGen = struct {
         try self.emit.fnegRegReg(.double, dst, src);
     }
 
+    /// Emit float32 addition: dst = a + b
+    pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.faddRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 subtraction: dst = a - b
+    pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fsubRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 multiplication: dst = a * b
+    pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fmulRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 division: dst = a / b
+    pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fdivRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 negation: dst = -src
+    pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        try self.emit.fnegRegReg(.single, dst, src);
+    }
+
     // Memory operations
 
     /// Load from stack slot into register

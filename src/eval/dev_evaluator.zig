@@ -437,7 +437,7 @@ pub const DevEvaluator = struct {
             return error.UnsupportedExpression;
         }
 
-        var executable = backend.ExecutableMemory.init(code_result.code) catch return error.ExecutionError;
+        var executable = backend.ExecutableMemory.initWithEntryOffset(code_result.code, code_result.entry_offset) catch return error.ExecutionError;
         defer executable.deinit();
 
         return switch (code_result.result_layout) {
@@ -451,10 +451,16 @@ pub const DevEvaluator = struct {
                 executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .u64_val = result };
             },
-            .f64, .f32 => blk: {
+            .f64 => blk: {
                 var result: f64 = undefined;
                 executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
                 break :blk EvalResult{ .f64_val = result };
+            },
+            .f32 => blk: {
+                // F32 stores 4 bytes, read as f32 then convert to f64 for display
+                var result: f32 = undefined;
+                executable.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&self.roc_ops));
+                break :blk EvalResult{ .f64_val = @floatCast(result) };
             },
             .i128 => blk: {
                 var result: i128 = undefined;
@@ -518,10 +524,12 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
             .u8, .u16, .u32, .u64 => .u64,
             .i128 => .i128,
             .u128 => .u128,
-            .f32, .f64 => .f64,
+            .f32 => .f32,
+            .f64 => .f64,
             .dec => .dec,
         },
-        .e_frac_f32, .e_frac_f64 => .f64,
+        .e_frac_f32 => .f32,
+        .e_frac_f64 => .f64,
         .e_dec, .e_dec_small => .dec,
         .e_typed_int => |ti| getTypedIntLayout(module_env, ti.type_name),
         .e_binop => |binop| getBinopLayout(allocator, module_env, binop, type_env),
@@ -736,7 +744,9 @@ fn getTypedIntLayout(module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutId
         return .u128;
     } else if (type_name == idents.i128_type) {
         return .i128;
-    } else if (type_name == idents.f32_type or type_name == idents.f64_type) {
+    } else if (type_name == idents.f32_type) {
+        return .f32;
+    } else if (type_name == idents.f64_type) {
         return .f64;
     } else if (type_name == idents.dec_type) {
         return .dec;
@@ -768,7 +778,8 @@ fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
         .u8, .u16, .u32, .u64 => .u64,
         .u128 => .u128,
         .i128 => .i128,
-        .f32, .f64 => .f64,
+        .f32 => .f32,
+        .f64 => .f64,
         .dec => .dec,
         else => .i64,
     };
