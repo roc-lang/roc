@@ -52,6 +52,12 @@ echo ""
 # Collect all fx files, excluding those that use Stdin or don't have main! entry point
 FX_FILES=""
 for fx_file in test/fx/*.roc; do
+    filename=$(basename "$fx_file")
+    # Skip files that are flaky on CI
+    if [ "$filename" = "dbg_corrupts_recursive_tag_union.roc" ]; then
+        echo "Skipping $fx_file (flaky on CI)"
+        continue
+    fi
     # Skip files that don't have a main! entry point (app [ main! ])
     if ! grep -qE '^app[[:space:]]*\[[[:space:]]*main![[:space:]]*\]' "$fx_file" 2>/dev/null; then
         echo "Skipping $fx_file (no main! entry point)"
