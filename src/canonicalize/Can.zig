@@ -116,9 +116,15 @@ processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
 /// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
-/// The pattern being defined in the current non-lambda assignment (if any).
-/// Used to detect self-referential definitions like `a = a` or `a = [a]`.
-/// This is null when we're inside a lambda (where self-references are valid for recursion).
+/// The node index at which pattern definitions for the current declaration started.
+/// Used to detect self-referential definitions like `(_, var $n) = f($n)` where
+/// newly created patterns are referenced in the RHS.
+/// This is null when we're inside a lambda or other context where inner definitions
+/// are independent of outer ones.
+defining_patterns_start: ?u32 = null,
+/// The main pattern being defined (for top-level declarations where the pattern
+/// was created in a first pass, or for simple ident patterns).
+/// Used to detect self-referential definitions like `a = a`.
 defining_pattern: ?Pattern.Idx = null,
 /// The expression index of the enclosing lambda, if any.
 /// Used to track which lambda a return expression belongs to.
@@ -3848,6 +3854,11 @@ fn canonicalizeDeclWithAnnotation(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Save the current node count BEFORE canonicalizing the pattern.
+    // This allows us to detect self-references: any pattern with index >= this value
+    // was newly created by this declaration (as opposed to existing vars being reassigned).
+    const patterns_start_idx: u32 = @intCast(self.env.store.nodes.len());
+
     // Either find the placeholder pattern insert in the first past if ident,
     // otherwise canonicalize the pattern
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
@@ -3870,19 +3881,24 @@ fn canonicalizeDeclWithAnnotation(
     };
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
-    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
     const ast_body_expr = self.parse_ir.store.getExpr(decl.body);
     const is_lambda = ast_body_expr == .lambda;
 
-    // Save and set defining_pattern for self-reference detection
+    // Save and set self-reference tracking for issues #8831, #9043:
+    // - defining_pattern: the main pattern (handles `a = a` for top-level placeholders)
+    // - defining_patterns_start: node index for new patterns (handles tuple cases)
+    const saved_defining_patterns_start = self.defining_patterns_start;
     const saved_defining_pattern = self.defining_pattern;
     if (!is_lambda) {
+        self.defining_patterns_start = patterns_start_idx;
         self.defining_pattern = pattern_idx;
     }
 
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
-    // Restore defining_pattern
+    // Restore self-reference tracking
+    self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
 
     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
@@ -4527,20 +4543,34 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
-                        // Check for self-reference outside of lambda (issue #8831).
-                        // If we're defining a non-lambda pattern and this lookup references it,
-                        // that's an invalid self-reference like `a = a` or `a = [a]`.
-                        if (self.defining_pattern) |defining_pat_idx| {
-                            if (found_pattern_idx == defining_pat_idx) {
-                                // Self-reference detected (issue #8831) - emit error and return malformed expr.
-                                // Non-function values cannot reference themselves as that would cause
-                                // an infinite loop at runtime.
-                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
-                                    .ident = ident,
-                                    .region = region,
-                                } });
-                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                        // Check for self-reference outside of lambda (issues #8831, #9043).
+                        // We detect self-reference in two cases:
+                        // 1. The found pattern IS the main defining pattern (for simple cases like `a = a`)
+                        // 2. The found pattern was newly created by this definition (for tuple cases
+                        //    like `(_, var $n) = f($n)` where $n is referenced before being defined)
+                        // Note: For var reassignments like `(a, $x) = f($x)` where $x already existed,
+                        // the existing pattern has an index < defining_patterns_start, so it's valid.
+                        const is_self_ref = blk: {
+                            // Check if it matches the main defining pattern (handles `a = a`)
+                            if (self.defining_pattern) |def_pat| {
+                                if (found_pattern_idx == def_pat) break :blk true;
                             }
+                            // Check if it's a newly created pattern (handles tuple cases)
+                            if (self.defining_patterns_start) |def_start| {
+                                if (@intFromEnum(found_pattern_idx) >= def_start) break :blk true;
+                            }
+                            break :blk false;
+                        };
+
+                        if (is_self_ref) {
+                            // Self-reference detected - emit error and return malformed expr.
+                            // Non-function values cannot reference themselves as that would cause
+                            // an infinite loop at runtime.
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
+                                .ident = ident,
+                                .region = region,
+                            } });
+                            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                         }
 
                         // Mark this pattern as used for unused variable checking
@@ -5266,6 +5296,16 @@ pub fn canonicalizeExpr(
             const body_idx = blk: {
                 const body_free_vars_start = self.scratch_free_vars.top();
                 defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                // Reset self-reference tracking for the lambda body - lambda bodies
+                // have their own scope and shouldn't inherit self-reference detection
+                // from outer declarations
+                const saved_defining_patterns_start = self.defining_patterns_start;
+                const saved_defining_pattern = self.defining_pattern;
+                self.defining_patterns_start = null;
+                self.defining_pattern = null;
+                defer self.defining_patterns_start = saved_defining_patterns_start;
+                defer self.defining_pattern = saved_defining_pattern;
 
                 const can_body = try self.canonicalizeExpr(e.body) orelse {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -6155,6 +6195,15 @@ pub fn canonicalizeExpr(
                 // Save position before canonicalizing body so we can filter pattern-bound vars
                 const body_free_vars_start = self.scratch_free_vars.top();
 
+                // Reset self-reference tracking for the branch body - variables bound by the
+                // branch pattern are valid to use in the body and aren't self-references
+                const saved_defining_patterns_start = self.defining_patterns_start;
+                const saved_defining_pattern = self.defining_pattern;
+                self.defining_patterns_start = null;
+                self.defining_pattern = null;
+                defer self.defining_patterns_start = saved_defining_patterns_start;
+                defer self.defining_pattern = saved_defining_pattern;
+
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
                     const body = self.parse_ir.store.getExpr(ast_branch.body);
@@ -6328,6 +6377,15 @@ fn canonicalizeForLoop(
         defer self.loop_depth -= 1;
         const body_free_vars_start = self.scratch_free_vars.top();
         defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+        // Reset defining_patterns_start for the loop body - variables bound by the
+        // loop pattern are valid to use in the body and aren't self-references
+        const saved_defining_patterns_start = self.defining_patterns_start;
+        const saved_defining_pattern = self.defining_pattern;
+        self.defining_patterns_start = null;
+        self.defining_pattern = null;
+        defer self.defining_patterns_start = saved_defining_patterns_start;
+        defer self.defining_pattern = saved_defining_pattern;
 
         const body_expr = try self.canonicalizeExprOrMalformed(ast_body);
 
@@ -9748,6 +9806,16 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
     defer self.scopeExit(self.env.gpa) catch {};
 
+    // Blocks create a new scope where declarations are independent of any outer
+    // declarations being defined. Reset self-reference tracking to prevent false
+    // self-reference errors for inner declarations (issue #9043).
+    const saved_defining_patterns_start = self.defining_patterns_start;
+    const saved_defining_pattern = self.defining_pattern;
+    self.defining_patterns_start = null;
+    self.defining_pattern = null;
+    defer self.defining_patterns_start = saved_defining_patterns_start;
+    defer self.defining_pattern = saved_defining_pattern;
+
     // Statements inside a block are in statement position.
     // This is important for constructs like `if` without `else`, which are only
     // valid in statement position (where their value is not used).
@@ -10837,6 +10905,11 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         }
     }
 
+    // Save the current node count BEFORE canonicalizing the pattern.
+    // This allows us to detect self-references: any pattern with index >= this value
+    // was newly created by this declaration (as opposed to existing vars being reassigned).
+    const patterns_start_idx: u32 = @intCast(self.env.store.nodes.len());
+
     // Regular declaration - canonicalize as usual
     const pattern_idx = try self.canonicalizePattern(d.pattern) orelse inner_blk: {
         const pattern = self.parse_ir.store.getPattern(d.pattern);
@@ -10846,20 +10919,25 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     };
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
-    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
     const ast_body_expr = self.parse_ir.store.getExpr(d.body);
     const is_lambda = ast_body_expr == .lambda;
 
-    // Save and set defining_pattern for self-reference detection (issue #8831)
+    // Save and set self-reference tracking for issues #8831, #9043:
+    // - defining_pattern: the main pattern (handles `a = a`)
+    // - defining_patterns_start: node index for new patterns (handles tuple cases)
+    const saved_defining_patterns_start = self.defining_patterns_start;
     const saved_defining_pattern = self.defining_pattern;
     if (!is_lambda) {
+        self.defining_patterns_start = patterns_start_idx;
         self.defining_pattern = pattern_idx;
     }
 
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
 
-    // Restore defining_pattern
+    // Restore self-reference tracking
+    self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
 
     // Create a declaration statement
