@@ -103,6 +103,11 @@ pub const CliProblem = union(enum) {
         platform_spec: []const u8,
     },
 
+    /// Invalid app header - missing platform package declaration
+    invalid_app_header: struct {
+        app_path: []const u8,
+    },
+
     // Build/Compilation Problems
 
     /// Compilation produced errors
@@ -236,6 +241,7 @@ pub const CliProblem = union(enum) {
             .circular_platform_dependency,
             .platform_validation_failed,
             .absolute_platform_path,
+            .invalid_app_header,
             .object_compilation_failed,
             .shim_generation_failed,
             .entrypoint_extraction_failed,
@@ -273,6 +279,7 @@ pub const CliProblem = union(enum) {
             .circular_platform_dependency => |info| try createCircularPlatformDependencyReport(allocator, info),
             .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
             .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
+            .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .compilation_failed => |info| try createCompilationFailedReport(allocator, info),
             .linker_failed => |info| try createLinkerFailedReport(allocator, info),
             .object_compilation_failed => |info| try createObjectCompilationFailedReport(allocator, info),
@@ -522,6 +529,29 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) !Report
     try report.document.addText("Tip: Use a relative path like ");
     try report.document.addAnnotated("../path/to/platform", .emphasized);
     try report.document.addText(" or a URL.");
+
+    return report;
+}
+
+fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) !Report {
+    var report = Report.init(allocator, "INVALID APP HEADER", .runtime_error);
+
+    try report.document.addText("The file ");
+    try report.document.addAnnotated(info.app_path, .path);
+    try report.document.addText(" does not have a valid app header with a platform declaration.");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("Expected an app header like:");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("    app [main] { pf: platform \"...\" }");
+    try report.document.addLineBreak();
+    try report.document.addLineBreak();
+    try report.document.addText("The platform package name (e.g., ");
+    try report.document.addAnnotated("pf", .emphasized);
+    try report.document.addText(") is used to qualify imports from the package like ");
+    try report.document.addAnnotated("pf.Stdout", .emphasized);
+    try report.document.addText(".");
 
     return report;
 }

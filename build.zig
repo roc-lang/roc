@@ -1824,13 +1824,59 @@ const FixArchivePaddingStep = struct {
         defer file.close();
 
         const stat = try file.stat();
-        const file_size = stat.size;
+        var file_size = stat.size;
 
         // AR format requires archives to end on an even byte boundary.
         // If file size is odd, append a newline padding byte.
+        // This fixes Zig bug https://codeberg.org/ziglang/zig/issues/30572
+        // where Zig's archiver doesn't add required padding after odd-sized members.
         if (file_size % 2 == 1) {
             try file.seekTo(file_size);
             try file.writeAll("\n");
+            file_size += 1;
+        }
+
+        // Parse the archive to verify member offsets are valid.
+        // This catches cases where lld would fail with "truncated or malformed archive".
+        try file.seekTo(0);
+        var header_buf: [8]u8 = undefined;
+        _ = try file.read(&header_buf);
+        if (!std.mem.eql(u8, &header_buf, "!<arch>\n")) {
+            std.debug.print("Warning: Invalid archive magic in {s}\n", .{self.archive_path});
+            return;
+        }
+
+        var offset: u64 = 8; // After magic
+        while (offset + 60 <= file_size) {
+            try file.seekTo(offset + 48); // Seek to size field (offset 48 within 60-byte header)
+            var size_buf: [10]u8 = undefined;
+            _ = try file.read(&size_buf);
+
+            // Parse size (ASCII decimal, space-padded)
+            var size: u64 = 0;
+            for (size_buf) |c| {
+                if (c >= '0' and c <= '9') {
+                    size = size * 10 + (c - '0');
+                } else break;
+            }
+
+            // Move to next member (header + content + padding if odd)
+            offset += 60 + size;
+            if (size % 2 == 1) {
+                offset += 1; // Padding byte expected
+            }
+
+            // If we're exactly at EOF, archive is valid
+            if (offset == file_size) break;
+
+            // If next offset would be past EOF, we have a problem - add missing padding
+            if (offset > file_size) {
+                const missing = offset - file_size;
+                try file.seekTo(file_size);
+                const padding = "\n\n"; // At most 1 byte needed, but be safe
+                try file.writeAll(padding[0..@min(missing, 2)]);
+                break;
+            }
         }
     }
 };
@@ -2241,6 +2287,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.repl.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.compile.addImport("compiled_builtins", compiled_builtins_module);
     roc_modules.eval.addImport("compiled_builtins", compiled_builtins_module);
+    roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
@@ -2553,8 +2600,8 @@ pub fn build(b: *std.Build) void {
     const module_tests_result = roc_modules.createModuleTests(b, target, optimize, zstd, test_filters);
     const tests_summary = TestsSummaryStep.create(b, test_filters, module_tests_result.forced_passes);
     for (module_tests_result.tests) |module_test| {
-        // Add compiled builtins to check, repl, eval, and compile module tests
-        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile")) {
+        // Add compiled builtins to check, repl, eval, compile, and lsp module tests
+        if (std.mem.eql(u8, module_test.test_step.name, "check") or std.mem.eql(u8, module_test.test_step.name, "repl") or std.mem.eql(u8, module_test.test_step.name, "eval") or std.mem.eql(u8, module_test.test_step.name, "compile") or std.mem.eql(u8, module_test.test_step.name, "lsp")) {
             module_test.test_step.root_module.addImport("compiled_builtins", compiled_builtins_module);
             module_test.test_step.step.dependOn(&write_compiled_builtins.step);
         }
@@ -2870,16 +2917,38 @@ pub fn build(b: *std.Build) void {
         // Copy the fx test platform host library to the source directory
         const copy_test_fx_host = b.addUpdateSourceFiles();
         const test_fx_host_filename = if (target.result.os.tag == .windows) "host.lib" else "libhost.a";
-        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename }));
-        b.getInstallStep().dependOn(&copy_test_fx_host.step);
+        const fx_host_main_path = b.pathJoin(&.{ "test/fx/platform", test_fx_host_filename });
+        copy_test_fx_host.addCopyFileToSource(test_platform_fx_host_lib.getEmittedBin(), fx_host_main_path);
 
         // Also copy to the target-specific directory so findHostLibrary finds it
-        if (fx_host_target_dir) |target_dir| {
+        const fx_host_target_path = if (fx_host_target_dir) |target_dir|
+            b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename })
+        else
+            null;
+        if (fx_host_target_path) |target_path| {
             copy_test_fx_host.addCopyFileToSource(
                 test_platform_fx_host_lib.getEmittedBin(),
-                b.pathJoin(&.{ "test/fx/platform/targets", target_dir, test_fx_host_filename }),
+                target_path,
             );
         }
+
+        // Apply archive padding fix for non-Windows targets (Zig bug workaround)
+        // The final_fx_host_step is what tests should depend on to ensure the archive is ready
+        const final_fx_host_step: *Step = if (target.result.os.tag != .windows) blk: {
+            const fix_main = FixArchivePaddingStep.create(b, fx_host_main_path);
+            fix_main.step.dependOn(&copy_test_fx_host.step);
+
+            if (fx_host_target_path) |target_path| {
+                const fix_target = FixArchivePaddingStep.create(b, target_path);
+                fix_target.step.dependOn(&copy_test_fx_host.step);
+                // Make fix_target depend on fix_main so both complete
+                fix_target.step.dependOn(&fix_main.step);
+                break :blk &fix_target.step;
+            }
+            break :blk &fix_main.step;
+        } else &copy_test_fx_host.step;
+
+        b.getInstallStep().dependOn(final_fx_host_step);
 
         const fx_platform_test = b.addTest(.{
             .name = "fx_platform_test",
@@ -2895,8 +2964,8 @@ pub fn build(b: *std.Build) void {
         if (run_args.len != 0) {
             run_fx_platform_test.addArgs(run_args);
         }
-        // Ensure host library is copied before running the test
-        run_fx_platform_test.step.dependOn(&copy_test_fx_host.step);
+        // Ensure host library is copied AND fixed before running the test
+        run_fx_platform_test.step.dependOn(final_fx_host_step);
         // Ensure roc binary is built before running the test (tests invoke roc CLI)
         run_fx_platform_test.step.dependOn(roc_step);
         tests_summary.addRun(&run_fx_platform_test.step);

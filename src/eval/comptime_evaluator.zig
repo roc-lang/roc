@@ -433,12 +433,12 @@ pub const ComptimeEvaluator = struct {
                         // Extract f32 value and fold to e_frac_f32
                         const f32_value = stack_value.asF32();
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        self.env.store.nodes.set(node_idx, .{
-                            .tag = .expr_frac_f32,
-                            .data_1 = @bitCast(f32_value),
-                            .data_2 = 1, // has_suffix = true (explicitly typed)
-                            .data_3 = 0,
-                        });
+                        var node = CIR.Node.init(.expr_frac_f32);
+                        node.setPayload(.{ .expr_frac_f32 = .{
+                            .value = @bitCast(f32_value),
+                            .has_suffix = true,
+                        } });
+                        self.env.store.nodes.set(node_idx, node);
                     },
                     .f64 => {
                         // Extract f64 value and fold to e_frac_f64
@@ -447,12 +447,13 @@ pub const ComptimeEvaluator = struct {
                         const low: u32 = @truncate(f64_bits);
                         const high: u32 = @truncate(f64_bits >> 32);
                         const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                        self.env.store.nodes.set(node_idx, .{
-                            .tag = .expr_frac_f64,
-                            .data_1 = low,
-                            .data_2 = high,
-                            .data_3 = 1, // has_suffix = true (explicitly typed)
-                        });
+                        var node = CIR.Node.init(.expr_frac_f64);
+                        node.setPayload(.{ .expr_frac_f64 = .{
+                            .value_lo = low,
+                            .value_hi = high,
+                            .has_suffix = true,
+                        } });
+                        self.env.store.nodes.set(node_idx, node);
                     },
                 }
             },
@@ -1042,17 +1043,17 @@ pub const ComptimeEvaluator = struct {
                 try arg_indices.append(arg_expr_idx);
             }
 
-            // Create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // Create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             // Create and return the tag expression
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1139,16 +1140,16 @@ pub const ComptimeEvaluator = struct {
             }
 
             // Create the tag expression with arguments
-            // First, create the span for args in extra_data
-            const extra_data_start = self.env.store.extra_data.len();
+            // First, create the span for args in index_data
+            const index_data_start = self.env.store.index_data.len();
             for (arg_indices.items) |arg_idx| {
-                _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
+                _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(arg_idx));
             }
 
             const tag_expr = CIR.Expr{
                 .e_tag = .{
                     .name = tag_info.name,
-                    .args = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(arg_indices.items.len) } },
+                    .args = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(arg_indices.items.len) } },
                 },
             };
             return try self.env.addExpr(tag_expr, region);
@@ -1196,15 +1197,15 @@ pub const ComptimeEvaluator = struct {
             try elem_indices.append(elem_expr_idx);
         }
 
-        // Create span in extra_data for tuple elements
-        const extra_data_start = self.env.store.extra_data.len();
+        // Create span in index_data for tuple elements
+        const index_data_start = self.env.store.index_data.len();
         for (elem_indices.items) |elem_idx| {
-            _ = try self.env.store.extra_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
+            _ = try self.env.store.index_data.append(self.env.store.gpa, @intFromEnum(elem_idx));
         }
 
         const tuple_expr = CIR.Expr{
             .e_tuple = .{
-                .elems = .{ .span = .{ .start = @intCast(extra_data_start), .len = @intCast(elem_indices.items.len) } },
+                .elems = .{ .span = .{ .start = @intCast(index_data_start), .len = @intCast(elem_indices.items.len) } },
             },
         };
         return try self.env.addExpr(tuple_expr, region);
@@ -1486,12 +1487,12 @@ pub const ComptimeEvaluator = struct {
                 // Rewrite to e_frac_f32
                 const f32_value: f32 = @floatCast(f64_value);
                 const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-                self.env.store.nodes.set(node_idx, .{
-                    .tag = .expr_frac_f32,
-                    .data_1 = @bitCast(f32_value),
-                    .data_2 = 1, // has_suffix = true to mark as explicitly typed
-                    .data_3 = 0,
-                });
+                var node = CIR.Node.init(.expr_frac_f32);
+                node.setPayload(.{ .expr_frac_f32 = .{
+                    .value = @bitCast(f32_value),
+                    .has_suffix = true,
+                } });
+                self.env.store.nodes.set(node_idx, node);
             },
             .f64 => {
                 // Rewrite to e_frac_f64
@@ -1499,12 +1500,13 @@ pub const ComptimeEvaluator = struct {
                 const f64_bits: u64 = @bitCast(f64_value);
                 const low: u32 = @truncate(f64_bits);
                 const high: u32 = @truncate(f64_bits >> 32);
-                self.env.store.nodes.set(node_idx, .{
-                    .tag = .expr_frac_f64,
-                    .data_1 = low,
-                    .data_2 = high,
-                    .data_3 = 1, // has_suffix = true to mark as explicitly typed
-                });
+                var node = CIR.Node.init(.expr_frac_f64);
+                node.setPayload(.{ .expr_frac_f64 = .{
+                    .value_lo = low,
+                    .value_hi = high,
+                    .has_suffix = true,
+                } });
+                self.env.store.nodes.set(node_idx, node);
             },
             .dec => {
                 // For Dec type, keep the original e_dec/e_dec_small expression

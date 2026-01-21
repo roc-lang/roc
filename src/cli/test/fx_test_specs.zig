@@ -76,6 +76,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>My favourite color is Red",
         .description = "Opaque type with attached method",
     },
+    .{
+        .roc_file = "test/fx/test_issue9034.roc",
+        .io_spec = "1>test",
+        .description = "Platform-exposed opaque types in type annotations (issue #9034)",
+    },
 
     // Language feature tests
     .{
@@ -274,6 +279,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: Minimal repro for issue #8897 panic",
     },
     .{
+        .roc_file = "test/fx/issue8898.roc",
+        .io_spec = "1>done",
+        .description = "Regression test: Polymorphic function with for loop list literal panic (issue #8898)",
+    },
+    .{
         .roc_file = "test/fx/static_dispatch_platform_module.roc",
         .io_spec = "1>Result: start-middle-end",
         .description = "Regression test: Static dispatch on platform-exposed opaque types (issue #8928)",
@@ -282,6 +292,17 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/static_dispatch_effect_bug.roc",
         .io_spec = "1>SUCCESS: Builder.print_value! called via static dispatch!|1>  value: test|1>  count: 0",
         .description = "Regression test: Static dispatch on effect methods (issue #8928)",
+    },
+    .{
+        .roc_file = "test/fx/record_builder_cli_parser.roc",
+        // Multi-line strings (\\) create strings with embedded newlines - use \n in spec
+        .io_spec = "1>=== Record Builder ===\n|1>Test 1: Two-field record builder\n  Result: host=localhost, port=8080\n|1>Test 2: Three-field record builder\n  Result: name=world, count=1, verbose=False\n|1>Test 3: Four-field record builder\n  Result: w=10, x=20, y=30, z=40\n|1>Test 4: Combined help text\n  Help:  --input <value>  --output <value>|1>Test 5: Equivalence with direct map2|1>  Builder: a=1, b=2|1>  Direct:  a=1, b=2|1>|1>=== All tests passed! ===",
+        .description = "True applicative record builder: { a: Cli.option(...), b: Cli.flag(...) }.Cli with parameterized Cli(a) type",
+    },
+    .{
+        .roc_file = "test/fx/issue9049.roc",
+        .io_spec = "1>Direct: False|1>Via pure/run: False",
+        .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
     },
 };
 
