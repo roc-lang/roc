@@ -773,6 +773,23 @@ pub fn resolveQualifiedName(
     }
 }
 
+/// Resolves the full module path for an import statement, from qualifier (or first segment)
+/// through module_name_tok. The parser sets module_name_tok appropriately:
+/// - For explicit clauses (as/exposing): points to the last uppercase segment
+/// - For auto-expose: points to the second-to-last uppercase segment
+pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx) []const u8 {
+    // Get the start position (qualifier or first module segment)
+    const start_offset: usize = if (qualifier_tok) |q|
+        self.tokens.resolve(q).start.offset
+    else
+        self.tokens.resolve(module_name_tok).start.offset;
+
+    // Get the end position (module_name_tok)
+    const end_offset = self.tokens.resolve(module_name_tok).end.offset;
+
+    return self.env.source[start_offset..end_offset];
+}
+
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
     /// e.g. 1 in case we use import `as`: `import Module as Mod`
@@ -939,23 +956,9 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
-                // Reconstruct full qualified module name
-                const module_name_raw = ast.resolve(import.module_name_tok);
-                if (import.qualifier_tok) |tok| {
-                    const qualifier_str = ast.resolve(tok);
-                    // Strip leading dot from module name if present
-                    const module_name_clean = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                        module_name_raw[1..]
-                    else
-                        module_name_raw;
-
-                    // Combine qualifier and module name
-                    const full_module_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ qualifier_str, module_name_clean });
-                    defer gpa.free(full_module_name);
-                    try tree.pushStringPair("raw", full_module_name);
-                } else {
-                    try tree.pushStringPair("raw", module_name_raw);
-                }
+                // Reconstruct full qualified module name using the new helper
+                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok);
+                try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {

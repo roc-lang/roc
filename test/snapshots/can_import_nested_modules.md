@@ -163,8 +163,8 @@ EndOfFile,
 		(s-import (raw "json.Parser")
 			(exposing
 				(exposed-upper-ident (text "Config"))))
-		(s-import (raw "http.Auth") (alias "HttpAuth"))
-		(s-import (raw "utils.Format")
+		(s-import (raw "http.Client.Auth") (alias "HttpAuth"))
+		(s-import (raw "utils.String.Format")
 			(exposing
 				(exposed-lower-ident
 					(text "padLeft"))))
@@ -245,8 +245,8 @@ EndOfFile,
 # FORMATTED
 ~~~roc
 import json.Parser exposing [Config]
-import http.Auth as HttpAuth
-import utils.Format exposing [padLeft]
+import http.Client.Auth as HttpAuth
+import utils.String.Format exposing [padLeft]
 
 # Test multi-level type qualification
 parseConfig : Config.Settings -> Str

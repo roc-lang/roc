@@ -415,7 +415,7 @@ EndOfFile,
 ~~~roc
 
 import Color
-import ModuleB exposing [TypeC]
+import .ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
 
 # Simple qualified type

@@ -419,7 +419,7 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                try fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
+                try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok);
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
                     flushed = try fmt.flushCommentsAfter(i.module_name_tok);
                 }
@@ -747,6 +747,27 @@ const Formatter = struct {
             }
         }
         try fmt.pushTokenText(ident);
+    }
+
+    /// Formats a module path from qualifier (if present) through module_name_tok.
+    /// For qualified imports like `a.B.C`, this outputs the full path based on where
+    /// module_name_tok points (which may be the last segment or second-to-last for auto-expose).
+    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx) !void {
+        const curr_indent = fmt.curr_indent;
+        defer {
+            fmt.curr_indent = curr_indent;
+        }
+
+        // Determine the start token (qualifier or first module segment)
+        const start_tok = if (qualifier) |q| q else module_name_tok;
+
+        // Get source range from start to module_name_tok
+        const start_region = fmt.ast.tokens.resolve(start_tok);
+        const end_region = fmt.ast.tokens.resolve(module_name_tok);
+
+        // Output the full module path text directly from source
+        const path_text = fmt.ast.env.source[start_region.start.offset..end_region.end.offset];
+        try fmt.pushAll(path_text);
     }
 
     const Braces = enum {

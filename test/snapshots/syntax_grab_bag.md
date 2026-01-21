@@ -1252,7 +1252,8 @@ EndOfFile,
 					(text "line!"))
 				(exposed-lower-ident
 					(text "write!"))))
-		(s-import (raw "pf.StdoutMultiline")
+		(s-import (raw "pf # Comment after qualifier
+		.StdoutMultiline")
 			(exposing
 				(exposed-lower-ident
 					(text "line!"))
