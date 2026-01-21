@@ -180,14 +180,8 @@ pub fn run(ctx: *CliContext) !void {
     defer repl_instance.deinit();
 
     // Read-eval-print loop
-    // const stdin_file = std.fs.File.stdin();
-    // var read_buffer: [4096]u8 = undefined;
-    // var stdin = stdin_file.reader(&read_buffer);
-    // const stdin_reader = stdin.interface.adaptToOldInterface();
-    // var line_buffer: [4096]u8 = undefined;
-
     var repl_line = ReplLine.init(ctx.gpa);
-
+    ctx.io.flush();
     while (true) : ({
         ctx.io.flush();
     }) {
