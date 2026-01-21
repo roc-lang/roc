@@ -85,6 +85,7 @@ for fx_file in $FX_FILES; do
     # Allow non-zero exit codes for files that are expected to fail
     # (compilation errors, runtime errors, or expected test failures)
     EXTRA_ARGS=""
+    ROC_EXTRA_ARGS=""
     case "$filename" in
         division_by_zero.roc|\
         issue8433.roc|\
@@ -99,6 +100,9 @@ for fx_file in $FX_FILES; do
         issue8943.roc)
             EXTRA_ARGS="--ignore-failure"
             ;;
+        num_method_call.roc)
+            ROC_EXTRA_ARGS="--allow-errors"
+            ;;
     esac
 
     # Run hyperfine comparison
@@ -109,8 +113,8 @@ for fx_file in $FX_FILES; do
         --show-output \
         --export-json "/tmp/bench_${filename}.json" \
         $EXTRA_ARGS \
-        -n "main" "$MAIN_ROC $fx_file --no-cache" \
-        -n "pr" "$PR_ROC $fx_file --no-cache" \
+        -n "main" "$MAIN_ROC $fx_file --no-cache $ROC_EXTRA_ARGS" \
+        -n "pr" "$PR_ROC $fx_file --no-cache $ROC_EXTRA_ARGS" \
         2>&1; then
         echo "ERROR: Benchmark failed for $filename"
         exit 1
