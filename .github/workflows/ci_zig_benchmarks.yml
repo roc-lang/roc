@@ -13,26 +13,24 @@ jobs:
     timeout-minutes: 90
     steps:
       # === MAIN BRANCH BUILD ===
+      # TEMPORARY: Using PR branch for both to test CI workflow - revert to ref: "main" after testing
       - name: Checkout main branch
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
         with:
-          ref: "main"
+          # ref: "main"
           clean: "true"
 
-      - uses: mlugg/setup-zig@8d6198c65fb0feaa111df26e6b467fea8345e46f # ratchet:mlugg/setup-zig@v2.0.5
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
         with:
-          version: 0.15.2
-          use-cache: true
+          nix_path: nixpkgs=channel:nixos-25.05
 
       - name: Verify prerequisites
-        run: |
-          hyperfine --version
-          jq --version
+        run: nix develop ./src/ -c bash -c "hyperfine --version && jq --version && zig version"
 
       - name: Build main branch release binary and snapshot tool
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build release snapshot -Doptimize=ReleaseFast"
+          command: "nix develop ./src/ -c bash -c 'zig build release snapshot -Doptimize=ReleaseFast'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -51,7 +49,7 @@ jobs:
       - name: Build PR branch release binary and snapshot tool
         uses: ./.github/actions/flaky-retry
         with:
-          command: "zig build release snapshot -Doptimize=ReleaseFast"
+          command: "nix develop ./src/ -c bash -c 'zig build release snapshot -Doptimize=ReleaseFast'"
           error_string_contains: "build.zig.zon"
           retry_count: 3
 
@@ -63,4 +61,4 @@ jobs:
 
       # === RUN BENCHMARKS ===
       - name: Run benchmarks
-        run: ./ci/benchmarks_zig/run_local_benchmarks.sh --main-dir bench-main --pr-dir bench-pr
+        run: nix develop ./src/ -c ./ci/benchmarks_zig/run_local_benchmarks.sh --main-dir bench-main --pr-dir bench-pr
