@@ -130,6 +130,22 @@ pub fn imulRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Gener
     try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
 }
 
+/// MUL r64 - unsigned widening multiply: RDX:RAX = RAX * src
+/// Result: low 64 bits in RAX, high 64 bits in RDX
+pub fn mulReg(self: *Emit, width: RegisterWidth, src: GeneralReg) !void {
+    try self.emitRex(width, null, src);
+    try self.buf.append(self.allocator, 0xF7); // MUL r/m
+    try self.buf.append(self.allocator, modRM(0b11, 4, src.enc())); // /4 = MUL
+}
+
+/// IMUL r64 - signed widening multiply: RDX:RAX = RAX * src (single operand form)
+/// Result: low 64 bits in RAX, high 64 bits in RDX
+pub fn imulRegWidening(self: *Emit, width: RegisterWidth, src: GeneralReg) !void {
+    try self.emitRex(width, null, src);
+    try self.buf.append(self.allocator, 0xF7); // IMUL r/m
+    try self.buf.append(self.allocator, modRM(0b11, 5, src.enc())); // /5 = IMUL
+}
+
 /// ADD reg, imm32 (sign-extended)
 pub fn addRegImm32(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
     if (width.requiresSizeOverride()) {

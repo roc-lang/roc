@@ -582,10 +582,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
                     }
                 },
-                .mul, .div, .mod => {
-                    // TODO: 128-bit mul/div/mod requires multi-word algorithms
-                    // For now, just do 64-bit operation on low parts
-                    try self.codegen.emitMul(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                .mul => {
+                    // 128-bit multiply: (a_lo, a_hi) * (b_lo, b_hi)
+                    // result_lo = low64(a_lo * b_lo)
+                    // result_hi = high64(a_lo * b_lo) + low64(a_lo * b_hi) + low64(a_hi * b_lo)
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // aarch64: Use MUL for low and UMULH for high
+                        // 1. a_lo * b_lo -> result_low (low), temp (high via UMULH)
+                        try self.codegen.emit.mulRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                        try self.codegen.emit.umulhRegRegReg(result_high, lhs_parts.low, rhs_parts.low);
+
+                        // 2. a_lo * b_hi -> temp1 (low part only, add to result_high)
+                        const temp1 = try self.codegen.allocGeneralFor(2);
+                        try self.codegen.emit.mulRegRegReg(.w64, temp1, lhs_parts.low, rhs_parts.high);
+                        try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp1);
+                        self.codegen.freeGeneral(temp1);
+
+                        // 3. a_hi * b_lo -> temp2 (low part only, add to result_high)
+                        const temp2 = try self.codegen.allocGeneralFor(2);
+                        try self.codegen.emit.mulRegRegReg(.w64, temp2, rhs_parts.low, lhs_parts.high);
+                        try self.codegen.emit.addRegRegReg(.w64, result_high, result_high, temp2);
+                        self.codegen.freeGeneral(temp2);
+                    } else {
+                        // x86_64: Use MUL which gives RDX:RAX = RAX * src
+                        // Save RAX and RDX if needed (they're clobbered by MUL)
+
+                        // 1. a_lo * b_lo -> RAX (low), RDX (high)
+                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
+                        try self.codegen.emit.mulReg(.w64, rhs_parts.low);
+                        try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                        try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+
+                        // 2. a_lo * b_hi -> add low part to result_high
+                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.low);
+                        try self.codegen.emit.mulReg(.w64, rhs_parts.high);
+                        try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+
+                        // 3. a_hi * b_lo -> add low part to result_high
+                        try self.codegen.emit.movRegReg(.w64, .RAX, lhs_parts.high);
+                        try self.codegen.emit.mulReg(.w64, rhs_parts.low);
+                        try self.codegen.emit.addRegReg(.w64, result_high, .RAX);
+                    }
+                },
+                .div, .mod => {
+                    // TODO: 128-bit div/mod requires complex multi-word algorithms
+                    // For now, return 0 as a placeholder
+                    try self.codegen.emitLoadImm(result_low, 0);
                     try self.codegen.emitLoadImm(result_high, 0);
                 },
                 else => {

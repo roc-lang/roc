@@ -244,6 +244,30 @@ pub fn mulRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
     try self.emit32(inst);
 }
 
+/// UMULH reg, reg, reg (unsigned multiply high - gives high 64 bits of 64x64->128 multiply)
+pub fn umulhRegRegReg(self: *Emit, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // UMULH <Xd>, <Xn>, <Xm>
+    // 1 0 0 1 1 0 1 1 1 1 0 Rm 0 1 1 1 1 1 Rn Rd
+    const inst: u32 = (0b10011011110 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b011111 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SMULH reg, reg, reg (signed multiply high - gives high 64 bits of 64x64->128 signed multiply)
+pub fn smulhRegRegReg(self: *Emit, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SMULH <Xd>, <Xn>, <Xm>
+    // 1 0 0 1 1 0 1 1 0 1 0 Rm 0 1 1 1 1 1 Rn Rd
+    const inst: u32 = (0b10011011010 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b011111 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// SDIV reg, reg, reg (signed divide)
 pub fn sdivRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
     // SDIV <Xd>, <Xn>, <Xm>
