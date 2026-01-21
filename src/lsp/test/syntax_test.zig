@@ -528,7 +528,8 @@ test "record field completion with partial field name" {
 }
 
 test "static dispatch completion for nominal type methods" {
-    // Tests that static dispatch completion works: "val.to|" should show to_str
+    // Tests that static dispatch completion works when adding incomplete code to a working file
+    // This simulates: user has working file, starts typing "new_result = val." and requests completion
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
     defer checker.deinit();
@@ -536,21 +537,28 @@ test "static dispatch completion for nominal type methods" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // First create clean code with complete definition
-    const clean_contents =
-        \\module []
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // First create clean, working code with complete definition
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\Basic := [Val(Str)].{
+        \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
         \\  to_str = |Basic.Val(s)| s
-        \\}
+        \\}}
         \\
         \\val : Basic
         \\val = Basic.Val("hello")
         \\
-        \\result = val.to_str
+        \\main = val.to_str()
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(clean_contents);
 
     try tmp.dir.writeFile(.{ .sub_path = "static_dispatch.roc", .data = clean_contents });
     const file_path = try tmp.dir.realpathAlloc(allocator, "static_dispatch.roc");
@@ -560,36 +568,47 @@ test "static dispatch completion for nominal type methods" {
     defer allocator.free(uri);
 
     std.debug.print("\n=== TEST: static dispatch completion ===\n", .{});
+    std.debug.print("Clean contents:\n{s}\n", .{clean_contents});
 
-    // First check to build and cache env
+    // First check to build and cache env - this should succeed with no errors
     const publish_sets = try checker.check(uri, clean_contents, null);
     defer {
         for (publish_sets) |*set| set.deinit(allocator);
         allocator.free(publish_sets);
     }
 
-    // Now test completion with incomplete code (cursor after dot)
-    const incomplete_contents =
-        \\module []
+    // Check if snapshot was created
+    std.debug.print("After check: snapshot_envs.count = {d}\n", .{checker.snapshot_envs.count()});
+
+    // Now test completion with ADDED incomplete code (cursor after dot)
+    // User has added a new line "result = val." and is requesting completion
+    const incomplete_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
         \\
-        \\Basic := [Val(Str)].{
+        \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
         \\  to_str = |Basic.Val(s)| s
-        \\}
+        \\}}
         \\
         \\val : Basic
         \\val = Basic.Val("hello")
         \\
+        \\main = val.to_str()
+        \\
         \\result = val.
         \\
-    ;
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(incomplete_contents);
 
-    std.debug.print("Contents:\n{s}\n", .{incomplete_contents});
+    std.debug.print("Incomplete contents:\n{s}\n", .{incomplete_contents});
 
     // Request completion after "val."
-    // Line 10: "result = val."
+    // Line 12: "result = val."
     // Character 13 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 10, 13);
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 13);
 
     if (result) |completion_result| {
         defer {
