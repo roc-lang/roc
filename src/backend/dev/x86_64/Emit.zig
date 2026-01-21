@@ -108,6 +108,20 @@ pub fn subRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
 }
 
+/// ADC reg, reg (add with carry)
+pub fn adcRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+    try self.emitRex(width, src, dst);
+    try self.buf.append(self.allocator, 0x11); // ADC r/m, r
+    try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
+/// SBB reg, reg (subtract with borrow)
+pub fn sbbRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+    try self.emitRex(width, src, dst);
+    try self.buf.append(self.allocator, 0x19); // SBB r/m, r
+    try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
 /// IMUL reg, reg (signed multiply, result in first reg)
 pub fn imulRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     try self.emitRex(width, dst, src);

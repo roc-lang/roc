@@ -172,6 +172,62 @@ pub fn subRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
     try self.emit32(inst);
 }
 
+/// ADDS reg, reg, reg (add and set flags)
+pub fn addsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // ADDS <Xd>, <Xn>, <Xm> - same as ADD but with S bit set
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0101011 << 24) | // ADD with S bit (bit 29)
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// ADC reg, reg, reg (add with carry)
+pub fn adcRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // ADC <Xd>, <Xn>, <Xm>
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0011010000 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SUBS reg, reg, reg (subtract and set flags)
+pub fn subsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SUBS <Xd>, <Xn>, <Xm> - same as SUB but with S bit set
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b1101011 << 24) | // SUB with S bit (bit 29)
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SBC reg, reg, reg (subtract with carry/borrow)
+pub fn sbcRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SBC <Xd>, <Xn>, <Xm>
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b1011010000 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// MUL reg, reg, reg (alias for MADD with XZR as addend)
 pub fn mulRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
     // MADD <Xd>, <Xn>, <Xm>, XZR

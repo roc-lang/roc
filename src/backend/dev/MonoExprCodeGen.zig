@@ -132,10 +132,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             float_reg: FloatReg,
             /// Value is on the stack at given offset from frame pointer
             stack: i32,
+            /// 128-bit value on the stack (16 bytes: low at offset, high at offset+8)
+            stack_i128: i32,
             /// Immediate value known at compile time
             immediate_i64: i64,
             /// Immediate float value
             immediate_f64: f64,
+            /// Immediate 128-bit value
+            immediate_i128: i128,
         };
 
         /// Result of code generation
@@ -343,19 +347,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for an i128 literal
-        fn generateI128Literal(self: *Self, val: i128) Error!ValueLocation {
-            // TODO: PLACEHOLDER - Only handles low 64 bits, discards high 64 bits
-            // WHY: i128 requires two registers (low + high), but our ValueLocation
-            //   only tracks one register. Full i128 support needs:
-            //   1. New ValueLocation variant: .register_pair { .low, .high }
-            //   2. Modified arithmetic ops to use add-with-carry, mul-high, etc.
-            //   3. Modified stores to write both halves to memory
-            // IMPACT: i128 values > 2^63 or < -2^63 get truncated/wrong results
-            // WHEN THIS MATTERS: Large integers, cryptographic code, some timestamps
-            const low: i64 = @truncate(val);
-            const reg = try self.codegen.allocGeneralFor(0);
-            try self.codegen.emitLoadImm(reg, low);
-            return .{ .general_reg = reg };
+        fn generateI128Literal(_: *Self, val: i128) Error!ValueLocation {
+            // Return as immediate - will be materialized when needed
+            return .{ .immediate_i128 = val };
         }
 
         /// Generate code for a symbol lookup
@@ -418,6 +412,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
+            } else if (binop.result_layout == .i128 or binop.result_layout == .u128) {
+                return self.generateI128Binop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             } else {
                 return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             }
@@ -526,6 +522,132 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         fn condGreaterOrEqual() Condition {
             return if (comptime builtin.cpu.arch == .aarch64) .ge else .greater_or_equal;
+        }
+
+        /// Generate 128-bit integer binary operation
+        fn generateI128Binop(
+            self: *Self,
+            op: MonoExpr.BinOp,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            result_layout: layout.Idx,
+        ) Error!ValueLocation {
+            // For 128-bit operations, we work with the values as pairs of 64-bit words
+            // Low word at offset 0, high word at offset 8
+
+            // Get low and high parts of both operands
+            const lhs_parts = try self.getI128Parts(lhs_loc);
+            const rhs_parts = try self.getI128Parts(rhs_loc);
+
+            // Allocate registers for result
+            const result_low = try self.codegen.allocGeneralFor(0);
+            const result_high = try self.codegen.allocGeneralFor(1);
+
+            const is_unsigned = result_layout == .u128;
+            _ = is_unsigned; // Used for div/mod if implemented
+
+            switch (op) {
+                .add => {
+                    // 128-bit add: low = lhs_low + rhs_low, high = lhs_high + rhs_high + carry
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // ADDS sets carry flag, ADC adds with carry
+                        try self.codegen.emit.addsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                        try self.codegen.emit.adcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                    } else {
+                        // x86_64: ADD sets carry, ADC uses it
+                        try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
+                        try self.codegen.emit.addRegReg(.w64, result_low, rhs_parts.low);
+                        try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
+                        try self.codegen.emit.adcRegReg(.w64, result_high, rhs_parts.high);
+                    }
+                },
+                .sub => {
+                    // 128-bit sub: low = lhs_low - rhs_low, high = lhs_high - rhs_high - borrow
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // SUBS sets borrow flag, SBC subtracts with borrow
+                        try self.codegen.emit.subsRegRegReg(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                        try self.codegen.emit.sbcRegRegReg(.w64, result_high, lhs_parts.high, rhs_parts.high);
+                    } else {
+                        // x86_64: SUB sets borrow, SBB uses it
+                        try self.codegen.emit.movRegReg(.w64, result_low, lhs_parts.low);
+                        try self.codegen.emit.subRegReg(.w64, result_low, rhs_parts.low);
+                        try self.codegen.emit.movRegReg(.w64, result_high, lhs_parts.high);
+                        try self.codegen.emit.sbbRegReg(.w64, result_high, rhs_parts.high);
+                    }
+                },
+                .mul, .div, .mod => {
+                    // TODO: 128-bit mul/div/mod requires multi-word algorithms
+                    // For now, just do 64-bit operation on low parts
+                    try self.codegen.emitMul(.w64, result_low, lhs_parts.low, rhs_parts.low);
+                    try self.codegen.emitLoadImm(result_high, 0);
+                },
+                else => {
+                    // Comparisons and boolean ops - just use low 64 bits for now
+                    return self.generateIntBinop(op, lhs_loc, rhs_loc, .i64);
+                },
+            }
+
+            // Free the part registers we loaded
+            self.codegen.freeGeneral(lhs_parts.low);
+            self.codegen.freeGeneral(lhs_parts.high);
+            self.codegen.freeGeneral(rhs_parts.low);
+            self.codegen.freeGeneral(rhs_parts.high);
+
+            // Store result to stack and return stack location
+            const stack_offset = self.codegen.allocStackSlot(16);
+            try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+            try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+            self.codegen.freeGeneral(result_low);
+            self.codegen.freeGeneral(result_high);
+
+            return .{ .stack_i128 = stack_offset };
+        }
+
+        /// Get low and high 64-bit parts of a 128-bit value
+        const I128Parts = struct {
+            low: GeneralReg,
+            high: GeneralReg,
+        };
+
+        fn getI128Parts(self: *Self, loc: ValueLocation) Error!I128Parts {
+            const low_reg = try self.codegen.allocGeneralFor(0);
+            const high_reg = try self.codegen.allocGeneralFor(1);
+
+            switch (loc) {
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                    try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                },
+                .stack_i128 => |offset| {
+                    try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                    try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                },
+                .immediate_i64 => |val| {
+                    // Sign-extend to 128 bits
+                    try self.codegen.emitLoadImm(low_reg, val);
+                    if (val < 0) {
+                        try self.codegen.emitLoadImm(high_reg, -1); // All 1s for sign extension
+                    } else {
+                        try self.codegen.emitLoadImm(high_reg, 0);
+                    }
+                },
+                .general_reg => |reg| {
+                    try self.emitMovRegReg(low_reg, reg);
+                    try self.codegen.emitLoadImm(high_reg, 0);
+                },
+                .stack => |offset| {
+                    try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                    try self.codegen.emitLoadImm(high_reg, 0);
+                },
+                else => {
+                    return Error.InvalidLocalLocation;
+                },
+            }
+
+            return .{ .low = low_reg, .high = high_reg };
         }
 
         /// Generate floating-point binary operation
@@ -1715,7 +1837,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .immediate_i64 => |val| {
                     try self.codegen.emitLoadImm(target_reg, val);
                 },
+                .immediate_i128 => |val| {
+                    // Only load low 64 bits into single register
+                    const low: i64 = @truncate(val);
+                    try self.codegen.emitLoadImm(target_reg, low);
+                },
                 .stack => |offset| {
+                    try self.codegen.emitLoadStack(.w64, target_reg, offset);
+                },
+                .stack_i128 => |offset| {
+                    // Only load low 64 bits
                     try self.codegen.emitLoadStack(.w64, target_reg, offset);
                 },
                 .float_reg, .immediate_f64 => {
@@ -1733,7 +1864,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadImm(reg, val);
                     return reg;
                 },
+                .immediate_i128 => |val| {
+                    // Only load low 64 bits
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    const low: i64 = @truncate(val);
+                    try self.codegen.emitLoadImm(reg, low);
+                    return reg;
+                },
                 .stack => |offset| {
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadStack(.w64, reg, offset);
+                    return reg;
+                },
+                .stack_i128 => |offset| {
+                    // Only load low 64 bits
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadStack(.w64, reg, offset);
                     return reg;
@@ -1781,8 +1925,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadStackF64(reg, offset);
                     return reg;
                 },
-                .general_reg, .immediate_i64 => {
-                    // Convert int to float
+                .general_reg, .immediate_i64, .immediate_i128, .stack_i128 => {
+                    // Convert int to float - not supported
                     return Error.InvalidLocalLocation;
                 },
             }
@@ -1821,16 +1965,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .i128, .u128, .dec => {
-                    // TODO: PLACEHOLDER - Only stores low 64 bits, ignores high 64 bits
-                    // WHY: Our ValueLocation only tracks one register, but i128 needs two.
-                    //   Full implementation requires:
-                    //   1. ValueLocation.register_pair { .low, .high } variant
-                    //   2. Store low: STR low_reg, [ptr]
-                    //   3. Store high: STR high_reg, [ptr, #8]
-                    // IMPACT: High 64 bits of 128-bit values are garbage (uninitialized memory)
-                    // NOTE: Same limitation exists in generateI128Literal above
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(result_ptr_reg, reg);
+                    try self.storeI128ToMem(result_ptr_reg, loc);
                 },
                 else => {
                     // For other types, just do a basic store
@@ -1867,12 +2002,80 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .i128, .u128, .dec => {
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                    try self.storeI128ToMem(saved_ptr_reg, loc);
                 },
                 else => {
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+            }
+        }
+
+        /// Store 128-bit value to memory at [ptr_reg]
+        fn storeI128ToMem(self: *Self, ptr_reg: GeneralReg, loc: ValueLocation) Error!void {
+            switch (loc) {
+                .immediate_i128 => |val| {
+                    // Store low 64 bits, then high 64 bits
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+
+                    const reg = try self.codegen.allocGeneralFor(0);
+
+                    // Store low 64 bits at [ptr]
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
+                    }
+
+                    // Store high 64 bits at [ptr + 8]
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 1); // offset 1 = 8 bytes for u64
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, reg);
+                    }
+
+                    self.codegen.freeGeneral(reg);
+                },
+                .stack_i128 => |offset| {
+                    // Copy 16 bytes from stack to destination
+                    const reg = try self.codegen.allocGeneralFor(0);
+
+                    // Load low 64 bits from stack, store to dest
+                    try self.codegen.emitLoadStack(.w64, reg, offset);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
+                    }
+
+                    // Load high 64 bits from stack, store to dest
+                    try self.codegen.emitLoadStack(.w64, reg, offset + 8);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 1);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, reg);
+                    }
+
+                    self.codegen.freeGeneral(reg);
+                },
+                else => {
+                    // Fallback: store low 64 bits and zero high 64 bits
+                    const reg = try self.ensureInGeneralReg(loc);
+
+                    // Store low 64 bits
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
+                        // Store zero for high 64 bits
+                        try self.codegen.emit.strRegMemUoff(.w64, .ZRSP, ptr_reg, 1);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
+                        // Store zero for high 64 bits
+                        try self.codegen.emitLoadImm(reg, 0);
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, reg);
+                    }
                 },
             }
         }

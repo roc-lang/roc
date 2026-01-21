@@ -330,6 +330,11 @@ pub const SystemVCodeGen = struct {
         return self.stack_offset;
     }
 
+    /// Alias for allocStack - allocate a stack slot of the given size
+    pub fn allocStackSlot(self: *Self, size: u32) i32 {
+        return self.allocStack(size);
+    }
+
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
         return (size + 15) & ~@as(u32, 15);
