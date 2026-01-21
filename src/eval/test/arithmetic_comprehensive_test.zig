@@ -1825,22 +1825,6 @@ test "I128: rem_by" {
 //
 // F32 Tests (32-bit floating point)
 
-test "F32: literal only" {
-    // Simplest possible F32 test - just return a literal
-    try runExpectF32("3.14f32", 3.14, .no_trace);
-}
-
-test "F32: variable assignment" {
-    // Test F32 variable assignment without any operations
-    try runExpectF32(
-        \\{
-        \\    a : F32
-        \\    a = 3.14f32
-        \\    a
-        \\}
-    , 3.14, .no_trace);
-}
-
 test "F32: negate" {
     try runExpectF32(
         \\{

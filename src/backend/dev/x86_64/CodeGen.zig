@@ -598,46 +598,6 @@ pub const SystemVCodeGen = struct {
         try self.emit.subsdRegReg(dst, src);
     }
 
-    /// Emit float32 addition: dst = a + b
-    pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
-        if (dst != a) {
-            try self.emit.movssRegReg(dst, a);
-        }
-        try self.emit.addssRegReg(dst, b);
-    }
-
-    /// Emit float32 subtraction: dst = a - b
-    pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
-        if (dst != a) {
-            try self.emit.movssRegReg(dst, a);
-        }
-        try self.emit.subssRegReg(dst, b);
-    }
-
-    /// Emit float32 multiplication: dst = a * b
-    pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
-        if (dst != a) {
-            try self.emit.movssRegReg(dst, a);
-        }
-        try self.emit.mulssRegReg(dst, b);
-    }
-
-    /// Emit float32 division: dst = a / b
-    pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
-        if (dst != a) {
-            try self.emit.movssRegReg(dst, a);
-        }
-        try self.emit.divssRegReg(dst, b);
-    }
-
-    /// Emit float32 negation: dst = -src
-    pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
-        // Zero the destination register
-        try self.emit.xorpsRegReg(dst, dst);
-        // dst = 0 - src = -src
-        try self.emit.subssRegReg(dst, src);
-    }
-
     // Memory operations
 
     /// Load from stack slot into register
