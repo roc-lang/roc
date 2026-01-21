@@ -310,6 +310,57 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     try std.testing.expect(false);
 }
 
+/// Helper function to verify type mismatch error and runtime crash.
+/// This tests both compile-time behavior (type mismatch reported) and
+/// runtime behavior (crash encountered instead of successfully evaluating).
+pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    // Step 1: Verify that the type checker detected a type mismatch
+    const problems = resources.checker.problems.problems.items;
+    var found_type_mismatch = false;
+    for (problems) |problem| {
+        if (problem == .type_mismatch) {
+            found_type_mismatch = true;
+            break;
+        }
+    }
+
+    if (!found_type_mismatch) {
+        std.debug.print("Expected TYPE MISMATCH error, but found {} problems:\n", .{problems.len});
+        for (problems, 0..) |problem, i| {
+            std.debug.print("  Problem {}: {s}\n", .{ i, @tagName(problem) });
+        }
+        return error.ExpectedTypeMismatch;
+    }
+
+    // Step 2: Run the interpreter anyway and verify it crashes
+    var test_env_instance = TestEnv.init(interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
+        // Expected: a crash or type mismatch error at runtime
+        switch (err) {
+            error.Crash, error.TypeMismatch => return, // Success - we expected a crash
+            else => {
+                std.debug.print("Expected Crash or TypeMismatch error, got: {}\n", .{err});
+                return error.UnexpectedError;
+            },
+        }
+    };
+
+    // If we reach here, the interpreter succeeded when it should have crashed
+    std.debug.print("Expected runtime crash, but interpreter succeeded\n", .{});
+    return error.ExpectedCrash;
+}
+
 /// Helpers to setup and run an interpreter expecting an integer result.
 pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);

@@ -36,6 +36,7 @@ const runExpectF32 = helpers.runExpectF32;
 const runExpectF64 = helpers.runExpectF64;
 const runExpectDec = helpers.runExpectDec;
 const runExpectStr = helpers.runExpectStr;
+const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 
 // U8 Tests (Unsigned 8-bit: 0 to 255)
 // Uses values > 127 to prove they're not I8
@@ -2376,132 +2377,87 @@ test "Dec: to_str" {
 }
 
 // Mixed Dec-Int Operations
-// These tests exercise the Dec-Int conversion helpers (toWholeInt, fromWholeInt)
-// used when performing operations between Dec and Int types.
+// These tests verify that mixing Dec and Int types produces a TYPE MISMATCH error
+// at compile time, and crashes at runtime. Roc requires explicit type conversions.
 
-// Dec + Int: Converts Int to Dec using fromWholeInt
-test "Dec + Int: plus" {
-    // 2.5.Dec + 3.I64 = 5.5.Dec
-    try runExpectDec(
+// Dec + Int: Should be a type mismatch - Dec and I64 are different types
+test "Dec + Int: plus - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 2.5.Dec
         \\    b = 3.I64
         \\    a + b
         \\}
-    , 5500000000000000000, .no_trace);
-
-    // Negative Int
-    try runExpectDec(
-        \\{
-        \\    a = 10.5.Dec
-        \\    b = -3.I64
-        \\    a + b
-        \\}
-    , 7500000000000000000, .no_trace);
+    );
 }
 
-test "Dec + Int: minus" {
-    // 10.5.Dec - 3.I64 = 7.5.Dec
-    try runExpectDec(
+test "Dec + Int: minus - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 10.5.Dec
         \\    b = 3.I64
         \\    a - b
         \\}
-    , 7500000000000000000, .no_trace);
-
-    // Result is negative
-    try runExpectDec(
-        \\{
-        \\    a = 2.5.Dec
-        \\    b = 5.I64
-        \\    a - b
-        \\}
-    , -2500000000000000000, .no_trace);
+    );
 }
 
-test "Dec + Int: times" {
-    // 2.5.Dec * 4.I64 = 10.0.Dec
-    try runExpectDec(
+test "Dec + Int: times - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 2.5.Dec
         \\    b = 4.I64
         \\    a * b
         \\}
-    , 10000000000000000000, .no_trace);
-
-    // Multiply by negative
-    try runExpectDec(
-        \\{
-        \\    a = 3.0.Dec
-        \\    b = -2.I64
-        \\    a * b
-        \\}
-    , -6000000000000000000, .no_trace);
+    );
 }
 
-test "Dec + Int: div_by" {
-    // 10.0.Dec / 2.I64 = 5.0.Dec
-    try runExpectDec(
+test "Dec + Int: div_by - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 10.0.Dec
         \\    b = 2.I64
         \\    a / b
         \\}
-    , 5000000000000000000, .no_trace);
-
-    // Non-exact division
-    try runExpectDec(
-        \\{
-        \\    a = 10.0.Dec
-        \\    b = 3.I64
-        \\    a / b
-        \\}
-    , 3333333333333333333, .no_trace);
+    );
 }
 
-// Int + Dec: The LHS type determines the result type.
-// When LHS is Int, the Dec is converted to Int using toWholeInt (truncation toward 0).
-test "Int + Dec: plus" {
-    // 3.I64 + 2.0.Dec: Dec truncated to 2, result is 5
-    try runExpectI64(
+// Int + Dec: Should be a type mismatch - I64 and Dec are different types
+test "Int + Dec: plus - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 3.I64
         \\    b = 2.0.Dec
         \\    a + b
         \\}
-    , 5, .no_trace);
+    );
 }
 
-test "Int + Dec: minus" {
-    // 10.I64 - 3.0.Dec = 7
-    try runExpectI64(
+test "Int + Dec: minus - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 10.I64
         \\    b = 3.0.Dec
         \\    a - b
         \\}
-    , 7, .no_trace);
+    );
 }
 
-test "Int + Dec: times" {
-    // 4.I64 * 2.0.Dec = 8
-    try runExpectI64(
+test "Int + Dec: times - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 4.I64
         \\    b = 2.0.Dec
         \\    a * b
         \\}
-    , 8, .no_trace);
+    );
 }
 
-test "Int + Dec: div_by" {
-    // 10.I64 // 2.0.Dec = 5
-    try runExpectI64(
+test "Int + Dec: div_by - type mismatch" {
+    try runExpectTypeMismatchAndCrash(
         \\{
         \\    a = 10.I64
         \\    b = 2.0.Dec
         \\    a // b
         \\}
-    , 5, .no_trace);
+    );
 }
