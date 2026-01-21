@@ -124,9 +124,6 @@ enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
 
-/// A map of rigid variables that we build up during a branch of type checking
-const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
-
 /// A def + processing data
 const DefProcessed = struct { def_idx: CIR.Def.Idx, status: HasProcessed };
 

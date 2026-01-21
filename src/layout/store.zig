@@ -1397,6 +1397,45 @@ pub const Store = struct {
                             layout_idx = try self.insertLayout(Layout.closure(empty_captures_idx));
                             skip_layout_computation = true;
                         },
+                        .nominal_type => |nominal_type| {
+                            // For nominal types that are in-progress, check if there's a placeholder
+                            // we can use. This handles recursive nominal types properly even when
+                            // we detect the cycle through var identity instead of nominal key.
+                            const nominal_key = work.NominalKey{
+                                .ident_idx = nominal_type.ident.ident_idx,
+                                .origin_module = nominal_type.origin_module,
+                            };
+                            if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
+                                // Mark it as truly recursive
+                                progress.is_recursive = true;
+                                // Use the cached placeholder if available
+                                if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
+                                    // Check if we're inside a List/Box to avoid double-boxing
+                                    if (self.work.pending_containers.len > 0) {
+                                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                                        if (pending_item.container == .box or pending_item.container == .list) {
+                                            // Get or create a raw layout placeholder for this nominal
+                                            if (self.raw_layout_placeholders.get(progress.nominal_var)) |raw_idx| {
+                                                layout_idx = raw_idx;
+                                            } else {
+                                                const raw_placeholder = try self.insertLayout(Layout.opaquePtr());
+                                                try self.raw_layout_placeholders.put(self.env.gpa, progress.nominal_var, raw_placeholder);
+                                                layout_idx = raw_placeholder;
+                                            }
+                                            skip_layout_computation = true;
+                                        } else {
+                                            // Not inside List/Box, use the boxed placeholder
+                                            layout_idx = cached_idx;
+                                            skip_layout_computation = true;
+                                        }
+                                    } else {
+                                        // No pending containers, use the boxed placeholder
+                                        layout_idx = cached_idx;
+                                        skip_layout_computation = true;
+                                    }
+                                }
+                            }
+                        },
                         else => {},
                     }
                 }
