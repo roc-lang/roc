@@ -103,8 +103,8 @@ for fx_file in $FX_FILES; do
         --show-output \
         --export-json "/tmp/bench_${filename}.json" \
         $EXTRA_ARGS \
-        -n "main" "$MAIN_ROC $fx_file" \
-        -n "pr" "$PR_ROC $fx_file" \
+        -n "main" "$MAIN_ROC $fx_file --no-cache" \
+        -n "pr" "$PR_ROC $fx_file --no-cache" \
         2>&1; then
         echo "ERROR: Benchmark failed for $filename"
         exit 1
