@@ -462,22 +462,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
                 .div => {
-                    // TODO: PLACEHOLDER - Uses MUL instead of proper division
-                    // WHY: SDIV (AArch64) and IDIV (x86) have complex register requirements:
-                    //   - x86 IDIV uses RDX:RAX for dividend, result in RAX, remainder in RDX
-                    //   - AArch64 SDIV is simpler: sdiv Rd, Rn, Rm
-                    // IMPACT: Division operations return wrong results (a*b instead of a/b)
-                    // PROPER FIX: Add emitDiv to the codegen layer with arch-specific handling
-                    try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
+                    // Use signed division for now (handles most common cases)
+                    // TODO: Detect unsigned types and use emitUDiv
+                    try self.codegen.emitSDiv(.w64, result_reg, lhs_reg, rhs_reg);
                 },
                 .mod => {
-                    // TODO: PLACEHOLDER - Uses MUL instead of proper modulo
-                    // WHY: Modulo requires division then computing remainder:
-                    //   - x86: IDIV gives remainder in RDX directly
-                    //   - AArch64: Need SDIV + MSUB (result = a - (a/b)*b)
-                    // IMPACT: Modulo operations return wrong results (a*b instead of a%b)
-                    // PROPER FIX: Add emitMod to the codegen layer, or use IDIV/SDIV+MSUB
-                    try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg);
+                    // Use signed modulo for now (handles most common cases)
+                    // TODO: Detect unsigned types and use emitUMod
+                    try self.codegen.emitSMod(.w64, result_reg, lhs_reg, rhs_reg);
                 },
                 // Comparison operations
                 .eq => try self.codegen.emitCmp(.w64, result_reg, lhs_reg, rhs_reg, condEqual()),

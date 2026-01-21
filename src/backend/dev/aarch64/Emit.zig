@@ -216,6 +216,22 @@ pub fn udivRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: G
     try self.emit32(inst);
 }
 
+/// MSUB reg, reg, reg, reg (multiply-subtract: dst = ra - rn * rm)
+pub fn msubRegRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, rn: GeneralReg, rm: GeneralReg, ra: GeneralReg) !void {
+    // MSUB <Xd>, <Xn>, <Xm>, <Xa>
+    // sf 0 0 1 1 0 1 1 0 0 0 Rm 1 Ra Rn Rd
+    // Result: Xa - Xn * Xm
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0011011000 << 21) |
+        (@as(u32, rm.enc()) << 16) |
+        (1 << 15) | // o0=1 for MSUB (vs o0=0 for MADD)
+        (@as(u32, ra.enc()) << 10) |
+        (@as(u32, rn.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// ADD reg, reg, imm12 (add immediate)
 pub fn addRegRegImm12(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u12) !void {
     // ADD <Xd>, <Xn>, #<imm>{, <shift>}

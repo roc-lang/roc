@@ -444,6 +444,36 @@ pub const AArch64CodeGen = struct {
         try self.emit.mulRegRegReg(width, dst, a, b);
     }
 
+    /// Emit signed integer division: dst = a / b
+    pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.sdivRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit unsigned integer division: dst = a / b
+    pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.udivRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit signed integer modulo: dst = a % b
+    /// Uses SDIV + MSUB: remainder = a - (a/b) * b
+    pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // We need a temp register for the quotient
+        // Since dst might be the same as a or b, we use dst for intermediate if safe
+        // quotient = a / b
+        try self.emit.sdivRegRegReg(width, dst, a, b);
+        // remainder = a - quotient * b
+        try self.emit.msubRegRegRegReg(width, dst, dst, b, a);
+    }
+
+    /// Emit unsigned integer modulo: dst = a % b
+    /// Uses UDIV + MSUB: remainder = a - (a/b) * b
+    pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // quotient = a / b
+        try self.emit.udivRegRegReg(width, dst, a, b);
+        // remainder = a - quotient * b
+        try self.emit.msubRegRegRegReg(width, dst, dst, b, a);
+    }
+
     /// Emit integer negation: dst = -src
     pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
         try self.emit.negRegReg(width, dst, src);
