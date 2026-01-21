@@ -23,11 +23,13 @@
         # kcov build dependencies for Linux (coverage uses custom kcov fork built from source)
         kcovBuildDeps = with pkgs; [ elfutils pkg-config curl zlib ];
 
+        benchmarkDeps = with pkgs; [ hyperfine jq ];
+
         dependencies = (with pkgs; [
           zig
           zls
           git # for use in ci/zig_lints.sh
-        ]) ++ pkgs.lib.optionals isLinux kcovBuildDeps;
+        ]) ++ pkgs.lib.optionals isLinux kcovBuildDeps ++ benchmarkDeps;
 
         shellFunctions = ''
           buildcmd() {

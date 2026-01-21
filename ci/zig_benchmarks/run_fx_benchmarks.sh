@@ -55,6 +55,7 @@ for fx_file in $FX_FILES; do
         issue8517.roc|\
         stack_overflow_runtime.roc|\
         issue8826_full.roc|\
+        issue8826_minimal.roc|\
         issue8943.roc)
             EXTRA_ARGS="--ignore-failure"
             ;;
