@@ -584,6 +584,15 @@ pub const SystemVCodeGen = struct {
         try self.emit.divsdRegReg(dst, b);
     }
 
+    /// Emit float64 negation: dst = -src
+    /// Uses the approach: load 0.0, then subtract src from 0
+    pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        // Zero the destination register
+        try self.emit.xorpdRegReg(dst, dst);
+        // dst = 0 - src = -src
+        try self.emit.subsdRegReg(dst, src);
+    }
+
     // Memory operations
 
     /// Load from stack slot into register

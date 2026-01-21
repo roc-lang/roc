@@ -519,6 +519,11 @@ pub const AArch64CodeGen = struct {
         try self.emit.fdivRegRegReg(.double, dst, a, b);
     }
 
+    /// Emit float64 negation: dst = -src
+    pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        try self.emit.fnegRegReg(.double, dst, src);
+    }
+
     // Memory operations
 
     /// Load from stack slot into register

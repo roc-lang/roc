@@ -582,13 +582,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             if (is_float) {
-                // TODO: PLACEHOLDER - Returns the input unchanged (no negation)
-                // WHY: Float negation requires flipping the sign bit (bit 63 for f64):
-                //   - AArch64: FNEG Dd, Dn (single instruction)
-                //   - x86: XORPD with constant 0x8000000000000000 (sign bit mask)
-                // IMPACT: `-x` returns `x` unchanged for floats
-                // PROPER FIX: Add emitNegF64 to codegen layer with arch-specific handling
-                return inner_loc;
+                const src_reg = try self.ensureInFloatReg(inner_loc);
+                const result_reg = try self.codegen.allocFloatFor(0);
+                try self.codegen.emitNegF64(result_reg, src_reg);
+                self.codegen.freeFloat(src_reg);
+                return .{ .float_reg = result_reg };
             } else {
                 // For integers, use NEG
                 const reg = try self.ensureInGeneralReg(inner_loc);
