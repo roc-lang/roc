@@ -212,8 +212,14 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
-        layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
+        layout_mod.Idx.f64 => blk: {
             var result: f64 = undefined;
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
+        },
+        layout_mod.Idx.f32 => blk: {
+            // F32 stores 4 bytes, use f32 buffer and print at f32 precision
+            var result: f32 = undefined;
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },

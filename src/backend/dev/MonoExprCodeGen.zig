@@ -2111,7 +2111,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             self.codegen.freeGeneral(reg);
                         },
                         else => {
-                            // Store 4 bytes
+                            // Store 4 bytes from general register
                             const reg = try self.ensureInGeneralReg(loc);
                             if (comptime builtin.cpu.arch == .aarch64) {
                                 try self.codegen.emit.strRegMemUoff(.w32, reg, saved_ptr_reg, 0);
