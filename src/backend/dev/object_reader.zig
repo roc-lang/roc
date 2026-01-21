@@ -90,12 +90,39 @@ fn extractElfTextSection(bytes: []const u8) Error![]const u8 {
             const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
             const name = name_start[0..name_end];
 
-            if (std.mem.eql(u8, name, ".text")) {
+            // Look for .text section or .text.* sections (when function_sections is enabled)
+            // Prefer .text._roc_eval or .text.roc_eval over other .text.* sections
+            if (std.mem.eql(u8, name, ".text._roc_eval") or std.mem.eql(u8, name, ".text.roc_eval")) {
                 const sec_offset = std.mem.readInt(u64, sh[24..32], .little);
                 const sec_size = std.mem.readInt(u64, sh[32..40], .little);
 
                 if (sec_offset + sec_size > bytes.len) return Error.InvalidObjectFile;
                 return bytes[@intCast(sec_offset)..@intCast(sec_offset + sec_size)];
+            }
+        }
+    }
+
+    // Second pass: fall back to .text if no roc_eval section found
+    i = 0;
+    while (i < e_shnum) : (i += 1) {
+        const sh_offset = e_shoff + @as(u64, i) * e_shentsize;
+        if (sh_offset + 64 > bytes.len) continue;
+
+        const sh = bytes[@intCast(sh_offset)..];
+        const sh_name = std.mem.readInt(u32, sh[0..4], .little);
+
+        if (sh_name < strtab.len) {
+            const name_start = strtab[sh_name..];
+            const name_end = std.mem.indexOfScalar(u8, name_start, 0) orelse name_start.len;
+            const name = name_start[0..name_end];
+
+            if (std.mem.eql(u8, name, ".text")) {
+                const sec_offset = std.mem.readInt(u64, sh[24..32], .little);
+                const sec_size = std.mem.readInt(u64, sh[32..40], .little);
+
+                if (sec_size > 0 and sec_offset + sec_size <= bytes.len) {
+                    return bytes[@intCast(sec_offset)..@intCast(sec_offset + sec_size)];
+                }
             }
         }
     }
