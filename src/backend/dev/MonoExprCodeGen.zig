@@ -412,7 +412,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (binop.result_layout == .i128 or binop.result_layout == .u128) {
+            } else if (binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
                 return self.generateI128Binop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             } else {
                 return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
@@ -703,14 +703,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 else => false,
             };
 
+            // Check if 128-bit type
+            const is_i128 = switch (unary.result_layout) {
+                .i128, .u128, .dec => true,
+                else => false,
+            };
+
             if (is_float) {
                 const src_reg = try self.ensureInFloatReg(inner_loc);
                 const result_reg = try self.codegen.allocFloatFor(0);
                 try self.codegen.emitNegF64(result_reg, src_reg);
                 self.codegen.freeFloat(src_reg);
                 return .{ .float_reg = result_reg };
+            } else if (is_i128) {
+                // 128-bit negation: result = 0 - value (using SUBS/SBC or SUB/SBB)
+                const parts = try self.getI128Parts(inner_loc);
+
+                const result_low = try self.codegen.allocGeneralFor(0);
+                const result_high = try self.codegen.allocGeneralFor(1);
+
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    // Negate using NEGS (NEG with flags) and NGC (negate with carry)
+                    // NEGS is actually SUBS with XZR as first operand
+                    try self.codegen.emit.subsRegRegReg(.w64, result_low, .ZRSP, parts.low);
+                    // NGC is SBC with XZR as first operand
+                    try self.codegen.emit.sbcRegRegReg(.w64, result_high, .ZRSP, parts.high);
+                } else {
+                    // x86_64: Load 0, then subtract
+                    try self.codegen.emitLoadImm(result_low, 0);
+                    try self.codegen.emit.subRegReg(.w64, result_low, parts.low);
+                    try self.codegen.emitLoadImm(result_high, 0);
+                    try self.codegen.emit.sbbRegReg(.w64, result_high, parts.high);
+                }
+
+                self.codegen.freeGeneral(parts.low);
+                self.codegen.freeGeneral(parts.high);
+
+                // Store result to stack
+                const stack_offset = self.codegen.allocStackSlot(16);
+                try self.codegen.emitStoreStack(.w64, stack_offset, result_low);
+                try self.codegen.emitStoreStack(.w64, stack_offset + 8, result_high);
+
+                self.codegen.freeGeneral(result_low);
+                self.codegen.freeGeneral(result_high);
+
+                return .{ .stack_i128 = stack_offset };
             } else {
-                // For integers, use NEG
+                // For 64-bit integers, use NEG
                 const reg = try self.ensureInGeneralReg(inner_loc);
                 const result_reg = try self.codegen.allocGeneralFor(0);
                 try self.codegen.emitNeg(.w64, result_reg, reg);
