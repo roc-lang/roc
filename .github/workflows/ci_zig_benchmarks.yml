@@ -62,8 +62,5 @@ jobs:
           cp zig-out/bin/snapshot bench-pr/snapshot
 
       # === RUN BENCHMARKS ===
-      - name: Run fx file benchmarks
-        run: ./ci/zig_benchmarks/run_fx_benchmarks.sh bench-main/roc bench-pr/roc main HEAD
-
-      - name: Run snapshot benchmarks
-        run: ./ci/zig_benchmarks/run_snapshot_benchmark.sh bench-main/snapshot bench-pr/snapshot main HEAD
+      - name: Run benchmarks
+        run: ./ci/benchmarks_zig/run_local_benchmarks.sh --main-dir bench-main --pr-dir bench-pr

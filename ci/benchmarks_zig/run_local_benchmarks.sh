@@ -13,6 +13,8 @@ BASE_BRANCH="main"
 SKIP_FX=false
 SKIP_SNAPSHOT=false
 KEEP_ARTIFACTS=false
+MAIN_DIR=""  # Pre-built binaries directory for main/base
+PR_DIR=""    # Pre-built binaries directory for PR/current
 
 # State tracking for cleanup
 ORIGINAL_BRANCH=""
@@ -31,17 +33,20 @@ OPTIONS:
     --skip-fx           Skip FX file benchmarks
     --skip-snapshot     Skip snapshot tool benchmarks
     --keep-artifacts    Keep bench-main and bench-local directories after run
+    --main-dir <dir>    Use pre-built binaries from this directory (skip base build)
+    --pr-dir <dir>      Use pre-built binaries from this directory (skip PR build)
     -h, --help          Show this help message
 
 PREREQUISITES:
     - hyperfine (benchmark tool)
     - jq (JSON processor)
-    - zig (0.15.2)
+    - zig (0.15.2) - only needed if not using --main-dir and --pr-dir
 
 EXAMPLES:
     $(basename "$0")                    # Compare current branch vs main
     $(basename "$0") --base develop     # Compare current branch vs develop
     $(basename "$0") --skip-snapshot    # Only run FX benchmarks
+    $(basename "$0") --main-dir bench-main --pr-dir bench-pr  # Use pre-built binaries (CI mode)
 EOF
 }
 
@@ -135,6 +140,14 @@ parse_args() {
                 KEEP_ARTIFACTS=true
                 shift
                 ;;
+            --main-dir)
+                MAIN_DIR="$2"
+                shift 2
+                ;;
+            --pr-dir)
+                PR_DIR="$2"
+                shift 2
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -148,6 +161,14 @@ parse_args() {
     if [ "$SKIP_FX" = "true" ] && [ "$SKIP_SNAPSHOT" = "true" ]; then
         error "Cannot skip both FX and snapshot benchmarks"
     fi
+
+    # Validate pre-built binary options
+    if [ -n "$MAIN_DIR" ] && [ -z "$PR_DIR" ]; then
+        error "--main-dir requires --pr-dir"
+    fi
+    if [ -z "$MAIN_DIR" ] && [ -n "$PR_DIR" ]; then
+        error "--pr-dir requires --main-dir"
+    fi
 }
 
 main() {
@@ -157,6 +178,50 @@ main() {
 
     check_prerequisites
 
+    # Pre-built binaries mode (CI mode)
+    if [ -n "$MAIN_DIR" ] && [ -n "$PR_DIR" ]; then
+        log "Using pre-built binaries"
+        echo "  Main dir: $MAIN_DIR"
+        echo "  PR dir: $PR_DIR"
+        echo ""
+
+        # Validate binaries exist
+        if [ ! -f "$MAIN_DIR/roc" ]; then
+            error "Main binary not found: $MAIN_DIR/roc"
+        fi
+        if [ ! -f "$PR_DIR/roc" ]; then
+            error "PR binary not found: $PR_DIR/roc"
+        fi
+        if [ "$SKIP_SNAPSHOT" = "false" ]; then
+            if [ ! -f "$MAIN_DIR/snapshot" ]; then
+                error "Main snapshot binary not found: $MAIN_DIR/snapshot"
+            fi
+            if [ ! -f "$PR_DIR/snapshot" ]; then
+                error "PR snapshot binary not found: $PR_DIR/snapshot"
+            fi
+        fi
+
+        # Run benchmarks with pre-built binaries
+        if [ "$SKIP_FX" = "false" ]; then
+            log "Running FX benchmarks"
+            "$SCRIPT_DIR/run_fx_benchmarks.sh" "$MAIN_DIR/roc" "$PR_DIR/roc" "$BASE_BRANCH" "HEAD"
+            echo ""
+        fi
+
+        if [ "$SKIP_SNAPSHOT" = "false" ]; then
+            log "Running snapshot benchmarks"
+            "$SCRIPT_DIR/run_snapshot_benchmark.sh" "$MAIN_DIR/snapshot" "$PR_DIR/snapshot" "$BASE_BRANCH" "HEAD"
+            echo ""
+        fi
+
+        log "Benchmark Complete"
+        echo "  Main dir: $MAIN_DIR"
+        echo "  PR dir: $PR_DIR"
+        echo "  No significant regressions detected"
+        return
+    fi
+
+    # Local mode: build from branches
     # Record current branch
     ORIGINAL_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     if [ "$ORIGINAL_BRANCH" = "HEAD" ]; then
