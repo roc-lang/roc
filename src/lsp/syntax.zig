@@ -86,7 +86,7 @@ pub const SyntaxChecker = struct {
 
         std.debug.print("check: create fresh build env\n", .{});
         const env = try self.createFreshBuildEnv();
-        
+
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
@@ -617,7 +617,7 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock();
 
         const env = try self.createFreshBuildEnv();
-        
+
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
@@ -670,7 +670,7 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock();
 
         const env = try self.createFreshBuildEnv();
-        
+
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
@@ -2280,7 +2280,7 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock();
 
         const env = try self.createFreshBuildEnv();
-        
+
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
@@ -2751,7 +2751,7 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock();
 
         const env = try self.createFreshBuildEnv();
-        
+
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
 
