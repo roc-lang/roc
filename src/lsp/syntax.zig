@@ -223,10 +223,15 @@ pub const SyntaxChecker = struct {
             return false;
         }
 
-        // Check for any reports for this file - if there are reports, don't snapshot
+        // Check for any error-level reports for this file - warnings/info are OK to snapshot
         for (drained) |entry| {
-            if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
-                return false;
+            if (std.mem.eql(u8, entry.abs_path, absolute_path)) {
+                for (entry.reports) |report| {
+                    switch (report.severity) {
+                        .runtime_error, .fatal => return false,
+                        .info, .warning => {},
+                    }
+                }
             }
         }
 
@@ -3115,6 +3120,36 @@ pub const SyntaxChecker = struct {
         }
     }
 
+    fn stripModulePrefix(name: []const u8, module_name: []const u8) []const u8 {
+        var i: usize = 0;
+        while (i < name.len) {
+            const seg_start = i;
+            const dot_idx = std.mem.indexOfScalarPos(u8, name, seg_start, '.') orelse name.len;
+            const seg = name[seg_start..dot_idx];
+
+            if (std.mem.eql(u8, seg, module_name)) {
+                if (dot_idx < name.len) return name[dot_idx + 1 ..];
+                return "";
+            }
+
+            if (dot_idx == name.len) break;
+            i = dot_idx + 1;
+        }
+
+        return name;
+    }
+
+    fn firstSegment(name: []const u8) []const u8 {
+        const dot_idx = std.mem.indexOfScalar(u8, name, '.') orelse name.len;
+        return name[0..dot_idx];
+    }
+
+    fn lastSegment(name: []const u8) []const u8 {
+        const dot_idx = std.mem.lastIndexOfScalar(u8, name, '.') orelse return name;
+        if (dot_idx + 1 >= name.len) return name;
+        return name[dot_idx + 1 ..];
+    }
+
     /// Add completions for members of a specific module (e.g., Str.concat)
     fn addModuleMemberCompletions(
         self: *SyntaxChecker,
@@ -3147,15 +3182,28 @@ pub const SyntaxChecker = struct {
                         while (iter.next()) |exp_entry| {
                             const ident_idx: base.Ident.Idx = @bitCast(exp_entry.ident_idx);
                             const name = imported_env.common.idents.getText(ident_idx);
+                            const without_module = stripModulePrefix(name, module_name);
+                            const label = firstSegment(without_module);
+                            if (label.len == 0) continue;
+
+                            // Avoid duplicates when multiple items share a prefix (e.g. nested items)
+                            var already_added = false;
+                            for (items.items) |item| {
+                                if (std.mem.eql(u8, item.label, label)) {
+                                    already_added = true;
+                                    break;
+                                }
+                            }
+                            if (already_added) continue;
 
                             // Determine kind based on name convention
-                            const kind: u32 = if (name.len > 0 and std.ascii.isUpper(name[0]))
+                            const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
                                 @intFromEnum(completion_handler.CompletionItemKind.class)
                             else
                                 @intFromEnum(completion_handler.CompletionItemKind.function);
 
                             try items.append(self.allocator, .{
-                                .label = name,
+                                .label = label,
                                 .kind = kind,
                                 .detail = null,
                             });
@@ -3515,10 +3563,13 @@ pub const SyntaxChecker = struct {
             const name = module_env.getIdentText(binding.ident);
             if (name.len == 0) continue;
 
+            const label = lastSegment(name);
+            if (label.len == 0) continue;
+
             // Check if already in items (avoid duplicates)
             var already_added = false;
             for (items.items) |item| {
-                if (std.mem.eql(u8, item.label, name)) {
+                if (std.mem.eql(u8, item.label, label)) {
                     already_added = true;
                     break;
                 }
@@ -3544,7 +3595,7 @@ pub const SyntaxChecker = struct {
             }
 
             try items.append(self.allocator, .{
-                .label = name,
+                .label = label,
                 .kind = kind,
                 .detail = detail,
             });
@@ -3564,6 +3615,7 @@ pub const SyntaxChecker = struct {
 
             const name = module_env.getIdentText(ident_idx);
             if (name.len == 0) continue;
+            if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
 
             // Check if already in items (avoid duplicates)
             var already_added = false;
@@ -3618,6 +3670,7 @@ pub const SyntaxChecker = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (name.len == 0) continue;
+                if (std.mem.indexOfScalar(u8, name, '.') != null) continue;
 
                 // Check if already in items
                 var already_added = false;
