@@ -77,6 +77,7 @@ pub const SyntaxChecker = struct {
 
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
+        std.debug.print("syntax check: uri={s}\n", .{uri});
         const path = try uri_util.uriToPath(self.allocator, uri);
         defer self.allocator.free(path);
 
@@ -88,39 +89,7 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Check if content has changed using hash comparison
-        // This avoids unnecessary rebuilds on focus/blur events
-        if (override_text) |text| {
-            const new_hash = DependencyGraph.computeContentHash(text);
-            const old_hash = self.dependency_graph.getContentHash(absolute_path);
-
-            if (old_hash) |existing| {
-                if (std.mem.eql(u8, &existing, &new_hash)) {
-                    self.logDebug(.build, "[INCREMENTAL] SKIP rebuild for {s}: content hash unchanged ({x}...)", .{
-                        absolute_path,
-                        new_hash[0..4].*,
-                    });
-                    // Return empty diagnostics array - no changes means no new diagnostics
-                    return &[_]Diagnostics.PublishDiagnostics{};
-                }
-                self.logDebug(.build, "[INCREMENTAL] REBUILD {s}: content hash changed ({x}... -> {x}...)", .{
-                    absolute_path,
-                    existing[0..4].*,
-                    new_hash[0..4].*,
-                });
-            } else {
-                self.logDebug(.build, "[INCREMENTAL] INITIAL build for {s}: no previous hash (new hash: {x}...)", .{
-                    absolute_path,
-                    new_hash[0..4].*,
-                });
-            }
-
-            // Update the content hash for this module
-            self.dependency_graph.setContentHash(absolute_path, new_hash) catch |err| {
-                self.logDebug(.build, "Failed to set content hash: {s}", .{@errorName(err)});
-            };
-        }
-
+        std.debug.print("completion: create fresh build env\n", .{});
         var env = try self.createFreshBuildEnv();
 
         var provider_state = OverrideProvider{
@@ -145,6 +114,7 @@ pub const SyntaxChecker = struct {
         std.process.changeCurDir(dir_owned) catch {};
 
         self.logDebug(.build, "building {s}", .{absolute_path});
+        std.debug.print("syntax check: build {s}\n", .{absolute_path});
         env.build(absolute_path) catch |err| {
             self.logDebug(.build, "build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
         };
@@ -153,6 +123,7 @@ pub const SyntaxChecker = struct {
             self.logDebug(.build, "drain reports failed: {s}", .{@errorName(err)});
             return err;
         };
+        std.debug.print("syntax check: drained reports={d}\n", .{drained.len});
         defer self.freeDrained(drained);
 
         // Update dependency graph from successful build
@@ -211,13 +182,19 @@ pub const SyntaxChecker = struct {
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
     fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnv {
+        std.debug.print("createFreshBuildEnv: prev_build_env={any} build_env={any}\n", .{ self.previous_build_env != null, self.build_env != null });
         // Move current build_env to previous_build_env (release old previous if exists)
         if (self.previous_build_env) |old_prev| {
             // Only free if no snapshot is still referencing it.
             // Snapshot ref counts are owned by snapshot_envs entries, so don't release here.
-            if (self.snapshot_env_ref_counts.get(old_prev) == null) {
+            const snapshot_ref = self.snapshot_env_ref_counts.get(old_prev) != null;
+            const snapshot_map_ref = self.isEnvReferencedInSnapshots(old_prev);
+            if (!snapshot_ref and !snapshot_map_ref) {
+                std.debug.print("createFreshBuildEnv: freeing old previous env\n", .{});
                 old_prev.deinit();
                 self.allocator.destroy(old_prev);
+            } else {
+                std.debug.print("createFreshBuildEnv: keeping old previous env (snapshot still references)\n", .{});
             }
         }
         self.previous_build_env = self.build_env;
@@ -258,7 +235,9 @@ pub const SyntaxChecker = struct {
     }
 
     fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
+        std.debug.print("storeSnapshotEnv: path={s}\n", .{absolute_path});
         if (self.snapshot_envs.get(absolute_path)) |existing| {
+            std.debug.print("storeSnapshotEnv: replacing existing snapshot\n", .{});
             self.releaseSnapshotEnv(existing);
             _ = self.snapshot_envs.remove(absolute_path);
         }
@@ -269,23 +248,34 @@ pub const SyntaxChecker = struct {
             return;
         };
         self.retainSnapshotEnv(env);
+        std.debug.print("storeSnapshotEnv: stored snapshot count={d}\n", .{self.snapshot_envs.count()});
     }
 
     fn retainSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
         const entry = self.snapshot_env_ref_counts.get(env);
         const next_count = if (entry) |count| count + 1 else 1;
         _ = self.snapshot_env_ref_counts.put(self.allocator, env, next_count) catch {};
+        std.debug.print("retainSnapshotEnv: count={d}\n", .{next_count});
     }
 
     fn releaseSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
         if (self.snapshot_env_ref_counts.get(env)) |count| {
             if (count <= 1) {
+                if (self.isEnvReferencedInSnapshots(env)) {
+                    std.debug.print("releaseSnapshotEnv: env still referenced by snapshots\n", .{});
+                    _ = self.snapshot_env_ref_counts.put(self.allocator, env, 1) catch {};
+                    return;
+                }
+                std.debug.print("releaseSnapshotEnv: freeing env\n", .{});
                 _ = self.snapshot_env_ref_counts.remove(env);
                 env.deinit();
                 self.allocator.destroy(env);
             } else {
+                std.debug.print("releaseSnapshotEnv: decrementing env count to {d}\n", .{count - 1});
                 _ = self.snapshot_env_ref_counts.put(self.allocator, env, count - 1) catch {};
             }
+        } else {
+            std.debug.print("releaseSnapshotEnv: env not tracked\n", .{});
         }
     }
 
@@ -298,6 +288,14 @@ pub const SyntaxChecker = struct {
         }
         self.snapshot_envs.clearRetainingCapacity();
         self.snapshot_env_ref_counts.clearRetainingCapacity();
+    }
+
+    fn isEnvReferencedInSnapshots(self: *SyntaxChecker, env: *BuildEnv) bool {
+        var it = self.snapshot_envs.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == env) return true;
+        }
+        return false;
     }
 
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
@@ -2954,12 +2952,14 @@ pub const SyntaxChecker = struct {
             std.debug.print("completion: build SUCCEEDED\n", .{});
             break :blk true;
         };
+        std.debug.print("completion: build_succeeded={}\n", .{build_succeeded});
 
         var build_has_reports = false;
 
         // Drain reports even on failure to avoid leaks
         if (build_succeeded) {
             const drained = env.drainReports() catch return null;
+            std.debug.print("completion: drained reports={d}\n", .{drained.len});
             for (drained) |entry| {
                 if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
                     build_has_reports = true;
@@ -3031,7 +3031,7 @@ pub const SyntaxChecker = struct {
             break :blk null;
         };
 
-        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}", .{ context, module_env_opt != null, build_succeeded, used_snapshot });
+        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}\n", .{ context, module_env_opt != null, build_succeeded, used_snapshot });
 
         switch (context) {
             .after_module_dot => |module_name| {
@@ -3040,16 +3040,16 @@ pub const SyntaxChecker = struct {
                 try self.addModuleMemberCompletions(&items, env, module_name);
             },
             .after_record_dot => |record_access| {
-                std.debug.print("completion: after_record_dot for '{s}' at offset {d}", .{ record_access.variable_name, record_access.variable_start });
+                std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.variable_name, record_access.variable_start });
                 if (module_env_opt) |module_env| {
                     // When using snapshot, cursor positions don't correspond to snapshot CIR
                     // So we must look up by name instead of analyzing the dot expression
                     if (used_snapshot or self.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
-                        std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)", .{used_snapshot});
+                        std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
                         try self.addRecordFieldCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
-                        std.debug.print("completion: after addRecordFieldCompletions, items={d}", .{items.items.len});
+                        std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
                         try self.addMethodCompletions(&items, module_env, record_access.variable_name, record_access.variable_start);
-                        std.debug.print("completion: after addMethodCompletions, items={d}", .{items.items.len});
+                        std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
                     } else if (self.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
                         std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
                         try self.addFieldsFromTypeVar(&items, module_env, type_var);
@@ -3410,7 +3410,7 @@ pub const SyntaxChecker = struct {
         }
 
         // Try to get record fields, handling aliases that wrap records
-        try self.addFieldsFromContent(items, module_env, content);
+        try self.addFieldsFromContent(items, module_env, content, 0);
     }
 
     /// Recursively extract fields from type content, unwrapping aliases
@@ -3419,10 +3419,13 @@ pub const SyntaxChecker = struct {
         items: *std.ArrayList(completion_handler.CompletionItem),
         module_env: *ModuleEnv,
         content: types.Content,
+        depth: usize,
     ) !void {
         const type_store = &module_env.types;
 
         std.debug.print("addFieldsFromContent: content tag={s}", .{@tagName(content)});
+
+        if (depth > 16) return;
 
         // Check if this is directly a record
         if (content.unwrapRecord()) |record| {
@@ -3438,7 +3441,7 @@ pub const SyntaxChecker = struct {
                 // Get the backing type of the alias
                 const backing_var = type_store.getAliasBackingVar(alias);
                 const backing_resolved = type_store.resolveVar(backing_var);
-                try self.addFieldsFromContent(items, module_env, backing_resolved.desc.content);
+                try self.addFieldsFromContent(items, module_env, backing_resolved.desc.content, depth + 1);
             },
             .structure => |flat_type| {
                 std.debug.print("addFieldsFromContent: structure, flat_type tag={s}", .{@tagName(flat_type)});
@@ -3965,17 +3968,24 @@ pub const SyntaxChecker = struct {
         variable_name: []const u8,
         variable_start: u32,
     ) !void {
+        std.debug.print("addMethodCompletions: looking for '{s}' at offset {d}\n", .{ variable_name, variable_start });
         // Find the binding for this variable name (same as record field completion)
         var scope = scope_map.ScopeMap.init(self.allocator);
         defer scope.deinit();
-        scope.build(module_env) catch return;
+        scope.build(module_env) catch |err| {
+            std.debug.print("addMethodCompletions: scope.build failed: {s}\n", .{@errorName(err)});
+            return;
+        };
+        std.debug.print("addMethodCompletions: scope has {d} bindings\n", .{scope.bindings.items.len});
 
         // Find the binding with matching name that's visible at the variable position
         var found_binding: ?scope_map.Binding = null;
         for (scope.bindings.items) |binding| {
-            if (!scope_map.ScopeMap.isVisibleAt(binding, variable_start)) continue;
             const name = module_env.getIdentText(binding.ident);
+            const is_visible = scope_map.ScopeMap.isVisibleAt(binding, variable_start);
+            if (!is_visible) continue;
             if (std.mem.eql(u8, name, variable_name)) {
+                std.debug.print("addMethodCompletions: FOUND binding '{s}'\n", .{name});
                 found_binding = binding;
                 break;
             }
@@ -3984,6 +3994,7 @@ pub const SyntaxChecker = struct {
         // Also check top-level definitions
         if (found_binding == null) {
             const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+            std.debug.print("addMethodCompletions: checking {d} top-level defs\n", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
                 const pattern = module_env.store.getPattern(def.pattern);
@@ -3996,6 +4007,7 @@ pub const SyntaxChecker = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
+                    std.debug.print("addMethodCompletions: FOUND def '{s}'\n", .{name});
                     // Found the definition - get its type and find methods
                     const type_var = ModuleEnv.varFrom(def.pattern);
                     try self.addMethodsFromTypeVar(items, module_env, type_var);
@@ -4007,6 +4019,7 @@ pub const SyntaxChecker = struct {
         // Also check statements (apps use statements for definitions)
         if (found_binding == null) {
             const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+            std.debug.print("addMethodCompletions: checking {d} statements\n", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getStatement(stmt_idx);
                 const pattern_idx = switch (stmt) {
@@ -4024,6 +4037,7 @@ pub const SyntaxChecker = struct {
 
                 const name = module_env.getIdentText(ident_idx);
                 if (std.mem.eql(u8, name, variable_name)) {
+                    std.debug.print("addMethodCompletions: FOUND stmt '{s}'\n", .{name});
                     // Found the definition - get its type and find methods
                     const type_var = ModuleEnv.varFrom(pattern_idx);
                     try self.addMethodsFromTypeVar(items, module_env, type_var);
@@ -4033,6 +4047,7 @@ pub const SyntaxChecker = struct {
         }
 
         if (found_binding) |binding| {
+            std.debug.print("addMethodCompletions: using binding pattern_idx={}\n", .{binding.pattern_idx});
             if (self.findExprTypeForPattern(module_env, binding.pattern_idx)) |type_var| {
                 try self.addMethodsFromTypeVar(items, module_env, type_var);
                 return;
@@ -4052,12 +4067,16 @@ pub const SyntaxChecker = struct {
     ) !void {
         const type_store = &module_env.types;
 
+        std.debug.print("addMethodsFromTypeVar: type_var={}\n", .{type_var});
         var resolved = type_store.resolveVar(type_var);
         var content = resolved.desc.content;
 
         var steps: usize = 0;
         while (true) : (steps += 1) {
-            if (steps > 8) break;
+            if (steps > 8) {
+                std.debug.print("addMethodsFromTypeVar: hit step limit\n", .{});
+                break;
+            }
 
             const type_ident_opt: ?base.Ident.Idx = switch (content) {
                 .alias => |alias| alias.ident.ident_idx,
@@ -4069,21 +4088,25 @@ pub const SyntaxChecker = struct {
             };
 
             if (type_ident_opt) |type_ident| {
+                std.debug.print("addMethodsFromTypeVar: type_ident={}\n", .{type_ident});
                 try self.addMethodsForTypeIdent(items, module_env, type_ident);
             }
 
             switch (content) {
                 .flex => |flex| {
+                    std.debug.print("addMethodsFromTypeVar: flex constraints\n", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(items, module_env, flex.constraints);
                     break;
                 },
                 .rigid => |rigid| {
+                    std.debug.print("addMethodsFromTypeVar: rigid constraints\n", .{});
                     // Extract method names from rigid constraints
                     try self.addMethodsFromConstraints(items, module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {
+                    std.debug.print("addMethodsFromTypeVar: alias unwrap\n", .{});
                     const backing_var = type_store.getAliasBackingVar(alias);
                     resolved = type_store.resolveVar(backing_var);
                     content = resolved.desc.content;
@@ -4101,9 +4124,13 @@ pub const SyntaxChecker = struct {
         module_env: *ModuleEnv,
         constraints: types.StaticDispatchConstraint.SafeList.Range,
     ) !void {
-        if (constraints.isEmpty()) return;
+        if (constraints.isEmpty()) {
+            std.debug.print("addMethodsFromConstraints: empty\n", .{});
+            return;
+        }
 
         const constraints_slice = module_env.types.sliceStaticDispatchConstraints(constraints);
+        std.debug.print("addMethodsFromConstraints: count={d}\n", .{constraints_slice.len});
         for (constraints_slice) |constraint| {
             const method_name = module_env.getIdentText(constraint.fn_name);
 
@@ -4150,6 +4177,7 @@ pub const SyntaxChecker = struct {
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             if (def.pattern == pattern_idx) {
+                std.debug.print("findExprTypeForPattern: def expr for pattern_idx={} expr_idx={}\n", .{ pattern_idx, def.expr });
                 return ModuleEnv.varFrom(def.expr);
             }
         }
@@ -4161,12 +4189,14 @@ pub const SyntaxChecker = struct {
             if (stmt_parts.pattern) |stmt_pattern_idx| {
                 if (stmt_pattern_idx == pattern_idx) {
                     if (stmt_parts.expr) |expr_idx| {
+                        std.debug.print("findExprTypeForPattern: stmt expr for pattern_idx={} expr_idx={}\n", .{ pattern_idx, expr_idx });
                         return ModuleEnv.varFrom(expr_idx);
                     }
                 }
             }
         }
 
+        std.debug.print("findExprTypeForPattern: no expr for pattern_idx={}\n", .{pattern_idx});
         return null;
     }
 
