@@ -411,7 +411,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             if (is_float) {
-                return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
+                return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             } else if (binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
                 return self.generateI128Binop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             } else {
@@ -651,11 +651,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate floating-point binary operation
+        /// Note: All float operations are done in F64 precision. F32 conversion happens at storage.
         fn generateFloatBinop(
             self: *Self,
             op: MonoExpr.BinOp,
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
+            _: layout.Idx,
         ) Error!ValueLocation {
             // Load LHS into a float register
             const lhs_reg = try self.ensureInFloatReg(lhs_loc);
@@ -712,6 +714,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (is_float) {
                 const src_reg = try self.ensureInFloatReg(inner_loc);
                 const result_reg = try self.codegen.allocFloatFor(0);
+                // All float operations done in F64, conversion to F32 happens at storage
                 try self.codegen.emitNegF64(result_reg, src_reg);
                 self.codegen.freeFloat(src_reg);
                 return .{ .float_reg = result_reg };
@@ -1984,13 +1987,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(result_ptr_reg, reg);
                 },
-                .f64, .f32 => {
+                .f64 => {
                     switch (loc) {
                         .float_reg => |reg| {
                             try self.emitStoreFloatToMem(result_ptr_reg, reg);
                         },
                         .immediate_f64 => |val| {
-                            // Store via integer register
+                            // Store via integer register (8 bytes for f64)
                             const bits: i64 = @bitCast(val);
                             const reg = try self.codegen.allocGeneralFor(0);
                             try self.codegen.emitLoadImm(reg, bits);
@@ -2000,6 +2003,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => {
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(result_ptr_reg, reg);
+                        },
+                    }
+                },
+                .f32 => {
+                    // F32 needs to be converted and stored as 4 bytes
+                    switch (loc) {
+                        .float_reg => |reg| {
+                            // Convert F64 to F32 in register, then store 4 bytes
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, reg, .double, reg);
+                                try self.codegen.emit.fstrRegMemUoff(.single, reg, result_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(reg, reg);
+                                try self.codegen.emit.movssMemReg(result_ptr_reg, 0, reg);
+                            }
+                        },
+                        .immediate_f64 => |val| {
+                            // Convert to f32 and store 4 bytes
+                            const f32_val: f32 = @floatCast(val);
+                            const bits: u32 = @bitCast(f32_val);
+                            const reg = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemUoff(.w32, reg, result_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w32, result_ptr_reg, 0, reg);
+                            }
+                            self.codegen.freeGeneral(reg);
+                        },
+                        else => {
+                            const reg = try self.ensureInGeneralReg(loc);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemUoff(.w32, reg, result_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w32, result_ptr_reg, 0, reg);
+                            }
                         },
                     }
                 },
@@ -2022,7 +2061,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(saved_ptr_reg, reg);
                 },
-                .f64, .f32 => {
+                .f64 => {
                     switch (loc) {
                         .float_reg => |reg| {
                             try self.emitStoreFloatToMem(saved_ptr_reg, reg);
@@ -2037,6 +2076,40 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => {
                             const reg = try self.ensureInGeneralReg(loc);
                             try self.emitStoreToMem(saved_ptr_reg, reg);
+                        },
+                    }
+                },
+                .f32 => {
+                    // F32 needs conversion and 4-byte store
+                    switch (loc) {
+                        .float_reg => |reg| {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.fcvtFloatFloat(.single, reg, .double, reg);
+                                try self.codegen.emit.fstrRegMemUoff(.single, reg, saved_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.cvtsd2ssRegReg(reg, reg);
+                                try self.codegen.emit.movssMemReg(saved_ptr_reg, 0, reg);
+                            }
+                        },
+                        .immediate_f64 => |val| {
+                            const f32_val: f32 = @floatCast(val);
+                            const bits: u32 = @bitCast(f32_val);
+                            const reg = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(reg, @as(i64, bits));
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemUoff(.w32, reg, saved_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w32, saved_ptr_reg, 0, reg);
+                            }
+                            self.codegen.freeGeneral(reg);
+                        },
+                        else => {
+                            const reg = try self.ensureInGeneralReg(loc);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemUoff(.w32, reg, saved_ptr_reg, 0);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w32, saved_ptr_reg, 0, reg);
+                            }
                         },
                     }
                 },
