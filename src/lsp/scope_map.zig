@@ -51,21 +51,24 @@ pub const ScopeMap = struct {
 
     /// Build scope map by traversing all CIR structures in the module.
     pub fn build(self: *ScopeMap, module_env: *ModuleEnv) !void {
+        std.debug.print("scope_map build: defs={d} statements={d}\n", .{ module_env.all_defs.span.len, module_env.all_statements.span.len });
+
         // Process top-level definitions
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
+            std.debug.print("scope_map build: def_idx={} pattern_idx={} expr_idx={}\n", .{ def_idx, def.pattern, def.expr });
             // Top-level defs are visible from their definition to the end of the module
-            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false);
+            try self.extractBindingsFromPattern(module_env, def.pattern, 0, std.math.maxInt(u32), false, 0);
 
             // Also traverse the expression to find nested scopes
-            try self.traverseExpr(module_env, def.expr, std.math.maxInt(u32));
+            try self.traverseExpr(module_env, def.expr, std.math.maxInt(u32), 0);
         }
 
         // Process top-level statements
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            try self.processStatement(module_env, stmt_idx, std.math.maxInt(u32));
+            try self.processStatement(module_env, stmt_idx, std.math.maxInt(u32), 0);
         }
 
         // Sort bindings by visible_from offset for efficient querying
@@ -99,54 +102,60 @@ pub const ScopeMap = struct {
     }
 
     /// Process a statement and extract any bindings it introduces.
-    fn processStatement(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32) Allocator.Error!void {
+    fn processStatement(self: *ScopeMap, module_env: *ModuleEnv, stmt_idx: CIR.Statement.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
+        if (depth > 512) {
+            std.debug.print("scope_map processStatement: depth limit at stmt_idx={}\n", .{stmt_idx});
+            return;
+        }
+
         const stmt = module_env.store.getStatement(stmt_idx);
         const stmt_region = module_env.store.getStatementRegion(stmt_idx);
+        std.debug.print("scope_map processStatement: stmt_idx={} depth={}\n", .{ stmt_idx, depth });
 
         switch (stmt) {
             .s_decl => |decl| {
                 // Variable binding - visible from definition to end of scope
-                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false);
+                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false, depth + 1);
                 // Traverse the expression for nested scopes
-                try self.traverseExpr(module_env, decl.expr, scope_end);
+                try self.traverseExpr(module_env, decl.expr, scope_end, depth + 1);
             },
             .s_decl_gen => |decl| {
                 // Generalized declaration (lambdas, number literals)
-                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false);
-                try self.traverseExpr(module_env, decl.expr, scope_end);
+                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false, depth + 1);
+                try self.traverseExpr(module_env, decl.expr, scope_end, depth + 1);
             },
             .s_var => |var_decl| {
                 // Mutable variable binding
-                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false);
-                try self.traverseExpr(module_env, var_decl.expr, scope_end);
+                try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);
+                try self.traverseExpr(module_env, var_decl.expr, scope_end, depth + 1);
             },
             .s_reassign => |reassign| {
                 // Reassignment doesn't introduce new bindings, but traverse the expr
-                try self.traverseExpr(module_env, reassign.expr, scope_end);
+                try self.traverseExpr(module_env, reassign.expr, scope_end, depth + 1);
             },
             .s_for => |for_stmt| {
                 // For loop - pattern is visible within the body
                 const body_region = module_env.store.getExprRegion(for_stmt.body);
-                try self.extractBindingsFromPattern(module_env, for_stmt.patt, body_region.start.offset, body_region.end.offset, false);
+                try self.extractBindingsFromPattern(module_env, for_stmt.patt, body_region.start.offset, body_region.end.offset, false, depth + 1);
                 // Traverse the iterable expression and body
-                try self.traverseExpr(module_env, for_stmt.expr, scope_end);
-                try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset);
+                try self.traverseExpr(module_env, for_stmt.expr, scope_end, depth + 1);
+                try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
             },
             .s_while => |while_stmt| {
-                try self.traverseExpr(module_env, while_stmt.cond, scope_end);
-                try self.traverseExpr(module_env, while_stmt.body, scope_end);
+                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
+                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },
             .s_expr => |expr_stmt| {
-                try self.traverseExpr(module_env, expr_stmt.expr, scope_end);
+                try self.traverseExpr(module_env, expr_stmt.expr, scope_end, depth + 1);
             },
             .s_expect => |expect_stmt| {
-                try self.traverseExpr(module_env, expect_stmt.body, scope_end);
+                try self.traverseExpr(module_env, expect_stmt.body, scope_end, depth + 1);
             },
             .s_dbg => |dbg_stmt| {
-                try self.traverseExpr(module_env, dbg_stmt.expr, scope_end);
+                try self.traverseExpr(module_env, dbg_stmt.expr, scope_end, depth + 1);
             },
             .s_return => |return_stmt| {
-                try self.traverseExpr(module_env, return_stmt.expr, scope_end);
+                try self.traverseExpr(module_env, return_stmt.expr, scope_end, depth + 1);
             },
             // Type declarations, imports, etc. don't introduce variable bindings
             .s_import, .s_alias_decl, .s_nominal_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
@@ -154,7 +163,13 @@ pub const ScopeMap = struct {
     }
 
     /// Traverse an expression and extract bindings from nested scopes.
-    fn traverseExpr(self: *ScopeMap, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, scope_end: u32) Allocator.Error!void {
+    fn traverseExpr(self: *ScopeMap, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, scope_end: u32, depth: usize) Allocator.Error!void {
+        if (depth > 512) {
+            std.debug.print("scope_map traverseExpr: depth limit at expr_idx={}\n", .{expr_idx});
+            return;
+        }
+
+        std.debug.print("scope_map traverseExpr: expr_idx={} depth={}\n", .{ expr_idx, depth });
         const expr = module_env.store.getExpr(expr_idx);
 
         switch (expr) {
@@ -166,21 +181,21 @@ pub const ScopeMap = struct {
                 // Process statements in order - each binding is visible to subsequent statements
                 const stmts = module_env.store.sliceStatements(block.stmts);
                 for (stmts) |stmt_idx| {
-                    try self.processStatement(module_env, stmt_idx, block_end);
+                    try self.processStatement(module_env, stmt_idx, block_end, depth + 1);
                 }
 
                 // Traverse the final expression
-                try self.traverseExpr(module_env, block.final_expr, block_end);
+                try self.traverseExpr(module_env, block.final_expr, block_end, depth + 1);
             },
             .e_lambda => |lambda| {
                 // Lambda parameters are visible within the body
                 const body_region = module_env.store.getExprRegion(lambda.body);
                 const args = module_env.store.slicePatterns(lambda.args);
                 for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true);
+                    try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
                 }
                 // Traverse the body
-                try self.traverseExpr(module_env, lambda.body, body_region.end.offset);
+                try self.traverseExpr(module_env, lambda.body, body_region.end.offset, depth + 1);
             },
             .e_closure => |closure| {
                 // Closure wraps a lambda - get the lambda and process it
@@ -190,14 +205,14 @@ pub const ScopeMap = struct {
                     const body_region = module_env.store.getExprRegion(lambda.body);
                     const args = module_env.store.slicePatterns(lambda.args);
                     for (args) |arg_pattern| {
-                        try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true);
+                        try self.extractBindingsFromPattern(module_env, arg_pattern, body_region.start.offset, body_region.end.offset, true, depth + 1);
                     }
-                    try self.traverseExpr(module_env, lambda.body, body_region.end.offset);
+                    try self.traverseExpr(module_env, lambda.body, body_region.end.offset, depth + 1);
                 }
             },
             .e_match => |match| {
                 // Traverse the condition
-                try self.traverseExpr(module_env, match.cond, scope_end);
+                try self.traverseExpr(module_env, match.cond, scope_end, depth + 1);
 
                 // Each branch's patterns introduce bindings visible in that branch's body
                 const branches = module_env.store.sliceMatchBranches(match.branches);
@@ -209,16 +224,16 @@ pub const ScopeMap = struct {
                     const patterns = module_env.store.sliceMatchBranchPatterns(branch.patterns);
                     for (patterns) |branch_pattern_idx| {
                         const branch_pattern = module_env.store.getMatchBranchPattern(branch_pattern_idx);
-                        try self.extractBindingsFromPattern(module_env, branch_pattern.pattern, body_region.start.offset, body_region.end.offset, false);
+                        try self.extractBindingsFromPattern(module_env, branch_pattern.pattern, body_region.start.offset, body_region.end.offset, false, depth + 1);
                     }
 
                     // Traverse the guard if present
                     if (branch.guard) |guard_idx| {
-                        try self.traverseExpr(module_env, guard_idx, body_region.end.offset);
+                        try self.traverseExpr(module_env, guard_idx, body_region.end.offset, depth + 1);
                     }
 
                     // Traverse the branch body
-                    try self.traverseExpr(module_env, branch.value, body_region.end.offset);
+                    try self.traverseExpr(module_env, branch.value, body_region.end.offset, depth + 1);
                 }
             },
             .e_if => |if_expr| {
@@ -226,68 +241,68 @@ pub const ScopeMap = struct {
                 const branches = module_env.store.sliceIfBranches(if_expr.branches);
                 for (branches) |branch_idx| {
                     const branch = module_env.store.getIfBranch(branch_idx);
-                    try self.traverseExpr(module_env, branch.cond, scope_end);
-                    try self.traverseExpr(module_env, branch.body, scope_end);
+                    try self.traverseExpr(module_env, branch.cond, scope_end, depth + 1);
+                    try self.traverseExpr(module_env, branch.body, scope_end, depth + 1);
                 }
                 // Traverse the else branch
-                try self.traverseExpr(module_env, if_expr.final_else, scope_end);
+                try self.traverseExpr(module_env, if_expr.final_else, scope_end, depth + 1);
             },
             .e_call => |call| {
-                try self.traverseExpr(module_env, call.func, scope_end);
+                try self.traverseExpr(module_env, call.func, scope_end, depth + 1);
                 const args = module_env.store.sliceExpr(call.args);
                 for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end);
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
             .e_binop => |binop| {
-                try self.traverseExpr(module_env, binop.lhs, scope_end);
-                try self.traverseExpr(module_env, binop.rhs, scope_end);
+                try self.traverseExpr(module_env, binop.lhs, scope_end, depth + 1);
+                try self.traverseExpr(module_env, binop.rhs, scope_end, depth + 1);
             },
             .e_unary_minus => |unary| {
-                try self.traverseExpr(module_env, unary.expr, scope_end);
+                try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
             },
             .e_unary_not => |unary| {
-                try self.traverseExpr(module_env, unary.expr, scope_end);
+                try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
             },
             .e_list => |list| {
                 const elems = module_env.store.sliceExpr(list.elems);
                 for (elems) |elem_idx| {
-                    try self.traverseExpr(module_env, elem_idx, scope_end);
+                    try self.traverseExpr(module_env, elem_idx, scope_end, depth + 1);
                 }
             },
             .e_tuple => |tuple| {
                 const elems = module_env.store.sliceExpr(tuple.elems);
                 for (elems) |elem_idx| {
-                    try self.traverseExpr(module_env, elem_idx, scope_end);
+                    try self.traverseExpr(module_env, elem_idx, scope_end, depth + 1);
                 }
             },
             .e_record => |record| {
                 const fields = module_env.store.sliceRecordFields(record.fields);
                 for (fields) |field_idx| {
                     const field = module_env.store.getRecordField(field_idx);
-                    try self.traverseExpr(module_env, field.value, scope_end);
+                    try self.traverseExpr(module_env, field.value, scope_end, depth + 1);
                 }
             },
             .e_dot_access => |dot| {
-                try self.traverseExpr(module_env, dot.receiver, scope_end);
+                try self.traverseExpr(module_env, dot.receiver, scope_end, depth + 1);
             },
             .e_str => |str| {
                 const segments = module_env.store.sliceExpr(str.span);
                 for (segments) |seg_idx| {
-                    try self.traverseExpr(module_env, seg_idx, scope_end);
+                    try self.traverseExpr(module_env, seg_idx, scope_end, depth + 1);
                 }
             },
             .e_tag => |tag| {
                 const args = module_env.store.sliceExpr(tag.args);
                 for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end);
+                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
             .e_nominal => |nominal| {
-                try self.traverseExpr(module_env, nominal.backing_expr, scope_end);
+                try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
             .e_nominal_external => |nominal| {
-                try self.traverseExpr(module_env, nominal.backing_expr, scope_end);
+                try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
             // Leaf expressions - no nested scopes
             .e_num,
@@ -327,7 +342,14 @@ pub const ScopeMap = struct {
         visible_from: u32,
         visible_to: u32,
         is_parameter: bool,
+        depth: usize,
     ) Allocator.Error!void {
+        if (depth > 512) {
+            std.debug.print("scope_map extractBindings: depth limit at pattern_idx={}\n", .{pattern_idx});
+            return;
+        }
+
+        std.debug.print("scope_map extractBindings: pattern_idx={} depth={}\n", .{ pattern_idx, depth });
         const pattern = module_env.store.getPattern(pattern_idx);
 
         switch (pattern) {
@@ -350,21 +372,21 @@ pub const ScopeMap = struct {
                     .is_parameter = is_parameter,
                 });
                 // Also extract from the nested pattern
-                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.pattern, visible_from, visible_to, is_parameter, depth + 1);
             },
             .applied_tag => |p| {
                 // Extract bindings from tag arguments
                 const args = module_env.store.slicePatterns(p.args);
                 for (args) |arg_pattern| {
-                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, arg_pattern, visible_from, visible_to, is_parameter, depth + 1);
                 }
             },
             .nominal => |p| {
                 // Extract bindings from the backing pattern
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter, depth + 1);
             },
             .nominal_external => |p| {
-                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter);
+                try self.extractBindingsFromPattern(module_env, p.backing_pattern, visible_from, visible_to, is_parameter, depth + 1);
             },
             .record_destructure => |p| {
                 const destructs = module_env.store.sliceRecordDestructs(p.destructs);
@@ -378,27 +400,31 @@ pub const ScopeMap = struct {
                         .visible_to = visible_to,
                         .is_parameter = is_parameter,
                     });
-                    // Extract from the nested pattern (Required or SubPattern)
-                    const nested_pattern = destruct.kind.toPatternIdx();
-                    try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter);
+
+                    switch (destruct.kind) {
+                        .SubPattern => |nested_pattern| {
+                            try self.extractBindingsFromPattern(module_env, nested_pattern, visible_from, visible_to, is_parameter, depth + 1);
+                        },
+                        .Required => {},
+                    }
                 }
             },
             .list => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
                 }
                 // Handle rest pattern if present (e.g., [first, .. as rest])
                 if (p.rest_info) |rest_info| {
                     if (rest_info.pattern) |rest_pattern| {
-                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, is_parameter);
+                        try self.extractBindingsFromPattern(module_env, rest_pattern, visible_from, visible_to, is_parameter, depth + 1);
                     }
                 }
             },
             .tuple => |p| {
                 const patterns = module_env.store.slicePatterns(p.patterns);
                 for (patterns) |elem_pattern| {
-                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter);
+                    try self.extractBindingsFromPattern(module_env, elem_pattern, visible_from, visible_to, is_parameter, depth + 1);
                 }
             },
             // Literal and other patterns don't introduce bindings
