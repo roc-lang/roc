@@ -432,3 +432,167 @@ test "record completion uses snapshot env when builds fail" {
         try std.testing.expect(false);
     }
 }
+
+test "record field completion with partial field name" {
+    // Tests that completion works when typing a partial field name: "my_record.fo|"
+    // This is the common case when user is typing - should show all available fields
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // First build with valid code to populate the snapshot env
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\
+        \\main = my_record.foo
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(clean_contents);
+
+    try tmp.dir.writeFile(.{ .sub_path = "partial_field.roc", .data = clean_contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "partial_field.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // First check to build and cache env
+    const publish_sets = try checker.check(uri, null, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(allocator);
+        allocator.free(publish_sets);
+    }
+
+    // Now request completion with partial field name "fo"
+    // Line 4: "main = my_record.fo"
+    // Character 19 is right after "fo" (after the 'o')
+    const partial_contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\my_record = {{ foo: "hello", bar: 42 }}
+        \\
+        \\main = my_record.fo
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(partial_contents);
+
+    const result = try checker.getCompletionsAtPosition(uri, partial_contents, 4, 19);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        std.debug.print("\n=== partial field completion: got {d} items ===\n", .{completion_result.items.len});
+        for (completion_result.items) |item| {
+            std.debug.print("  - {s}\n", .{item.label});
+        }
+
+        // Should have record field completions - at least foo and bar
+        // Even with partial "fo", we should get all field options
+        var found_foo = false;
+        var found_bar = false;
+        for (completion_result.items) |item| {
+            if (std.mem.eql(u8, item.label, "foo")) found_foo = true;
+            if (std.mem.eql(u8, item.label, "bar")) found_bar = true;
+        }
+
+        // Both should be found - filtering is done client-side
+        try std.testing.expect(found_foo);
+        try std.testing.expect(found_bar);
+    } else {
+        std.debug.print("\n=== partial field completion: got null result ===\n", .{});
+        try std.testing.expect(false); // Should have got a result
+    }
+}
+
+test "static dispatch completion for nominal type methods" {
+    // Tests that static dispatch completion works: "val.to|" should show to_str
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create code with a nominal type that has methods
+    const contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main] {{ pf: platform "{s}" }}
+        \\
+        \\Basic := [Val(Str)].{{
+        \\  to_str : Basic -> Str
+        \\  to_str = |Basic.Val(s)| s
+        \\}}
+        \\
+        \\val : Basic
+        \\val = Basic.Val("hello")
+        \\
+        \\main = val.
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(contents);
+
+    std.debug.print("\n=== TEST: static dispatch completion ===\n", .{});
+    std.debug.print("Contents:\n{s}\n", .{contents});
+
+    try tmp.dir.writeFile(.{ .sub_path = "static_dispatch.roc", .data = contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "static_dispatch.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // Request completion after "val."
+    // Line 10: "main = val."
+    // Character 11 is right after the dot
+    const result = try checker.getCompletionsAtPosition(uri, contents, 10, 11);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        std.debug.print("Got {d} completion items:\n", .{completion_result.items.len});
+        for (completion_result.items) |item| {
+            std.debug.print("  - {s} (kind={?})\n", .{ item.label, item.kind });
+        }
+
+        // Should have the to_str method
+        var found_to_str = false;
+        for (completion_result.items) |item| {
+            if (std.mem.eql(u8, item.label, "to_str")) found_to_str = true;
+        }
+
+        std.debug.print("found_to_str={}\n", .{found_to_str});
+        try std.testing.expect(found_to_str);
+    } else {
+        std.debug.print("Got null result\n", .{});
+        try std.testing.expect(false); // Should have got a result
+    }
+}

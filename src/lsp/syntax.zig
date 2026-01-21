@@ -2354,7 +2354,7 @@ pub const SyntaxChecker = struct {
 
     /// Check if a region contains the given byte offset
     fn regionContainsOffset(region: Region, offset: u32) bool {
-        return offset >= region.start.offset and offset < region.end.offset;
+        return offset >= region.start.offset and offset <= region.end.offset;
     }
 
     /// Result of finding highlights for a symbol
@@ -3898,8 +3898,11 @@ pub const SyntaxChecker = struct {
                 }
             },
             .e_type_var_dispatch => |dispatch| {
-                if (self.findDotReceiverTypeVarInExpr(module_env, dispatch.value, cursor_offset, best_size)) |var_| {
-                    result = var_;
+                const args = module_env.store.sliceExpr(dispatch.args);
+                for (args) |arg| {
+                    if (self.findDotReceiverTypeVarInExpr(module_env, arg, cursor_offset, best_size)) |var_| {
+                        result = var_;
+                    }
                 }
             },
             else => {},
