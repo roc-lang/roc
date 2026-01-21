@@ -237,6 +237,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // X0/RDI = result pointer, X1/RSI = RocOps pointer
             self.reserveArgumentRegisters();
 
+            // Emit prologue to save callee-saved registers we'll use (X19 for result ptr)
+            try self.emitMainPrologue();
+
             // IMPORTANT: Save the result pointer to a callee-saved register before
             // generating code that might call procedures (which would clobber X0).
             // On aarch64: save X0 to X19 (callee-saved)
@@ -257,8 +260,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Store result to the saved result pointer
             try self.storeResultToSavedPtr(result_loc, result_layout, result_ptr_save_reg);
 
-            // Emit return
-            try self.emitRet();
+            // Emit epilogue to restore callee-saved registers and return
+            try self.emitMainEpilogue();
 
             // Get ALL the generated code (including procedures at the start)
             // Execution will start at main_code_start via entry_offset
@@ -2004,6 +2007,35 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // ret                          ; Return to caller
                 try self.codegen.emit.movRegReg(.w64, .RSP, .RBP);
                 try self.codegen.emit.pop(.RBP);
+                try self.codegen.emit.retq();
+            }
+        }
+
+        /// Emit prologue for main expression code.
+        /// Saves callee-saved registers that will be used (X19/RBX for result pointer).
+        fn emitMainPrologue(self: *Self) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Save X19 (callee-saved) which we use for the result pointer.
+                // Use stp to save X19 and LR together (need LR for calls)
+                // stp x19, x30, [sp, #-16]!
+                try self.codegen.emit.stpPreIndex(.w64, .X19, .LR, .ZRSP, -2);
+            } else {
+                // Save RBX (callee-saved) which we use for the result pointer
+                try self.codegen.emit.push(.RBX);
+            }
+        }
+
+        /// Emit epilogue for main expression code.
+        /// Restores callee-saved registers and returns.
+        fn emitMainEpilogue(self: *Self) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Restore X19 and LR
+                // ldp x19, x30, [sp], #16
+                try self.codegen.emit.ldpPostIndex(.w64, .X19, .LR, .ZRSP, 2);
+                try self.codegen.emit.ret();
+            } else {
+                // Restore RBX
+                try self.codegen.emit.pop(.RBX);
                 try self.codegen.emit.retq();
             }
         }

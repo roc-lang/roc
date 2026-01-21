@@ -204,6 +204,27 @@ pub fn notReg(self: *Emit, width: RegisterWidth, reg: GeneralReg) !void {
     try self.buf.append(self.allocator, modRM(0b11, 2, reg.enc()));
 }
 
+/// IDIV reg (signed divide RDX:RAX by reg, quotient in RAX, remainder in RDX)
+pub fn idivReg(self: *Emit, width: RegisterWidth, reg: GeneralReg) !void {
+    if (width.requiresSizeOverride()) {
+        try self.buf.append(self.allocator, 0x66);
+    }
+    try self.emitRex(width, null, reg);
+    try self.buf.append(self.allocator, 0xF7);
+    try self.buf.append(self.allocator, modRM(0b11, 7, reg.enc())); // /7 = IDIV
+}
+
+/// CQO (sign-extend RAX into RDX:RAX for 64-bit division)
+pub fn cqo(self: *Emit) !void {
+    try self.buf.append(self.allocator, 0x48); // REX.W
+    try self.buf.append(self.allocator, 0x99); // CQO
+}
+
+/// CDQ (sign-extend EAX into EDX:EAX for 32-bit division)
+pub fn cdq(self: *Emit) !void {
+    try self.buf.append(self.allocator, 0x99); // CDQ
+}
+
 /// AND reg, reg
 pub fn andRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     if (width.requiresSizeOverride()) {
