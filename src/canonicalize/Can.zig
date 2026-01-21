@@ -120,6 +120,9 @@ current_alias_name: ?Ident.Idx = null,
 /// Used to detect self-referential definitions like `a = a` or `a = [a]`.
 /// This is null when we're inside a lambda (where self-references are valid for recursion).
 defining_pattern: ?Pattern.Idx = null,
+/// The expression index of the enclosing lambda, if any.
+/// Used to track which lambda a return expression belongs to.
+enclosing_lambda: ?Expr.Idx = null,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -5241,6 +5244,20 @@ pub fn canonicalizeExpr(
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
 
+            // Create lambda with undefined body first (for enclosing_lambda tracking)
+            const lambda_expr = Expr{
+                .e_lambda = .{
+                    .args = args_span,
+                    .body = undefined, // Placeholder, will be updated after body canonicalization
+                },
+            };
+            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+
+            // Set enclosing lambda context for return expressions
+            const saved_enclosing_lambda = self.enclosing_lambda;
+            self.enclosing_lambda = lambda_idx;
+            defer self.enclosing_lambda = saved_enclosing_lambda;
+
             // Define the set of captures
             const captures_top = self.scratch_captures.top();
             defer self.scratch_captures.clearFrom(captures_top);
@@ -5279,15 +5296,8 @@ pub fn canonicalizeExpr(
                 break :blk can_body.idx;
             };
 
-            // Create the pure lambda expression first
-            const lambda_expr = Expr{
-                .e_lambda = .{
-                    .args = args_span,
-                    .body = body_idx,
-                },
-            };
-
-            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+            // Update lambda with the actual body
+            self.env.store.updateLambdaBody(lambda_idx, body_idx);
 
             // Get a slice of the captured vars in the body
             const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
@@ -5586,6 +5596,24 @@ pub fn canonicalizeExpr(
             const ok_tag_ident = self.env.idents.ok;
             const err_tag_ident = self.env.idents.err;
 
+            // Look up Try type for nominal wrapping (improves error messages)
+            const try_ident = self.env.idents.@"try";
+            const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+                if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+                    switch (type_binding_loc.binding.*) {
+                        .external_nominal => |ext| {
+                            if (ext.import_idx) |import_idx| {
+                                if (ext.target_node_idx) |target_node_idx| {
+                                    break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                break :blk null;
+            };
+
             // Mark the start of scratch match branches
             const scratch_top = self.env.store.scratchMatchBranchTop();
 
@@ -5608,13 +5636,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(ok_assign_pattern_idx);
                 const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
 
-                // Create the Ok tag pattern: Ok(#ok)
-                const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = ok_tag_ident,
-                        .args = ok_args_span,
-                    },
-                }, region);
+                // Create the Ok tag pattern: Ok(#ok), wrapped in nominal_external if Try type is available
+                const ok_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = ok_tag_ident,
+                            .args = ok_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5664,13 +5706,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(err_assign_pattern_idx);
                 const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
 
-                // Create the Err tag pattern: Err(#err)
-                const err_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_args_span,
-                    },
-                }, region);
+                // Create the Err tag pattern: Err(#err), wrapped in nominal_external if Try type is available
+                const err_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5697,22 +5753,44 @@ pub fn canonicalizeExpr(
                     // Mark the pattern as used
                     try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                    // Create Err(#err) tag expression
+                    // Create Err(#err) tag expression, wrapped in e_nominal_external if Try type is available
                     const err_tag_args_start = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(err_lookup_idx);
                     const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_tag = .{
-                            .name = err_tag_ident,
-                            .args = err_tag_args_span,
-                        },
-                    }, region);
+                    const err_tag_expr_idx = expr_blk: {
+                        const tag_expr = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = err_tag_ident,
+                                .args = err_tag_args_span,
+                            },
+                        }, region);
+
+                        if (try_nominal_info) |info| {
+                            break :expr_blk try self.env.addExpr(CIR.Expr{
+                                .e_nominal_external = .{
+                                    .module_idx = info.import_idx,
+                                    .target_node_idx = info.target_node_idx,
+                                    .backing_expr = tag_expr,
+                                    .backing_type = .tag,
+                                },
+                            }, region);
+                        }
+                        break :expr_blk tag_expr;
+                    };
 
                     // Create return Err(#err) expression
-                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
-                        .expr = err_tag_expr_idx,
-                    } }, region);
+                    break :blk if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(CIR.Expr{ .e_return = .{
+                            .expr = err_tag_expr_idx,
+                            .lambda = lambda_idx,
+                            .context = .try_suffix,
+                        } }, region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = region,
+                            .context = .try_suffix,
+                        } });
                 };
 
                 // Create the Err branch
@@ -9721,9 +9799,17 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     // This is for when return is the final expression in a block
                     const inner_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
                     const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-                    const return_expr_idx = try self.env.addExpr(Expr{ .e_return = .{
-                        .expr = inner_expr.idx,
-                    } }, return_region);
+                    const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(Expr{ .e_return = .{
+                            .expr = inner_expr.idx,
+                            .lambda = lambda_idx,
+                            .context = .return_expr,
+                        } }, return_region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = return_region,
+                            .context = .return_expr,
+                        } });
                     last_expr = CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = inner_expr.free_vars };
                 },
                 .crash => |crash_stmt| {
@@ -9781,7 +9867,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
-                    .s_decl_gen => |decl| try self.collectBoundVarsToScratch(decl.pattern),
                     .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
                     else => {},
                 }
@@ -10013,11 +10098,18 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Canonicalize the return expression
             const expr = try self.canonicalizeExprOrMalformed(r.expr);
 
-            // Create return statement (lambda is null for now - will be implemented later)
-            const stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
-                .expr = expr.idx,
-                .lambda = null,
-            } }, region);
+            // Create return statement with enclosing lambda, or emit error if outside function
+            const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addStatement(Statement{ .s_return = .{
+                    .expr = expr.idx,
+                    .lambda = lambda_idx,
+                } }, region)
+            else
+                // Return outside function - create malformed statement
+                try self.env.pushMalformed(Statement.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = region,
+                    .context = .return_statement,
+                } });
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
         },
@@ -10770,18 +10862,8 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     // Restore defining_pattern
     self.defining_pattern = saved_defining_pattern;
 
-    // Determine if we should generalize based on RHS
-    // TODO: Remove, generalization is handled solely in type checking
-    const should_generalize = self.shouldGeneralizeBinding(expr.idx);
-
-    // Create a declaration statement (generalized or not)
-    const stmt_idx = if (should_generalize)
-        try self.env.addStatement(Statement{ .s_decl_gen = .{
-            .pattern = pattern_idx,
-            .expr = expr.idx,
-            .anno = mb_validated_anno,
-        } }, region)
-    else
+    // Create a declaration statement
+    const stmt_idx =
         try self.env.addStatement(Statement{ .s_decl = .{
             .pattern = pattern_idx,
             .expr = expr.idx,
@@ -10789,23 +10871,6 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } }, region);
 
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
-}
-
-/// Determines whether a let binding should be generalized based on its RHS expression.
-/// According to Roc's value restriction, only lambdas and number literals should be generalized.
-// TODO: Remove, generalization is handled solely in type checking
-fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    return switch (expr) {
-        // Lambdas should be generalized (both closures and pure lambdas)
-        .e_closure, .e_lambda => true,
-
-        // Number literals should be generalized
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
-
-        // Everything else should NOT be generalized
-        else => false,
-    };
 }
 
 // A canonicalized statement

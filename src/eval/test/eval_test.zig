@@ -2135,11 +2135,12 @@ test "encode: Str.encode with local format type" {
     try runExpectListI64(
         \\{
         \\    Utf8Format := {}.{
-        \\        encode_str : Utf8Format, Str -> List(U8)
-        \\        encode_str = |_fmt, s| Str.to_utf8(s)
+        \\        encode_str : Utf8Format, Str -> Try(List(U8), [])
+        \\        encode_str = |_fmt, s| Ok(Str.to_utf8(s))
         \\    }
         \\    fmt = Utf8Format
-        \\    bytes = Str.encode("hi", fmt)
+        \\    result = Str.encode("hi", fmt)
+        \\    bytes = result?
         \\    List.map(bytes, |b| U8.to_i64(b))
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);
