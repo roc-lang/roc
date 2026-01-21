@@ -16,6 +16,7 @@ const uri_util = @import("uri.zig");
 const DependencyGraph = @import("dependency_graph.zig").DependencyGraph;
 const compiled_builtins = @import("compiled_builtins");
 const scope_map = @import("scope_map.zig");
+const BuildSession = @import("build_session.zig").BuildSession;
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -78,59 +79,28 @@ pub const SyntaxChecker = struct {
     /// Check the file referenced by the URI and return diagnostics grouped by URI.
     pub fn check(self: *SyntaxChecker, uri: []const u8, override_text: ?[]const u8, workspace_root: ?[]const u8) ![]Diagnostics.PublishDiagnostics {
         std.debug.print("syntax check: uri={s}\n", .{uri});
-        const path = try uri_util.uriToPath(self.allocator, uri);
-        defer self.allocator.free(path);
-
-        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
-        defer self.allocator.free(absolute_path);
-
         _ = workspace_root; // Reserved for future use
 
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        std.debug.print("completion: create fresh build env\n", .{});
-        var env = try self.createFreshBuildEnv();
+        std.debug.print("check: create fresh build env\n", .{});
+        const env = try self.createFreshBuildEnv();
+        
+        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        defer session.deinit();
 
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = override_text,
-        };
-        const provider: ?FileProvider = if (override_text != null) .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        } else null;
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
+        self.logDebug(.build, "building {s}", .{session.absolute_path});
+        std.debug.print("syntax check: build {s}\n", .{session.absolute_path});
 
-        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
-        const dir_owned = try self.allocator.dupe(u8, dir_slice);
-        defer self.allocator.free(dir_owned);
-        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
-        defer if (prev_cwd) |cwd| {
-            std.process.changeCurDir(cwd) catch {};
-            self.allocator.free(cwd);
-        };
-        std.process.changeCurDir(dir_owned) catch {};
-
-        self.logDebug(.build, "building {s}", .{absolute_path});
-        std.debug.print("syntax check: build {s}\n", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
-        };
-
-        const drained = env.drainReports() catch |err| {
-            self.logDebug(.build, "drain reports failed: {s}", .{@errorName(err)});
-            return err;
-        };
+        const drained = session.drained_reports orelse return error.BuildFailed;
         std.debug.print("syntax check: drained reports={d}\n", .{drained.len});
-        defer self.freeDrained(drained);
 
         // Update dependency graph from successful build
         self.updateDependencyGraph(env);
 
-        if (self.shouldSnapshotBuild(env, absolute_path, drained)) {
-            self.storeSnapshotEnv(env, absolute_path);
+        if (self.shouldSnapshotBuild(env, session.absolute_path, drained)) {
+            self.storeSnapshotEnv(env, session.absolute_path);
         }
 
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
@@ -140,7 +110,7 @@ pub const SyntaxChecker = struct {
         }
 
         for (drained) |entry| {
-            const mapped_path = if (entry.abs_path.len == 0) absolute_path else entry.abs_path;
+            const mapped_path = if (entry.abs_path.len == 0) session.absolute_path else entry.abs_path;
             const module_uri = try uri_util.pathToUri(self.allocator, mapped_path);
 
             var diags = std.ArrayList(Diagnostics.Diagnostic){};
@@ -643,65 +613,23 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HoverResult {
-        const path = try uri_util.uriToPath(self.allocator, uri);
-        defer self.allocator.free(path);
-
-        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
-        defer self.allocator.free(absolute_path);
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.createFreshBuildEnv();
+        const env = try self.createFreshBuildEnv();
+        
+        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        defer session.deinit();
 
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = override_text,
-        };
-        const provider: ?FileProvider = if (override_text != null) .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        } else null;
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
+        self.logDebug(.build, "hover: building {s}", .{session.absolute_path});
 
-        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
-        const dir_owned = try self.allocator.dupe(u8, dir_slice);
-        defer self.allocator.free(dir_owned);
-        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
-        defer if (prev_cwd) |cwd| {
-            std.process.changeCurDir(cwd) catch {};
-            self.allocator.free(cwd);
-        };
-        std.process.changeCurDir(dir_owned) catch {};
-
-        self.logDebug(.build, "hover: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "hover: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+        if (!session.build_succeeded) {
+            self.logDebug(.build, "hover: build failed for {s}", .{session.absolute_path});
             return null;
-        };
+        }
 
-        // Drain reports but ignore them for hover (must still free them to avoid leaks)
-        const drained = env.drainReports() catch return null;
-        defer self.freeDrainedWithReports(drained);
-
-        // Get any available scheduler and find the root module
-        // Try "app" first, then fall back to iterating through all schedulers
-        const app_sched = env.schedulers.get("app") orelse blk: {
-            // Try to find any scheduler with a valid root module
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.env != null) {
-                        break :blk sched;
-                    }
-                }
-            }
-            return null;
-        };
-        const root_module = app_sched.getRootModule() orelse return null;
-        const module_env = if (root_module.env) |*e| e else return null;
+        // Get module environment
+        const module_env = session.getModuleEnv() orelse return null;
 
         // Convert LSP position (0-based line/col) to byte offset
         // LSP uses 0-based line and UTF-16 code units for character
@@ -738,63 +666,23 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?DefinitionResult {
-        const path = try uri_util.uriToPath(self.allocator, uri);
-        defer self.allocator.free(path);
-
-        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
-        defer self.allocator.free(absolute_path);
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.createFreshBuildEnv();
+        const env = try self.createFreshBuildEnv();
+        
+        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        defer session.deinit();
 
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = override_text,
-        };
-        const provider: ?FileProvider = if (override_text != null) .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        } else null;
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
+        self.logDebug(.build, "definition: building {s}", .{session.absolute_path});
 
-        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
-        const dir_owned = try self.allocator.dupe(u8, dir_slice);
-        defer self.allocator.free(dir_owned);
-        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
-        defer if (prev_cwd) |cwd| {
-            std.process.changeCurDir(cwd) catch {};
-            self.allocator.free(cwd);
-        };
-        std.process.changeCurDir(dir_owned) catch {};
-
-        self.logDebug(.build, "definition: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "definition: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+        if (!session.build_succeeded) {
+            self.logDebug(.build, "definition: build failed for {s}", .{session.absolute_path});
             return null;
-        };
+        }
 
-        // Drain reports but ignore them for definition (must still free them to avoid leaks)
-        const drained = env.drainReports() catch return null;
-        defer self.freeDrainedWithReports(drained);
-
-        // Get any available scheduler and find the root module
-        const app_sched = env.schedulers.get("app") orelse blk: {
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.env != null) {
-                        break :blk sched;
-                    }
-                }
-            }
-            return null;
-        };
-        const root_module = app_sched.getRootModule() orelse return null;
-        const module_env = if (root_module.env) |*e| e else return null;
+        // Get module environment
+        const module_env = session.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
         const target_offset = positionToOffset(module_env, line, character) orelse return null;
@@ -2388,63 +2276,23 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?HighlightResult {
-        const path = try uri_util.uriToPath(self.allocator, uri);
-        defer self.allocator.free(path);
-
-        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
-        defer self.allocator.free(absolute_path);
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.createFreshBuildEnv();
+        const env = try self.createFreshBuildEnv();
+        
+        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        defer session.deinit();
 
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = override_text,
-        };
-        const provider: ?FileProvider = if (override_text != null) .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        } else null;
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
+        self.logDebug(.build, "highlights: building {s}", .{session.absolute_path});
 
-        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
-        const dir_owned = try self.allocator.dupe(u8, dir_slice);
-        defer self.allocator.free(dir_owned);
-        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
-        defer if (prev_cwd) |cwd| {
-            std.process.changeCurDir(cwd) catch {};
-            self.allocator.free(cwd);
-        };
-        std.process.changeCurDir(dir_owned) catch {};
-
-        self.logDebug(.build, "highlights: building {s}", .{absolute_path});
-        env.build(absolute_path) catch |err| {
-            self.logDebug(.build, "highlights: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+        if (!session.build_succeeded) {
+            self.logDebug(.build, "highlights: build failed for {s}", .{session.absolute_path});
             return null;
-        };
+        }
 
-        // Drain reports but ignore them (must still free them to avoid leaks)
-        const drained = env.drainReports() catch return null;
-        defer self.freeDrainedWithReports(drained);
-
-        // Get any available scheduler and find the root module
-        const app_sched = env.schedulers.get("app") orelse blk: {
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                if (sched.getRootModule()) |rm| {
-                    if (rm.env != null) {
-                        break :blk sched;
-                    }
-                }
-            }
-            return null;
-        };
-        const root_module = app_sched.getRootModule() orelse return null;
-        const module_env = if (root_module.env) |*e| e else return null;
+        // Get module environment
+        const module_env = session.getModuleEnv() orelse return null;
 
         // Convert LSP position to byte offset
         const target_offset = positionToOffset(module_env, line, character) orelse return null;
@@ -2899,62 +2747,27 @@ pub const SyntaxChecker = struct {
         line: u32,
         character: u32,
     ) !?completion_handler.CompletionResult {
-        const path = try uri_util.uriToPath(self.allocator, uri);
-        defer self.allocator.free(path);
-
-        const absolute_path = std.fs.cwd().realpathAlloc(self.allocator, path) catch try self.allocator.dupe(u8, path);
-        defer self.allocator.free(absolute_path);
-
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        var env = try self.createFreshBuildEnv();
+        const env = try self.createFreshBuildEnv();
+        
+        var session = try BuildSession.init(self.allocator, env, uri, override_text);
+        defer session.deinit();
 
-        var provider_state = OverrideProvider{
-            .override_path = absolute_path,
-            .override_text = override_text,
-        };
-        const provider: ?FileProvider = if (override_text != null) .{
-            .ctx = &provider_state,
-            .read = OverrideProvider.read,
-        } else null;
-        env.setFileProvider(provider);
-        defer env.setFileProvider(null);
-
-        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
-        const dir_owned = try self.allocator.dupe(u8, dir_slice);
-        defer self.allocator.free(dir_owned);
-        const prev_cwd = std.process.getCwdAlloc(self.allocator) catch null;
-        defer if (prev_cwd) |cwd| {
-            std.process.changeCurDir(cwd) catch {};
-            self.allocator.free(cwd);
-        };
-        std.process.changeCurDir(dir_owned) catch {};
-
-        std.debug.print("completion: building {s}\n", .{absolute_path});
-        const build_succeeded = blk: {
-            env.build(absolute_path) catch |err| {
-                std.debug.print("completion: build FAILED for {s}: {s}\n", .{ absolute_path, @errorName(err) });
-                break :blk false;
-            };
-            std.debug.print("completion: build SUCCEEDED\n", .{});
-            break :blk true;
-        };
-        std.debug.print("completion: build_succeeded={}\n", .{build_succeeded});
+        std.debug.print("completion: building {s}\n", .{session.absolute_path});
+        std.debug.print("completion: build_succeeded={}\n", .{session.build_succeeded});
 
         var build_has_reports = false;
 
-        // Drain reports even on failure to avoid leaks
-        if (build_succeeded) {
-            const drained = env.drainReports() catch return null;
-            std.debug.print("completion: drained reports={d}\n", .{drained.len});
+        // Check if we have reports for this file
+        if (session.drained_reports) |drained| {
             for (drained) |entry| {
-                if (std.mem.eql(u8, entry.abs_path, absolute_path) and entry.reports.len > 0) {
+                if (std.mem.eql(u8, entry.abs_path, session.absolute_path) and entry.reports.len > 0) {
                     build_has_reports = true;
                     break;
                 }
             }
-            self.freeDrainedWithReports(drained);
         }
 
         // Detect completion context from source
@@ -2977,8 +2790,8 @@ pub const SyntaxChecker = struct {
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
         var used_snapshot = false;
         const module_env_opt: ?*ModuleEnv = blk: {
-            if (self.snapshot_envs.get(absolute_path)) |snapshot_env| {
-                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_env, absolute_path);
+            if (self.snapshot_envs.get(session.absolute_path)) |snapshot_env| {
+                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_env, session.absolute_path);
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     break :blk module_env;
@@ -2987,7 +2800,7 @@ pub const SyntaxChecker = struct {
 
             // Fall back to previous build env if snapshot not available
             if (self.previous_build_env) |previous_env| {
-                const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, absolute_path);
+                const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, session.absolute_path);
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     break :blk module_env;
@@ -2995,31 +2808,18 @@ pub const SyntaxChecker = struct {
             }
 
             // Fall back to current build only if no snapshot available and build succeeded
-            if (build_succeeded and !build_has_reports) {
-                if (self.getModuleEnvByPath(absolute_path)) |module_env| {
+            if (session.build_succeeded and !build_has_reports) {
+                if (self.getModuleEnvByPath(session.absolute_path)) |module_env| {
                     break :blk module_env;
                 }
 
-                const app_sched = env.schedulers.get("app") orelse inner: {
-                    var sched_it = env.schedulers.iterator();
-                    while (sched_it.next()) |entry| {
-                        const sched = entry.value_ptr.*;
-                        if (sched.getRootModule()) |rm| {
-                            if (rm.env != null) {
-                                break :inner sched;
-                            }
-                        }
-                    }
-                    break :blk null;
-                };
-                const root_module = app_sched.getRootModule() orelse break :blk null;
-                break :blk if (root_module.env) |*e| e else null;
+                break :blk session.getModuleEnv();
             }
 
             break :blk null;
         };
 
-        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}\n", .{ context, module_env_opt != null, build_succeeded, used_snapshot });
+        std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}\n", .{ context, module_env_opt != null, session.build_succeeded, used_snapshot });
 
         switch (context) {
             .after_module_dot => |module_name| {
