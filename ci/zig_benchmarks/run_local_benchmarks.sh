@@ -221,13 +221,13 @@ main() {
     # === RUN BENCHMARKS ===
     if [ "$SKIP_FX" = "false" ]; then
         log "Running FX benchmarks"
-        "$TEMP_SCRIPTS_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc
+        "$TEMP_SCRIPTS_DIR/run_fx_benchmarks.sh" bench-main/roc bench-local/roc "$BASE_BRANCH" "$ORIGINAL_BRANCH"
         echo ""
     fi
 
     if [ "$SKIP_SNAPSHOT" = "false" ]; then
         log "Running snapshot benchmarks"
-        "$TEMP_SCRIPTS_DIR/run_snapshot_benchmark.sh" bench-main/snapshot bench-local/snapshot
+        "$TEMP_SCRIPTS_DIR/run_snapshot_benchmark.sh" bench-main/snapshot bench-local/snapshot "$BASE_BRANCH" "$ORIGINAL_BRANCH"
         echo ""
     fi
 

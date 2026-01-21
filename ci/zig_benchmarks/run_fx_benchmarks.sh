@@ -6,6 +6,39 @@ set -euo pipefail
 
 MAIN_ROC=$1
 PR_ROC=$2
+BASE_BRANCH="${3:-}"  # Optional: base branch name
+PR_BRANCH="${4:-}"    # Optional: PR/current branch name
+
+# Check if file content differs between branches
+# Returns 0 if same, 1 if different, 2 if comparison not possible
+check_file_changed() {
+    local file="$1"
+    local base_branch="$2"
+    local pr_branch="$3"
+
+    if [ -z "$base_branch" ] || [ -z "$pr_branch" ]; then
+        return 2  # Branches not provided
+    fi
+
+    local base_sha pr_sha
+    base_sha=$(git show "$base_branch:$file" 2>/dev/null | shasum -a 256 | cut -d' ' -f1) || return 2
+    pr_sha=$(git show "$pr_branch:$file" 2>/dev/null | shasum -a 256 | cut -d' ' -f1) || return 2
+
+    if [ "$base_sha" != "$pr_sha" ]; then
+        return 1  # Different
+    fi
+    return 0  # Same
+}
+
+# Print diff between branches for a file (indented for readability)
+print_file_diff() {
+    local file="$1"
+    local base_branch="$2"
+    local pr_branch="$3"
+
+    echo "    Diff:"
+    git diff "$base_branch".."$pr_branch" -- "$file" 2>/dev/null | sed 's/^/    /'
+}
 
 echo "=== Building FX platform ==="
 zig build test-platforms -Dplatform=fx
@@ -37,6 +70,7 @@ echo "=== Running benchmarks ==="
 
 SLOWER_DETECTED=0
 SLOWER_FILES=""
+CHANGED_FILES=""  # Files that differ between branches
 
 for fx_file in $FX_FILES; do
     filename=$(basename "$fx_file")
@@ -95,6 +129,15 @@ for fx_file in $FX_FILES; do
                 echo "  SLOWER EXECUTION in $filename (${pct_change}% slower)"
                 SLOWER_DETECTED=1
                 SLOWER_FILES="$SLOWER_FILES $filename"
+
+                # Check if file content changed between branches
+                check_file_changed "$fx_file" "$BASE_BRANCH" "$PR_BRANCH" || check_result=$?
+                if [ "${check_result:-0}" = "1" ]; then
+                    echo "    NOTE: File content differs between branches - comparison may not be meaningful"
+                    print_file_diff "$fx_file" "$BASE_BRANCH" "$PR_BRANCH"
+                    CHANGED_FILES="$CHANGED_FILES $filename"
+                fi
+                unset check_result
             fi
         fi
     fi
@@ -106,7 +149,12 @@ echo "=== FX Benchmark Summary ==="
 if [ "$SLOWER_DETECTED" = "1" ]; then
     echo "SLOWER EXECUTION detected in the following files:"
     for f in $SLOWER_FILES; do
-        echo "  - $f"
+        # Check if this file is in the CHANGED_FILES list
+        if echo "$CHANGED_FILES" | grep -qw "$f"; then
+            echo "  - $f (file changed)"
+        else
+            echo "  - $f"
+        fi
     done
     echo ""
     echo "Ask Richard, Anton, or Luke to override this failure if you believe it is justified."
