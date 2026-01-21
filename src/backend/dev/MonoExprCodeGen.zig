@@ -146,6 +146,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             relocations: []const Relocation,
             /// Layout of the result
             result_layout: layout.Idx,
+            /// Offset from start of code where execution should begin
+            /// (procedures may be compiled before the main expression)
+            entry_offset: usize = 0,
         };
 
         /// Errors that can occur during code generation
@@ -226,29 +229,49 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             expr_id: MonoExprId,
             result_layout: layout.Idx,
         ) Error!CodeResult {
+            // Track where the main expression code starts
+            // (procedures may have been compiled before this, at the start of the buffer)
+            const main_code_start = self.codegen.currentOffset();
+
             // Reserve argument registers so they don't get allocated for temporaries
             // X0/RDI = result pointer, X1/RSI = RocOps pointer
             self.reserveArgumentRegisters();
 
+            // IMPORTANT: Save the result pointer to a callee-saved register before
+            // generating code that might call procedures (which would clobber X0).
+            // On aarch64: save X0 to X19 (callee-saved)
+            // On x86_64: save RDI to RBX (callee-saved)
+            const result_ptr_save_reg = if (comptime builtin.cpu.arch == .aarch64)
+                aarch64.GeneralReg.X19
+            else
+                x86_64.GeneralReg.RBX;
+
+            try self.emitMovRegReg(result_ptr_save_reg, if (comptime builtin.cpu.arch == .aarch64)
+                aarch64.GeneralReg.X0
+            else
+                x86_64.GeneralReg.RDI);
+
             // Generate code for the expression - result ends up in a register
             const result_loc = try self.generateExpr(expr_id);
 
-            // Store result to the result pointer (first argument register)
-            try self.storeResult(result_loc, result_layout);
+            // Store result to the saved result pointer
+            try self.storeResultToSavedPtr(result_loc, result_layout, result_ptr_save_reg);
 
             // Emit return
             try self.emitRet();
 
-            // Get the generated code
-            const code = self.codegen.getCode();
+            // Get ALL the generated code (including procedures at the start)
+            // Execution will start at main_code_start via entry_offset
+            const all_code = self.codegen.getCode();
 
             // Make a copy of the code since codegen buffer may be reused
-            const code_copy = self.allocator.dupe(u8, code) catch return Error.OutOfMemory;
+            const code_copy = self.allocator.dupe(u8, all_code) catch return Error.OutOfMemory;
 
             return CodeResult{
                 .code = code_copy,
                 .relocations = self.codegen.relocations.items,
                 .result_layout = result_layout,
+                .entry_offset = main_code_start,
             };
         }
 
@@ -356,8 +379,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a binary operation
         fn generateBinop(self: *Self, binop: anytype) Error!ValueLocation {
-            // Generate code for both operands
-            const lhs_loc = try self.generateExpr(binop.lhs);
+            // Generate code for LHS first
+            var lhs_loc = try self.generateExpr(binop.lhs);
+
+            // If LHS is in a register and RHS might involve a call (which clobbers registers),
+            // we need to save LHS to the stack first. This handles cases like `n * factorial(n-1)`
+            // where evaluating the RHS call would clobber the register containing n.
+            if (lhs_loc == .general_reg) {
+                // Check if RHS might involve a call by looking at the expression
+                const rhs_expr = self.store.getExpr(binop.rhs);
+                if (self.exprMightInvolveCall(rhs_expr)) {
+                    // Spill LHS to stack before evaluating RHS
+                    const stack_offset = try self.codegen.spillToStack(lhs_loc.general_reg);
+                    lhs_loc = .{ .stack = stack_offset };
+
+                    // If LHS is a lookup, update the symbol's location so that any
+                    // subsequent lookups of the same symbol (in the RHS) will find
+                    // the spilled value on the stack instead of the stale register.
+                    const lhs_expr = self.store.getExpr(binop.lhs);
+                    if (lhs_expr == .lookup) {
+                        const symbol_key: u48 = @bitCast(lhs_expr.lookup.symbol);
+                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                    }
+                }
+            }
+
+            // Now evaluate RHS (safe even if it involves calls)
             const rhs_loc = try self.generateExpr(binop.rhs);
 
             // Determine if this is an integer or float operation
@@ -373,6 +420,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
+        /// Check if an expression might involve a function call
+        fn exprMightInvolveCall(self: *Self, expr: MonoExpr) bool {
+            return switch (expr) {
+                .call => true,
+                .binop => |b| {
+                    // Recursively check both operands
+                    const lhs_expr = self.store.getExpr(b.lhs);
+                    const rhs_expr = self.store.getExpr(b.rhs);
+                    return self.exprMightInvolveCall(lhs_expr) or self.exprMightInvolveCall(rhs_expr);
+                },
+                else => false,
+            };
+        }
+
         /// Generate integer binary operation
         fn generateIntBinop(
             self: *Self,
@@ -380,11 +441,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             lhs_loc: ValueLocation,
             rhs_loc: ValueLocation,
         ) Error!ValueLocation {
-            // Load LHS into a register
-            const lhs_reg = try self.ensureInGeneralReg(lhs_loc);
-
-            // Load RHS into a register
+            // IMPORTANT: Load RHS first to protect its register
+            // If rhs is in a register (e.g., X0 from a function call result)
+            // and lhs is on the stack, loading lhs might allocate X0 and
+            // clobber the rhs value. By loading rhs first, we mark its register
+            // as in use so the allocator won't reuse it.
             const rhs_reg = try self.ensureInGeneralReg(rhs_loc);
+
+            // Now load LHS into a register (safe because rhs_reg is protected)
+            const lhs_reg = try self.ensureInGeneralReg(lhs_loc);
 
             // Allocate result register
             const result_reg = try self.codegen.allocGeneralFor(0);
@@ -1584,12 +1649,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateLookupCall(self: *Self, lookup: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             const symbol_key: u48 = @bitCast(lookup.symbol);
 
-            // NOTE: We used to have a recursive jump shortcut here, but it only works for
-            // tail-recursive calls. For non-tail calls like `n * factorial(n - 1)`, we need
-            // to return to complete the multiplication. The proper function call path handles
-            // recursion correctly via emitted functions with proper stack frames.
+            // FIRST: Check if the function was compiled as a procedure (for recursive functions)
+            // This takes priority over inlining because recursive functions MUST be called
+            // as proper procedures with stack frames.
+            if (self.proc_registry.get(symbol_key)) |proc| {
+                return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
+            }
 
-            // First check if the symbol is bound to a lambda/closure in local scope
+            // Fall back to inline path for non-recursive closures
+
+            // Check if the symbol is bound to a lambda/closure in local scope
             if (self.lambda_bindings.get(symbol_key)) |lambda_expr_id| {
                 const lambda_expr = self.store.getExpr(lambda_expr_id);
 
@@ -1612,6 +1681,49 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             return Error.LocalNotFound;
+        }
+
+        /// Generate a call to an already-compiled procedure.
+        /// This is used for recursive functions that were compiled via compileAllProcs.
+        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
+            _ = ret_layout;
+
+            // Evaluate arguments and place them in argument registers
+            const args = self.store.getExprSpan(args_span);
+            for (args, 0..) |arg_id, i| {
+                const arg_loc = try self.generateExpr(arg_id);
+                const arg_reg = self.getArgumentRegister(@intCast(i));
+                try self.moveToReg(arg_loc, arg_reg);
+            }
+
+            // Emit the call instruction
+            try self.emitCallToOffset(proc.code_start);
+
+            // Result is in the return register - mark it as allocated so it won't
+            // be reused before we're done with it
+            const ret_reg = self.getReturnRegister();
+            self.codegen.markRegisterInUse(ret_reg);
+            return .{ .general_reg = ret_reg };
+        }
+
+        /// Move a value to a specific register
+        fn moveToReg(self: *Self, loc: ValueLocation, target_reg: GeneralReg) Error!void {
+            switch (loc) {
+                .general_reg => |src_reg| {
+                    if (src_reg != target_reg) {
+                        try self.emitMovRegReg(target_reg, src_reg);
+                    }
+                },
+                .immediate_i64 => |val| {
+                    try self.codegen.emitLoadImm(target_reg, val);
+                },
+                .stack => |offset| {
+                    try self.codegen.emitLoadStack(.w64, target_reg, offset);
+                },
+                .float_reg, .immediate_f64 => {
+                    return Error.InvalidLocalLocation;
+                },
+            }
         }
 
         /// Ensure a value is in a general-purpose register
@@ -1726,6 +1838,43 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
+        /// Store the result to the output buffer pointed to by a saved register
+        /// This is used when the original result pointer (X0/RDI) may have been clobbered
+        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg) Error!void {
+            switch (result_layout) {
+                .i64, .i32, .i16, .i8, .u64, .u32, .u16, .u8, .bool => {
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+                .f64, .f32 => {
+                    switch (loc) {
+                        .float_reg => |reg| {
+                            try self.emitStoreFloatToMem(saved_ptr_reg, reg);
+                        },
+                        .immediate_f64 => |val| {
+                            const bits: i64 = @bitCast(val);
+                            const reg = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(reg, bits);
+                            try self.emitStoreToMem(saved_ptr_reg, reg);
+                            self.codegen.freeGeneral(reg);
+                        },
+                        else => {
+                            const reg = try self.ensureInGeneralReg(loc);
+                            try self.emitStoreToMem(saved_ptr_reg, reg);
+                        },
+                    }
+                },
+                .i128, .u128, .dec => {
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+                else => {
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+            }
+        }
+
         /// Store general register to memory at [ptr_reg] (architecture-specific)
         fn emitStoreToMem(self: *Self, ptr_reg: anytype, src_reg: GeneralReg) !void {
             if (comptime builtin.cpu.arch == .aarch64) {
@@ -1759,6 +1908,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn compileProc(self: *Self, proc: MonoProc) Error!void {
             const code_start = self.codegen.currentOffset();
 
+            // CRITICAL: Register the procedure BEFORE generating the body
+            // so that recursive calls within the body can find this procedure.
+            // We'll update code_end after generation is complete.
+            const key: u48 = @bitCast(proc.name);
+            try self.proc_registry.put(key, .{
+                .code_start = code_start,
+                .code_end = 0, // Placeholder, updated below
+                .name = proc.name,
+            });
+
             // Generate function prologue (save frame, allocate stack)
             try self.emitPrologue();
 
@@ -1785,32 +1944,44 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.current_recursive_symbol = old_recursive_symbol;
             self.current_recursive_join_point = old_recursive_join_point;
 
+            // Update the code_end now that generation is complete
             const code_end = self.codegen.currentOffset();
-
-            // Register this procedure
-            const key: u48 = @bitCast(proc.name);
-            try self.proc_registry.put(key, .{
-                .code_start = code_start,
-                .code_end = code_end,
-                .name = proc.name,
-            });
+            if (self.proc_registry.getPtr(key)) |entry| {
+                entry.code_end = code_end;
+            }
         }
 
+        /// Fixed stack frame size for procedures (includes space for spills)
+        /// Note: On aarch64, stp/ldp use 7-bit signed scaled offsets.
+        /// Max frame size is 63 * 8 = 504 bytes. We use 48 bytes for locals.
+        const PROC_STACK_SIZE: i32 = 48;
+
         /// Emit function prologue (architecture-specific).
-        /// Sets up the stack frame for the function.
+        /// Sets up the stack frame for the function, including space for local variables.
         fn emitPrologue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
                 // AArch64 prologue:
-                // stp x29, x30, [sp, #-16]!  ; Save frame pointer and link register
-                // mov x29, sp                 ; Set up new frame pointer
-                try self.codegen.emit.stpPreIndex(.x64, .X29, .X30, .SP, -16);
-                try self.codegen.emit.movRegReg(.x64, .X29, .SP);
+                // stp x29, x30, [sp, #-(16+STACK_SIZE)]!  ; Save FP/LR and allocate stack
+                // mov x29, sp                             ; Set up new frame pointer
+                // Total frame = 16 (FP/LR) + PROC_STACK_SIZE (locals)
+                // stp offset is in units of 8 bytes (scaled)
+                const total_frame = 16 + PROC_STACK_SIZE;
+                const scaled_offset: i7 = @intCast(@divExact(-total_frame, 8));
+                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
+                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+                // Reset stack_offset to account for the pre-allocated space
+                // Stack slots start at FP+16 (above saved FP/LR) and go up
+                self.codegen.stack_offset = 16; // First slot at [FP+16]
             } else {
                 // x86_64 prologue:
                 // push rbp                    ; Save frame pointer
                 // mov rbp, rsp                ; Set up new frame pointer
+                // sub rsp, PROC_STACK_SIZE   ; Allocate stack space
                 try self.codegen.emit.push(.RBP);
-                try self.codegen.emit.movRegReg(.x64, .RBP, .RSP);
+                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
+                try self.codegen.emit.subRegImm32(.w64, .RSP, PROC_STACK_SIZE);
+                // Stack slots are at negative offsets from RBP
+                self.codegen.stack_offset = 0; // Will go negative
             }
         }
 
@@ -1819,16 +1990,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn emitEpilogue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
                 // AArch64 epilogue:
-                // ldp x29, x30, [sp], #16     ; Restore frame pointer and link register
-                // ret                          ; Return to caller
-                try self.codegen.emit.ldpPostIndex(.x64, .X29, .X30, .SP, 16);
+                // ldp x29, x30, [sp], #(16+STACK_SIZE)  ; Restore FP/LR and deallocate
+                // ret                                   ; Return to caller
+                // ldp offset is in units of 8 bytes (scaled)
+                const total_frame = 16 + PROC_STACK_SIZE;
+                const scaled_offset: i7 = @intCast(@divExact(total_frame, 8));
+                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, scaled_offset);
                 try self.codegen.emit.ret();
             } else {
                 // x86_64 epilogue:
-                // mov rsp, rbp                ; Restore stack pointer
+                // mov rsp, rbp                ; Restore stack pointer (deallocates locals)
                 // pop rbp                     ; Restore frame pointer
                 // ret                          ; Return to caller
-                try self.codegen.emit.movRegReg(.x64, .RSP, .RBP);
+                try self.codegen.emit.movRegReg(.w64, .RSP, .RBP);
                 try self.codegen.emit.pop(.RBP);
                 try self.codegen.emit.retq();
             }
@@ -1846,6 +2020,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const arg_reg = self.getArgumentRegister(@intCast(i));
                         const symbol_key: u48 = @bitCast(bind.symbol);
                         try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                        // IMPORTANT: Mark the register as in use so the allocator won't
+                        // reuse it for other values. Without this, loading a literal
+                        // might clobber the parameter value.
+                        self.codegen.markRegisterInUse(arg_reg);
                     },
                     else => {
                         // Complex parameter patterns not yet supported
@@ -1875,7 +2053,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Initialize jump record list for this join point
                     const jp_key = @intFromEnum(j.id);
                     if (!self.join_point_jumps.contains(jp_key)) {
-                        try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).init(self.allocator));
+                        try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                     }
 
                     // Generate REMAINDER first (code that eventually jumps TO the join point)
@@ -1917,7 +2095,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Record for patching
                     const jp_key = @intFromEnum(jmp.target);
                     if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
-                        try jumps.append(.{ .location = jump_location });
+                        try jumps.append(self.allocator, .{ .location = jump_location });
                     }
                 },
 

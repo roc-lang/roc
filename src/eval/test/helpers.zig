@@ -168,8 +168,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
     defer code_result.deinit();
 
-    // JIT execute the code
-    var jit = backend.JitCode.init(code_result.code) catch {
+    // JIT execute the code (with entry_offset for compiled procedures)
+    var jit = backend.JitCode.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
         return error.JitInitFailed;
     };
     defer jit.deinit();

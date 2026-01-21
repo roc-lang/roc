@@ -311,6 +311,9 @@ pub const DevEvaluator = struct {
         result_layout: LayoutIdx,
         tuple_len: usize = 1,
         crash_message: ?[]const u8 = null,
+        /// Offset from start of code where execution should begin
+        /// (procedures may be compiled before the main expression)
+        entry_offset: usize = 0,
 
         pub fn deinit(self: *CodeResult) void {
             if (self.code.len > 0) {
@@ -364,6 +367,16 @@ pub const DevEvaluator = struct {
         );
         defer codegen.deinit();
 
+        // Compile all procedures first (for recursive functions)
+        // This ensures recursive closures are compiled as complete procedures
+        // before we generate calls to them.
+        const procs = mono_store.getProcs();
+        if (procs.len > 0) {
+            codegen.compileAllProcs(procs) catch {
+                return error.UnsupportedExpression;
+            };
+        }
+
         // Generate code for the expression
         const gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
             return error.UnsupportedExpression;
@@ -373,6 +386,7 @@ pub const DevEvaluator = struct {
             .code = gen_result.code,
             .allocator = self.allocator,
             .result_layout = result_layout,
+            .entry_offset = gen_result.entry_offset,
         };
     }
 

@@ -154,6 +154,17 @@ pub const SystemVCodeGen = struct {
         }
     }
 
+    /// Mark a register as in use so it won't be allocated.
+    /// Used for return values from function calls that need to persist.
+    pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
+        const idx = @intFromEnum(reg);
+        // Remove from free pool (it's now in use)
+        self.free_general &= ~(@as(u16, 1) << @intCast(idx));
+        self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
+        // Set ownership to a sentinel value (0 = temporary)
+        self.general_owners[idx] = 0;
+    }
+
     /// Spill a register to make room and allocate it for the given local.
     fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
         // Find a register to spill - prefer lowest-numbered for consistency
@@ -322,6 +333,14 @@ pub const SystemVCodeGen = struct {
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
         return (size + 15) & ~@as(u32, 15);
+    }
+
+    /// Spill a register to the stack and return the stack slot offset.
+    /// This is used to save caller-saved registers before function calls.
+    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
+        const slot = self.allocStack(8);
+        try self.emitStoreStack(.w64, slot, reg);
+        return slot;
     }
 
     // Function prologue/epilogue

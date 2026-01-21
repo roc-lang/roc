@@ -13,12 +13,20 @@ pub const ExecutableMemory = struct {
     memory: []align(std.heap.page_size_min) u8,
     /// Size of the actual code (may be less than memory.len due to page alignment)
     code_size: usize,
+    /// Offset from start where execution should begin (for compiled procedures)
+    entry_offset: usize,
 
     const Self = @This();
 
     /// Allocate executable memory and copy the given code into it.
     /// The code bytes should already have any relocations applied.
     pub fn init(code: []const u8) !Self {
+        return initWithEntryOffset(code, 0);
+    }
+
+    /// Allocate executable memory with a specific entry offset.
+    /// Use this when procedures are compiled before the main expression.
+    pub fn initWithEntryOffset(code: []const u8, entry_offset: usize) !Self {
         if (code.len == 0) {
             return error.EmptyCode;
         }
@@ -40,6 +48,7 @@ pub const ExecutableMemory = struct {
         return Self{
             .memory = memory,
             .code_size = code.len,
+            .entry_offset = entry_offset,
         };
     }
 
@@ -55,34 +64,39 @@ pub const ExecutableMemory = struct {
         return self.memory.ptr;
     }
 
+    /// Get a pointer to the entry point (may differ from codePtr if entry_offset is non-zero)
+    pub fn entryPtr(self: *const Self) [*]const u8 {
+        return self.memory.ptr + self.entry_offset;
+    }
+
     /// Call the code as a function that takes no arguments and returns i64
     pub fn callReturnI64(self: *const Self) i64 {
-        const func: *const fn () callconv(.c) i64 = @ptrCast(self.memory.ptr);
+        const func: *const fn () callconv(.c) i64 = @ptrCast(@alignCast(self.entryPtr()));
         return func();
     }
 
     /// Call the code as a function that takes no arguments and returns u64
     pub fn callReturnU64(self: *const Self) u64 {
-        const func: *const fn () callconv(.c) u64 = @ptrCast(self.memory.ptr);
+        const func: *const fn () callconv(.c) u64 = @ptrCast(@alignCast(self.entryPtr()));
         return func();
     }
 
     /// Call the code as a function that takes no arguments and returns f64
     pub fn callReturnF64(self: *const Self) f64 {
-        const func: *const fn () callconv(.c) f64 = @ptrCast(self.memory.ptr);
+        const func: *const fn () callconv(.c) f64 = @ptrCast(@alignCast(self.entryPtr()));
         return func();
     }
 
     /// Call the code as a function that takes a result pointer and returns void.
     /// This is the Roc calling convention for functions that return values.
     pub fn callWithResultPtr(self: *const Self, result_ptr: *anyopaque) void {
-        const func: *const fn (*anyopaque) callconv(.c) void = @ptrCast(self.memory.ptr);
+        const func: *const fn (*anyopaque) callconv(.c) void = @ptrCast(@alignCast(self.entryPtr()));
         func(result_ptr);
     }
 
     /// Call the code as a function that takes a result pointer and RocOps pointer.
     pub fn callWithResultPtrAndRocOps(self: *const Self, result_ptr: *anyopaque, roc_ops: *anyopaque) void {
-        const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(self.memory.ptr);
+        const func: *const fn (*anyopaque, *anyopaque) callconv(.c) void = @ptrCast(@alignCast(self.entryPtr()));
         func(result_ptr, roc_ops);
     }
 };

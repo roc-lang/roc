@@ -98,6 +98,10 @@ current_module_idx: u16 = 0,
 /// so we can detect if the closure body references itself.
 current_binding_pattern: ?CIR.Pattern.Idx = null,
 
+/// Current binding symbol (MonoSymbol version of current_binding_pattern)
+/// Used to create MonoProcs for recursive closures.
+current_binding_symbol: ?MonoSymbol = null,
+
 /// Counter for generating unique join point IDs
 next_join_point_id: u32 = 0,
 
@@ -362,6 +366,19 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Detect if this closure is recursive (references itself)
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
+
+            // If this is a recursive closure bound to a variable, create a MonoProc
+            // so it can be compiled as a separate procedure with proper stack frame.
+            if (recursion_info.self_recursive != .not_self_recursive and is_bound) {
+                if (self.current_binding_symbol) |binding_symbol| {
+                    const join_point_id = switch (recursion_info.self_recursive) {
+                        .self_recursive => |id| id,
+                        .not_self_recursive => unreachable,
+                    };
+                    const proc = try self.lowerClosureToProc(module_env, closure, binding_symbol, join_point_id);
+                    _ = try self.store.addProc(proc);
+                }
+            }
 
             break :blk .{ .closure = .{
                 .closure_layout = .i64, // TODO: compute from representation
@@ -1375,11 +1392,19 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
         switch (stmt) {
             .s_decl => |decl| {
                 const pattern = try self.lowerPattern(module_env, decl.pattern);
-                // Set current binding pattern for recursive closure detection
+                // Set current binding pattern and symbol for recursive closure detection
                 const old_binding = self.current_binding_pattern;
+                const old_symbol = self.current_binding_symbol;
                 self.current_binding_pattern = decl.pattern;
+                const binding_symbol = self.patternToSymbol(decl.pattern);
+                self.current_binding_symbol = binding_symbol;
                 const value = try self.lowerExprFromIdx(module_env, decl.expr);
                 self.current_binding_pattern = old_binding;
+                self.current_binding_symbol = old_symbol;
+
+                // Register the symbol definition for lookups
+                try self.store.registerSymbolDef(binding_symbol, value);
+
                 try lowered.append(self.allocator, .{
                     .pattern = pattern,
                     .expr = value,
@@ -1387,11 +1412,19 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
             },
             .s_decl_gen => |decl| {
                 const pattern = try self.lowerPattern(module_env, decl.pattern);
-                // Set current binding pattern for recursive closure detection
+                // Set current binding pattern and symbol for recursive closure detection
                 const old_binding = self.current_binding_pattern;
+                const old_symbol = self.current_binding_symbol;
                 self.current_binding_pattern = decl.pattern;
+                const binding_symbol = self.patternToSymbol(decl.pattern);
+                self.current_binding_symbol = binding_symbol;
                 const value = try self.lowerExprFromIdx(module_env, decl.expr);
                 self.current_binding_pattern = old_binding;
+                self.current_binding_symbol = old_symbol;
+
+                // Register the symbol definition for lookups
+                try self.store.registerSymbolDef(binding_symbol, value);
+
                 try lowered.append(self.allocator, .{
                     .pattern = pattern,
                     .expr = value,
@@ -1860,7 +1893,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
 
 /// Lower a block to a chain of let statements.
 /// The final expression is lowered to a statement (which might be ret, switch, etc.)
-fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: CIR.Expr.Block, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
     const stmt_slice = module_env.store.sliceStatements(block.stmts);
 
     // First, lower the final expression to a statement
@@ -1876,11 +1909,18 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: CIR.Expr.Block, 
         switch (stmt) {
             .s_decl => |decl| {
                 const pattern_id = try self.lowerPattern(module_env, decl.pattern);
-                // Set binding pattern for recursive closure detection
+                // Set binding pattern and symbol for recursive closure detection
                 const old_binding = self.current_binding_pattern;
+                const old_symbol = self.current_binding_symbol;
                 self.current_binding_pattern = decl.pattern;
+                const binding_symbol = self.patternToSymbol(decl.pattern);
+                self.current_binding_symbol = binding_symbol;
                 const value_id = try self.lowerExprFromIdx(module_env, decl.expr);
                 self.current_binding_pattern = old_binding;
+                self.current_binding_symbol = old_symbol;
+
+                // Register the symbol definition for lookups
+                try self.store.registerSymbolDef(binding_symbol, value_id);
 
                 current_stmt = try self.store.addCFStmt(.{
                     .let_stmt = .{
@@ -1893,9 +1933,16 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: CIR.Expr.Block, 
             .s_decl_gen => |decl| {
                 const pattern_id = try self.lowerPattern(module_env, decl.pattern);
                 const old_binding = self.current_binding_pattern;
+                const old_symbol = self.current_binding_symbol;
                 self.current_binding_pattern = decl.pattern;
+                const binding_symbol = self.patternToSymbol(decl.pattern);
+                self.current_binding_symbol = binding_symbol;
                 const value_id = try self.lowerExprFromIdx(module_env, decl.expr);
                 self.current_binding_pattern = old_binding;
+                self.current_binding_symbol = old_symbol;
+
+                // Register the symbol definition for lookups
+                try self.store.registerSymbolDef(binding_symbol, value_id);
 
                 current_stmt = try self.store.addCFStmt(.{
                     .let_stmt = .{
@@ -1914,7 +1961,7 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: CIR.Expr.Block, 
 
 /// Lower if-then-else to a switch statement.
 /// This makes branch structure explicit for tail call analysis.
-fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: CIR.Expr.If, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
     const branch_indices = module_env.store.sliceIfBranches(ite.branches);
 
     // For a simple if-then-else with one condition:
@@ -1990,6 +2037,7 @@ fn lowerClosureToProc(
     module_env: *ModuleEnv,
     closure: CIR.Expr.Closure,
     binding_symbol: MonoSymbol,
+    join_point_id: JoinPointId,
 ) Error!MonoProc {
     // Get the lambda from the closure
     const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
@@ -2003,21 +2051,12 @@ fn lowerClosureToProc(
     const param_layouts = try self.extractParamLayouts(params);
     const ret_layout = self.getExprLayoutFromIdx(module_env, lambda.body);
 
-    // Detect if this closure is recursive
-    const is_recursive = self.exprContainsPatternRef(module_env, lambda.body, self.current_binding_pattern orelse return error.InvalidExpression);
-
-    // Generate a join point ID if recursive
-    const join_point_id: JoinPointId = if (is_recursive) blk: {
-        const id: JoinPointId = @enumFromInt(self.next_join_point_id);
-        self.next_join_point_id += 1;
-        break :blk id;
-    } else JoinPointId.none;
-
     // Lower body to statements
     var body_stmt = try self.lowerExprToStmt(module_env, lambda.body, ret_layout);
 
-    // Apply tail recursion transformation if recursive
-    if (is_recursive and !join_point_id.isNone()) {
+    // Apply tail recursion transformation if recursive (join_point_id is valid)
+    const is_recursive = !join_point_id.isNone();
+    if (is_recursive) {
         if (try TailRecursion.makeTailRecursive(
             self.store,
             binding_symbol,
