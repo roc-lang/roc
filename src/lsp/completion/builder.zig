@@ -205,11 +205,22 @@ pub const CompletionBuilder = struct {
             if (name.len == 0) continue;
 
             const without_module = stripModulePrefix(name, module_env.module_name);
-            if (!std.mem.startsWith(u8, without_module, module_name)) continue;
-            if (without_module.len <= module_name.len or without_module[module_name.len] != '.') continue;
+            const label = blk: {
+                // Module exports can be qualified (Module.member) or unqualified (member).
+                // Prefer matching the actual module name to avoid leaking unrelated items,
+                // but allow unqualified names when we are completing the module itself.
+                const dot_index = std.mem.indexOfScalar(u8, without_module, '.');
+                if (dot_index == null) {
+                    if (!std.mem.eql(u8, module_env.module_name, module_name)) continue;
+                    break :blk without_module;
+                }
 
-            const remainder = without_module[module_name.len + 1 ..];
-            const label = firstSegment(remainder);
+                if (!std.mem.startsWith(u8, without_module, module_name)) continue;
+                if (without_module.len <= module_name.len or without_module[module_name.len] != '.') continue;
+
+                const remainder = without_module[module_name.len + 1 ..];
+                break :blk firstSegment(remainder);
+            };
             if (label.len == 0) continue;
 
             const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
