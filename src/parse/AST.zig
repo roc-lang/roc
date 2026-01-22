@@ -773,19 +773,58 @@ pub fn resolveQualifiedName(
     }
 }
 
-/// Resolves the full module path for an import statement, from qualifier (or first segment)
-/// through module_name_tok. The parser sets module_name_tok appropriately:
-/// - For explicit clauses (as/exposing): points to the last uppercase segment
-/// - For auto-expose: points to the second-to-last uppercase segment
-pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx) []const u8 {
-    // Get the start position (qualifier or first module segment)
+/// Resolves the full module path for an import statement.
+/// For auto-expose imports, module_name_tok points to the second-to-last token.
+/// For explicit clause imports, module_name_tok points to the first token and
+/// we iterate through consecutive uppercase tokens.
+pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, exposes: ExposedItem.Span) []const u8 {
+    const tags = self.tokens.tokens.items(.tag);
+
+    // Check if this is auto-expose by seeing if the first exposed item's token
+    // immediately follows module_name_tok
+    var is_auto_expose = false;
+    if (exposes.span.len > 0) {
+        const exposed_slice = self.store.exposedItemSlice(exposes);
+        if (exposed_slice.len > 0) {
+            const first_exposed = self.store.getExposedItem(exposed_slice[0]);
+            const first_exposed_tok: ?Token.Idx = switch (first_exposed) {
+                .lower_ident => |i| i.ident,
+                .upper_ident => |i| i.ident,
+                .upper_ident_star => |i| i.ident,
+                .malformed => null,
+            };
+            if (first_exposed_tok) |tok| {
+                if (tok == module_name_tok + 1) {
+                    is_auto_expose = true;
+                }
+            }
+        }
+    }
+
+    // Get start position (qualifier or first module segment)
     const start_offset: usize = if (qualifier_tok) |q|
         self.tokens.resolve(q).start.offset
     else
         self.tokens.resolve(module_name_tok).start.offset;
 
-    // Get the end position (module_name_tok)
-    const end_offset = self.tokens.resolve(module_name_tok).end.offset;
+    // Find the end token
+    var end_tok = module_name_tok;
+    if (!is_auto_expose) {
+        // For explicit clauses, iterate through consecutive uppercase tokens
+        var tok = module_name_tok + 1;
+        while (tok < tags.len) {
+            const tag = tags[tok];
+            if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
+                end_tok = tok;
+                tok += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Get end position
+    const end_offset = self.tokens.resolve(end_tok).end.offset;
 
     return self.env.source[start_offset..end_offset];
 }
@@ -957,7 +996,7 @@ pub const Statement = union(enum) {
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
                 // Reconstruct full qualified module name using the new helper
-                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok);
+                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes);
                 try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`

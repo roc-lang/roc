@@ -276,7 +276,7 @@ data = json
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "json.Core.Utf8")
+	(s-import (module "json.Core")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
 ~~~

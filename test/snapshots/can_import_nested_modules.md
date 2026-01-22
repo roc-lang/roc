@@ -301,7 +301,7 @@ validateAuth = |creds| HttpAuth.validate(creds)
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
 				(ty-lookup (name "Str") (builtin))
-				(ty-lookup (name "Token") (external-module "http.Client.Auth")))))
+				(ty-lookup (name "Token") (external-module "http.Client")))))
 	(d-let
 		(p-assign (ident "processData"))
 		(e-lambda
@@ -346,16 +346,16 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(p-assign (ident "creds")))))
 		(annotation
 			(ty-fn (effectful false)
-				(ty-lookup (name "Credentials") (external-module "http.Client.Auth"))
+				(ty-lookup (name "Credentials") (external-module "http.Client"))
 				(ty-apply (name "Try") (builtin)
-					(ty-lookup (name "Token") (external-module "http.Client.Auth"))
-					(ty-lookup (name "Error") (external-module "http.Client.Auth"))))))
+					(ty-lookup (name "Token") (external-module "http.Client"))
+					(ty-lookup (name "Error") (external-module "http.Client"))))))
 	(s-import (module "json.Parser")
 		(exposes
 			(exposed (name "Config") (wildcard false))))
-	(s-import (module "http.Client.Auth")
+	(s-import (module "http.Client")
 		(exposes))
-	(s-import (module "utils.String.Format")
+	(s-import (module "utils.String")
 		(exposes
 			(exposed (name "padLeft") (wildcard false)))))
 ~~~

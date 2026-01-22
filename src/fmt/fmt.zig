@@ -419,9 +419,9 @@ const Formatter = struct {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
                 }
-                try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok);
+                const last_module_tok = try fmt.formatModulePath(i.module_name_tok, i.qualifier_tok, i.exposes);
                 if (multiline and (i.alias_tok != null or i.exposes.span.len > 0)) {
-                    flushed = try fmt.flushCommentsAfter(i.module_name_tok);
+                    flushed = try fmt.flushCommentsAfter(last_module_tok);
                 }
 
                 if (i.alias_tok) |a| {
@@ -749,25 +749,68 @@ const Formatter = struct {
         try fmt.pushTokenText(ident);
     }
 
-    /// Formats a module path from qualifier (if present) through module_name_tok.
-    /// For qualified imports like `a.B.C`, this outputs the full path based on where
-    /// module_name_tok points (which may be the last segment or second-to-last for auto-expose).
-    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx) !void {
+    /// Formats a module path for an import statement.
+    /// For auto-expose imports (like `import A.B.C` becoming `import A.B exposing [C]`),
+    /// module_name_tok points to the second-to-last token.
+    /// For explicit clause imports (like `import A.B.C as D`), module_name_tok points to
+    /// the first token and we iterate through consecutive uppercase tokens.
+    fn formatModulePath(fmt: *Formatter, module_name_tok: Token.Idx, qualifier: ?Token.Idx, exposes: AST.ExposedItem.Span) !Token.Idx {
         const curr_indent = fmt.curr_indent;
         defer {
             fmt.curr_indent = curr_indent;
         }
 
-        // Determine the start token (qualifier or first module segment)
-        const start_tok = if (qualifier) |q| q else module_name_tok;
+        // Check if this is auto-expose by seeing if the first exposed item's token
+        // immediately follows module_name_tok (meaning it was auto-generated)
+        var is_auto_expose = false;
+        if (exposes.span.len > 0) {
+            const exposed_slice = fmt.ast.store.exposedItemSlice(exposes);
+            if (exposed_slice.len > 0) {
+                const first_exposed = fmt.ast.store.getExposedItem(exposed_slice[0]);
+                const first_exposed_tok = switch (first_exposed) {
+                    .lower_ident => |i| i.ident,
+                    .upper_ident => |i| i.ident,
+                    .upper_ident_star => |i| i.ident,
+                    .malformed => null,
+                };
+                if (first_exposed_tok) |tok| {
+                    // For auto-expose, the exposed token immediately follows module_name_tok
+                    if (tok == module_name_tok + 1) {
+                        is_auto_expose = true;
+                    }
+                }
+            }
+        }
 
-        // Get source range from start to module_name_tok
-        const start_region = fmt.ast.tokens.resolve(start_tok);
-        const end_region = fmt.ast.tokens.resolve(module_name_tok);
+        // Output qualifier if present
+        if (qualifier) |q| {
+            try fmt.pushTokenText(q);
+            try fmt.push('.');
+        }
 
-        // Output the full module path text directly from source
-        const path_text = fmt.ast.env.source[start_region.start.offset..end_region.end.offset];
-        try fmt.pushAll(path_text);
+        // Output the first uppercase token
+        try fmt.pushTokenText(module_name_tok);
+        var last_tok = module_name_tok;
+
+        // For auto-expose, stop here (module_name_tok is already the last token we want)
+        // For explicit clauses, iterate through consecutive uppercase tokens
+        if (!is_auto_expose) {
+            var tok = module_name_tok + 1;
+            const tags = fmt.ast.tokens.tokens.items(.tag);
+            while (tok < tags.len) {
+                const tag = tags[tok];
+                if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
+                    try fmt.push('.');
+                    try fmt.pushTokenText(tok);
+                    last_tok = tok;
+                    tok += 1;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        return last_tok;
     }
 
     const Braces = enum {

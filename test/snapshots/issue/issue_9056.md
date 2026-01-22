@@ -32,7 +32,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-import (module "a.B.C")
+	(s-import (module "a.B")
 		(exposes
 			(exposed (name "E") (wildcard false)))))
 ~~~

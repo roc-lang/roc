@@ -1874,8 +1874,7 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 import pf.Stdout exposing [line!, write!]
 
 import # Comment after import keyword
-	pf # Comment after qualifier
-		.StdoutMultiline # Comment after ident
+	pf.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
 			write!, # Another after exposed item

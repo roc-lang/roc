@@ -1374,8 +1374,8 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
                 } else {
                     // Normal import with explicit 'as' or 'exposing' clause
-                    // module_name_tok should be the last uppercase token for full path reconstruction
-                    module_name_tok = last_upper_tok;
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens to output the full path.
 
                     // Handle 'as' clause if present
                     if (self.peek() == .KwAs) {

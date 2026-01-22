@@ -116,7 +116,7 @@ import Color
 
 
 **MODULE NOT FOUND**
-The module `ModuleB` was not found in this Roc project.
+The module `ModuleA` was not found in this Roc project.
 
 You're attempting to use this module here:
 **qualified_type_canonicalization.md:10:1:10:40:**
@@ -319,7 +319,7 @@ EndOfFile,
 	(statements
 		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-import (raw "Color"))
-		(s-import (raw ".ModuleB")
+		(s-import (raw "ModuleA.ModuleB")
 			(exposing
 				(exposed-upper-ident (text "TypeC"))))
 		(s-import (raw "ExternalModule") (alias "ExtMod"))
@@ -415,7 +415,7 @@ EndOfFile,
 ~~~roc
 
 import Color
-import .ModuleB exposing [TypeC]
+import ModuleA.ModuleB exposing [TypeC]
 import ExternalModule as ExtMod
 
 # Simple qualified type
@@ -536,7 +536,7 @@ transform = |result|
 				(ty-malformed))))
 	(s-import (module "Color")
 		(exposes))
-	(s-import (module "ModuleB")
+	(s-import (module "ModuleA")
 		(exposes
 			(exposed (name "TypeC") (wildcard false))))
 	(s-import (module "ExternalModule")
