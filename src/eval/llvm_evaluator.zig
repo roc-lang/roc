@@ -585,32 +585,21 @@ pub const LlvmEvaluator = struct {
         }
 
         /// Emit short-circuit AND operation using select
-        /// For simple boolean and/or, we use select which is simpler than control flow
+        /// All booleans are i1, so we can use simple bitwise AND
         fn emitShortCircuitAnd(ctx: *ExprContext, binop: CIR.Expr.Binop) ExprError!LlvmBuilder.Value {
-            // Evaluate both sides (select evaluates both, but that's ok for simple expressions)
             const lhs = try ctx.emitExpr(binop.lhs);
             const rhs = try ctx.emitExpr(binop.rhs);
-
             // AND: if lhs is true, result is rhs; otherwise result is false
-            // Convert i8 to i1 for condition by comparing with zero
-            const zero = (ctx.builder.intConst(.i8, 0) catch return error.CompilationFailed).toValue();
-            const cond = ctx.wip.icmp(.ne, lhs, zero, "") catch return error.CompilationFailed;
-            const false_const = (ctx.builder.intConst(.i8, 0) catch return error.CompilationFailed).toValue();
-            return ctx.wip.select(.normal, cond, rhs, false_const, "") catch return error.CompilationFailed;
+            return ctx.wip.select(.normal, lhs, rhs, try ctx.boolConst(false), "") catch return error.CompilationFailed;
         }
 
         /// Emit short-circuit OR operation using select
+        /// All booleans are i1, so we can use simple bitwise OR
         fn emitShortCircuitOr(ctx: *ExprContext, binop: CIR.Expr.Binop) ExprError!LlvmBuilder.Value {
-            // Evaluate both sides
             const lhs = try ctx.emitExpr(binop.lhs);
             const rhs = try ctx.emitExpr(binop.rhs);
-
             // OR: if lhs is true, result is true; otherwise result is rhs
-            // Convert i8 to i1 for condition by comparing with zero
-            const zero = (ctx.builder.intConst(.i8, 0) catch return error.CompilationFailed).toValue();
-            const cond = ctx.wip.icmp(.ne, lhs, zero, "") catch return error.CompilationFailed;
-            const true_const = (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
-            return ctx.wip.select(.normal, cond, true_const, rhs, "") catch return error.CompilationFailed;
+            return ctx.wip.select(.normal, lhs, try ctx.boolConst(true), rhs, "") catch return error.CompilationFailed;
         }
 
         /// Emit unary minus operation
@@ -630,9 +619,8 @@ pub const LlvmEvaluator = struct {
         /// Emit unary not operation
         fn emitUnaryNot(ctx: *ExprContext, unary: CIR.Expr.UnaryNot) ExprError!LlvmBuilder.Value {
             const operand = try ctx.emitExpr(unary.expr);
-            // XOR with 1 to flip the boolean (use i8 since Bool is stored as i8)
-            const one = (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
-            return ctx.wip.bin(.xor, operand, one, "") catch return error.CompilationFailed;
+            // XOR with true to flip the boolean
+            return ctx.wip.bin(.xor, operand, try ctx.boolConst(true), "") catch return error.CompilationFailed;
         }
 
         /// Emit if expression using proper control flow with basic blocks and phi nodes
@@ -722,11 +710,10 @@ pub const LlvmEvaluator = struct {
             return wip_phi.toValue();
         }
 
-        /// Emit a zero-argument tag (like True, False)
+        /// Emit a zero-argument tag (like True, False, or any 2-tag union)
         fn emitZeroArgTag(ctx: *ExprContext, tag: anytype) ExprError!LlvmBuilder.Value {
-            // For Bool tags, True is 1 and False is 0
-            const value: i128 = if (tag.name == ctx.module_env.idents.true_tag) 1 else 0;
-            return (ctx.builder.intConst(.i8, value) catch return error.CompilationFailed).toValue();
+            // All 2-tag unions with no payloads use i1: True=1, False=0
+            return ctx.boolConst(tag.name == ctx.module_env.idents.true_tag);
         }
 
         /// Emit a tag expression (e.g., True, False, Ok(value), Err(msg))
@@ -734,10 +721,8 @@ pub const LlvmEvaluator = struct {
             // Check if this is a zero-argument tag (like True, False)
             const args = ctx.module_env.store.sliceExpr(tag.args);
             if (args.len == 0) {
-                // Zero-argument tag - handle like e_zero_argument_tag
-                // For Bool tags, True is 1 and False is 0
-                const value: i128 = if (tag.name == ctx.module_env.idents.true_tag) 1 else 0;
-                return (ctx.builder.intConst(.i8, value) catch return error.CompilationFailed).toValue();
+                // Zero-argument tag - all 2-tag unions with no payloads use i1
+                return ctx.boolConst(tag.name == ctx.module_env.idents.true_tag);
             }
 
             // Tags with arguments require more complex handling
@@ -786,11 +771,10 @@ pub const LlvmEvaluator = struct {
                 const idents = ctx.module_env.idents;
                 const args = ctx.module_env.store.sliceExpr(call.args);
 
-                // Handle Bool.not - XOR with 1 to flip the boolean
+                // Handle Bool.not - XOR with true to flip the boolean
                 if (func_ident == idents.not and args.len == 1) {
                     const arg_val = try ctx.emitExpr(args[0]);
-                    const one = (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
-                    return ctx.wip.bin(.xor, arg_val, one, "") catch return error.CompilationFailed;
+                    return ctx.wip.bin(.xor, arg_val, try ctx.boolConst(true), "") catch return error.CompilationFailed;
                 }
 
                 // Handle Num.abs - absolute value
@@ -928,14 +912,12 @@ pub const LlvmEvaluator = struct {
                         if (args.len == 1) {
                             const arg_expr = ctx.module_env.store.getExpr(args[0]);
                             if (arg_expr == .e_empty_list) {
-                                // Empty list - return True (1)
-                                return (ctx.builder.intConst(.i8, 1) catch return error.CompilationFailed).toValue();
+                                return ctx.boolConst(true);
                             }
                             if (arg_expr == .e_list) {
                                 const list = arg_expr.e_list;
                                 const elems = ctx.module_env.store.sliceExpr(list.elems);
-                                const is_empty: i128 = if (elems.len == 0) 1 else 0;
-                                return (ctx.builder.intConst(.i8, is_empty) catch return error.CompilationFailed).toValue();
+                                return ctx.boolConst(elems.len == 0);
                             }
                         }
                         return error.UnsupportedType;
@@ -1402,6 +1384,11 @@ pub const LlvmEvaluator = struct {
             };
         }
 
+        /// Create an LLVM i1 constant from a Zig bool
+        fn boolConst(ctx: *ExprContext, value: bool) ExprError!LlvmBuilder.Value {
+            return (ctx.builder.intConst(.i1, @intFromBool(value)) catch return error.CompilationFailed).toValue();
+        }
+
         /// Emit string comparison operation
         /// String comparisons are not supported in the LLVM evaluator - use interpreter instead
         fn emitStringComparison(_: *ExprContext, _: CIR.Expr.Binop, _: CIR.Expr, _: CIR.Expr) ExprError!LlvmBuilder.Value {
@@ -1719,7 +1706,7 @@ pub const LlvmEvaluator = struct {
             .e_frac_f32 => .float,
             .e_frac_f64 => .double,
             .e_dec, .e_dec_small => .i128,
-            .e_zero_argument_tag => .i8, // Bool is stored as u8
+            .e_zero_argument_tag => .i1, // All 2-tag unions with no payloads use i1
             .e_unary_not => .i1, // Boolean result
             else => try builder.ptrType(.default),
         };
