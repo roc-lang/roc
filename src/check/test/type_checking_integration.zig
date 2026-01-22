@@ -2896,6 +2896,7 @@ const ModuleExpectation = union(enum) {
     pass: DefExpectation,
     fail,
     fail_first, // Allows multiple errors, checks first error title
+    fail_with,
 };
 
 const DefExpectation = union(enum) {
@@ -2930,6 +2931,9 @@ fn checkTypesModule(
         .fail => {
             return test_env.assertOneTypeError(expected);
         },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
+        },
         .fail_first => {
             return test_env.assertFirstTypeError(expected);
         },
@@ -2958,6 +2962,7 @@ fn checkTypesModuleDefs(
 const ExprExpectation = union(enum) {
     pass,
     fail,
+    fail_with,
 };
 
 /// A unified helper to run the full pipeline: parse, canonicalize, and type-check source code.
@@ -2979,6 +2984,9 @@ fn checkTypesExpr(
         },
         .fail => {
             return test_env.assertOneTypeError(expected);
+        },
+        .fail_with => {
+            return test_env.assertOneTypeErrorMsg(expected);
         },
     }
 
@@ -3089,7 +3097,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [ListWasEmpty, Impossible, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3356,4 +3364,158 @@ test "check type - issue8934 recursive nominal type unification" {
     // The key thing is that the compiler should NOT crash with stack overflow.
     // It should successfully type-check the file.
     try checkTypesModule(source, .{ .pass = .{ .def = "flatten" } }, "List(Node(a)) -> List(a)");
+}
+
+// early return //
+
+test "check type - early return - pass" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return []
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(source, .pass, "Bool -> List(_a)");
+}
+
+test "check type - early return - fail" {
+    const source =
+        \\|bool| {
+        \\  if bool {
+        \\    return "hello"
+        \\  }
+        \\
+        \\ []
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `return` does not match the function's return type:
+        \\**test:3:12:3:19:**
+        \\```roc
+        \\    return "hello"
+        \\```
+        \\           ^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str
+        \\
+        \\But the function's return type is:
+        \\
+        \\    List(_a)
+        \\
+        \\**Hint:** All `return` statements and the final expression in a function must have the same type.
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - early return - ? - fail" {
+    const source =
+        \\|| {
+        \\  _val = Try.Err("hello")?
+        \\  Try.Err(Bool.True)
+        \\}
+    ;
+    try checkTypesExpr(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `?` may return early with a type that doesn't match the function body:
+        \\**test:2:10:2:27:**
+        \\```roc
+        \\  _val = Try.Err("hello")?
+        \\```
+        \\         ^^^^^^^^^^^^^^^^^
+        \\
+        \\On error, this would return:
+        \\
+        \\    Try(ok, Str)
+        \\
+        \\But the function body evaluates to:
+        \\
+        \\    Try(ok, Bool)
+        \\
+        \\**Hint:** The error types from all `?` operators and the function body must be compatible since any of them could be the actual return value.
+        \\
+        \\
+        ,
+    );
+}
+
+// recursive functions //
+
+test "check type - self recursive function - fibonacci - pass" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib(n - 1.U8) + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "fib" } }, "U8 -> U8");
+}
+
+test "check type - self recursive function - fibonacci - fail" {
+    const source =
+        \\fib = |n| {
+        \\  if n <= 1.U8 {
+        \\    n
+        \\  } else {
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:5:5:5:8:**
+        \\```roc
+        \\    fib("bad arg") + fib(n - 2.U8)
+        \\```
+        \\    ^^^
+        \\
+        \\It has the type:
+        \\
+        \\    Str -> U8
+        \\
+        \\But I expected it to be:
+        \\
+        \\    U8 -> U8
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - mutually recursive functions - is_even and is_odd" {
+    const source =
+        \\is_even = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.True
+        \\  } else {
+        \\    is_odd(n - 1.U64)
+        \\  }
+        \\}
+        \\
+        \\is_odd = |n| {
+        \\  if n == 0.U64 {
+        \\    Bool.False
+        \\  } else {
+        \\    is_even(n - 1.U64)
+        \\  }
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "is_odd" } }, "U64 -> Bool");
 }

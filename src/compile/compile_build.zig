@@ -35,6 +35,11 @@ const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const FileProvider = compile_package.FileProvider;
 
+/// Cache version string that includes the build mode to prevent debug/release cache incompatibility.
+/// A cache created by a debug build should not be loaded by a release build (and vice versa)
+/// because the struct layouts may differ between build modes.
+const cache_compiler_version = "roc-zig-dev-" ++ @tagName(builtin.mode);
+
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
 const threads_available = builtin.target.cpu.arch != .wasm32;
@@ -218,7 +223,7 @@ const GlobalQueue = struct {
                                 };
                                 defer be.gpa.free(source);
 
-                                const cache_result = cm.loadFromCache("roc-zig-dev", source, task.module_name);
+                                const cache_result = cm.loadFromCache(cache_compiler_version, source, task.module_name);
                                 switch (cache_result) {
                                     .hit => |hit| {
                                         // Cache hit! Update the module state with cached data
@@ -256,7 +261,7 @@ const GlobalQueue = struct {
                                     };
                                     defer be.gpa.free(source);
 
-                                    const cache_key = CacheManager.generateCacheKey(source, "roc-zig-dev");
+                                    const cache_key = CacheManager.generateCacheKey(source, cache_compiler_version);
                                     // For now, just pass 0 for error and warning counts
                                     // TODO: Extract actual error/warning counts from reports
                                     const error_count: u32 = 0;

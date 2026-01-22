@@ -76,6 +76,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>My favourite color is Red",
         .description = "Opaque type with attached method",
     },
+    .{
+        .roc_file = "test/fx/test_issue9034.roc",
+        .io_spec = "1>test",
+        .description = "Platform-exposed opaque types in type annotations (issue #9034)",
+    },
 
     // Language feature tests
     .{

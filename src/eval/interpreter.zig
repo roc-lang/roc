@@ -5979,7 +5979,6 @@ pub const Interpreter = struct {
 
             // Declaration statements: check the expression
             .s_decl => |decl| self.bodyHasExitStatement(decl.expr),
-            .s_decl_gen => |decl| self.bodyHasExitStatement(decl.expr),
             .s_var => |var_stmt| self.bodyHasExitStatement(var_stmt.expr),
             .s_reassign => |reassign| self.bodyHasExitStatement(reassign.expr),
 
@@ -6121,7 +6120,6 @@ pub const Interpreter = struct {
 
         return switch (stmt) {
             .s_decl => |decl| self.conditionInvolvesMutableVariable(decl.expr),
-            .s_decl_gen => |decl| self.conditionInvolvesMutableVariable(decl.expr),
             .s_var => |var_stmt| self.conditionInvolvesMutableVariable(var_stmt.expr),
             .s_reassign => |reassign| self.conditionInvolvesMutableVariable(reassign.expr),
             .s_expr => |expr_stmt| self.conditionInvolvesMutableVariable(expr_stmt.expr),
@@ -14181,14 +14179,6 @@ pub const Interpreter = struct {
                         try self.addClosurePlaceholder(d.pattern, d.expr);
                     }
                 },
-                .s_decl_gen => |d| {
-                    const patt = self.env.store.getPattern(d.pattern);
-                    if (patt != .assign) continue;
-                    const rhs = self.env.store.getExpr(d.expr);
-                    if ((rhs == .e_lambda or rhs == .e_closure) and !self.placeholderExists(bindings_start, d.pattern)) {
-                        try self.addClosurePlaceholder(d.pattern, d.expr);
-                    }
-                },
                 .s_var => |v| {
                     const patt = self.env.store.getPattern(v.pattern_idx);
                     if (patt != .assign) continue;
@@ -14273,23 +14263,6 @@ pub const Interpreter = struct {
                     .expected_rt_var = expected_rt_var,
                 } } });
                 // Push expression evaluation
-                const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
-                const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
-                try work_stack.push(.{ .eval_expr = .{
-                    .expr_idx = d.expr,
-                    .expected_rt_var = expr_rt_var,
-                } });
-            },
-            .s_decl_gen => |d| {
-                // Same as s_decl
-                try work_stack.push(.{ .apply_continuation = .{ .bind_decl = .{
-                    .pattern = d.pattern,
-                    .expr_idx = d.expr,
-                    .remaining_stmts = remaining_stmts,
-                    .final_expr = final_expr,
-                    .bindings_start = bindings_start,
-                    .expected_rt_var = expected_rt_var,
-                } } });
                 const expr_ct_var = can.ModuleEnv.varFrom(d.expr);
                 const expr_rt_var = try self.translateTypeVar(self.env, expr_ct_var);
                 try work_stack.push(.{ .eval_expr = .{

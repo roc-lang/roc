@@ -2135,11 +2135,12 @@ test "encode: Str.encode with local format type" {
     try runExpectListI64(
         \\{
         \\    Utf8Format := {}.{
-        \\        encode_str : Utf8Format, Str -> List(U8)
-        \\        encode_str = |_fmt, s| Str.to_utf8(s)
+        \\        encode_str : Utf8Format, Str -> Try(List(U8), [])
+        \\        encode_str = |_fmt, s| Ok(Str.to_utf8(s))
         \\    }
         \\    fmt = Utf8Format
-        \\    bytes = Str.encode("hi", fmt)
+        \\    result = Str.encode("hi", fmt)
+        \\    bytes = result?
         \\    List.map(bytes, |b| U8.to_i64(b))
         \\}
     , &[_]i64{ 104, 105 }, .no_trace);
@@ -2171,6 +2172,20 @@ test "issue 8831: nested self-reference in list should also error" {
         \\{
         \\    a = [a]
         \\    a
+        \\}
+    , error.Crash, .no_trace);
+}
+
+test "issue 9043: self-reference in tuple pattern with var element should error" {
+    // Regression test for GitHub issue #9043
+    // A self-referential definition with a mutable variable in a tuple pattern
+    // like `(_, var $n) = f($n)` should produce a compile-time error.
+    // Previously this would crash with "e_lookup_local: definition not found".
+    try runExpectError(
+        \\{
+        \\    next = |idx| (idx, idx + 1)
+        \\    (_, var $n) = next($n)
+        \\    $n
         \\}
     , error.Crash, .no_trace);
 }

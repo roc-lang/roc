@@ -338,13 +338,6 @@ pub fn CirVisitor(comptime Context: type) type {
                     if (self.stopped) return;
                     if (d.anno) |a| self.walkAnnotation(store, a);
                 },
-                .s_decl_gen => |d| {
-                    self.walkPattern(store, d.pattern);
-                    if (self.stopped) return;
-                    self.walkExpr(store, d.expr);
-                    if (self.stopped) return;
-                    if (d.anno) |a| self.walkAnnotation(store, a);
-                },
                 .s_var => |v| {
                     self.walkPattern(store, v.pattern_idx);
                     if (self.stopped) return;

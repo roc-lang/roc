@@ -267,11 +267,7 @@ pub fn getStatementParts(stmt: CIR.Statement) StatementParts {
             .expr = d.expr,
             .expr2 = null,
         },
-        .s_decl_gen => |d| .{
-            .pattern = d.pattern,
-            .expr = d.expr,
-            .expr2 = null,
-        },
+
         .s_var => |d| .{
             .pattern = d.pattern_idx,
             .expr = d.expr,

@@ -168,6 +168,8 @@ pub const TypePair = struct {
 pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
+    early_return,
+    try_suffix_return,
     /// A statement expression must evaluate to {} but has a different type
     statement_not_unit,
     incompatible_if_branches: IncompatibleIfBranches,
@@ -492,6 +494,12 @@ pub const ReportBuilder = struct {
                         },
                         .statement_not_unit => {
                             return self.buildStatementNotUnit(mismatch.types);
+                        },
+                        .early_return => {
+                            return self.buildEarlyReturn(mismatch.types);
+                        },
+                        .try_suffix_return => {
+                            return self.buildTrySuffixReturn(mismatch.types);
                         },
                         .incompatible_if_branches => |data| {
                             return self.buildIncompatibleIfBranches(mismatch.types, data);
@@ -948,6 +956,108 @@ pub const ReportBuilder = struct {
         try report.document.addReflowingText("If you don't need the value, you can ignore it with ");
         try report.document.addAnnotated("_ =", .keyword);
         try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for statement expressions that don't return {}
+    fn buildEarlyReturn(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This ");
+        try report.document.addAnnotated("return", .keyword);
+        try report.document.addReflowingText(" does not match the function's return type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_actual);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the function's return type is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" All ");
+        try report.document.addAnnotated("return", .keyword);
+        try report.document.addReflowingText(" statements and the final expression in a function must have the same type.");
+
+        return report;
+    }
+
+    /// Build a report for try suffix (?) returning a type that doesn't match the function's return type
+    fn buildTrySuffixReturn(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This ");
+        try report.document.addAnnotated("?", .inline_code);
+        try report.document.addReflowingText(" may return early with a type that doesn't match the function body:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("On error, this would return:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_actual);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the function body evaluates to:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" The error types from all ");
+        try report.document.addAnnotated("?", .inline_code);
+        try report.document.addReflowingText(" operators and the function body must be compatible since any of them could be the actual return value.");
 
         return report;
     }

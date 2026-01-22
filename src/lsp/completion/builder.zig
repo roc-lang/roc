@@ -528,7 +528,6 @@ pub const CompletionBuilder = struct {
             const stmt = module_env.store.getStatement(stmt_idx);
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
-                .s_decl_gen => |decl| decl.pattern,
                 else => continue,
             };
 
@@ -799,7 +798,6 @@ pub const CompletionBuilder = struct {
                 const stmt = module_env.store.getStatement(stmt_idx);
                 const pattern_idx = switch (stmt) {
                     .s_decl => |decl| decl.pattern,
-                    .s_decl_gen => |decl| decl.pattern,
                     else => continue,
                 };
 
@@ -1070,7 +1068,6 @@ pub const CompletionBuilder = struct {
             const stmt = module_env.store.getStatement(stmt_idx);
             const pattern_idx = switch (stmt) {
                 .s_decl => |decl| decl.pattern,
-                .s_decl_gen => |decl| decl.pattern,
                 else => continue,
             };
 
@@ -1138,7 +1135,6 @@ const StatementParts = struct {
 fn getStatementParts(stmt: CIR.Statement) StatementParts {
     return switch (stmt) {
         .s_decl => |decl| .{ .pattern = decl.pattern, .expr = decl.expr, .expr2 = null },
-        .s_decl_gen => |decl| .{ .pattern = decl.pattern, .expr = decl.expr, .expr2 = null },
         .s_var => |var_stmt| .{ .pattern = var_stmt.pattern_idx, .expr = var_stmt.expr, .expr2 = null },
         .s_reassign => |reassign| .{ .pattern = null, .expr = reassign.expr, .expr2 = null },
         .s_for => |for_stmt| .{ .pattern = for_stmt.patt, .expr = for_stmt.expr, .expr2 = for_stmt.body },

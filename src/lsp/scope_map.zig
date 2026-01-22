@@ -119,11 +119,7 @@ pub const ScopeMap = struct {
                 // Traverse the expression for nested scopes
                 try self.traverseExpr(module_env, decl.expr, scope_end, depth + 1);
             },
-            .s_decl_gen => |decl| {
-                // Generalized declaration (lambdas, number literals)
-                try self.extractBindingsFromPattern(module_env, decl.pattern, stmt_region.start.offset, scope_end, false, depth + 1);
-                try self.traverseExpr(module_env, decl.expr, scope_end, depth + 1);
-            },
+
             .s_var => |var_decl| {
                 // Mutable variable binding
                 try self.extractBindingsFromPattern(module_env, var_decl.pattern_idx, stmt_region.start.offset, scope_end, false, depth + 1);

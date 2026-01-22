@@ -17,6 +17,8 @@ const problem = @import("problem.zig");
 const snapshot_mod = @import("snapshot.zig");
 const exhaustive = @import("exhaustive.zig");
 
+const MkSafeList = collections.SafeList;
+
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
 const Allocator = std.mem.Allocator;
@@ -78,14 +80,14 @@ import_mapping: @import("types").import_mapping.ImportMapping,
 unify_scratch: unifier.Scratch,
 /// reusable scratch arrays used in occurs check
 occurs_scratch: occurs.Scratch,
-/// free vars collected when generation types from type decls
-decl_free_vars: base.Scratch(FreeVar),
 /// annos we've already seen when generation a type from an annotation
 seen_annos: std.AutoHashMap(CIR.TypeAnno.Idx, Var),
 /// A pool of solver envs
 env_pool: EnvPool,
 /// wrapper around generalization, contains some internal state used to do it's work
 generalizer: Generalizer,
+/// A list of generated constraints with solving deferred
+constraints: Constraint.SafeList,
 /// A map from one var to another. Used in instantiation and var copying
 var_map: std.AutoHashMap(Var, Var),
 /// A map from one var to another. Used in instantiation and var copying
@@ -108,8 +110,6 @@ constraint_check_stack: std.ArrayList(Var),
 // Cache for imported types. This cache lives for the entire type-checking session
 /// of a module, so the same imported type can be reused across the entire module.
 import_cache: ImportCache,
-/// Maps variables to the expressions that constrained them (for better error regions)
-constraint_origins: std.AutoHashMap(Var, Var),
 /// Copied Bool type from Bool module (for use in if conditions, etc.)
 bool_var: Var,
 /// Copied Str type from Builtin module (for use in string literals, etc.)
@@ -118,17 +118,11 @@ str_var: Var,
 ident_to_var_map: std.AutoHashMap(Ident.Idx, Var),
 /// Map representation all top level patterns, and if we've processed them yet
 top_level_ptrns: std.AutoHashMap(CIR.Pattern.Idx, DefProcessed),
-/// The expected return type of the enclosing function, if any.
-/// Used to correctly type-check `return` expressions inside loops etc.
-enclosing_func_return_type: ?Var,
 /// The name of the enclosing function, if known.
 /// Used to provide better error messages when type checking lambda arguments.
 enclosing_func_name: ?Ident.Idx,
 /// Type writer for formatting types at snapshot time
 type_writer: types_mod.TypeWriter,
-
-/// A map of rigid variables that we build up during a branch of type checking
-const FreeVar = struct { ident: base.Ident.Idx, var_: Var };
 
 /// A def + processing data
 const DefProcessed = struct { def_idx: CIR.Def.Idx, status: HasProcessed };
@@ -140,6 +134,22 @@ const HasProcessed = enum { processed, processing, not_processed };
 const ScratchStaticDispatchConstraint = struct {
     var_: Var,
     constraint: types_mod.StaticDispatchConstraint,
+};
+
+/// A constraint generated during type checking, to be checked at the end
+///
+/// In most cases, we don't defer constraint checking and unify things
+/// immediately. However, there are some cases where it's necessary.
+const Constraint = union(enum) {
+    eql: struct { expected: Var, actual: Var, ctx: Ctx },
+
+    pub const Ctx = union(enum) {
+        anonymous,
+        early_return,
+        try_suffix_return,
+    };
+
+    pub const SafeList = MkSafeList(@This());
 };
 
 /// Context for type checking: module identity, builtin type references, and the Builtin module itself.
@@ -194,11 +204,11 @@ pub fn init(
         .import_mapping = import_mapping,
         .unify_scratch = try unifier.Scratch.init(gpa),
         .occurs_scratch = try occurs.Scratch.init(gpa),
-        .decl_free_vars = try base.Scratch(FreeVar).init(gpa),
         .seen_annos = std.AutoHashMap(CIR.TypeAnno.Idx, Var).init(gpa),
         .env_pool = try EnvPool.init(gpa),
         .generalizer = try Generalizer.init(gpa, types),
         .var_map = std.AutoHashMap(Var, Var).init(gpa),
+        .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .var_set = std.AutoHashMap(Var, void).init(gpa),
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
@@ -208,12 +218,10 @@ pub fn init(
         .scratch_deferred_static_dispatch_constraints = try base.Scratch(DeferredConstraintCheck).init(gpa),
         .constraint_check_stack = try std.ArrayList(Var).initCapacity(gpa, 0),
         .import_cache = ImportCache{},
-        .constraint_origins = std.AutoHashMap(Var, Var).init(gpa),
         .bool_var = undefined, // Will be initialized in copyBuiltinTypes()
         .str_var = undefined, // Will be initialized in copyBuiltinTypes()
         .ident_to_var_map = std.AutoHashMap(Ident.Idx, Var).init(gpa),
         .top_level_ptrns = std.AutoHashMap(CIR.Pattern.Idx, DefProcessed).init(gpa),
-        .enclosing_func_return_type = null,
         .enclosing_func_name = null,
         // Initialize with null import_mapping - caller should call fixupTypeWriter() after storing Check
         .type_writer = try types_mod.TypeWriter.initFromParts(gpa, types, mutable_cir.getIdentStore(), null),
@@ -233,11 +241,11 @@ pub fn deinit(self: *Self) void {
     self.import_mapping.deinit();
     self.unify_scratch.deinit();
     self.occurs_scratch.deinit();
-    self.decl_free_vars.deinit();
     self.seen_annos.deinit();
     self.env_pool.deinit();
     self.generalizer.deinit(self.gpa);
     self.var_map.deinit();
+    self.constraints.deinit(self.gpa);
     self.var_set.deinit();
     self.rigid_var_substitutions.deinit(self.gpa);
     self.scratch_vars.deinit();
@@ -247,7 +255,6 @@ pub fn deinit(self: *Self) void {
     self.scratch_deferred_static_dispatch_constraints.deinit();
     self.constraint_check_stack.deinit(self.gpa);
     self.import_cache.deinit(self.gpa);
-    self.constraint_origins.deinit();
     self.ident_to_var_map.deinit();
     self.top_level_ptrns.deinit();
     self.type_writer.deinit();
@@ -273,7 +280,7 @@ inline fn ensureTypeStoreIsFilled(self: *Self) Allocator.Error!void {
     const type_nodes: usize = @intCast(self.types.len());
     try self.types.ensureTotalCapacity(region_nodes);
     for (type_nodes..region_nodes) |_| {
-        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, @enumFromInt(15));
+        _ = self.types.appendFromContentAssumeCapacity(.{ .flex = Flex.init() }, undefined);
     }
 }
 
@@ -375,10 +382,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Before unification, check if either variable has constraint origins
-    // We need to look up constraint origins by walking through the type structure
-    const constraint_origin_var = self.findConstraintOriginForVars(a, b);
-
     // Unify
     const result = try unifier.unifyWithConf(
         self.cir,
@@ -390,19 +393,8 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.occurs_scratch,
         a,
         b,
-        unifier.Conf{
-            .ctx = ctx,
-            .constraint_origin_var = constraint_origin_var,
-        },
+        unifier.Conf{ .ctx = ctx, .constraint_origin_var = null },
     );
-
-    // After successful unification, propagate constraint origins to both variables
-    if (result == .ok) {
-        if (constraint_origin_var) |origin| {
-            try self.constraint_origins.put(a, origin);
-            try self.constraint_origins.put(b, origin);
-        }
-    }
 
     // Set regions and add to the current rank all variables created during unification.
     //
@@ -435,34 +427,6 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
     self.debugAssertArraysInSync();
 
     return result;
-}
-
-/// Find constraint origins for variables, checking resolved forms
-fn findConstraintOriginForVars(self: *Self, a: Var, b: Var) ?Var {
-    // Check the variables directly first
-    if (self.constraint_origins.get(a)) |origin| return origin;
-    if (self.constraint_origins.get(b)) |origin| return origin;
-
-    // Check resolved forms of the variables
-    const a_resolved = self.types.resolveVar(a);
-    const b_resolved = self.types.resolveVar(b);
-
-    if (self.constraint_origins.get(a_resolved.var_)) |origin| return origin;
-    if (self.constraint_origins.get(b_resolved.var_)) |origin| return origin;
-
-    // Fallback: if we have any constraint origins recorded (indicating dot access expressions),
-    // and we haven't found a direct match, look for constraint origins that might be related
-    // if (self.constraint_origins.count() > 0) {
-    //     var it = self.constraint_origins.iterator();
-    //     while (it.next()) |entry| {
-    //         const origin = entry.value_ptr.*;
-    //         // Return the first constraint origin we find - this is specifically for the Color.md case
-    //         // where constraint origins exist but don't directly match the unification variables
-    //         return origin;
-    //     }
-    // }
-
-    return null;
 }
 
 /// Check if a variable contains an infinite type after solving a definition.
@@ -1117,8 +1081,13 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
         }
     }
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
+
+    // After solving all deferred constraints, check for infinite types
+    for (defs_slice) |def_idx| {
+        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+    }
 
     // Note that we can't use SCCs to determine the order to resolve defs
     // because anonymous static dispatch makes function order not knowable
@@ -1506,12 +1475,15 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     // Check the expr
     _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
 
     // Check if the expression's type has incompatible constraints (e.g., !3)
     const expr_var = ModuleEnv.varFrom(expr_idx);
     try self.checkFlexVarConstraintCompatibility(expr_var, &env);
+
+    // Check for infinite types
+    try self.checkForInfiniteType(ModuleEnv.varFrom(expr_idx));
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -1556,8 +1528,13 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
     // Check the expr
     _ = try self.checkExpr(expr_idx, &env, .no_expectation);
 
-    // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(&env);
+    // Check any accumulated constraints
+    try self.checkAllConstraints(&env);
+
+    // After solving all deferred constraints, check for infinite types
+    for (defs_slice) |def_idx| {
+        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+    }
 }
 
 // defs //
@@ -1596,13 +1573,7 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
 
     // Extract function name from the pattern (for better error messages)
     const saved_func_name = self.enclosing_func_name;
-    self.enclosing_func_name = blk: {
-        const pattern = self.cir.store.getPattern(def.pattern);
-        switch (pattern) {
-            .assign => |assign| break :blk assign.ident,
-            else => break :blk null,
-        }
-    };
+    self.enclosing_func_name = self.getPatternIdent(def.pattern);
     defer self.enclosing_func_name = saved_func_name;
 
     // Check the annotation, if it exists
@@ -1623,11 +1594,6 @@ fn checkDef(self: *Self, def_idx: CIR.Def.Idx, env: *Env) std.mem.Allocator.Erro
     // Unify the def and ptrn
     _ = try self.unify(def_var, ptrn_var, env);
 
-    // After solving the definition, check for infinite types.
-    // This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
-    // Similar to Rust's check_for_infinite_type called after LetCon.
-    try self.checkForInfiniteType(def_var);
-
     // Mark as processed
     try self.top_level_ptrns.put(def.pattern, .{ .def_idx = def_idx, .status = .processed });
 }
@@ -1644,9 +1610,6 @@ fn generateStmtTypeDeclType(
     decl_idx: CIR.Statement.Idx,
     env: *Env,
 ) std.mem.Allocator.Error!void {
-    const decl_free_vars_top = self.decl_free_vars.top();
-    defer self.decl_free_vars.clearFrom(decl_free_vars_top);
-
     const decl = self.cir.store.getStatement(decl_idx);
     const decl_var = ModuleEnv.varFrom(decl_idx);
 
@@ -2831,6 +2794,14 @@ fn checkPatternHelp(
     return pattern_var;
 }
 
+fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
+    const pattern = self.cir.store.getPattern(ptrn_idx);
+    switch (pattern) {
+        .assign => |assign| return assign.ident,
+        else => return null,
+    }
+}
+
 // expr //
 
 fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected) std.mem.Allocator.Error!bool {
@@ -2843,10 +2814,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
     // Check if this is a lambda expression. If so, then we should generalize.
     const is_closure = expr == .e_closure;
-    _ = expr == .e_anno_only and expected == .expected and blk: {
-        // TODO: If anno, then
-        break :blk false;
-    };
     const should_generalize = isLambdaExpr(expr);
 
     // Push/pop ranks based on if we should generalize
@@ -3356,7 +3323,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         // lookup //
-        .e_lookup_local => |lookup| {
+        .e_lookup_local => |lookup| blk: {
+            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+
             const mb_processing_def = self.top_level_ptrns.get(lookup.pattern_idx);
             if (mb_processing_def) |processing_def| {
                 switch (processing_def.status) {
@@ -3375,35 +3344,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         // TODO: Handle mutually recursive functions
                     },
                     .processing => {
-                        // Recursive reference - the pattern variable is still at
-                        // top_level rank (not generalized).
+                        // This is a recursive reference
                         //
-                        // If the def has a type annotation, we need to instantiate it
-                        // to avoid polluting the pattern variable's rank. Without this,
-                        // unifying directly would pull the annotation's rigid vars down
-                        // to the pattern's rank, preventing proper generalization.
-                        // This fixes GitHub issue #8994.
-                        const def = self.cir.store.getDef(processing_def.def_idx);
-                        if (def.annotation) |annotation_idx| {
-                            const anno_var = ModuleEnv.varFrom(annotation_idx);
-                            const instantiated = try self.instantiateVar(anno_var, env, .use_last_var);
-                            _ = try self.unify(expr_var, instantiated, env);
-                            return does_fx;
-                        }
-                        // Otherwise, fall through to unify directly with pat_var
+                        // In this case, we simply assign the pattern to be a
+                        // flex var, then write down an eql constraint for later
+                        // validation. This deferred approach is necessary for
+                        // good error messages.
+
+                        // Assert that this def is NOT generalized nor outermost
+                        std.debug.assert(self.types.resolveVar(pat_var).desc.rank != .generalized);
+
+                        // Set the expr to be a flex
+                        try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
+
+                        // Write down this constraint for later validation
+                        _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{ .expected = pat_var, .actual = expr_var, .ctx = .anonymous } });
+
+                        break :blk;
                     },
                     .processed => {},
                 }
             }
 
-            const pat_var = ModuleEnv.varFrom(lookup.pattern_idx);
+            // Instantiate if generalized, otherwise just use the pattern var
             const resolved_pat = self.types.resolveVar(pat_var);
-
-            // Only lambdas get generalized (value restriction), so we instantiate
-            // if and only if the variable has been generalized. Non-lambda definitions
-            // (like numeric literals, records, etc.) are NOT generalized and are
-            // unified directly, allowing type constraints to propagate back.
-            // This fixes GitHub issues #8666 and #8765.
             if (resolved_pat.desc.rank == Rank.generalized) {
                 const instantiated = try self.instantiateVar(pat_var, env, .use_last_var);
                 _ = try self.unify(expr_var, instantiated, env);
@@ -3571,21 +3535,12 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
             // Check the the body of the expr
             // If we have an expected function, use that as the expr's expected type
-            // Also track the return type so `return` expressions can use it
-            const saved_return_type = self.enclosing_func_return_type;
             if (mb_anno_func) |expected_func| {
-                self.enclosing_func_return_type = expected_func.ret;
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
                 _ = try self.unifyWithCtx(expected_func.ret, body_var, env, .anno);
             } else {
-                self.enclosing_func_return_type = body_var;
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
             }
-            self.enclosing_func_return_type = saved_return_type;
-
-            // Unify all early returns with the body's return type.
-            // This ensures that `return x` has the same type as the implicit return.
-            try self.unifyEarlyReturns(lambda.body, body_var, env);
 
             // Create the function type
             if (does_fx) {
@@ -3992,11 +3947,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
             const ret_var = ModuleEnv.varFrom(ret.expr);
 
-            // Early return expression - check the inner expression against enclosing function's return type
-            // If we're inside a function, use its return type. Otherwise fall back to expected.
-            if (self.enclosing_func_return_type) |enclosing_ret_var| {
-                _ = try self.unify(enclosing_ret_var, ret_var, env);
-            }
+            // Write down this constraint for later validation
+            // We assert the lambda's type and the return type are equiv
+            const lambda_expr = self.cir.store.getExpr(ret.lambda);
+            std.debug.assert(lambda_expr == .e_lambda);
+            _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                .expected = ModuleEnv.varFrom(lambda_expr.e_lambda.body),
+                .actual = ret_var,
+                .ctx = switch (ret.context) {
+                    .return_expr => .early_return,
+                    .try_suffix => .try_suffix_return,
+                },
+            } });
 
             // Note that we DO NOT unify the return type with the expr here.
             // This is so this expr can unify with anything (like {} in the an implicit `else` branch)
@@ -4120,7 +4082,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     // Check any accumulated static dispatch constraints
-    try self.checkDeferredStaticDispatchConstraints(env);
+    try self.checkStaticDispatchConstraints(env);
 
     // If this type of expr should be generalized, generalize it!
     if (should_generalize) {
@@ -4178,53 +4140,12 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
 
                 // Extract function name from the pattern (for better error messages)
                 const saved_func_name = self.enclosing_func_name;
-                self.enclosing_func_name = inner_blk: {
-                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
-                    switch (pattern) {
-                        .assign => |assign| break :inner_blk assign.ident,
-                        else => break :inner_blk null,
-                    }
-                };
+                self.enclosing_func_name = self.getPatternIdent(decl_stmt.pattern);
                 defer self.enclosing_func_name = saved_func_name;
 
                 // Check the annotation, if it exists
                 const expectation = blk: {
                     if (decl_stmt.anno) |annotation_idx| {
-                        break :blk Expected{ .expected = annotation_idx };
-                    } else {
-                        break :blk Expected.no_expectation;
-                    }
-                };
-
-                does_fx = try self.checkExpr(decl_stmt.expr, env, expectation) or does_fx;
-
-                _ = try self.unify(decl_pattern_var, decl_expr_var, env);
-                _ = try self.unify(stmt_var, decl_pattern_var, env);
-            },
-            .s_decl_gen => |decl_stmt| {
-                // Generalized declarations (let-polymorphism) - handled same as s_decl for type checking
-                // Check the pattern
-                try self.checkPattern(decl_stmt.pattern, env);
-                const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
-
-                // Extract function name from the pattern (for better error messages)
-                const saved_func_name = self.enclosing_func_name;
-                self.enclosing_func_name = inner_blk: {
-                    const pattern = self.cir.store.getPattern(decl_stmt.pattern);
-                    switch (pattern) {
-                        .assign => |assign| break :inner_blk assign.ident,
-                        else => break :inner_blk null,
-                    }
-                };
-                defer self.enclosing_func_name = saved_func_name;
-
-                // Evaluate the rhs of the expression
-                const decl_expr_var: Var = ModuleEnv.varFrom(decl_stmt.expr);
-
-                // Check the annotation, if it exists
-                const expectation = blk: {
-                    if (decl_stmt.anno) |annotation_idx| {
-                        // Return the expectation
                         break :blk Expected{ .expected = annotation_idx };
                     } else {
                         break :blk Expected.no_expectation;
@@ -4369,10 +4290,20 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
             .s_return => |ret| {
                 // Type check the return expression
                 does_fx = try self.checkExpr(ret.expr, env, .no_expectation) or does_fx;
+                const ret_var = ModuleEnv.varFrom(ret.expr);
+
+                // Write down this constraint for later validation
+                // We assert the lambda's type and the return type are equiv
+                const lambda_expr = self.cir.store.getExpr(ret.lambda);
+                std.debug.assert(lambda_expr == .e_lambda);
+                _ = try self.constraints.append(self.gpa, Constraint{ .eql = .{
+                    .expected = ModuleEnv.varFrom(lambda_expr.e_lambda.body),
+                    .actual = ret_var,
+                    .ctx = .early_return,
+                } });
 
                 // A return statement's type should be a flex var so it can unify with any type.
                 // This allows branches containing early returns to match any other branch type.
-                // The actual unification with the function return type happens in unifyEarlyReturns.
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 diverges = true;
             },
@@ -4400,93 +4331,6 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
         }
     }
     return .{ .does_fx = does_fx, .diverges = diverges };
-}
-
-/// Traverse an expression to find s_return statements and unify them with the expected return type.
-/// This is called after type-checking a lambda body to ensure all early returns have matching types.
-fn unifyEarlyReturns(self: *Self, expr_idx: CIR.Expr.Idx, return_var: Var, env: *Env) std.mem.Allocator.Error!void {
-    const expr = self.cir.store.getExpr(expr_idx);
-    switch (expr) {
-        .e_block => |block| {
-            // Check all statements in the block for returns
-            for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
-                try self.unifyEarlyReturnsInStmt(stmt_idx, return_var, env);
-            }
-            // Also recurse into the final expression
-            try self.unifyEarlyReturns(block.final_expr, return_var, env);
-        },
-        .e_if => |if_expr| {
-            // Check all branches
-            for (self.cir.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                const branch = self.cir.store.getIfBranch(branch_idx);
-                try self.unifyEarlyReturns(branch.body, return_var, env);
-            }
-            // Check the final else
-            try self.unifyEarlyReturns(if_expr.final_else, return_var, env);
-        },
-        .e_match => |match| {
-            // Check all branches
-            for (self.cir.store.sliceMatchBranches(match.branches)) |branch_idx| {
-                const branch = self.cir.store.getMatchBranch(branch_idx);
-                try self.unifyEarlyReturns(branch.value, return_var, env);
-            }
-        },
-        .e_for => |for_expr| {
-            // Check the list expression and body for returns
-            try self.unifyEarlyReturns(for_expr.expr, return_var, env);
-            try self.unifyEarlyReturns(for_expr.body, return_var, env);
-        },
-        // Lambdas create a new scope for returns - don't recurse into them
-        .e_lambda, .e_closure => {},
-        // All other expressions don't contain statements
-        else => {},
-    }
-}
-
-/// Check a statement for s_return and unify with the expected return type.
-fn unifyEarlyReturnsInStmt(self: *Self, stmt_idx: CIR.Statement.Idx, return_var: Var, env: *Env) std.mem.Allocator.Error!void {
-    const stmt = self.cir.store.getStatement(stmt_idx);
-    switch (stmt) {
-        .s_return => |ret| {
-            const return_expr_var = ModuleEnv.varFrom(ret.expr);
-            _ = try self.unify(return_var, return_expr_var, env);
-        },
-        .s_decl => |decl| {
-            // Recurse into the declaration's expression
-            try self.unifyEarlyReturns(decl.expr, return_var, env);
-        },
-        .s_decl_gen => |decl| {
-            // Recurse into the generalized declaration's expression
-            try self.unifyEarlyReturns(decl.expr, return_var, env);
-        },
-        .s_var => |var_stmt| {
-            // Recurse into the var's expression
-            try self.unifyEarlyReturns(var_stmt.expr, return_var, env);
-        },
-        .s_reassign => |reassign| {
-            try self.unifyEarlyReturns(reassign.expr, return_var, env);
-        },
-        .s_for => |for_stmt| {
-            try self.unifyEarlyReturns(for_stmt.expr, return_var, env);
-            try self.unifyEarlyReturns(for_stmt.body, return_var, env);
-        },
-        .s_while => |while_stmt| {
-            try self.unifyEarlyReturns(while_stmt.cond, return_var, env);
-            try self.unifyEarlyReturns(while_stmt.body, return_var, env);
-        },
-        .s_expr => |s| {
-            // Recurse into the expression (could contain blocks with returns)
-            try self.unifyEarlyReturns(s.expr, return_var, env);
-        },
-        .s_expect => |s| {
-            try self.unifyEarlyReturns(s.body, return_var, env);
-        },
-        .s_dbg => |s| {
-            try self.unifyEarlyReturns(s.expr, return_var, env);
-        },
-        // These statements don't contain expressions with potential returns
-        .s_crash, .s_import, .s_alias_decl, .s_nominal_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error, .s_break => {},
-    }
 }
 
 // if-else //
@@ -4611,6 +4455,28 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     // If so, we'll skip exhaustiveness checking since the types may be invalid
     var had_type_error = false;
 
+    // For matches desugared from `?` operator, verify the condition unifies with Try type FIRST.
+    // If it doesn't, report the specific error and skip pattern checking to avoid confusing errors.
+    var has_invalid_try = false;
+    if (match.is_try_suffix) {
+        // Get the actual Try type from builtins and instantiate it with fresh type vars
+        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
+        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
+            try self.copyVar(try_type_var, builtin_env, Region.zero())
+        else
+            try_type_var;
+        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
+
+        // Unify the condition with Try type
+        const try_result = try self.unify(try_var, cond_var, env);
+        if (!try_result.isOk()) {
+            has_invalid_try = true;
+            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
+                .expr = match.cond,
+            } });
+        }
+    }
+
     // Manually check the 1st branch
     // The type of the branch's body becomes the var other branch bodies must unify
     // against.
@@ -4618,6 +4484,8 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     const first_branch = self.cir.store.getMatchBranch(first_branch_idx);
     const first_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(first_branch.patterns);
 
+    // Skip pattern checking if we already know the condition isn't a Try type
+    // This prevents confusing cascading errors about pattern incompatibility
     for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, env);
@@ -4638,7 +4506,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
     for (branch_idxs[1..], 1..) |branch_idx, branch_cur_index| {
         const branch = self.cir.store.getMatchBranch(branch_idx);
 
-        // First, check the patterns of this branch
+        // First, check the patterns of this branch (skip if invalid try to avoid confusing errors)
         const branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(branch.patterns);
         for (branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
             // Check the pattern's sub types
@@ -4673,7 +4541,7 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
             for (branch_idxs[branch_cur_index + 1 ..], branch_cur_index + 1..) |other_branch_idx, other_branch_cur_index| {
                 const other_branch = self.cir.store.getMatchBranch(other_branch_idx);
 
-                // Still check the other patterns
+                // Still check the other patterns (skip if invalid try to avoid confusing errors)
                 const other_branch_ptrn_idxs = self.cir.store.sliceMatchBranchPatterns(other_branch.patterns);
                 for (other_branch_ptrn_idxs, 0..) |other_branch_ptrn_idx, other_cur_ptrn_index| {
                     // Check the pattern's sub types
@@ -4699,29 +4567,6 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
             // Then stop type checking for this branch
             break;
-        }
-    }
-
-    // For matches desugared from `?` operator, verify the condition unifies with Try type.
-    // If it doesn't, report an error. Skip exhaustiveness checking for invalid try since
-    // the desugared match only handles Ok/Err branches and would report confusing errors.
-    var has_invalid_try = false;
-    if (match.is_try_suffix) {
-        // Get the actual Try type from builtins and instantiate it with fresh type vars
-        const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
-        const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
-            try self.copyVar(try_type_var, builtin_env, Region.zero())
-        else
-            try_type_var;
-        const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
-
-        // Unify the condition with Try type
-        const try_result = try self.unify(try_var, cond_var, env);
-        if (!try_result.isOk()) {
-            has_invalid_try = true;
-            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
-                .expr = match.cond,
-            } });
         }
     }
 
@@ -5375,7 +5220,40 @@ fn checkNominalTypeUsage(
     }
 }
 
-// validate static dispatch constraints //
+// validate constraints //
+
+/// Check all constraints
+/// We loop here because checkStaticDispatchConstraints and add new regular
+/// constraints.
+fn checkAllConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    while (self.constraints.items.items.len > 0) {
+        try self.checkConstraints(env);
+        try self.checkStaticDispatchConstraints(env);
+    }
+}
+
+/// Check any accumulated constraints
+fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    var iter = self.constraints.iterIndices();
+    while (iter.next()) |idx| {
+        const constraint = self.constraints.get(idx);
+        switch (constraint.*) {
+            .eql => |eql| {
+                const unify_result = try self.unify(eql.expected, eql.actual, env);
+                switch (eql.ctx) {
+                    .anonymous => {},
+                    .early_return => {
+                        self.setDetailIfTypeMismatch(unify_result, .early_return);
+                    },
+                    .try_suffix_return => {
+                        self.setDetailIfTypeMismatch(unify_result, .try_suffix_return);
+                    },
+                }
+            },
+        }
+    }
+    self.constraints.items.clearRetainingCapacity();
+}
 
 /// Check static dispatch constraints
 ///
@@ -5389,7 +5267,7 @@ fn checkNominalTypeUsage(
 ///
 /// Initially, we only have to check constraint for `Test.to_str2`. But when we
 /// process that, we then have to check `Test.to_str`.
-fn checkDeferredStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     // During this pass, we want to hold onto any flex vars we encounter and
     // check them again later, when maybe they've been resolved
     const scratch_deferred_top = self.scratch_deferred_static_dispatch_constraints.top();
