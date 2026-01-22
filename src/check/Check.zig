@@ -535,6 +535,10 @@ fn instantiateVarWithSubs(
 
         .current_rank = env.rank(),
         .rigid_behavior = .{ .substitute_rigids = subs },
+        // When substituting rigids, we need to traverse all vars regardless of rank.
+        // Type declarations have vars at rank 0/1 (not generalized), but we still
+        // need to substitute rigids inside them to get proper type instantiation.
+        .rank_behavior = .ignore_rank,
     };
     return self.instantiateVarHelp(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }

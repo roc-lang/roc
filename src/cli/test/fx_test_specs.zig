@@ -81,6 +81,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>test",
         .description = "Platform-exposed opaque types in type annotations (issue #9034)",
     },
+    .{
+        .roc_file = "test/fx/issue9053.roc",
+        .io_spec = "1>hello",
+        .description = "Polymorphic recursive opaque types with unannotated inner functions (issue #9053)",
+    },
 
     // Language feature tests
     .{
