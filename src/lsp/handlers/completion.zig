@@ -136,9 +136,12 @@ pub fn handler(comptime ServerType: type) type {
 
             if (completion_result) |result| {
                 defer {
-                    // Free allocated detail strings
+                    // Free allocated completion item fields owned by the builder.
                     for (result.items) |item| {
                         if (item.detail) |d| self.allocator.free(d);
+                        if (item.documentation) |documentation| self.allocator.free(documentation);
+                        if (item.sortText) |sort_text| self.allocator.free(sort_text);
+                        if (item.insertText) |insert_text| self.allocator.free(insert_text);
                     }
                     self.allocator.free(result.items);
                 }
@@ -166,6 +169,9 @@ pub fn handler(comptime ServerType: type) type {
 }
 
 /// A single completion item returned to the client.
+///
+/// Note: optional string fields are owned by the completion builder and must be
+/// freed by the caller that consumes the result.
 pub const CompletionItem = struct {
     label: []const u8,
     kind: ?u32 = null,

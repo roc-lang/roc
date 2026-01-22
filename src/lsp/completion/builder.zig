@@ -51,12 +51,35 @@ pub const CompletionBuilder = struct {
     pub fn addItem(self: *CompletionBuilder, item: CompletionItem) !bool {
         // Check for duplicates
         if (self.seen_labels.contains(item.label)) {
+            // Avoid leaking owned fields on duplicate rejection.
+            // The caller expects the builder to take ownership of any allocated
+            // strings that accompany the item (e.g., detail strings).
+            self.freeOwnedFields(item);
             return false;
         }
 
         try self.seen_labels.put(item.label, {});
         try self.items.append(self.allocator, item);
         return true;
+    }
+
+    /// Free any owned fields on a completion item that wasn't retained.
+    ///
+    /// We only free fields that are known to be owned by the builder. If new
+    /// owned fields are added to CompletionItem in the future, update this list.
+    fn freeOwnedFields(self: *CompletionBuilder, item: CompletionItem) void {
+        if (item.detail) |detail| {
+            self.allocator.free(detail);
+        }
+        if (item.documentation) |doc| {
+            self.allocator.free(doc);
+        }
+        if (item.insertText) |insert_text| {
+            self.allocator.free(insert_text);
+        }
+        if (item.sortText) |sort_text| {
+            self.allocator.free(sort_text);
+        }
     }
 
     // =========================================================================

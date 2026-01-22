@@ -22,6 +22,7 @@ const module_lookup = @import("module_lookup.zig");
 const completion_context = @import("completion/context.zig");
 const completion_builtins = @import("completion/builtins.zig");
 const completion_builder = @import("completion/builder.zig");
+const BuildEnvHandle = @import("build_env_handle.zig").BuildEnvHandle;
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
@@ -42,18 +43,23 @@ pub const DebugFlags = struct {
 pub const SyntaxChecker = struct {
     allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex = .{},
-    build_env: ?*BuildEnv = null,
+    /// Current build environment owned by the live check path.
+    build_env: ?*BuildEnvHandle = null,
     /// Previous successful BuildEnv kept for module lookups (e.g., semantic tokens).
     /// This is swapped with build_env after each successful build.
-    previous_build_env: ?*BuildEnv = null,
+    previous_build_env: ?*BuildEnvHandle = null,
     /// Snapshot of the most recent successful build per module (kept for completions).
-    snapshot_envs: std.StringHashMapUnmanaged(*BuildEnv) = .{},
-    snapshot_env_ref_counts: std.AutoHashMapUnmanaged(*BuildEnv, usize) = .{},
+    snapshot_envs: std.StringHashMapUnmanaged(*BuildEnvHandle) = .{},
     /// Dependency graph for tracking module relationships and invalidation.
     dependency_graph: DependencyGraph,
     cache_config: CacheConfig = .{},
     log_file: ?std.fs.File = null,
     debug: DebugFlags,
+
+    // Owner tags used for BuildEnvHandle debugging.
+    const owner_build = "build_env";
+    const owner_previous = "previous_build_env";
+    const owner_snapshot = "snapshot";
 
     pub fn init(allocator: std.mem.Allocator, debug: DebugFlags, log_file: ?std.fs.File) SyntaxChecker {
         return .{
@@ -65,22 +71,21 @@ pub const SyntaxChecker = struct {
     }
 
     pub fn deinit(self: *SyntaxChecker) void {
-        self.clearSnapshots();
-
-        if (self.build_env) |env| {
-            env.deinit();
-            self.allocator.destroy(env);
+        // Release live handles first, then snapshots.
+        // Handles guarantee the BuildEnv is freed exactly once.
+        if (self.build_env) |handle| {
+            handle.release(owner_build);
             self.build_env = null;
         }
-        if (self.previous_build_env) |env| {
-            env.deinit();
-            self.allocator.destroy(env);
+        if (self.previous_build_env) |handle| {
+            handle.release(owner_previous);
             self.previous_build_env = null;
         }
 
+        self.clearSnapshots();
+
         // Free hashmap allocations
         self.snapshot_envs.deinit(self.allocator);
-        self.snapshot_env_ref_counts.deinit(self.allocator);
 
         self.dependency_graph.deinit();
     }
@@ -94,7 +99,8 @@ pub const SyntaxChecker = struct {
         defer self.mutex.unlock();
 
         std.debug.print("check: create fresh build env\n", .{});
-        const env = try self.createFreshBuildEnv();
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
@@ -109,7 +115,7 @@ pub const SyntaxChecker = struct {
         self.updateDependencyGraph(env);
 
         if (self.shouldSnapshotBuild(env, session.absolute_path, drained)) {
-            self.storeSnapshotEnv(env, session.absolute_path);
+            self.storeSnapshotEnv(env_handle, session.absolute_path);
         }
 
         var publish_list = std.ArrayList(Diagnostics.PublishDiagnostics){};
@@ -130,16 +136,16 @@ pub const SyntaxChecker = struct {
                 diags.deinit(self.allocator);
             }
 
+            // Reports and their backing storage are owned by BuildSession.deinit().
+            // We only read them here to build diagnostics.
             for (entry.reports) |*rep| {
                 const report = rep.*;
-                defer rep.deinit();
 
                 if (self.shouldSuppressReport(report)) continue;
 
                 const diag = try self.reportToDiagnostic(report);
                 try diags.append(self.allocator, diag);
             }
-            self.allocator.free(entry.reports);
 
             try publish_list.append(self.allocator, .{
                 .uri = module_uri,
@@ -160,40 +166,36 @@ pub const SyntaxChecker = struct {
 
     /// Creates a fresh BuildEnv for a new build.
     /// The previous build_env is moved to previous_build_env for module lookups.
-    fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnv {
+    fn createFreshBuildEnv(self: *SyntaxChecker) !*BuildEnvHandle {
         std.debug.print("createFreshBuildEnv: prev_build_env={any} build_env={any}\n", .{ self.previous_build_env != null, self.build_env != null });
-        // Move current build_env to previous_build_env (release old previous if exists)
+
+        // Release the previous_build_env owner first.
         if (self.previous_build_env) |old_prev| {
-            // Only free if no snapshot is still referencing it.
-            // Snapshot ref counts are owned by snapshot_envs entries, so don't release here.
-            const snapshot_ref = self.snapshot_env_ref_counts.get(old_prev) != null;
-            const snapshot_map_ref = self.isEnvReferencedInSnapshots(old_prev);
-            if (!snapshot_ref and !snapshot_map_ref) {
-                std.debug.print("createFreshBuildEnv: freeing old previous env\n", .{});
-                old_prev.deinit();
-                self.allocator.destroy(old_prev);
-            } else {
-                std.debug.print("createFreshBuildEnv: keeping old previous env (snapshot still references)\n", .{});
-            }
+            old_prev.release(owner_previous);
         }
-        self.previous_build_env = self.build_env;
-        self.build_env = null;
+
+        // Move build_env to previous_build_env, transferring ownership tag.
+        if (self.build_env) |current| {
+            current.retain(owner_previous);
+            current.release(owner_build);
+            self.previous_build_env = current;
+            self.build_env = null;
+        }
 
         // Create a fresh BuildEnv
-        const env_ptr = try self.allocator.create(BuildEnv);
-        errdefer self.allocator.destroy(env_ptr);
-
-        env_ptr.* = try BuildEnv.init(self.allocator, .single_threaded, 1);
-        env_ptr.compiler_version = build_options.compiler_version;
+        var env = try BuildEnv.init(self.allocator, .single_threaded, 1);
+        env.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {
             const cache_manager = try self.allocator.create(CacheManager);
             cache_manager.* = CacheManager.init(self.allocator, self.cache_config, Filesystem.default());
-            env_ptr.setCacheManager(cache_manager);
+            env.setCacheManager(cache_manager);
         }
 
-        self.build_env = env_ptr;
-        return env_ptr;
+        const debug_handles = self.debug.build or self.debug.syntax or self.debug.server;
+        const handle = try BuildEnvHandle.create(self.allocator, env, owner_build, debug_handles);
+        self.build_env = handle;
+        return handle;
     }
 
     fn shouldSnapshotBuild(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8, drained: []BuildEnv.DrainedModuleReports) bool {
@@ -218,55 +220,27 @@ pub const SyntaxChecker = struct {
         return true;
     }
 
-    fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
+    fn storeSnapshotEnv(self: *SyntaxChecker, env_handle: *BuildEnvHandle, absolute_path: []const u8) void {
         std.debug.print("storeSnapshotEnv: path={s}\n", .{absolute_path});
         if (self.snapshot_envs.fetchRemove(absolute_path)) |removed| {
             std.debug.print("storeSnapshotEnv: replacing existing snapshot\n", .{});
-            self.releaseSnapshotEnv(removed.value);
+            removed.value.release(owner_snapshot);
             self.allocator.free(removed.key);
         }
 
         const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
-        self.snapshot_envs.put(self.allocator, owned_path, env) catch {
+        self.snapshot_envs.put(self.allocator, owned_path, env_handle) catch {
             self.allocator.free(owned_path);
             return;
         };
-        self.retainSnapshotEnv(env);
+        env_handle.retain(owner_snapshot);
         std.debug.print("storeSnapshotEnv: stored snapshot count={d}\n", .{self.snapshot_envs.count()});
     }
 
-    fn retainSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
-        const entry = self.snapshot_env_ref_counts.get(env);
-        const next_count = if (entry) |count| count + 1 else 1;
-        _ = self.snapshot_env_ref_counts.put(self.allocator, env, next_count) catch {};
-        std.debug.print("retainSnapshotEnv: count={d}\n", .{next_count});
-    }
-
-    fn releaseSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv) void {
-        if (self.snapshot_env_ref_counts.get(env)) |count| {
-            if (count <= 1) {
-                if (self.isEnvReferencedInSnapshots(env)) {
-                    std.debug.print("releaseSnapshotEnv: env still referenced by snapshots\n", .{});
-                    _ = self.snapshot_env_ref_counts.put(self.allocator, env, 1) catch {};
-                    return;
-                }
-                std.debug.print("releaseSnapshotEnv: freeing env\n", .{});
-                _ = self.snapshot_env_ref_counts.remove(env);
-                env.deinit();
-                self.allocator.destroy(env);
-            } else {
-                std.debug.print("releaseSnapshotEnv: decrementing env count to {d}\n", .{count - 1});
-                _ = self.snapshot_env_ref_counts.put(self.allocator, env, count - 1) catch {};
-            }
-        } else {
-            std.debug.print("releaseSnapshotEnv: env not tracked\n", .{});
-        }
-    }
-
     fn clearSnapshots(self: *SyntaxChecker) void {
-        // Collect all envs and keys before clearing the map
-        // This prevents isEnvReferencedInSnapshots from returning true during cleanup
-        var envs: std.ArrayListUnmanaged(*BuildEnv) = .{};
+        // Collect all handles and keys before clearing the map so we can
+        // release snapshot ownership without mutating the map mid-iteration.
+        var envs: std.ArrayListUnmanaged(*BuildEnvHandle) = .{};
         defer envs.deinit(self.allocator);
         var keys: std.ArrayListUnmanaged([]const u8) = .{};
         defer keys.deinit(self.allocator);
@@ -277,41 +251,33 @@ pub const SyntaxChecker = struct {
             keys.append(self.allocator, entry.key_ptr.*) catch {};
         }
 
-        // Clear the map FIRST so isEnvReferencedInSnapshots returns false
+        // Clear the map FIRST so snapshot ownership is only represented by handles.
         self.snapshot_envs.clearRetainingCapacity();
 
-        // Now release all envs (with empty snapshot_envs map)
-        for (envs.items) |env| {
-            self.releaseSnapshotEnv(env);
+        // Now release all handles (with empty snapshot_envs map)
+        for (envs.items) |handle| {
+            handle.release(owner_snapshot);
         }
 
         // Free all keys
         for (keys.items) |key| {
             self.allocator.free(key);
         }
-
-        self.snapshot_env_ref_counts.clearRetainingCapacity();
-    }
-
-    fn isEnvReferencedInSnapshots(self: *SyntaxChecker, env: *BuildEnv) bool {
-        var it = self.snapshot_envs.iterator();
-        while (it.next()) |entry| {
-            if (entry.value_ptr.* == env) return true;
-        }
-        return false;
     }
 
     /// Get the BuildEnv that should be used for module lookups (semantic tokens, etc.).
     /// Prefers the current build_env if it has modules, otherwise falls back to previous_build_env.
     pub fn getModuleLookupEnv(self: *SyntaxChecker) ?*BuildEnv {
         // Prefer current build_env if it exists and has modules
-        if (self.build_env) |env| {
+        if (self.build_env) |handle| {
+            const env = handle.envPtr();
             if (env.schedulers.count() > 0) {
                 return env;
             }
         }
         // Fall back to previous_build_env
-        return self.previous_build_env;
+        if (self.previous_build_env) |handle| return handle.envPtr();
+        return null;
     }
 
     /// Get the cached snapshot BuildEnv for completions.
@@ -319,7 +285,7 @@ pub const SyntaxChecker = struct {
     pub fn getSnapshotEnv(self: *SyntaxChecker) ?*BuildEnv {
         var it = self.snapshot_envs.iterator();
         if (it.next()) |entry| {
-            return entry.value_ptr.*;
+            return entry.value_ptr.*.envPtr();
         }
         return null;
     }
@@ -645,7 +611,8 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const env = try self.createFreshBuildEnv();
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
@@ -698,7 +665,8 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const env = try self.createFreshBuildEnv();
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
@@ -908,7 +876,8 @@ pub const SyntaxChecker = struct {
 
     /// Helper function to find a module by name and return a DefinitionResult pointing to it
     fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
-        const env = self.build_env orelse return null;
+        const env_handle = self.build_env orelse return null;
+        const env = env_handle.envPtr();
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
         const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
@@ -1439,7 +1408,8 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const env = try self.createFreshBuildEnv();
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
@@ -1491,7 +1461,8 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        const env = self.build_env orelse return &[_]SymbolInformation{};
+        const env_handle = self.build_env orelse return &[_]SymbolInformation{};
+        const env = env_handle.envPtr();
 
         // Convert URI to absolute path to match against module paths
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
@@ -1595,7 +1566,8 @@ pub const SyntaxChecker = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const env = try self.createFreshBuildEnv();
+        const env_handle = try self.createFreshBuildEnv();
+        const env = env_handle.envPtr();
 
         var session = try BuildSession.init(self.allocator, env, uri, override_text);
         defer session.deinit();
@@ -1635,8 +1607,8 @@ pub const SyntaxChecker = struct {
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
         var used_snapshot = false;
         const module_env_opt: ?*ModuleEnv = blk: {
-            if (self.snapshot_envs.get(session.absolute_path)) |snapshot_env| {
-                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_env, session.absolute_path);
+            if (self.snapshot_envs.get(session.absolute_path)) |snapshot_handle| {
+                const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_handle.envPtr(), session.absolute_path);
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
                     break :blk module_env;
@@ -1644,8 +1616,8 @@ pub const SyntaxChecker = struct {
             }
 
             // Fall back to previous build env if snapshot not available
-            if (self.previous_build_env) |previous_env| {
-                const prev_module_env = self.getModuleEnvByPathInEnv(previous_env, session.absolute_path);
+            if (self.previous_build_env) |previous_handle| {
+                const prev_module_env = self.getModuleEnvByPathInEnv(previous_handle.envPtr(), session.absolute_path);
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
                     break :blk module_env;
