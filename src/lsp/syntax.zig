@@ -1778,7 +1778,7 @@ pub const SyntaxChecker = struct {
                 // Get completions from the specified module
                 try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
             },
-            .after_record_dot => |record_access| {
+            .after_value_dot => |record_access| {
                 std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.access_chain, record_access.member_start });
                 if (module_env_opt) |module_env| {
                     var chain_resolved = false;
@@ -1792,15 +1792,27 @@ pub const SyntaxChecker = struct {
                         const variable_name = lastChainSegment(record_access.access_chain);
                         const variable_start = record_access.member_start;
 
+                        var resolved_type_var: ?types.Var = null;
+                        if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                            resolved_type_var = type_var;
+                        }
+                        //NOTE[ELI]: I'm really not sure if we shouldn't always do this instead
+                        if (resolved_type_var == null and record_access.dot_offset > 0) {
+                            // Fall back to the type of the expression immediately before the dot.
+                            // This is important for chained calls where no field name exists yet.
+                            if (cir_queries.findTypeAtOffset(module_env, record_access.dot_offset - 1)) |type_at| {
+                                resolved_type_var = type_at.type_var;
+                            }
+                        }
                         // When using snapshot, cursor positions don't correspond to snapshot CIR
                         // So we must look up by name instead of analyzing the dot expression
-                        if (used_snapshot or cir_queries.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
+                        if (used_snapshot or resolved_type_var == null) {
                             std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
                             try builder.addRecordFieldCompletions(module_env, variable_name, variable_start);
                             std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
                             try builder.addMethodCompletions(module_env, variable_name, variable_start);
                             std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
-                        } else if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                        } else if (resolved_type_var) |type_var| {
                             std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
                             try builder.addFieldsFromTypeVar(module_env, type_var);
                             try builder.addMethodsFromTypeVar(module_env, type_var);
