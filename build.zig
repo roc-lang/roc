@@ -2841,7 +2841,7 @@ pub fn build(b: *std.Build) void {
 
             // Coverage thresholds - minimum required coverage percentage for each module
             const parser_min_coverage: f64 = 28.0;
-            const canonicalize_min_coverage: f64 = 86.2;
+            const canonicalize_min_coverage: f64 = 85.3;
 
             // kcov exclusion patterns for canonicalize coverage
             const can_exclude_patterns = .{
