@@ -64,7 +64,6 @@
 - Line 0054: `pub fn deinit(self: *SyntaxChecker) -> void`
 - Line 0069: `pub fn check(self, uri, override_text, workspace_root) -> ![]Diagnostics.PublishDiagnostics`
 - Line 0253: `pub fn getModuleLookupEnv(self) -> ?*BuildEnv`
-- Line 0264: `pub fn getSnapshotEnv(self) -> ?*BuildEnv`
 - Line 0270: `pub fn getModuleEnvByPath(self, path) -> ?*ModuleEnv`
 - Line 0294: `pub fn getImportedModuleEnvs(self, module_path) -> !?[]*ModuleEnv`
 - Line 0573: `pub fn getTypeAtPosition(self, uri, override_text, line, character) -> !?HoverResult`

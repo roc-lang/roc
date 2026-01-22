@@ -108,36 +108,11 @@ pub const CompletionBuilder = struct {
                     .kind = @intFromEnum(CompletionItemKind.module),
                     .detail = null,
                 });
-
-                if (module_state.env) |*module_env| {
-                    try self.addModuleLikeNameCompletionsFromModuleEnv(module_env);
-                }
             }
         }
     }
 
-    /// Add module-like name completions (e.g., "Basic" from "Basic.to_str") from a module.
-    pub fn addModuleLikeNameCompletionsFromModuleEnv(self: *CompletionBuilder, module_env: *const ModuleEnv) !void {
-        const exposed = &module_env.common.exposed_items;
-        var iter = exposed.iterator();
-        while (iter.next()) |exp_entry| {
-            const ident_idx: base.Ident.Idx = @bitCast(exp_entry.ident_idx);
-            const name = module_env.common.idents.getText(ident_idx);
-            if (name.len == 0) continue;
-
-            const without_module = stripModulePrefix(name, module_env.module_name);
-            const label = firstSegment(without_module);
-            if (label.len == 0 or !std.ascii.isUpper(label[0])) continue;
-
-            _ = try self.addItem(.{
-                .label = label,
-                .kind = @intFromEnum(CompletionItemKind.module),
-                .detail = null,
-            });
-        }
-    }
-
-    /// Add module name completions from the current module (imports and local module-like names).
+    /// Add module name completions from the current module's import statements.
     pub fn addModuleNameCompletions(self: *CompletionBuilder, module_env: *ModuleEnv) !void {
         // Add imported module names from import statements
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
@@ -156,60 +131,6 @@ pub const CompletionBuilder = struct {
                         .detail = null,
                     });
                 }
-            }
-        }
-
-        // Add local module-like names from associated items (e.g., Basic from Basic.to_str)
-        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-        for (defs_slice) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
-
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
-
-            const name = module_env.getIdentText(ident_idx);
-            if (name.len == 0) continue;
-
-            const without_module = stripModulePrefix(name, module_env.module_name);
-            const label = firstSegment(without_module);
-            if (label.len == 0 or !std.ascii.isUpper(label[0])) continue;
-
-            _ = try self.addItem(.{
-                .label = label,
-                .kind = @intFromEnum(CompletionItemKind.module),
-                .detail = null,
-            });
-        }
-
-        const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-        for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            const stmt_parts = getStatementParts(stmt);
-
-            if (stmt_parts.pattern) |pattern_idx| {
-                const pattern = module_env.store.getPattern(pattern_idx);
-                const ident_idx = switch (pattern) {
-                    .assign => |p| p.ident,
-                    .as => |p| p.ident,
-                    else => continue,
-                };
-
-                const name = module_env.getIdentText(ident_idx);
-                if (name.len == 0) continue;
-
-                const without_module = stripModulePrefix(name, module_env.module_name);
-                const label = firstSegment(without_module);
-                if (label.len == 0 or !std.ascii.isUpper(label[0])) continue;
-
-                _ = try self.addItem(.{
-                    .label = label,
-                    .kind = @intFromEnum(CompletionItemKind.module),
-                    .detail = null,
-                });
             }
         }
     }
@@ -239,68 +160,18 @@ pub const CompletionBuilder = struct {
                 // Check if this module's name matches
                 if (std.mem.eql(u8, module_state.name, module_name)) {
                     if (module_state.env) |*imported_env| {
-                        var type_writer = imported_env.initTypeWriter() catch null;
-                        defer if (type_writer) |*tw| tw.deinit();
-
-                        // Get exposed items from this module
-                        const exposed = &imported_env.common.exposed_items;
-                        var iter = exposed.iterator();
-                        while (iter.next()) |exp_entry| {
-                            const ident_idx: base.Ident.Idx = @bitCast(exp_entry.ident_idx);
-                            const name = imported_env.common.idents.getText(ident_idx);
-                            const without_module = stripModulePrefix(name, module_name);
-                            const label = firstSegment(without_module);
-                            if (label.len == 0) continue;
-
-                            // Determine kind based on name convention
-                            const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
-                                @intFromEnum(CompletionItemKind.class)
-                            else
-                                @intFromEnum(CompletionItemKind.function);
-
-                            var detail: ?[]const u8 = null;
-                            if (type_writer) |*tw| {
-                                if (imported_env.common.getNodeIndexById(self.allocator, ident_idx)) |node_idx| {
-                                    if (node_idx != 0) {
-                                        const def_idx: CIR.Def.Idx = @enumFromInt(node_idx);
-                                        const def = imported_env.store.getDef(def_idx);
-                                        const type_var = ModuleEnv.varFrom(def.pattern);
-                                        tw.write(type_var, .one_line) catch {};
-                                        const type_str = tw.get();
-                                        if (type_str.len > 0) {
-                                            detail = self.allocator.dupe(u8, type_str) catch null;
-                                        }
-                                        tw.reset();
-                                    }
-                                }
-                            }
-
-                            _ = try self.addItem(.{
-                                .label = label,
-                                .kind = kind,
-                                .detail = detail,
-                            });
-                        }
+                        try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
                     }
                     return;
                 }
             }
         }
 
-        // Try to resolve module-like names (e.g., Str) from exposed items in any module
-        var sched_it2 = env.schedulers.iterator();
-        while (sched_it2.next()) |entry| {
-            const sched = entry.value_ptr.*;
-            for (sched.modules.items) |*module_state| {
-                if (module_state.env) |*imported_env| {
-                    try self.addModuleMemberCompletionsFromModuleEnv(imported_env, module_name);
-                }
-            }
-        }
-
-        // Fall back to local module env for associated items in the current module
+        // Fall back to local module env only when the module name matches.
         if (module_env_opt) |module_env| {
-            try self.addLocalModuleMemberCompletions(module_env, module_name);
+            if (std.mem.eql(u8, module_env.module_name, module_name)) {
+                try self.addModuleMemberCompletionsFromModuleEnv(module_env, module_name);
+            }
         }
     }
 
@@ -371,80 +242,6 @@ pub const CompletionBuilder = struct {
         }
     }
 
-    /// Add local module member completions (members defined as qualified identifiers).
-    pub fn addLocalModuleMemberCompletions(
-        self: *CompletionBuilder,
-        module_env: *ModuleEnv,
-        module_name: []const u8,
-    ) !void {
-        // Add members defined as qualified identifiers in this module (e.g., Basic.to_str)
-        const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
-        for (defs_slice) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
-
-            const ident_idx = switch (pattern) {
-                .assign => |p| p.ident,
-                .as => |p| p.ident,
-                else => continue,
-            };
-
-            const name = module_env.getIdentText(ident_idx);
-            if (name.len == 0) continue;
-
-            const without_module = stripModulePrefix(name, module_name);
-            if (std.mem.eql(u8, without_module, name) or without_module.len == 0) continue;
-
-            const label = firstSegment(without_module);
-            if (label.len == 0) continue;
-
-            const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
-                @intFromEnum(CompletionItemKind.class)
-            else
-                @intFromEnum(CompletionItemKind.function);
-
-            _ = try self.addItem(.{
-                .label = label,
-                .kind = kind,
-                .detail = null,
-            });
-        }
-
-        const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
-        for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            const stmt_parts = getStatementParts(stmt);
-
-            if (stmt_parts.pattern) |pattern_idx| {
-                const pattern = module_env.store.getPattern(pattern_idx);
-                const ident_idx = switch (pattern) {
-                    .assign => |p| p.ident,
-                    .as => |p| p.ident,
-                    else => continue,
-                };
-
-                const name = module_env.getIdentText(ident_idx);
-                if (name.len == 0) continue;
-
-                const without_module = stripModulePrefix(name, module_name);
-                if (std.mem.eql(u8, without_module, name) or without_module.len == 0) continue;
-
-                const label = firstSegment(without_module);
-                if (label.len == 0) continue;
-
-                const kind: u32 = if (label.len > 0 and std.ascii.isUpper(label[0]))
-                    @intFromEnum(CompletionItemKind.class)
-                else
-                    @intFromEnum(CompletionItemKind.function);
-
-                _ = try self.addItem(.{
-                    .label = label,
-                    .kind = kind,
-                    .detail = null,
-                });
-            }
-        }
-    }
 
     // =========================================================================
     // Type Completions
