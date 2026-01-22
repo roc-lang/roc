@@ -172,7 +172,6 @@ const FindTypeContext = struct {
         // Check if cursor is in a type annotation
         const anno_idx: ?CIR.Annotation.Idx = switch (stmt) {
             .s_decl => |d| d.anno,
-            .s_decl_gen => |d| d.anno,
             .s_var => |v| v.anno,
             else => null,
         };
@@ -184,7 +183,6 @@ const FindTypeContext = struct {
                 // Get the pattern for this statement to get the type var
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
-                    .s_decl_gen => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
                     else => null,
                 };
@@ -201,7 +199,6 @@ const FindTypeContext = struct {
             if (ctx.checkAndUpdate(anno_region)) {
                 const pattern_idx: ?CIR.Pattern.Idx = switch (stmt) {
                     .s_decl => |d| d.pattern,
-                    .s_decl_gen => |d| d.pattern,
                     .s_var => |v| v.pattern_idx,
                     else => null,
                 };

@@ -1235,9 +1235,6 @@ pub const DevEvaluator = struct {
             .s_decl => |decl| {
                 try self.bindDeclaration(module_env, decl.expr, decl.pattern, env);
             },
-            .s_decl_gen => |decl| {
-                try self.bindDeclaration(module_env, decl.expr, decl.pattern, env);
-            },
             else => {
                 // Other statement types not yet supported
                 return error.UnsupportedExpression;
@@ -1773,23 +1770,6 @@ pub const DevEvaluator = struct {
                         type_env.put(pattern_key, result_layout) catch {};
                     } else {
                         // Try to find a separate type annotation for this pattern
-                        const pattern = module_env.store.getPattern(decl.pattern);
-                        switch (pattern) {
-                            .assign => |assign| {
-                                if (type_annos.get(assign.ident)) |anno_layout| {
-                                    type_env.put(pattern_key, anno_layout) catch {};
-                                }
-                            },
-                            else => {},
-                        }
-                    }
-                },
-                .s_decl_gen => |decl| {
-                    const pattern_key = @intFromEnum(decl.pattern);
-                    if (decl.anno) |anno_idx| {
-                        const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
-                        type_env.put(pattern_key, anno_layout) catch {};
-                    } else {
                         const pattern = module_env.store.getPattern(decl.pattern);
                         switch (pattern) {
                             .assign => |assign| {

@@ -1145,11 +1145,11 @@ main! = |_| { # Yeah I can leave a comment here
 
 It has the type:
 
-    List(Error) => Error
+    List(Error) => Try({  }, _d)
 
 But the type annotation says it should have the type:
 
-    List(Error) -> Error
+    List(Error) -> Try({  }, _d)
 
 # TOKENS
 ~~~zig
@@ -2541,76 +2541,92 @@ expect {
 																								(branch
 																									(patterns
 																										(pattern (degenerate false)
-																											(p-applied-tag)))
+																											(p-nominal-external (builtin)
+																												(p-applied-tag))))
 																									(value
 																										(e-lookup-local
 																											(p-assign (ident "#ok")))))
 																								(branch
 																									(patterns
 																										(pattern (degenerate false)
-																											(p-applied-tag)))
+																											(p-nominal-external (builtin)
+																												(p-applied-tag))))
 																									(value
 																										(e-return
-																											(e-tag (name "Err")
-																												(args
-																													(e-lookup-local
-																														(p-assign (ident "#err"))))))))))))
+																											(e-nominal-external
+																												(builtin)
+																												(e-tag (name "Err")
+																													(args
+																														(e-lookup-local
+																															(p-assign (ident "#err")))))))))))))
 																				(args)))
 																		(branches
 																			(branch
 																				(patterns
 																					(pattern (degenerate false)
-																						(p-applied-tag)))
+																						(p-nominal-external (builtin)
+																							(p-applied-tag))))
 																				(value
 																					(e-lookup-local
 																						(p-assign (ident "#ok")))))
 																			(branch
 																				(patterns
 																					(pattern (degenerate false)
-																						(p-applied-tag)))
+																						(p-nominal-external (builtin)
+																							(p-applied-tag))))
 																				(value
 																					(e-return
-																						(e-tag (name "Err")
-																							(args
-																								(e-lookup-local
-																									(p-assign (ident "#err"))))))))))))
+																						(e-nominal-external
+																							(builtin)
+																							(e-tag (name "Err")
+																								(args
+																									(e-lookup-local
+																										(p-assign (ident "#err")))))))))))))
 															(args)))
 													(branches
 														(branch
 															(patterns
 																(pattern (degenerate false)
-																	(p-applied-tag)))
+																	(p-nominal-external (builtin)
+																		(p-applied-tag))))
 															(value
 																(e-lookup-local
 																	(p-assign (ident "#ok")))))
 														(branch
 															(patterns
 																(pattern (degenerate false)
-																	(p-applied-tag)))
+																	(p-nominal-external (builtin)
+																		(p-applied-tag))))
 															(value
 																(e-return
-																	(e-tag (name "Err")
-																		(args
-																			(e-lookup-local
-																				(p-assign (ident "#err"))))))))))))))
+																	(e-nominal-external
+																		(builtin)
+																		(e-tag (name "Err")
+																			(args
+																				(e-lookup-local
+																					(p-assign (ident "#err")))))))))))))))
 								(branches
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-lookup-local
 												(p-assign (ident "#ok")))))
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-return
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "#err")))))))))))))
 					(s-expr
 						(e-match
 							(match
@@ -2623,20 +2639,24 @@ expect {
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-lookup-local
 												(p-assign (ident "#ok")))))
 									(branch
 										(patterns
 											(pattern (degenerate false)
-												(p-applied-tag)))
+												(p-nominal-external (builtin)
+													(p-applied-tag))))
 										(value
 											(e-return
-												(e-tag (name "Err")
-													(args
-														(e-lookup-local
-															(p-assign (ident "#err"))))))))))))
+												(e-nominal-external
+													(builtin)
+													(e-tag (name "Err")
+														(args
+															(e-lookup-local
+																(p-assign (ident "#err")))))))))))))
 					(e-call
 						(e-runtime-error (tag "ident_not_in_scope"))
 						(e-string

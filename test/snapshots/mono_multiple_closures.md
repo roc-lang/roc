@@ -14,9 +14,9 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-c1_add_x = |a, captures| a + captures.x
-
 c2_add_y = |b, captures| b + captures.y
+
+c1_add_x = |a, captures| a + captures.x
 
 func = |x, y| {
 	add_x = C1_add_x({ x: x })
