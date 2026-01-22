@@ -2761,7 +2761,61 @@ pub const MonoExprCodeGen = if (builtin.cpu.arch == .aarch64)
 else if (builtin.cpu.arch == .x86_64)
     MonoExprCodeGenFor(x86_64.CodeGen.SystemVCodeGen, x86_64.GeneralReg, x86_64.FloatReg, x86_64.Emit.Condition)
 else
-    @compileError("Unsupported architecture for MonoExprCodeGen");
+    UnsupportedArchCodeGen;
+
+/// Stub code generator for unsupported architectures.
+/// This allows the code to compile for cross-compilation targets like 32-bit ARM/x86,
+/// but will error at runtime if actually used.
+pub const UnsupportedArchCodeGen = struct {
+    const Self = @This();
+
+    pub const Error = error{
+        UnsupportedArchitecture,
+        UnsupportedExpression,
+        OutOfMemory,
+    };
+
+    pub const CodeResult = struct {
+        code: []const u8,
+        entry_offset: usize,
+    };
+
+    allocator: Allocator,
+
+    pub fn init(
+        allocator: Allocator,
+        _: *const MonoExprStore,
+        _: ?*StaticDataInterner,
+    ) Self {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(_: *Self) void {}
+
+    pub fn compileAllProcs(_: *Self, _: anytype) Error!void {
+        return error.UnsupportedArchitecture;
+    }
+
+    pub fn generateCode(_: *Self, _: anytype, _: anytype) Error!CodeResult {
+        return error.UnsupportedArchitecture;
+    }
+
+    pub fn generateExpr(_: *Self, _: anytype) Error!void {
+        return error.UnsupportedArchitecture;
+    }
+
+    pub fn generateProc(_: *Self, _: anytype) Error!void {
+        return error.UnsupportedArchitecture;
+    }
+
+    pub fn finalize(_: *Self) Error![]const u8 {
+        return error.UnsupportedArchitecture;
+    }
+
+    pub fn getCode(_: *const Self) []const u8 {
+        return &[_]u8{};
+    }
+};
 
 // Tests
 
