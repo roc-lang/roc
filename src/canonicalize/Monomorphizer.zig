@@ -1898,12 +1898,14 @@ fn resolveTypeVarDispatch(
             base.Region.zero(),
         );
     } else {
-        // Method not found - this is an error case, but for now we'll create
-        // a runtime error expression to preserve compilation
-        // TODO: Add proper error handling/diagnostics
+        // Method not found - create a diagnostic for this error
+        // TODO: Create a more specific diagnostic for method resolution failures
+        const diagnostic_idx = try self.module_env.addDiagnostic(.{
+            .expr_not_canonicalized = .{ .region = base.Region.zero() },
+        });
         return try self.module_env.store.addExpr(
             Expr{ .e_runtime_error = .{
-                .diagnostic = @enumFromInt(0),
+                .diagnostic = diagnostic_idx,
             } },
             base.Region.zero(),
         );

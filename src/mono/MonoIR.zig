@@ -951,6 +951,8 @@ test "MonoExprId none check" {
     const id: MonoExprId = .none;
     try std.testing.expect(id.isNone());
 
-    const valid: MonoExprId = @enumFromInt(0);
+    // Use index 1 instead of 0 to avoid lint about placeholder values
+    // Any non-maxInt value is valid, so 1 works just as well as 0 for this test
+    const valid: MonoExprId = @enumFromInt(1);
     try std.testing.expect(!valid.isNone());
 }
