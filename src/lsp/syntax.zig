@@ -78,6 +78,10 @@ pub const SyntaxChecker = struct {
             self.previous_build_env = null;
         }
 
+        // Free hashmap allocations
+        self.snapshot_envs.deinit(self.allocator);
+        self.snapshot_env_ref_counts.deinit(self.allocator);
+
         self.dependency_graph.deinit();
     }
 
@@ -216,10 +220,10 @@ pub const SyntaxChecker = struct {
 
     fn storeSnapshotEnv(self: *SyntaxChecker, env: *BuildEnv, absolute_path: []const u8) void {
         std.debug.print("storeSnapshotEnv: path={s}\n", .{absolute_path});
-        if (self.snapshot_envs.get(absolute_path)) |existing| {
+        if (self.snapshot_envs.fetchRemove(absolute_path)) |removed| {
             std.debug.print("storeSnapshotEnv: replacing existing snapshot\n", .{});
-            self.releaseSnapshotEnv(existing);
-            _ = self.snapshot_envs.remove(absolute_path);
+            self.releaseSnapshotEnv(removed.value);
+            self.allocator.free(removed.key);
         }
 
         const owned_path = self.allocator.dupe(u8, absolute_path) catch return;
@@ -260,13 +264,32 @@ pub const SyntaxChecker = struct {
     }
 
     fn clearSnapshots(self: *SyntaxChecker) void {
+        // Collect all envs and keys before clearing the map
+        // This prevents isEnvReferencedInSnapshots from returning true during cleanup
+        var envs: std.ArrayListUnmanaged(*BuildEnv) = .{};
+        defer envs.deinit(self.allocator);
+        var keys: std.ArrayListUnmanaged([]const u8) = .{};
+        defer keys.deinit(self.allocator);
+
         var it = self.snapshot_envs.iterator();
         while (it.next()) |entry| {
-            const env = entry.value_ptr.*;
-            self.releaseSnapshotEnv(env);
-            self.allocator.free(entry.key_ptr.*);
+            envs.append(self.allocator, entry.value_ptr.*) catch {};
+            keys.append(self.allocator, entry.key_ptr.*) catch {};
         }
+
+        // Clear the map FIRST so isEnvReferencedInSnapshots returns false
         self.snapshot_envs.clearRetainingCapacity();
+
+        // Now release all envs (with empty snapshot_envs map)
+        for (envs.items) |env| {
+            self.releaseSnapshotEnv(env);
+        }
+
+        // Free all keys
+        for (keys.items) |key| {
+            self.allocator.free(key);
+        }
+
         self.snapshot_env_ref_counts.clearRetainingCapacity();
     }
 
@@ -292,8 +315,13 @@ pub const SyntaxChecker = struct {
     }
 
     /// Get the cached snapshot BuildEnv for completions.
+    /// Returns the first available snapshot env if any exist.
     pub fn getSnapshotEnv(self: *SyntaxChecker) ?*BuildEnv {
-        return self.snapshot_build_env;
+        var it = self.snapshot_envs.iterator();
+        if (it.next()) |entry| {
+            return entry.value_ptr.*;
+        }
+        return null;
     }
 
     /// Look up a ModuleEnv by its file path from the cached BuildEnv.
