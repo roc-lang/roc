@@ -1553,6 +1553,28 @@ pub const SyntaxChecker = struct {
 
     // detectCompletionContext and computeOffset moved to completion/context.zig
 
+    /// Resolve a module alias to its real module name using import statements.
+    /// Returns the input name if no alias match is found.
+    fn resolveModuleAlias(module_env: *ModuleEnv, name: []const u8) []const u8 {
+        if (std.mem.eql(u8, module_env.module_name, name)) return name;
+
+        const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
+        for (import_statements_slice) |stmt_idx| {
+            const stmt = module_env.store.getStatement(stmt_idx);
+            if (stmt != .s_import) continue;
+
+            const import_stmt = stmt.s_import;
+            if (import_stmt.alias_tok) |alias_tok| {
+                const alias_name = module_env.common.idents.getText(alias_tok);
+                if (std.mem.eql(u8, alias_name, name)) {
+                    return module_env.common.idents.getText(import_stmt.module_name_tok);
+                }
+            }
+        }
+
+        return name;
+    }
+
     /// Get completion suggestions at a specific position in a document.
     /// Returns completions from the current module's exposed items and imports.
     /// If the build fails, still provides basic completions (builtin modules, types).
@@ -1606,11 +1628,15 @@ pub const SyntaxChecker = struct {
         // Try to get the module environment for richer completions
         // ALWAYS try snapshot first for completion - typing usually produces incomplete code
         var used_snapshot = false;
+        // Track which BuildEnv backs the chosen module_env_opt so module member
+        // lookups stay consistent with snapshot/previous envs.
+        var module_lookup_env: *BuildEnv = env;
         const module_env_opt: ?*ModuleEnv = blk: {
             if (self.snapshot_envs.get(session.absolute_path)) |snapshot_handle| {
                 const snapshot_module_env = self.getModuleEnvByPathInEnv(snapshot_handle.envPtr(), session.absolute_path);
                 if (snapshot_module_env) |module_env| {
                     used_snapshot = true;
+                    module_lookup_env = snapshot_handle.envPtr();
                     break :blk module_env;
                 }
             }
@@ -1620,6 +1646,7 @@ pub const SyntaxChecker = struct {
                 const prev_module_env = self.getModuleEnvByPathInEnv(previous_handle.envPtr(), session.absolute_path);
                 if (prev_module_env) |module_env| {
                     used_snapshot = true;
+                    module_lookup_env = previous_handle.envPtr();
                     break :blk module_env;
                 }
             }
@@ -1627,9 +1654,11 @@ pub const SyntaxChecker = struct {
             // Fall back to current build only if no snapshot available and build succeeded
             if (session.build_succeeded and !build_has_reports) {
                 if (self.getModuleEnvByPath(session.absolute_path)) |module_env| {
+                    module_lookup_env = env;
                     break :blk module_env;
                 }
 
+                module_lookup_env = env;
                 break :blk session.getModuleEnv();
             }
 
@@ -1646,8 +1675,12 @@ pub const SyntaxChecker = struct {
         switch (context) {
             .after_module_dot => |module_name| {
                 std.debug.print("completion: after_module_dot for '{s}'", .{module_name});
+                var resolved_module_name = module_name;
+                if (module_env_opt) |module_env| {
+                    resolved_module_name = resolveModuleAlias(module_env, module_name);
+                }
                 // Get completions from the specified module
-                try builder.addModuleMemberCompletions(env, module_name, module_env_opt);
+                try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
             },
             .after_record_dot => |record_access| {
                 std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.variable_name, record_access.variable_start });
