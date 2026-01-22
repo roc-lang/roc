@@ -109,6 +109,18 @@ fn debugInBuffer(state: *LineState) !void {
     _ = try state.out.print("in_buffer = {any}\n", .{state.in_buffer[0..state.bytes_read]});
 }
 
+fn cancelLine(state: *LineState) !void {
+    // Clear the buffer and reset cursor position
+    state.line_buffer.clearAndFree(state.temp);
+    state.col_offset = 0;
+
+    // Move cursor to start of line, print prompt, clear rest of line
+    try ansi_term.setCursorColumn(state.out, 0);
+    try state.out.writeAll(state.prompt);
+    try ansi_term.clearFromCursorToLineEnd(state.out);
+    try ansi_term.setCursorColumn(state.out, state.prompt_width);
+}
+
 fn clearScreen(state: *LineState) !void {
     try ansi_term.clearEntireScreen(state.out);
     try ansi_term.setCursor(state.out, 0, 0);
@@ -181,6 +193,7 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.BACKSPACE => deleteBefore,
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
+        ansi_term.ctrlKey('C') => cancelLine,
         control_code.lf => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
@@ -189,20 +202,25 @@ fn findCommandFn(state: *LineState) CommandFn {
                     ansi_term.RIGHT => moveCursorRight,
                     ansi_term.UP => historyBackward,
                     ansi_term.DOWN => historyForward,
-                    else => doNothing,
+                    else => {
+                        // TODO: remove these comments
+                        state.out.print("got control code\n", .{}) catch unreachable;
+                        return debugInBuffer;
+                        // return doNothing;
+                    },
                 };
             } else {
                 // TODO: remove these comments
-                // state.out.print("got control code\n", .{}) catch unreachable;
-                // return debugInBuffer;
-                return doNothing;
+                state.out.print("got control code\n", .{}) catch unreachable;
+                return debugInBuffer;
+                // return doNothing;
             }
         },
         else => {
-                // TODO: remove these comments
-            // state.out.print("got byte: {}\n", .{key}) catch unreachable;
-            // return debugInBuffer;
-            return doNothing;
+            // TODO: remove these comments
+            state.out.print("got byte: {}\n", .{key}) catch unreachable;
+            return debugInBuffer;
+            // return doNothing;
         },
     };
 }
