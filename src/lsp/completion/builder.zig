@@ -254,7 +254,6 @@ pub const CompletionBuilder = struct {
         }
     }
 
-
     // =========================================================================
     // Type Completions
     // =========================================================================
@@ -601,6 +600,42 @@ pub const CompletionBuilder = struct {
         return false;
     }
 
+    /// Resolve a record field's type variable from a receiver type.
+    ///
+    /// This unwraps aliases to find records and returns the field's type var
+    /// for chained access resolution (e.g., myrec.subrec.).
+    pub fn getFieldTypeVarFromTypeVar(
+        self: *CompletionBuilder,
+        module_env: *ModuleEnv,
+        type_var: types.Var,
+        field_name: []const u8,
+    ) ?types.Var {
+        _ = self;
+        const type_store = &module_env.types;
+
+        var resolved = type_store.resolveVar(type_var);
+        var content = resolved.desc.content;
+
+        var steps: usize = 0;
+        while (steps < 8) : (steps += 1) {
+            if (content.unwrapRecord()) |record| {
+                return findFieldVarInRecord(module_env, record, field_name);
+            }
+
+            switch (content) {
+                .alias => |alias| {
+                    const backing_var = type_store.getAliasBackingVar(alias);
+                    resolved = type_store.resolveVar(backing_var);
+                    content = resolved.desc.content;
+                    continue;
+                },
+                else => break,
+            }
+        }
+
+        return null;
+    }
+
     /// Recursively extract fields from type content, unwrapping aliases.
     fn addFieldsFromContent(
         self: *CompletionBuilder,
@@ -677,6 +712,23 @@ pub const CompletionBuilder = struct {
                 .detail = detail,
             });
         }
+    }
+
+    /// Find the type var for a specific field within a record.
+    fn findFieldVarInRecord(module_env: *ModuleEnv, record: types.Record, field_name: []const u8) ?types.Var {
+        const type_store = &module_env.types;
+        const fields_slice = type_store.getRecordFieldsSlice(record.fields);
+        const field_names = fields_slice.items(.name);
+        const field_vars = fields_slice.items(.var_);
+
+        for (field_names, field_vars) |field_name_idx, field_var| {
+            const name = module_env.getIdentText(field_name_idx);
+            if (std.mem.eql(u8, name, field_name)) {
+                return field_var;
+            }
+        }
+
+        return null;
     }
 
     // =========================================================================

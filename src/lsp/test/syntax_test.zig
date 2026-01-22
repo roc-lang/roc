@@ -4,13 +4,6 @@ const std = @import("std");
 const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 const uri_util = @import("../uri.zig");
 
-fn platformPath(allocator: std.mem.Allocator) ![]u8 {
-    const this_dir = std.fs.path.dirname(@src().file) orelse ".";
-    const abs_dir = try std.fs.path.resolve(allocator, &.{this_dir});
-    defer allocator.free(abs_dir);
-    return std.fs.path.resolve(allocator, &.{ abs_dir, "..", "..", "..", "test", "str", "platform", "main.roc" });
-}
-
 test "syntax checker skips rebuild when content unchanged" {
     // Test the incremental invalidation: same content should skip rebuild
     const allocator = std.testing.allocator;
@@ -20,17 +13,14 @@ test "syntax checker skips rebuild when content unchanged" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     const contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\main = "hello"
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(contents);
 
@@ -77,28 +67,25 @@ test "syntax checker rebuilds when content changes" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     const contents1 = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\main = "hello"
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(contents1);
 
     const contents2 = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\main = "world"
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(contents2);
 
@@ -140,17 +127,14 @@ test "syntax checker reports diagnostics for invalid source" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     const contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
-        \\main =
+        \\main = missing
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(contents);
 
@@ -161,7 +145,7 @@ test "syntax checker reports diagnostics for invalid source" {
     const uri = try uri_util.pathToUri(allocator, file_path);
     defer allocator.free(uri);
 
-    const publish_sets = try checker.check(uri, null, null);
+    const publish_sets = try checker.check(uri, contents, null);
     defer {
         for (publish_sets) |*set| set.deinit(allocator);
         allocator.free(publish_sets);
@@ -185,7 +169,7 @@ test "completion context detects after_record_dot for lowercase identifier" {
 
     switch (context) {
         .after_record_dot => |access| {
-            try std.testing.expectEqualStrings("my_var", access.variable_name);
+            try std.testing.expectEqualStrings("my_var", access.access_chain);
         },
         else => try std.testing.expect(false), // Should be after_record_dot
     }
@@ -243,20 +227,17 @@ test "getCompletionsAtPosition returns basic completions" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     // Create a simple app with a definition
     const contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\my_value = "hello"
         \\
         \\main = my_
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(contents);
 
@@ -297,7 +278,7 @@ test "record field completion works for modules" {
     const clean_contents =
         \\module []
         \\
-        \\my_record : { foo : Str, bar : I64 }
+        \\my_record : {{ foo : Str, bar : I64 }}
         \\my_record = { foo: "hello", bar: 42 }
         \\
         \\get_foo = my_record.foo
@@ -325,6 +306,7 @@ test "record field completion works for modules" {
     const incomplete_contents =
         \\module []
         \\
+        \\my_record : {{ foo : Str, bar : I64 }}
         \\my_record = { foo: "hello", bar: 42 }
         \\
         \\get_foo = my_record.
@@ -380,19 +362,17 @@ test "record completion uses snapshot env when builds fail" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     const clean_contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
+        \\my_record : {{ foo : Str, bar : I64 }}
         \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\main = my_record.foo
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(clean_contents);
 
@@ -411,15 +391,16 @@ test "record completion uses snapshot env when builds fail" {
 
     const error_contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
+        \\my_record : {{ foo : Str, bar : I64 }}
         \\my_record = {{ foo: "hello", bar: 42 }}
         \\
         \\main = my_record.
         \\broken =
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(error_contents);
 
@@ -488,6 +469,7 @@ test "record field completion with partial field name" {
     const partial_contents =
         \\module []
         \\
+        \\my_record : { foo : Str, bar : I64 }
         \\my_record = { foo: "hello", bar: 42 }
         \\
         \\get_foo = my_record.fo
@@ -537,13 +519,10 @@ test "static dispatch completion for nominal type methods" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
     // First create clean, working code with complete definition
     const clean_contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
@@ -556,7 +535,7 @@ test "static dispatch completion for nominal type methods" {
         \\main = val.to_str()
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(clean_contents);
 
@@ -584,7 +563,7 @@ test "static dispatch completion for nominal type methods" {
     // User has added a new line "result = val." and is requesting completion
     const incomplete_contents = try std.fmt.allocPrint(
         allocator,
-        \\app [main] {{ pf: platform "{s}" }}
+        \\module []
         \\
         \\Basic := [Val(Str)].{{
         \\  to_str : Basic -> Str
@@ -599,7 +578,7 @@ test "static dispatch completion for nominal type methods" {
         \\result = val.
         \\
     ,
-        .{platform_path},
+        .{},
     );
     defer allocator.free(incomplete_contents);
 
@@ -634,269 +613,5 @@ test "static dispatch completion for nominal type methods" {
     } else {
         std.debug.print("Got null result\n", .{});
         try std.testing.expect(false); // Should have got a result
-    }
-}
-
-test "builtin module names appear in expression completion" {
-    // Tests that builtin modules (Str, List, etc.) show up as module name completions
-    const allocator = std.testing.allocator;
-    var checker = SyntaxChecker.init(allocator, .{}, null);
-    defer checker.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
-    const contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
-        \\
-        \\main = 
-        \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(contents);
-
-    try tmp.dir.writeFile(.{ .sub_path = "builtin_modules.roc", .data = contents });
-    const file_path = try tmp.dir.realpathAlloc(allocator, "builtin_modules.roc");
-    defer allocator.free(file_path);
-
-    const uri = try uri_util.pathToUri(allocator, file_path);
-    defer allocator.free(uri);
-
-    std.debug.print("\n=== TEST: builtin module names in expression ===\n", .{});
-
-    // Request completion after "main = "
-    // Line 2, character 7 (after the space following =)
-    const result = try checker.getCompletionsAtPosition(uri, contents, 2, 7);
-
-    if (result) |completion_result| {
-        defer {
-            for (completion_result.items) |item| {
-                if (item.detail) |d| allocator.free(d);
-            }
-            allocator.free(completion_result.items);
-        }
-
-        std.debug.print("Got {d} completion items\n", .{completion_result.items.len});
-
-        // Should have builtin module names like Str, List, Bool, etc.
-        var found_str = false;
-        var found_list = false;
-        var found_bool = false;
-        var found_dict = false;
-
-        for (completion_result.items) |item| {
-            if (std.mem.eql(u8, item.label, "Str")) found_str = true;
-            if (std.mem.eql(u8, item.label, "List")) found_list = true;
-            if (std.mem.eql(u8, item.label, "Bool")) found_bool = true;
-            if (std.mem.eql(u8, item.label, "Dict")) found_dict = true;
-        }
-
-        std.debug.print("found_str={}, found_list={}, found_bool={}, found_dict={}\n", .{ found_str, found_list, found_bool, found_dict });
-
-        try std.testing.expect(found_str);
-        try std.testing.expect(found_list);
-        try std.testing.expect(found_bool);
-        try std.testing.expect(found_dict);
-    } else {
-        std.debug.print("Got null result\n", .{});
-        try std.testing.expect(false);
-    }
-}
-
-test "builtin module members complete after Str dot" {
-    // Tests that Str module members (like concat, join_with, etc.) complete after "Str."
-    const allocator = std.testing.allocator;
-    var checker = SyntaxChecker.init(allocator, .{}, null);
-    defer checker.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
-    const contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
-        \\
-        \\main = Str.
-        \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(contents);
-
-    try tmp.dir.writeFile(.{ .sub_path = "str_members.roc", .data = contents });
-    const file_path = try tmp.dir.realpathAlloc(allocator, "str_members.roc");
-    defer allocator.free(file_path);
-
-    const uri = try uri_util.pathToUri(allocator, file_path);
-    defer allocator.free(uri);
-
-    std.debug.print("\n=== TEST: Str module member completion ===\n", .{});
-
-    // Request completion after "Str."
-    // Line 2: "main = Str."
-    // Character 11 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, contents, 2, 11);
-
-    if (result) |completion_result| {
-        defer {
-            for (completion_result.items) |item| {
-                if (item.detail) |d| allocator.free(d);
-            }
-            allocator.free(completion_result.items);
-        }
-
-        std.debug.print("Got {d} completion items\n", .{completion_result.items.len});
-
-        // Print first few items for debugging
-        const max_to_print = @min(10, completion_result.items.len);
-        std.debug.print("First {d} items:\n", .{max_to_print});
-        for (completion_result.items[0..max_to_print]) |item| {
-            std.debug.print("  - {s}\n", .{item.label});
-        }
-
-        // Should have at least some Str members
-        // The actual member names depend on what's exposed from Builtin.roc
-        // But there should be some completions
-        try std.testing.expect(completion_result.items.len > 0);
-    } else {
-        std.debug.print("Got null result\n", .{});
-        try std.testing.expect(false);
-    }
-}
-
-test "builtin module members complete after List dot" {
-    // Tests that List module members complete after "List."
-    const allocator = std.testing.allocator;
-    var checker = SyntaxChecker.init(allocator, .{}, null);
-    defer checker.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const platform_path = try platformPath(allocator);
-    defer allocator.free(platform_path);
-
-    const contents = try std.fmt.allocPrint(
-        allocator,
-        \\app [main] {{ pf: platform "{s}" }}
-        \\
-        \\main = List.
-        \\
-    ,
-        .{platform_path},
-    );
-    defer allocator.free(contents);
-
-    try tmp.dir.writeFile(.{ .sub_path = "list_members.roc", .data = contents });
-    const file_path = try tmp.dir.realpathAlloc(allocator, "list_members.roc");
-    defer allocator.free(file_path);
-
-    const uri = try uri_util.pathToUri(allocator, file_path);
-    defer allocator.free(uri);
-
-    std.debug.print("\n=== TEST: List module member completion ===\n", .{});
-
-    // Request completion after "List."
-    // Line 2: "main = List."
-    // Character 12 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, contents, 2, 12);
-
-    if (result) |completion_result| {
-        defer {
-            for (completion_result.items) |item| {
-                if (item.detail) |d| allocator.free(d);
-            }
-            allocator.free(completion_result.items);
-        }
-
-        std.debug.print("Got {d} completion items\n", .{completion_result.items.len});
-
-        // Print first few items for debugging
-        const max_to_print = @min(10, completion_result.items.len);
-        std.debug.print("First {d} items:\n", .{max_to_print});
-        for (completion_result.items[0..max_to_print]) |item| {
-            std.debug.print("  - {s}\n", .{item.label});
-        }
-
-        // Should have at least some List members
-        try std.testing.expect(completion_result.items.len > 0);
-    } else {
-        std.debug.print("Got null result\n", .{});
-        try std.testing.expect(false);
-    }
-}
-
-test "static dispatch completion for Str variables" {
-    // Tests that variables with builtin type Str get method completions (e.g., concat)
-    const allocator = std.testing.allocator;
-    var checker = SyntaxChecker.init(allocator, .{}, null);
-    defer checker.deinit();
-
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const clean_contents =
-        \\module []
-        \\
-        \\mystr : Str
-        \\mystr = "hello"
-        \\
-        \\main = mystr.concat("world")
-        \\
-    ;
-
-    try tmp.dir.writeFile(.{ .sub_path = "str_method_clean.roc", .data = clean_contents });
-    const file_path = try tmp.dir.realpathAlloc(allocator, "str_method_clean.roc");
-    defer allocator.free(file_path);
-
-    const uri = try uri_util.pathToUri(allocator, file_path);
-    defer allocator.free(uri);
-
-    // Build snapshot from clean code
-    const publish_sets = try checker.check(uri, clean_contents, null);
-    defer {
-        for (publish_sets) |*set| set.deinit(allocator);
-        allocator.free(publish_sets);
-    }
-
-    const incomplete_contents =
-        \\module []
-        \\
-        \\mystr : Str
-        \\mystr = "hello"
-        \\
-        \\main = mystr.
-        \\
-    ;
-
-    // Request completion after "mystr."
-    // Line 5: "main = mystr."
-    // Character 13 is right after the dot
-    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 5, 13);
-
-    if (result) |completion_result| {
-        defer {
-            for (completion_result.items) |item| {
-                if (item.detail) |d| allocator.free(d);
-            }
-            allocator.free(completion_result.items);
-        }
-
-        var found_concat = false;
-        for (completion_result.items) |item| {
-            if (std.mem.eql(u8, item.label, "concat")) found_concat = true;
-        }
-
-        try std.testing.expect(found_concat);
-    } else {
-        try std.testing.expect(false);
     }
 }

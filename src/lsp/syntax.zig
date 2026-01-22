@@ -1575,33 +1575,102 @@ pub const SyntaxChecker = struct {
         return name;
     }
 
-    /// If the cursor is after a member access on a module value (Module.member.),
-    /// parse and return the module/member names so we can resolve record fields.
-    fn parseModuleMemberAccess(source: []const u8, member_start: u32) ?struct { module_name: []const u8, member_name: []const u8 } {
-        if (member_start == 0 or member_start > source.len) return null;
-        if (source[member_start - 1] != '.') return null;
+    /// Resolve a local binding's type var for chained access completion.
+    fn resolveLocalBindingTypeVar(self: *SyntaxChecker, module_env: *ModuleEnv, name: []const u8, name_start: u32) ?types.Var {
+        var scope = scope_map.ScopeMap.init(self.allocator);
+        defer scope.deinit();
+        scope.build(module_env) catch return null;
 
-        var member_end = member_start;
-        while (member_end < source.len and (std.ascii.isAlphanumeric(source[member_end]) or source[member_end] == '_')) {
-            member_end += 1;
+        for (scope.bindings.items) |binding| {
+            const binding_name = module_env.getIdentText(binding.ident);
+            if (!scope_map.ScopeMap.isVisibleAt(binding, name_start)) continue;
+            if (std.mem.eql(u8, binding_name, name)) {
+                return ModuleEnv.varFrom(binding.pattern_idx);
+            }
         }
 
-        const member_name = source[member_start..member_end];
-        if (member_name.len == 0) return null;
-
-        const module_end = member_start - 1;
-        if (module_end == 0) return null;
-
-        var module_start = module_end;
-        while (module_start > 0 and (std.ascii.isAlphanumeric(source[module_start - 1]) or source[module_start - 1] == '_')) {
-            module_start -= 1;
+        if (module_lookup.findDefinitionByName(module_env, name)) |def_info| {
+            return ModuleEnv.varFrom(def_info.pattern_idx);
         }
 
-        if (module_start == module_end) return null;
-        const module_name = source[module_start..module_end];
-        if (module_name.len == 0 or !std.ascii.isUpper(module_name[0])) return null;
+        return null;
+    }
 
-        return .{ .module_name = module_name, .member_name = member_name };
+    /// Find the module env that should back module member resolution.
+    fn findModuleEnvForCompletion(module_lookup_env: *BuildEnv, env: *BuildEnv, module_name: []const u8) ?*ModuleEnv {
+        if (completion_builtins.isBuiltinType(module_name)) {
+            return env.builtin_modules.builtin_module.env;
+        }
+
+        var sched_it = module_lookup_env.schedulers.iterator();
+        while (sched_it.next()) |entry| {
+            const sched = entry.value_ptr.*;
+            if (sched.getModuleState(module_name)) |mod_state| {
+                if (mod_state.env) |*mod_env| return mod_env;
+            }
+        }
+
+        return null;
+    }
+
+    /// Resolve the type variable for a dotted access chain (e.g., myrec.subrec).
+    fn resolveAccessChainTypeVar(
+        self: *SyntaxChecker,
+        builder: *completion_builder.CompletionBuilder,
+        module_env: *ModuleEnv,
+        module_lookup_env: *BuildEnv,
+        env: *BuildEnv,
+        access_chain: []const u8,
+        chain_start: u32,
+    ) ?struct { module_env: *ModuleEnv, type_var: types.Var } {
+        var idx: usize = 0;
+        const first = nextChainSegment(access_chain, idx) orelse return null;
+        idx = first.next;
+
+        if (first.segment.len == 0) return null;
+
+        if (std.ascii.isUpper(first.segment[0])) {
+            const resolved_module = resolveModuleAlias(module_env, first.segment);
+            const member_env = findModuleEnvForCompletion(module_lookup_env, env, resolved_module) orelse return null;
+            const member = nextChainSegment(access_chain, idx) orelse return null;
+            idx = member.next;
+
+            const def_info = module_lookup.findDefinitionByName(member_env, member.segment) orelse return null;
+            var type_var = ModuleEnv.varFrom(def_info.pattern_idx);
+
+            while (nextChainSegment(access_chain, idx)) |segment| {
+                idx = segment.next;
+                const next_var = builder.getFieldTypeVarFromTypeVar(member_env, type_var, segment.segment) orelse return null;
+                type_var = next_var;
+            }
+
+            return .{ .module_env = member_env, .type_var = type_var };
+        }
+
+        var type_var = self.resolveLocalBindingTypeVar(module_env, first.segment, chain_start) orelse return null;
+        while (nextChainSegment(access_chain, idx)) |segment| {
+            idx = segment.next;
+            const next_var = builder.getFieldTypeVarFromTypeVar(module_env, type_var, segment.segment) orelse return null;
+            type_var = next_var;
+        }
+
+        return .{ .module_env = module_env, .type_var = type_var };
+    }
+
+    /// Get the next segment in a dotted access chain.
+    fn nextChainSegment(chain: []const u8, start: usize) ?struct { segment: []const u8, next: usize } {
+        if (start >= chain.len) return null;
+        const dot_idx = std.mem.indexOfScalarPos(u8, chain, start, '.') orelse chain.len;
+        const segment = chain[start..dot_idx];
+        const next = if (dot_idx < chain.len) dot_idx + 1 else chain.len;
+        return .{ .segment = segment, .next = next };
+    }
+
+    /// Get the last segment in a dotted access chain.
+    fn lastChainSegment(chain: []const u8) []const u8 {
+        const dot_idx = std.mem.lastIndexOfScalar(u8, chain, '.') orelse return chain;
+        if (dot_idx + 1 >= chain.len) return chain;
+        return chain[dot_idx + 1 ..];
     }
 
     /// Get completion suggestions at a specific position in a document.
@@ -1712,44 +1781,26 @@ pub const SyntaxChecker = struct {
                 try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
             },
             .after_record_dot => |record_access| {
-                std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.variable_name, record_access.variable_start });
+                std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.access_chain, record_access.member_start });
                 if (module_env_opt) |module_env| {
-                    var module_member_handled = false;
-                    // If the record access is a module member (Module.member.), resolve
-                    // the member definition from that module to provide record fields.
-                    if (parseModuleMemberAccess(source, record_access.variable_start)) |module_member| {
-                        const resolved_module = resolveModuleAlias(module_env, module_member.module_name);
-                        const module_env_for_member = blk: {
-                            if (completion_builtins.isBuiltinType(resolved_module)) {
-                                break :blk env.builtin_modules.builtin_module.env;
-                            }
-
-                            var sched_it = module_lookup_env.schedulers.iterator();
-                            while (sched_it.next()) |entry| {
-                                const sched = entry.value_ptr.*;
-                                if (sched.getModuleState(resolved_module)) |mod_state| {
-                                    if (mod_state.env) |*mod_env| {
-                                        break :blk mod_env;
-                                    }
-                                }
-                            }
-
-                            break :blk null;
-                        };
-
-                        if (module_env_for_member) |member_env| {
-                            module_member_handled = try builder.addRecordFieldsForModuleMember(member_env, module_member.member_name);
-                        }
+                    var chain_resolved = false;
+                    if (resolveAccessChainTypeVar(self, &builder, module_env, module_lookup_env, env, record_access.access_chain, record_access.chain_start)) |resolved| {
+                        chain_resolved = true;
+                        try builder.addFieldsFromTypeVar(resolved.module_env, resolved.type_var);
+                        try builder.addMethodsFromTypeVar(resolved.module_env, resolved.type_var);
                     }
 
-                    // When using snapshot, cursor positions don't correspond to snapshot CIR
-                    // So we must look up by name instead of analyzing the dot expression
-                    if (!module_member_handled) {
+                    if (!chain_resolved) {
+                        const variable_name = lastChainSegment(record_access.access_chain);
+                        const variable_start = record_access.member_start;
+
+                        // When using snapshot, cursor positions don't correspond to snapshot CIR
+                        // So we must look up by name instead of analyzing the dot expression
                         if (used_snapshot or cir_queries.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
                             std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
-                            try builder.addRecordFieldCompletions(module_env, record_access.variable_name, record_access.variable_start);
+                            try builder.addRecordFieldCompletions(module_env, variable_name, variable_start);
                             std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
-                            try builder.addMethodCompletions(module_env, record_access.variable_name, record_access.variable_start);
+                            try builder.addMethodCompletions(module_env, variable_name, variable_start);
                             std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
                         } else if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
                             std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});

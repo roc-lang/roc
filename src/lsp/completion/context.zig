@@ -11,10 +11,12 @@ pub const CompletionContext = union(enum) {
     after_module_dot: []const u8,
     /// After a dot with a record variable: "myRecord."
     after_record_dot: struct {
-        /// The variable name before the dot
-        variable_name: []const u8,
-        /// Byte offset of the start of the variable name
-        variable_start: u32,
+        /// The full dotted access chain before the dot (e.g., "myrec.subrec")
+        access_chain: []const u8,
+        /// Byte offset of the start of the chain
+        chain_start: u32,
+        /// Byte offset of the start of the segment before the dot
+        member_start: u32,
     },
     /// After a colon (type annotation context)
     after_colon,
@@ -76,14 +78,27 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
             if (ident_start < ident_end) {
                 const ident_name = source[ident_start..ident_end];
                 if (ident_name.len > 0) {
-                    if (std.ascii.isUpper(ident_name[0])) {
+                    var chain_start = ident_start;
+                    while (chain_start > 0) {
+                        const c = source[chain_start - 1];
+                        if (std.ascii.isAlphanumeric(c) or c == '_' or c == '.') {
+                            chain_start -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    const access_chain = source[chain_start..ident_end];
+
+                    if (std.ascii.isUpper(ident_name[0]) and std.mem.indexOfScalar(u8, access_chain, '.') == null) {
                         // Uppercase - module access (e.g., "Str.")
                         return .{ .after_module_dot = ident_name };
                     } else {
                         // Lowercase - record field access (e.g., "myRecord.")
                         return .{ .after_record_dot = .{
-                            .variable_name = ident_name,
-                            .variable_start = @intCast(ident_start),
+                            .access_chain = access_chain,
+                            .chain_start = @intCast(chain_start),
+                            .member_start = @intCast(ident_start),
                         } };
                     }
                 }
@@ -129,7 +144,16 @@ test "detectCompletionContext: after record dot" {
     const source = "myRecord.";
     const ctx = detectCompletionContext(source, 0, 9);
     try std.testing.expect(ctx == .after_record_dot);
-    try std.testing.expectEqualStrings("myRecord", ctx.after_record_dot.variable_name);
+    try std.testing.expectEqualStrings("myRecord", ctx.after_record_dot.access_chain);
+}
+
+test "detectCompletionContext: after nested record dot" {
+    const source = "myrec.subrec.";
+    const ctx = detectCompletionContext(source, 0, 13);
+    try std.testing.expect(ctx == .after_record_dot);
+    try std.testing.expectEqualStrings("myrec.subrec", ctx.after_record_dot.access_chain);
+    try std.testing.expectEqual(@as(u32, 0), ctx.after_record_dot.chain_start);
+    try std.testing.expectEqual(@as(u32, 6), ctx.after_record_dot.member_start);
 }
 
 test "detectCompletionContext: after colon" {
