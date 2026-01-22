@@ -1554,17 +1554,6 @@ fn processAssociatedItemsSecondPass(
                     });
                 }
             },
-            .import => {
-                // Imports are not valid in associated blocks
-                const region = self.parse_ir.tokenizedRegionToRegion(stmt.import.region);
-                const feature = try self.env.insertString("import statements in associated blocks");
-                try self.env.pushDiagnostic(Diagnostic{
-                    .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    },
-                });
-            },
             else => {
                 // Other statement types (var, expr, crash, dbg, expect, for, return, malformed)
                 // are not valid in associated blocks but are already caught by the parser,
@@ -2460,18 +2449,9 @@ pub fn canonicalizeFile(
                 const region = self.parse_ir.tokenizedRegionToRegion(ta.region);
 
                 // Top-level type annotation - store for connection to next declaration
-                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name) orelse {
-                    // Malformed identifier - skip this annotation
-                    const feature = try self.env.insertString("handle malformed identifier for a type annotation");
-                    try self.env.pushDiagnostic(Diagnostic{
-                        .not_implemented = .{
-                            .feature = feature,
-                            .region = region,
-                        },
-                    });
-
-                    continue;
-                };
+                // Note: ta.name is always a LowerIdent or NamedUnderscore token (guaranteed by parser),
+                // so resolveIdentifier always succeeds.
+                const name_ident = self.parse_ir.tokens.resolveIdentifier(ta.name).?;
 
                 // For type-modules, check if this is an anno-only annotation that was already processed in Phase 1.5.5
                 // We need to check if there's a matching decl - if there isn't, this was processed early
@@ -4717,16 +4697,7 @@ pub fn canonicalizeExpr(
                         };
                     },
                 }
-            } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                return CanonicalizedExpr{
-                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .not_implemented = .{
-                        .feature = feature,
-                        .region = region,
-                    } }),
-                    .free_vars = DataSpan.empty(),
-                };
-            }
+            } else unreachable; // All ident expressions have resolvable tokens (LowerIdent, NamedUnderscore, etc.)
         },
         .int => |e| {
             const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -7548,14 +7519,7 @@ pub fn canonicalizePattern(
                 }
 
                 return pattern_idx;
-            } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-                return malformed_idx;
-            }
+            } else unreachable; // All ident patterns have resolvable tokens (LowerIdent, NamedUnderscore)
         },
         .var_ident => |e| {
             // Mutable variable binding in a pattern (e.g., `|var $x, y|`)
@@ -7570,14 +7534,7 @@ pub fn canonicalizePattern(
                 // scopeIntroduceVar will detect if this is a reassignment of an existing var
                 // and return the existing pattern in that case
                 return try self.scopeIntroduceVar(ident_idx, pattern_idx, region, true, Pattern.Idx);
-            } else {
-                const feature = try self.env.insertString("report an error when unable to resolve identifier");
-                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .not_implemented = .{
-                    .feature = feature,
-                    .region = region,
-                } });
-                return malformed_idx;
-            }
+            } else unreachable; // var_ident patterns always have resolvable tokens (LowerIdent)
         },
         .underscore => |p| {
             const region = self.parse_ir.tokenizedRegionToRegion(p.region);
