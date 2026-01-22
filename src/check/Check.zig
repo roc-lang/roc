@@ -5193,14 +5193,6 @@ fn checkNominalTypeUsage(
                         // Record fields don't match the nominal type's backing record
                         self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_record);
                     },
-                    .tuple => {
-                        // Tuple elements don't match the nominal type's backing tuple
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tuple);
-                    },
-                    .value => {
-                        // Value doesn't match the nominal type's backing type
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_value);
-                    },
                 }
 
                 // Mark the entire expression as having a type error

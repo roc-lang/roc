@@ -619,3 +619,290 @@ test "unsupported where clause - old ability syntax" {
 
     try test_env.assertFirstTypeError("UNSUPPORTED WHERE CLAUSE");
 }
+
+// NOMINAL TYPE ERRORS
+// Tests for buildInvalidNominalTag, buildInvalidNominalRecord, buildInvalidNominalTuple
+
+test "nominal type - invalid tag constructor" {
+    // Create a nominal type with specific tags, then use a non-existent tag
+    const source =
+        \\Color := [Red, Green, Blue].{}
+        \\
+        \\c : Color
+        \\c = Color.Yellow
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+test "nominal type - tag with wrong payload type" {
+    // Use a tag that exists but with wrong payload types
+    const source =
+        \\Container := [Val(I64)].{}
+        \\
+        \\c : Container
+        \\c = Container.Val("string")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+test "nominal type - tag with wrong payload arity" {
+    // Use correct tag name but with wrong number of payload args
+    const source =
+        \\Pair := [Pair(I64, I64)].{}
+        \\
+        \\p : Pair
+        \\p = Pair.Pair(1, 2, 3)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+// NOTE: Tests for buildInvalidNominalRecord and buildInvalidNominalTuple
+// require explicit constructor syntax (e.g., Point.{ x: 1, z: 2 } for records)
+// which is not yet fully implemented in the parser. Those tests are omitted.
+
+test "nominal type - tag with multiple valid tags wrong choice" {
+    // Nominal with multiple tags - use a tag name that doesn't exist
+    const source =
+        \\Color := [Red, Green, Blue].{}
+        \\
+        \\c : Color
+        \\c = Color.Yellow
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+// STATIC DISPATCH EDGE CASES
+// Tests for rigid type variable method constraints
+
+test "static dispatch - missing method on non-nominal type" {
+    // Call a non-existent method on a string
+    const source =
+        \\str = "hello"
+        \\result = str.nonexistent()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+test "static dispatch - method return type mismatch" {
+    // Define a type with a method, but call it where a different return type is expected
+    const source =
+        \\MyType := [Val(I64)].{
+        \\    to_str : MyType -> Str
+        \\    to_str = |MyType.Val(_)| "value"
+        \\}
+        \\
+        \\x = MyType.Val(42)
+        \\
+        \\result : I64
+        \\result = x.to_str()
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// EQUALITY EXPLANATION FOR COMPLEX TYPES
+// These tests verify the TYPE DOES NOT SUPPORT EQUALITY error is triggered
+// for types containing functions, which cannot be compared
+
+test "equality - deeper nested record with function" {
+    // Records nested multiple levels with functions cannot be compared
+    const source =
+        \\rec1 : { level1: { level2: { action: I64 -> I64 } } }
+        \\rec1 = { level1: { level2: { action: |x| x + 1 } } }
+        \\
+        \\rec2 : { level1: { level2: { action: I64 -> I64 } } }
+        \\rec2 = { level1: { level2: { action: |x| x + 2 } } }
+        \\
+        \\result = rec1 == rec2
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+test "equality - record with multiple function fields" {
+    // Records with multiple function fields cannot be compared
+    const source =
+        \\rec1 : { add: I64 -> I64, mult: I64 -> I64 }
+        \\rec1 = { add: |x| x + 1, mult: |x| x * 2 }
+        \\
+        \\rec2 : { add: I64 -> I64, mult: I64 -> I64 }
+        \\rec2 = { add: |x| x + 10, mult: |x| x * 20 }
+        \\
+        \\result = rec1 == rec2
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE DOES NOT SUPPORT EQUALITY");
+}
+
+// BOUND TYPE VARIABLE CONFLICTS
+// Tests for incompatible_fn_args_bound_var
+
+test "incompatible fn args - same type var different types" {
+    // Function requires same type for both args but we pass different types
+    const source =
+        \\identity : a, a -> (a, a)
+        \\identity = |x, y| (x, y)
+        \\
+        \\result = identity(42, "string")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "incompatible fn args - polymorphic binding violation" {
+    // Using a polymorphic function with conflicting concrete types
+    const source =
+        \\makePair : a, a -> (a, a)
+        \\makePair = |x, y| (x, y)
+        \\
+        \\x : I64
+        \\x = 1
+        \\
+        \\y : Str
+        \\y = "hello"
+        \\
+        \\result = makePair(x, y)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// EARLY RETURN TYPE MISMATCHES
+// Tests for return statement type checking
+
+test "early return type mismatch - return in block" {
+    // Early return must match the expected block type
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| {
+        \\    if x > 0 { return 42 }
+        \\    "negative"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "early return type mismatch - multiple returns" {
+    // All return paths must agree
+    const source =
+        \\classify : I64 -> Str
+        \\classify = |x| {
+        \\    if x < 0 { return "negative" }
+        \\    if x == 0 { return 0 }
+        \\    "positive"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// ERROR RECOVERY PATHS
+// Tests for multiple errors in same construct
+
+test "pattern matching - multiple type errors in branches" {
+    // Multiple branches have type errors
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    1 => "one"
+        \\    2 => 2
+        \\    3 => "three"
+        \\    _ => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // Should report incompatible match branches
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "function call - multiple argument type errors" {
+    // Function call with multiple wrong argument types
+    const source =
+        \\f : I64, I64, I64 -> I64
+        \\f = |a, b, c| a + b + c
+        \\
+        \\result = f("one", "two", "three")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// BOX TYPE USAGE
+// Tests for Box type creation and usage
+
+test "box type - basic creation" {
+    // Box.box creates a boxed value
+    const source =
+        \\x : Box(I64)
+        \\x = Box.box(42)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Box(I64)");
+}
+
+test "box type - unbox operation" {
+    // Box.unbox retrieves the value
+    const source =
+        \\boxed : Box(Str)
+        \\boxed = Box.box("hello")
+        \\
+        \\value = Box.unbox(boxed)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Str");
+}
+
+test "box type - nested box" {
+    // Can box a boxed value
+    const source =
+        \\inner : Box(I64)
+        \\inner = Box.box(42)
+        \\
+        \\outer : Box(Box(I64))
+        \\outer = Box.box(inner)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Box(Box(I64))");
+}

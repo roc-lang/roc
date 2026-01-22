@@ -90,39 +90,7 @@ These require a platform module that specifies required types/definitions, and a
 
 2. **Unit Test Report Builders**: Call `buildPlatformAliasNotFound` and `buildPlatformDefNotFound` directly with mock data.
 
-### 4. Cross-Module Import Errors
-
-**Error Type:**
-- `TYPE MISMATCH` with `cross_module_import` detail
-
-**Why They're Hard to Test:**
-Requires specific type mismatches between imported and expected types across module boundaries.
-
-**Testing Strategy:**
-Use `TestEnv.initWithImport()` which already exists:
-```zig
-test "cross module - import type mismatch" {
-    const module_a =
-        \\getValue : I64
-        \\getValue = 42
-    ;
-    var env_a = try TestEnv.init("A", module_a);
-    defer env_a.deinit();
-
-    const module_b =
-        \\import A
-        \\
-        \\x : Str
-        \\x = A.getValue
-    ;
-    var env_b = try TestEnv.initWithImport("B", module_b, "A", &env_a);
-    defer env_b.deinit();
-
-    try env_b.assertFirstTypeError("TYPE MISMATCH");
-}
-```
-
-### 5. Unused Value Errors
+### 4. Unused Value Errors
 
 **Error Type:**
 - `UNUSED VALUE`

@@ -153,9 +153,6 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     invalid_nominal_record,
-    invalid_nominal_tuple,
-    invalid_nominal_value,
-    cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
     /// App's export type doesn't match the platform's required type
@@ -173,12 +170,6 @@ pub const IncompatibleListElements = struct {
     last_elem_idx: CIR.Node.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
-};
-
-/// Problem data for cross-module import type mismatches
-pub const CrossModuleImport = struct {
-    import_region: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
 };
 
 /// Problem data when function is called with wrong number of arguments
@@ -499,15 +490,6 @@ pub const ReportBuilder = struct {
                         },
                         .invalid_nominal_record => {
                             return self.buildInvalidNominalRecord(mismatch.types);
-                        },
-                        .invalid_nominal_tuple => {
-                            return self.buildInvalidNominalTuple(mismatch.types);
-                        },
-                        .invalid_nominal_value => {
-                            return self.buildInvalidNominalValue(mismatch.types);
-                        },
-                        .cross_module_import => |data| {
-                            return self.buildCrossModuleImportError(mismatch.types, data);
                         },
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(mismatch.types, data);
@@ -1824,86 +1806,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for invalid nominal tuple (tuple elements don't match)
-    fn buildInvalidNominalTuple(
-        self: *Self,
-        types: TypePair,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID NOMINAL TUPLE", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The tuple I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal value (value type doesn't match)
-    fn buildInvalidNominalValue(
-        self: *Self,
-        types: TypePair,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID NOMINAL TYPE", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("I'm having trouble with this nominal type:");
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The value I found has type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
     /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
@@ -3090,93 +2992,6 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addLineBreak();
         try report.document.addCodeBlock(owned_expected);
-
-        return report;
-    }
-
-    // cross-module import //
-
-    /// Build a report for cross-module import type mismatch
-    fn buildCrossModuleImportError(
-        self: *Self,
-        types: TypePair,
-        data: CrossModuleImport,
-    ) !Report {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This value is being used in an unexpected way.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        // Get the import expression
-        const import_expr = self.can_ir.store.getExpr(data.import_region);
-        const import_region = import_expr.e_lookup_external.region;
-
-        // Get region info for the import
-        const import_region_info = base.RegionInfo.position(
-            self.source,
-            self.module_env.getLineStarts(),
-            import_region.start.offset,
-            import_region.end.offset,
-        ) catch return report;
-
-        // Create the display region
-        const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, import_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
-            .start_line = import_region_info.start_line_idx + 1,
-            .start_column = import_region_info.start_col_idx + 1,
-            .end_line = import_region_info.end_line_idx + 1,
-            .end_column = import_region_info.end_col_idx + 1,
-            .region_annotation = .dimmed,
-            .filename = self.filename,
-        };
-
-        // Create underline region
-        const underline_regions = [_]UnderlineRegion{
-            .{
-                .start_line = import_region_info.start_line_idx + 1,
-                .start_column = import_region_info.start_col_idx + 1,
-                .end_line = import_region_info.end_line_idx + 1,
-                .end_column = import_region_info.end_col_idx + 1,
-                .annotation = .error_highlight,
-            },
-        };
-
-        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
-        try report.document.addLineBreak();
-
-        // Get module name if available
-        const module_idx = @intFromEnum(data.module_idx);
-        const module_name = if (module_idx < self.can_ir.imports.imports.len()) blk: {
-            const import_string_idx = self.can_ir.imports.imports.items.items[module_idx];
-            const import_name = self.can_ir.getString(import_string_idx);
-            break :blk import_name;
-        } else null;
-
-        // Show what was imported
-        try report.document.addText("It has the type:");
-        try report.document.addLineBreak();
-
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        // Show the actual type from the import
-        if (module_name) |name| {
-            try report.document.addText("However, the value imported from ");
-            try report.document.addAnnotated(name, .module_name);
-            try report.document.addText(" has the type:");
-        } else {
-            try report.document.addText("However, the imported value has the type:");
-        }
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
 
         return report;
     }

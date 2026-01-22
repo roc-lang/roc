@@ -1119,3 +1119,71 @@ test "exhaustive - tuple with list and integer patterns" {
     // This should be exhaustive - patterns 1 and 3 together cover all lists
     try test_env.assertLastDefType("I64");
 }
+
+// LIST PATTERN LENGTH TESTS
+// These tests exercise specific list pattern lengths
+
+test "exhaustive - list pattern specific lengths" {
+    // Matching on specific list lengths with rest pattern for remainder
+    const source =
+        \\classify : List(I64) -> Str
+        \\classify = |lst| match lst {
+        \\    [] => "empty"
+        \\    [_] => "single"
+        \\    [_, _] => "pair"
+        \\    [_, _, ..] => "many"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(I64) -> Str");
+}
+
+test "exhaustive - list pattern with three elements" {
+    // Matching on lists up to 3 elements
+    const source =
+        \\describe : List(Str) -> Str
+        \\describe = |items| match items {
+        \\    [] => "none"
+        \\    [a] => a
+        \\    [a, _b] => a
+        \\    [a, _b, _c] => a
+        \\    [_, _, _, ..] => "too many"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(Str) -> Str");
+}
+
+test "non-exhaustive - missing list length case" {
+    // Missing the empty list case
+    const source =
+        \\getFirst : List(I64) -> I64
+        \\getFirst = |lst| match lst {
+        \\    [x, ..] => x
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "redundant - overlapping list patterns" {
+    // The [_, ..] pattern makes the specific [_, _] pattern redundant
+    const source =
+        \\classify : List(I64) -> Str
+        \\classify = |lst| match lst {
+        \\    [] => "empty"
+        \\    [_, ..] => "has elements"
+        \\    [_, _] => "exactly two"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
