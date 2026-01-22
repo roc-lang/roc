@@ -215,114 +215,6 @@ pub fn unifyWithConf(
                         .detail = null,
                     } };
                 },
-                error.NumberDoesNotFit => {
-                    // For number literal errors, we need to determine which var is the literal
-                    // and which is the expected type
-                    const a_resolved = types.resolveVar(a);
-
-                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
-                    const literal_is_a = switch (a_resolved.desc.content) {
-                        .structure => |structure| switch (structure) {
-                            .record_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    const literal_var = if (literal_is_a) a else b;
-                    const num_expected_var = if (literal_is_a) b else a;
-                    const num_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, num_expected_var);
-
-                    break :blk .{ .number_does_not_fit = .{
-                        .literal_var = literal_var,
-                        .expected_type = num_expected_snapshot,
-                    } };
-                },
-                error.NegativeUnsignedInt => {
-                    // For number literal errors, we need to determine which var is the literal
-                    // and which is the expected type
-                    const a_resolved = types.resolveVar(a);
-
-                    // Check if 'a' is the literal (has int_poly/num_poly/unbound types) or 'b' is
-                    const literal_is_a = switch (a_resolved.desc.content) {
-                        .structure => |structure| switch (structure) {
-                            .record_unbound => true,
-                            else => false,
-                        },
-                        else => false,
-                    };
-
-                    const literal_var = if (literal_is_a) a else b;
-                    const neg_expected_var = if (literal_is_a) b else a;
-                    const neg_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, neg_expected_var);
-
-                    break :blk .{ .negative_unsigned_int = .{
-                        .literal_var = literal_var,
-                        .expected_type = neg_expected_snapshot,
-                    } };
-                },
-                error.UnifyErr => {
-                    // Unify can error in the following ways:
-                    //
-                    // 1. Encountering illegal recursion (infinite or anonymous)
-                    // 2. Encountering an invalid polymorphic number type
-                    // 2. Encountering an invalid record extensible type
-                    // 2. Encountering an invalid tag union extensible type
-                    //
-                    // In these cases, before throwing, we set error state in
-                    // `scratch.occurs_err`. This is necessary because you cannot
-                    // associated an error payload when throwing.
-                    //
-                    // If we threw but there is no error data, it is a bug
-                    if (unify_scratch.err) |unify_err| {
-                        switch (unify_err) {
-                            .recursion_anonymous => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .anonymous_recursion = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .recursion_infinite => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .infinite_recursion = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .invalid_number_type => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_number_type = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .invalid_record_ext => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_record_ext = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                            .invalid_tag_union_ext => |var_| {
-                                const snapshot = try snapshots.snapshotVarForError(types, type_writer, var_);
-                                break :blk .{ .invalid_tag_union_ext = .{
-                                    .var_ = var_,
-                                    .snapshot = snapshot,
-                                } };
-                            },
-                        }
-                    } else {
-                        const bug_expected_snapshot = try snapshots.snapshotVarForError(types, type_writer, a);
-                        const bug_actual_snapshot = try snapshots.snapshotVarForError(types, type_writer, b);
-                        break :blk .{ .bug = .{
-                            .expected_var = a,
-                            .expected = bug_expected_snapshot,
-                            .actual_var = b,
-                            .actual = bug_actual_snapshot,
-                        } };
-                    }
-                },
             }
         };
         const problem_idx = try problems.appendProblem(module_env.gpa, problem);
@@ -407,9 +299,6 @@ const Unifier = struct {
 
     const Error = error{
         TypeMismatch,
-        UnifyErr,
-        NumberDoesNotFit,
-        NegativeUnsignedInt,
         AllocatorError,
     };
 
@@ -1627,10 +1516,15 @@ const Unifier = struct {
                                 .empty_record => {
                                     return .{ .ext = ext, .range = range };
                                 },
-                                else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                                // Record extensions can only be records, empty_record, or record_unbound.
+                                // If we reach here, there's a bug in the type checker - the extension
+                                // variable was unified with a non-record type, which should be impossible.
+                                else => unreachable,
                             }
                         },
-                        else => try self.setUnifyErrAndThrow(.{ .invalid_record_ext = ext_var }),
+                        // Record extensions must be flex, rigid, alias, or structure containing a record.
+                        // Any other content indicates an internal bug.
+                        else => unreachable,
                     }
                 },
             }
@@ -2088,10 +1982,14 @@ const Unifier = struct {
                         .empty_tag_union => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
+                        // Tag union extensions can only be tag_union or empty_tag_union.
+                        // If we reach here, there's a bug in the type checker.
+                        else => unreachable,
                     }
                 },
-                else => try self.setUnifyErrAndThrow(.{ .invalid_tag_union_ext = ext_var }),
+                // Tag union extensions must be flex, rigid, alias, or structure containing a tag union.
+                // Any other content indicates an internal bug.
+                else => unreachable,
             }
         }
     }
@@ -2430,21 +2328,6 @@ const Unifier = struct {
             .in_both = scratch.in_both_static_dispatch_constraints.rangeToEnd(both_constraints_start),
         };
     }
-
-    /// Set error data in scratch & throw
-    inline fn setUnifyErrAndThrow(self: *Self, err: UnifyErrCtx) Error!void {
-        self.scratch.setUnifyErr(err);
-        return error.UnifyErr;
-    }
-};
-
-/// A fatal occurs error
-pub const UnifyErrCtx = union(enum) {
-    recursion_infinite: Var,
-    recursion_anonymous: Var,
-    invalid_number_type: Var,
-    invalid_record_ext: Var,
-    invalid_tag_union_ext: Var,
 };
 
 /// A list of constraint that should apply to concrete type
@@ -2540,9 +2423,6 @@ pub const Scratch = struct {
     // occurs
     occurs_scratch: occurs.Scratch,
 
-    // err
-    err: ?UnifyErrCtx,
-
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) std.mem.Allocator.Error!Self {
         // Initial capacities are conservative estimates. Lists grow dynamically as needed.
@@ -2566,7 +2446,6 @@ pub const Scratch = struct {
             .only_in_b_static_dispatch_constraints = try StaticDispatchConstraint.SafeList.initCapacity(gpa, 32),
             .in_both_static_dispatch_constraints = try TwoStaticDispatchConstraints.SafeList.initCapacity(gpa, 32),
             .occurs_scratch = try occurs.Scratch.init(gpa),
-            .err = null,
         };
     }
 
@@ -2604,7 +2483,6 @@ pub const Scratch = struct {
         self.in_both_static_dispatch_constraints.items.clearRetainingCapacity();
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
-        self.err = null;
     }
 
     // helpers //
@@ -2765,10 +2643,6 @@ pub const Scratch = struct {
     /// Exposed for tests
     pub fn appendSliceGatheredTags(self: *Self, fields: []const Tag) std.mem.Allocator.Error!TagSafeList.Range {
         return try self.gathered_tags.appendSlice(self.gpa, fields);
-    }
-
-    fn setUnifyErr(self: *Self, err: UnifyErrCtx) void {
-        self.err = err;
     }
 };
 

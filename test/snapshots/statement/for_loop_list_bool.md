@@ -7,15 +7,15 @@ type=snippet
 ~~~roc
 result : Bool
 result = {
-	var allTrue_ = Bool.True
+	var $allTrue = Bool.True
 	for b in [Bool.True, Bool.True, Bool.False] {
 		if b == Bool.False {
-			allTrue_ = Bool.False
+			$allTrue = Bool.False
 		} else {
 			{}
 		}
 	}
-	allTrue_
+	$allTrue
 }
 
 expect result == Bool.False
@@ -52,7 +52,7 @@ EndOfFile,
 			(p-ident (raw "result"))
 			(e-block
 				(statements
-					(s-var (name "allTrue_")
+					(s-var (name "$allTrue")
 						(e-tag (raw "Bool.True")))
 					(s-for
 						(p-ident (raw "b"))
@@ -69,12 +69,12 @@ EndOfFile,
 									(e-block
 										(statements
 											(s-decl
-												(p-ident (raw "allTrue_"))
+												(p-ident (raw "$allTrue"))
 												(e-tag (raw "Bool.False")))))
 									(e-block
 										(statements
 											(e-record)))))))
-					(e-ident (raw "allTrue_")))))
+					(e-ident (raw "$allTrue")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "result"))
@@ -91,7 +91,7 @@ NO CHANGE
 		(p-assign (ident "result"))
 		(e-block
 			(s-var
-				(p-assign (ident "allTrue_"))
+				(p-assign (ident "$allTrue"))
 				(e-nominal-external
 					(builtin)
 					(e-tag (name "True"))))
@@ -120,7 +120,7 @@ NO CHANGE
 										(e-tag (name "False"))))
 								(e-block
 									(s-reassign
-										(p-assign (ident "allTrue_"))
+										(p-assign (ident "$allTrue"))
 										(e-nominal-external
 											(builtin)
 											(e-tag (name "False"))))
@@ -129,7 +129,7 @@ NO CHANGE
 							(e-block
 								(e-empty_record))))))
 			(e-lookup-local
-				(p-assign (ident "allTrue_"))))
+				(p-assign (ident "$allTrue"))))
 		(annotation
 			(ty-lookup (name "Bool") (builtin))))
 	(s-expect

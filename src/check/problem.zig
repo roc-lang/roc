@@ -47,17 +47,10 @@ pub const Problem = union(enum) {
     static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
-    number_does_not_fit: NumberDoesNotFit,
-    negative_unsigned_int: NegativeUnsignedInt,
-    invalid_numeric_literal: InvalidNumericLiteral,
-    unused_value: UnusedValue,
     recursive_alias: RecursiveAlias,
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
-    invalid_number_type: VarWithSnapshot,
-    invalid_record_ext: VarWithSnapshot,
-    invalid_tag_union_ext: VarWithSnapshot,
     platform_def_not_found: PlatformDefNotFound,
     platform_alias_not_found: PlatformAliasNotFound,
     comptime_crash: ComptimeCrash,
@@ -66,7 +59,6 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
-    bug: Bug,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -114,34 +106,6 @@ pub const VarWithSnapshot = struct {
     snapshot: SnapshotContentIdx,
 };
 
-// number problems //
-
-/// Number literal doesn't fit in the expected type
-pub const NumberDoesNotFit = struct {
-    literal_var: Var,
-    expected_type: SnapshotContentIdx,
-};
-
-/// Negative literal assigned to unsigned type
-pub const NegativeUnsignedInt = struct {
-    literal_var: Var,
-    expected_type: SnapshotContentIdx,
-};
-
-/// Invalid numeric literal that cannot be converted to target type
-pub const InvalidNumericLiteral = struct {
-    literal_var: Var,
-    expected_type: SnapshotContentIdx,
-    is_fractional: bool,
-    region: base.Region,
-};
-
-/// Error when a stmt expression returns a non-empty record value
-pub const UnusedValue = struct {
-    var_: Var,
-    snapshot: SnapshotContentIdx,
-};
-
 // type mismatch //
 
 /// These two variables mismatch. This should usually be cast into a more
@@ -181,9 +145,6 @@ pub const TypeMismatchDetail = union(enum) {
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     invalid_nominal_record,
-    invalid_nominal_tuple,
-    invalid_nominal_value,
-    cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
     /// App's export type doesn't match the platform's required type
@@ -201,12 +162,6 @@ pub const IncompatibleListElements = struct {
     last_elem_idx: CIR.Node.Idx,
     incompatible_elem_index: u32, // 0-based index of the incompatible element
     list_length: u32, // Total number of elements in the list
-};
-
-/// Problem data for cross-module import type mismatches
-pub const CrossModuleImport = struct {
-    import_region: CIR.Expr.Idx,
-    module_idx: CIR.Import.Idx,
 };
 
 /// Problem data when function is called with wrong number of arguments
@@ -388,16 +343,6 @@ pub const UnsupportedAliasWhereClause = struct {
     region: base.Region,
 };
 
-// bug //
-
-/// A bug that occurred during unification
-pub const Bug = struct {
-    expected_var: Var,
-    expected: SnapshotContentIdx,
-    actual_var: Var,
-    actual: SnapshotContentIdx,
-};
-
 // reporting //
 
 /// Build reports for problems
@@ -528,15 +473,6 @@ pub const ReportBuilder = struct {
                         .invalid_nominal_record => {
                             return self.buildInvalidNominalRecord(mismatch.types);
                         },
-                        .invalid_nominal_tuple => {
-                            return self.buildInvalidNominalTuple(mismatch.types);
-                        },
-                        .invalid_nominal_value => {
-                            return self.buildInvalidNominalValue(mismatch.types);
-                        },
-                        .cross_module_import => |data| {
-                            return self.buildCrossModuleImportError(mismatch.types, data);
-                        },
                         .incompatible_fn_call_arg => |data| {
                             return self.buildIncompatibleFnCallArg(mismatch.types, data);
                         },
@@ -571,29 +507,14 @@ pub const ReportBuilder = struct {
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
                 }
             },
-            .number_does_not_fit => |data| {
-                return self.buildNumberDoesNotFitReport(data);
-            },
-            .negative_unsigned_int => |data| {
-                return self.buildNegativeUnsignedIntReport(data);
-            },
-            .invalid_numeric_literal => |data| {
-                return self.buildInvalidNumericLiteralReport(data);
-            },
-            .unused_value => |data| {
-                return self.buildUnusedValueReport(data);
-            },
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
             .unsupported_alias_where_clause => |data| {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
             },
-            .infinite_recursion => |_| return self.buildUnimplementedReport("infinite_recursion"),
-            .anonymous_recursion => |_| return self.buildUnimplementedReport("anonymous_recursion"),
-            .invalid_number_type => |_| return self.buildUnimplementedReport("invalid_number_type"),
-            .invalid_record_ext => |_| return self.buildUnimplementedReport("invalid_record_ext"),
-            .invalid_tag_union_ext => |_| return self.buildUnimplementedReport("invalid_tag_union_ext"),
+            .infinite_recursion => |data| return self.buildInfiniteRecursionReport(data),
+            .anonymous_recursion => |data| return self.buildAnonymousRecursionReport(data),
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
             },
@@ -606,7 +527,6 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
-            .bug => |_| return self.buildUnimplementedReport("bug"),
         }
     }
 
@@ -1864,86 +1784,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for invalid nominal tuple (tuple elements don't match)
-    fn buildInvalidNominalTuple(
-        self: *Self,
-        types: TypePair,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID NOMINAL TUPLE", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("I'm having trouble with this nominal type that wraps a tuple:");
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The tuple I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal value (value type doesn't match)
-    fn buildInvalidNominalValue(
-        self: *Self,
-        types: TypePair,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID NOMINAL TYPE", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("I'm having trouble with this nominal type:");
-        try report.document.addLineBreak();
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The value I found has type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
     /// Build a report for function argument type mismatch
     fn buildIncompatibleFnCallArg(
         self: *Self,
@@ -2308,6 +2148,74 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try report.document.addReflowingText("This syntax was used for abilities, which have been removed from Roc. Use method constraints like `where [a.methodName(args) -> ret]` instead.");
+
+        return report;
+    }
+
+    /// Build a report for infinite type recursion (like `a = List(a)`)
+    fn buildInfiniteRecursionReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "INFINITE TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This type definition is infinitely recursive:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The type expands to:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(type_str);
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("This creates an infinitely large type. If you need recursion, use a nominal type (defined with ");
+        try report.document.addAnnotated(":=", .inline_code);
+        try report.document.addReflowingText(") to break the cycle.");
+
+        return report;
+    }
+
+    /// Build a report for anonymous type recursion (recursive without going through a nominal type)
+    fn buildAnonymousRecursionReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "RECURSIVE TYPE WITHOUT NAME", .runtime_error);
+        errdefer report.deinit();
+
+        const type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This type is recursive, but doesn't go through a named type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("The type is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(type_str);
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("Recursive types must use a nominal type (defined with ");
+        try report.document.addAnnotated(":=", .inline_code);
+        try report.document.addReflowingText(") to give the recursion a name.");
 
         return report;
     }
@@ -2995,282 +2903,7 @@ pub const ReportBuilder = struct {
         }
     }
 
-    // number problems //
-
-    /// Build a report for "number does not fit in type" diagnostic
-    fn buildNumberDoesNotFitReport(
-        self: *Self,
-        data: NumberDoesNotFit,
-    ) !Report {
-        var report = Report.init(self.gpa, "NUMBER DOES NOT FIT IN TYPE", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        const literal_text = self.source[region.start.offset..region.end.offset];
-
-        try report.document.addReflowingText("The number ");
-        try report.document.addAnnotated(literal_text, .emphasized);
-        try report.document.addReflowingText(" does not fit in its inferred type:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addText("Its inferred type is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(owned_expected);
-
-        return report;
-    }
-
-    /// Build a report for "negative unsigned integer" diagnostic
-    fn buildNegativeUnsignedIntReport(
-        self: *Self,
-        data: NegativeUnsignedInt,
-    ) !Report {
-        var report = Report.init(self.gpa, "NEGATIVE UNSIGNED INTEGER", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.literal_var)));
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(region.*);
-        const literal_text = self.source[region.start.offset..region.end.offset];
-
-        try report.document.addReflowingText("The number ");
-        try report.document.addAnnotated(literal_text, .emphasized);
-        try report.document.addReflowingText(" is ");
-        try report.document.addAnnotated("signed", .emphasized);
-        try report.document.addReflowingText(" because it is negative:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addText("However, its inferred type is ");
-        try report.document.addAnnotated("unsigned", .emphasized);
-        try report.document.addReflowingText(":");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(owned_expected);
-
-        return report;
-    }
-
-    /// Build a report for "invalid numeric literal" diagnostic
-    fn buildInvalidNumericLiteralReport(
-        self: *Self,
-        data: InvalidNumericLiteral,
-    ) !Report {
-        var report = Report.init(self.gpa, "INVALID NUMERIC LITERAL", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_expected = try report.addOwnedString(self.getFormattedString(data.expected_type));
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        const literal_text = self.source[data.region.start.offset..data.region.end.offset];
-
-        if (data.is_fractional) {
-            // Fractional literal to integer type
-            try report.document.addReflowingText("The fractional literal ");
-            try report.document.addAnnotated(literal_text, .emphasized);
-            try report.document.addReflowingText(" cannot be converted to an integer type:");
-            try report.document.addLineBreak();
-
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-
-            try report.document.addText("Its inferred type is:");
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(owned_expected);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Hint: Use a decimal type like ");
-            try report.document.addAnnotated("Dec", .type_variable);
-            try report.document.addReflowingText(" or ");
-            try report.document.addAnnotated("F64", .type_variable);
-            try report.document.addReflowingText(" instead.");
-        } else {
-            // Integer literal out of range
-            try report.document.addReflowingText("The numeric literal ");
-            try report.document.addAnnotated(literal_text, .emphasized);
-            try report.document.addReflowingText(" is out of range for its inferred type:");
-            try report.document.addLineBreak();
-
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-
-            try report.document.addText("Its inferred type is:");
-            try report.document.addLineBreak();
-            try report.document.addCodeBlock(owned_expected);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try report.document.addReflowingText("Hint: Use a larger integer type or ");
-            try report.document.addAnnotated("Dec", .type_variable);
-            try report.document.addReflowingText(" for arbitrary precision.");
-        }
-
-        return report;
-    }
-
-    /// Build a report for "unused value" diagnostic
-    fn buildUnusedValueReport(self: *Self, data: UnusedValue) !Report {
-        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_expected = try report.addOwnedString(self.getFormattedString(data.snapshot));
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
-        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("It has the type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(owned_expected);
-
-        return report;
-    }
-
-    // cross-module import //
-
-    /// Build a report for cross-module import type mismatch
-    fn buildCrossModuleImportError(
-        self: *Self,
-        types: TypePair,
-        data: CrossModuleImport,
-    ) !Report {
-        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-        errdefer report.deinit();
-
-        try report.document.addText("This value is being used in an unexpected way.");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        // Get the import expression
-        const import_expr = self.can_ir.store.getExpr(data.import_region);
-        const import_region = import_expr.e_lookup_external.region;
-
-        // Get region info for the import
-        const import_region_info = base.RegionInfo.position(
-            self.source,
-            self.module_env.getLineStarts(),
-            import_region.start.offset,
-            import_region.end.offset,
-        ) catch return report;
-
-        // Create the display region
-        const display_region = SourceCodeDisplayRegion{
-            .line_text = self.gpa.dupe(u8, import_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
-            .start_line = import_region_info.start_line_idx + 1,
-            .start_column = import_region_info.start_col_idx + 1,
-            .end_line = import_region_info.end_line_idx + 1,
-            .end_column = import_region_info.end_col_idx + 1,
-            .region_annotation = .dimmed,
-            .filename = self.filename,
-        };
-
-        // Create underline region
-        const underline_regions = [_]UnderlineRegion{
-            .{
-                .start_line = import_region_info.start_line_idx + 1,
-                .start_column = import_region_info.start_col_idx + 1,
-                .end_line = import_region_info.end_line_idx + 1,
-                .end_column = import_region_info.end_col_idx + 1,
-                .annotation = .error_highlight,
-            },
-        };
-
-        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
-        try report.document.addLineBreak();
-
-        // Get module name if available
-        const module_idx = @intFromEnum(data.module_idx);
-        const module_name = if (module_idx < self.can_ir.imports.imports.len()) blk: {
-            const import_string_idx = self.can_ir.imports.imports.items.items[module_idx];
-            const import_name = self.can_ir.getString(import_string_idx);
-            break :blk import_name;
-        } else null;
-
-        // Show what was imported
-        try report.document.addText("It has the type:");
-        try report.document.addLineBreak();
-
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        // Show the actual type from the import
-        if (module_name) |name| {
-            try report.document.addText("However, the value imported from ");
-            try report.document.addAnnotated(name, .module_name);
-            try report.document.addText(" has the type:");
-        } else {
-            try report.document.addText("However, the imported value has the type:");
-        }
-        try report.document.addLineBreak();
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-
-        return report;
-    }
-
-    /// Build a report for "invalid number literal" diagnostic
-    fn buildUnimplementedReport(self: *Self, bytes: []const u8) !Report {
-        var report = Report.init(self.gpa, "UNIMPLEMENTED: ", .runtime_error);
-        const owned_bytes = try report.addOwnedString(bytes);
-        try report.document.addText(owned_bytes);
-        return report;
-    }
-
+    /// Build a report for when a platform expects a type alias but it's not found
     fn buildPlatformAliasNotFound(self: *Self, data: PlatformAliasNotFound) !Report {
         var report = Report.init(self.gpa, "MISSING PLATFORM REQUIRED TYPE", .runtime_error);
         errdefer report.deinit();

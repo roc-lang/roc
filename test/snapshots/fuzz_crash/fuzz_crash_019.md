@@ -81,7 +81,7 @@ expect # Cord
 main! : Listlt({}, _)
 ma= |_| { e
 	w = "d"
-	var er = 123
+	var $er = 123
 	expect blaue
 	return #d
 		tag
@@ -93,11 +93,11 @@ ma= |_| { e
 	)crash ke"Unr!" #)
 	i= "H, ${d}"
 t = [
-		one(er, 		),	456, # two
+		one($er, 		),	456, # two
 9, #ee
 	]
 	for n in list {
-	line!("Ag ${n} to ${er}")
+	line!("Ag ${n} to ${$er}")
 		ber + n
 	}
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world),ned }
@@ -194,7 +194,7 @@ MISSING METHOD - fuzz_crash_019.md:39:2:39:3
 INCOMPATIBLE MATCH PATTERNS - fuzz_crash_019.md:52:2:52:2
 TOO FEW ARGUMENTS - fuzz_crash_019.md:84:2:86:3
 UNUSED VALUE - fuzz_crash_019.md:86:11:86:11
-TYPE MISMATCH - fuzz_crash_019.md:77:11:77:14
+TYPE MISMATCH - fuzz_crash_019.md:77:12:77:15
 UNUSED VALUE - fuzz_crash_019.md:98:4:98:4
 UNUSED VALUE - fuzz_crash_019.md:105:2:105:2
 UNUSED VALUE - fuzz_crash_019.md:119:2:119:2
@@ -579,7 +579,7 @@ Is there an `import` or `exposing` missing up-top?
 
 **fuzz_crash_019.md:93:2:93:7:**
 ```roc
-	line!("Ag ${n} to ${er}")
+	line!("Ag ${n} to ${$er}")
 ```
 	^^^^^
 
@@ -978,11 +978,11 @@ Since this expression is used as a statement, it must evaluate to _{}_. If you d
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
-**fuzz_crash_019.md:77:11:77:14:**
+**fuzz_crash_019.md:77:12:77:15:**
 ```roc
-	var er = 123
+	var $er = 123
 ```
-	         ^^^
+	          ^^^
 
 Other code expects this to have the type:
 
@@ -1341,7 +1341,7 @@ EndOfFile,
 							(p-ident (raw "w"))
 							(e-string
 								(e-string-part (raw "d"))))
-						(s-var (name "er")
+						(s-var (name "$er")
 							(e-int (raw "123")))
 						(s-expect
 							(e-ident (raw "blaue")))
@@ -1366,7 +1366,7 @@ EndOfFile,
 							(e-list
 								(e-apply
 									(e-ident (raw "one"))
-									(e-ident (raw "er")))
+									(e-ident (raw "$er")))
 								(e-int (raw "456"))
 								(e-int (raw "9"))))
 						(s-for
@@ -1380,7 +1380,7 @@ EndOfFile,
 											(e-string-part (raw "Ag "))
 											(e-ident (raw "n"))
 											(e-string-part (raw " to "))
-											(e-ident (raw "er"))
+											(e-ident (raw "$er"))
 											(e-string-part (raw ""))))
 									(e-binop (op "+")
 										(e-ident (raw "ber"))
@@ -1579,7 +1579,7 @@ main! : Listlt({}, _)
 ma = |_| {
 	e
 	w = "d"
-	var er = 123
+	var $er = 123
 	expect blaue
 	return # d
 		tag
@@ -1594,13 +1594,13 @@ ma = |_| {
 	i = "H, ${d}"
 	t = [
 		one(
-			er,
+			$er,
 		),
 		456, # two
 		9, # ee
 	]
 	for n in list {
-		line!("Ag ${n} to ${er}")
+		line!("Ag ${n} to ${$er}")
 		ber + n
 	}
 	rd = { foo: 123, bar: "H", baz: tag, qux: Ok(world), ned }
@@ -1814,7 +1814,7 @@ expect {
 						(e-string
 							(e-literal (string "d"))))
 					(s-var
-						(p-assign (ident "er"))
+						(p-assign (ident "$er"))
 						(e-num (value "123")))
 					(s-expect
 						(e-runtime-error (tag "ident_not_in_scope")))
@@ -1845,7 +1845,7 @@ expect {
 									(e-lookup-local
 										(p-assign (ident "one")))
 									(e-lookup-local
-										(p-assign (ident "er"))))
+										(p-assign (ident "$er"))))
 								(e-num (value "456"))
 								(e-num (value "9")))))
 					(s-for
@@ -1861,7 +1861,7 @@ expect {
 											(p-assign (ident "n")))
 										(e-literal (string " to "))
 										(e-lookup-local
-											(p-assign (ident "er")))
+											(p-assign (ident "$er")))
 										(e-literal (string "")))))
 							(e-binop (op "add")
 								(e-runtime-error (tag "ident_not_in_scope"))

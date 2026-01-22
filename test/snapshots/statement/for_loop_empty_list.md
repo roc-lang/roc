@@ -7,11 +7,11 @@ type=snippet
 ~~~roc
 unchanged : U64
 unchanged = {
-	var value_ = 42
+	var $value = 42
 	for n in [] {
-		value_ = n
+		$value = n
 	}
-	value_
+	$value
 }
 
 expect unchanged == 42
@@ -44,7 +44,7 @@ EndOfFile,
 			(p-ident (raw "unchanged"))
 			(e-block
 				(statements
-					(s-var (name "value_")
+					(s-var (name "$value")
 						(e-int (raw "42")))
 					(s-for
 						(p-ident (raw "n"))
@@ -52,9 +52,9 @@ EndOfFile,
 						(e-block
 							(statements
 								(s-decl
-									(p-ident (raw "value_"))
+									(p-ident (raw "$value"))
 									(e-ident (raw "n"))))))
-					(e-ident (raw "value_")))))
+					(e-ident (raw "$value")))))
 		(s-expect
 			(e-binop (op "==")
 				(e-ident (raw "unchanged"))
@@ -71,19 +71,19 @@ NO CHANGE
 		(p-assign (ident "unchanged"))
 		(e-block
 			(s-var
-				(p-assign (ident "value_"))
+				(p-assign (ident "$value"))
 				(e-num (value "42")))
 			(s-for
 				(p-assign (ident "n"))
 				(e-empty_list)
 				(e-block
 					(s-reassign
-						(p-assign (ident "value_"))
+						(p-assign (ident "$value"))
 						(e-lookup-local
 							(p-assign (ident "n"))))
 					(e-empty_record)))
 			(e-lookup-local
-				(p-assign (ident "value_"))))
+				(p-assign (ident "$value"))))
 		(annotation
 			(ty-lookup (name "U64") (builtin))))
 	(s-expect
