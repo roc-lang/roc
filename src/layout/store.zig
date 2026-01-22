@@ -1165,26 +1165,26 @@ pub const Store = struct {
                     .origin_module = nominal_type.origin_module,
                 };
 
-                if (self.work.in_progress_nominals.get(nominal_key)) |progress| {
+                if (self.work.in_progress_nominals.getPtr(nominal_key)) |progress| {
                     // This nominal type is already being processed - we have a cycle.
+                    // Check if we're inside a List/Box container that already provides
+                    // heap allocation (indirect recursion), or if this is direct recursion.
+                    const inside_list_or_box = if (self.work.pending_containers.len > 0) inner: {
+                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                        break :inner pending_item.container == .box or pending_item.container == .list;
+                    } else false;
+
+                    // Only mark as recursive if this is direct recursion (not inside List/Box).
+                    // Indirect recursion through List/Box doesn't need the extra Box wrapper
+                    // because those containers already provide heap allocation.
+                    if (!inside_list_or_box) {
+                        progress.is_recursive = true;
+                    }
+
                     // Use the cached placeholder index for the nominal.
                     // The placeholder will be updated with the real layout once
                     // the nominal's backing type is fully computed.
                     if (self.layouts_by_var.get(progress.nominal_var)) |cached_idx| {
-                        // We have a placeholder - but we need to check if we're inside a List/Box.
-                        // If we are, we can use the placeholder index directly since the List/Box
-                        // will reference it by index, and it will be updated later.
-                        // If we're NOT inside a List/Box, this is a direct recursive reference which is invalid.
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                layout_idx = cached_idx;
-                                skip_layout_computation = true;
-                                break :blk;
-                            }
-                        }
-                        // For record/tuple fields (not inside List/Box), we also use the cached placeholder.
-                        // The placeholder will be updated by the time we need the actual layout.
                         layout_idx = cached_idx;
                         skip_layout_computation = true;
                         break :blk;
@@ -1744,7 +1744,15 @@ pub const Store = struct {
                     if (progress.backing_var == current.var_) {
                         // The backing type just finished! Update the nominal's placeholder.
                         if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
-                            self.updateLayout(reserved_idx, layout);
+                            if (progress.is_recursive) {
+                                // For recursive nominal types, keep the Box layout but update
+                                // its element to point to the backing layout.
+                                // The placeholder was Box(opaque_ptr), now becomes Box(layout_idx).
+                                self.updateLayout(reserved_idx, Layout.box(layout_idx));
+                            } else {
+                                // Non-recursive nominal types get replaced with their backing layout.
+                                self.updateLayout(reserved_idx, layout);
+                            }
                         }
                         try nominals_to_remove.append(self.env.gpa, entry.key_ptr.*);
                     }
@@ -1903,7 +1911,14 @@ pub const Store = struct {
                         if (progress.backing_var == container_var) {
                             // The backing type (container) just finished! Update the nominal's placeholder.
                             if (self.layouts_by_var.get(progress.nominal_var)) |reserved_idx| {
-                                self.updateLayout(reserved_idx, layout);
+                                if (progress.is_recursive) {
+                                    // For recursive nominal types, keep the Box layout but update
+                                    // its element to point to the backing layout.
+                                    self.updateLayout(reserved_idx, Layout.box(layout_idx));
+                                } else {
+                                    // Non-recursive nominal types get replaced with their backing layout.
+                                    self.updateLayout(reserved_idx, layout);
+                                }
                             }
                             try nominals_to_remove_container.append(self.env.gpa, entry.key_ptr.*);
                         }

@@ -45,6 +45,10 @@ pub const Work = struct {
     pub const NominalProgress = struct {
         nominal_var: types.Var,
         backing_var: types.Var,
+        /// Set to true when a recursive reference to this nominal type is detected.
+        /// When true, the nominal's layout should remain as Box(backing_layout)
+        /// instead of being replaced with just the backing layout.
+        is_recursive: bool = false,
     };
 
     /// A container being processed. The var_ is optional because synthetic tuples
