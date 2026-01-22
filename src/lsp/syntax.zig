@@ -1812,6 +1812,34 @@ pub const SyntaxChecker = struct {
                     std.debug.print("completion: NO module_env for record/method completions", .{});
                 }
             },
+            .after_receiver_dot => |info| {
+                // Use CIR to resolve receiver types for chained calls (e.g., value.func().).
+                // This avoids brittle text parsing and keeps completion tied to the AST.
+                if (module_env_opt) |module_env| {
+                    var resolved_type_var: ?types.Var = null;
+                    if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                        resolved_type_var = type_var;
+                    }
+                    //NOTE[ELI]: I'm really not sure if we shouldn't always do this instead
+                    if (resolved_type_var == null and info.dot_offset > 0) {
+                        // Fall back to the type of the expression immediately before the dot.
+                        // This is important for chained calls where no field name exists yet.
+                        if (cir_queries.findTypeAtOffset(module_env, info.dot_offset - 1)) |type_at| {
+                            resolved_type_var = type_at.type_var;
+                        }
+                    }
+
+                    if (resolved_type_var) |type_var| {
+                        std.debug.print("completion: after_receiver_dot using CIR type_var={}", .{type_var});
+                        try builder.addFieldsFromTypeVar(module_env, type_var);
+                        try builder.addMethodsFromTypeVar(module_env, type_var);
+                    } else {
+                        std.debug.print("completion: after_receiver_dot no CIR receiver type found", .{});
+                    }
+                } else {
+                    std.debug.print("completion: NO module_env for receiver dot completions", .{});
+                }
+            },
             .after_colon => {
                 // Type annotation context - add type names
                 if (module_env_opt) |module_env| {

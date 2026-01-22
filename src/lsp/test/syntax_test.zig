@@ -191,6 +191,22 @@ test "completion context detects after_module_dot for uppercase identifier" {
     }
 }
 
+test "completion context detects after_receiver_dot for chained call" {
+    // Test that detectCompletionContext identifies receiver dots after call chaining
+    const completion_context = @import("../completion/context.zig");
+
+    // Test case: "val.func()." should be detected as after_receiver_dot
+    const source = "main = val.func().";
+    const context = completion_context.detectCompletionContext(source, 0, 18);
+
+    switch (context) {
+        .after_receiver_dot => |info| {
+            try std.testing.expectEqual(@as(u32, 17), info.dot_offset);
+        },
+        else => try std.testing.expect(false), // Should be after_receiver_dot
+    }
+}
+
 test "completion context detects expression context" {
     // Test that detectCompletionContext correctly identifies general expression context
     const completion_context = @import("../completion/context.zig");
@@ -612,6 +628,94 @@ test "static dispatch completion for nominal type methods" {
         try std.testing.expect(found_to_str);
     } else {
         std.debug.print("Got null result\n", .{});
+        try std.testing.expect(false); // Should have got a result
+    }
+}
+
+test "static dispatch completion for chained call" {
+    // Tests method completion when the receiver is a call result (e.g., val.step().)
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    // Create clean, working code so snapshot env has full type info
+    const clean_contents = try std.fmt.allocPrint(
+        allocator,
+        \\module []
+        \\
+        \\Basic := [Val(Str)].{{
+        \\  step : Basic -> Basic
+        \\  step = |b| b
+        \\}}
+        \\
+        \\val : Basic
+        \\val = Basic.Val("hello")
+        \\
+        \\main = val.step()
+        \\
+    ,
+        .{},
+    );
+    defer allocator.free(clean_contents);
+
+    try tmp.dir.writeFile(.{ .sub_path = "static_dispatch_chain.roc", .data = clean_contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "static_dispatch_chain.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // Build once to populate snapshot env
+    const publish_sets = try checker.check(uri, clean_contents, null);
+    defer {
+        for (publish_sets) |*set| set.deinit(allocator);
+        allocator.free(publish_sets);
+    }
+
+    // Now request completion after the chained call dot
+    const incomplete_contents = try std.fmt.allocPrint(
+        allocator,
+        \\module []
+        \\
+        \\Basic := [Val(Str)].{{
+        \\  step : Basic -> Basic
+        \\  step = |b| b
+        \\}}
+        \\
+        \\val : Basic
+        \\val = Basic.Val("hello")
+        \\
+        \\main = val.step()
+        \\
+        \\result = val.step().
+        \\
+    ,
+        .{},
+    );
+    defer allocator.free(incomplete_contents);
+
+    // Line 12: "result = val.step()."
+    // Character 20 is right after the dot
+    const result = try checker.getCompletionsAtPosition(uri, incomplete_contents, 12, 20);
+
+    if (result) |completion_result| {
+        defer {
+            for (completion_result.items) |item| {
+                if (item.detail) |d| allocator.free(d);
+            }
+            allocator.free(completion_result.items);
+        }
+
+        var found_step = false;
+        for (completion_result.items) |item| {
+            if (std.mem.eql(u8, item.label, "step")) found_step = true;
+        }
+
+        try std.testing.expect(found_step);
+    } else {
         try std.testing.expect(false); // Should have got a result
     }
 }
