@@ -1422,7 +1422,7 @@ const MiniCiStep = struct {
         try checkSnapshotChanges(step);
         try checkFxPlatformTestCoverage(step);
         try runSubBuild(step, "test", "zig build test");
-        try runSubBuild(step, "test-playground", "zig build test-playground");
+        // NOTE: test-playground was removed along with the interpreter/playground
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
         try runSubBuild(step, "test-cli", "zig build test-cli");
         try runSubBuild(step, "coverage", "zig build coverage");
@@ -2087,9 +2087,8 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    // NOTE: Playground has been removed (interpreter deleted)
-    // const playground_step = b.step("playground", "Build the WASM playground");
-    // const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
+    // NOTE: test-playground was removed along with the interpreter/playground
+    // See the "Playground WASM has been removed" comment around line 2435
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
