@@ -1575,6 +1575,35 @@ pub const SyntaxChecker = struct {
         return name;
     }
 
+    /// If the cursor is after a member access on a module value (Module.member.),
+    /// parse and return the module/member names so we can resolve record fields.
+    fn parseModuleMemberAccess(source: []const u8, member_start: u32) ?struct { module_name: []const u8, member_name: []const u8 } {
+        if (member_start == 0 or member_start > source.len) return null;
+        if (source[member_start - 1] != '.') return null;
+
+        var member_end = member_start;
+        while (member_end < source.len and (std.ascii.isAlphanumeric(source[member_end]) or source[member_end] == '_')) {
+            member_end += 1;
+        }
+
+        const member_name = source[member_start..member_end];
+        if (member_name.len == 0) return null;
+
+        const module_end = member_start - 1;
+        if (module_end == 0) return null;
+
+        var module_start = module_end;
+        while (module_start > 0 and (std.ascii.isAlphanumeric(source[module_start - 1]) or source[module_start - 1] == '_')) {
+            module_start -= 1;
+        }
+
+        if (module_start == module_end) return null;
+        const module_name = source[module_start..module_end];
+        if (module_name.len == 0 or !std.ascii.isUpper(module_name[0])) return null;
+
+        return .{ .module_name = module_name, .member_name = member_name };
+    }
+
     /// Get completion suggestions at a specific position in a document.
     /// Returns completions from the current module's exposed items and imports.
     /// If the build fails, still provides basic completions (builtin modules, types).
@@ -1685,18 +1714,48 @@ pub const SyntaxChecker = struct {
             .after_record_dot => |record_access| {
                 std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.variable_name, record_access.variable_start });
                 if (module_env_opt) |module_env| {
+                    var module_member_handled = false;
+                    // If the record access is a module member (Module.member.), resolve
+                    // the member definition from that module to provide record fields.
+                    if (parseModuleMemberAccess(source, record_access.variable_start)) |module_member| {
+                        const resolved_module = resolveModuleAlias(module_env, module_member.module_name);
+                        const module_env_for_member = blk: {
+                            if (completion_builtins.isBuiltinType(resolved_module)) {
+                                break :blk env.builtin_modules.builtin_module.env;
+                            }
+
+                            var sched_it = module_lookup_env.schedulers.iterator();
+                            while (sched_it.next()) |entry| {
+                                const sched = entry.value_ptr.*;
+                                if (sched.getModuleState(resolved_module)) |mod_state| {
+                                    if (mod_state.env) |*mod_env| {
+                                        break :blk mod_env;
+                                    }
+                                }
+                            }
+
+                            break :blk null;
+                        };
+
+                        if (module_env_for_member) |member_env| {
+                            module_member_handled = try builder.addRecordFieldsForModuleMember(member_env, module_member.member_name);
+                        }
+                    }
+
                     // When using snapshot, cursor positions don't correspond to snapshot CIR
                     // So we must look up by name instead of analyzing the dot expression
-                    if (used_snapshot or cir_queries.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
-                        std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
-                        try builder.addRecordFieldCompletions(module_env, record_access.variable_name, record_access.variable_start);
-                        std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
-                        try builder.addMethodCompletions(module_env, record_access.variable_name, record_access.variable_start);
-                        std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
-                    } else if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
-                        std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
-                        try builder.addFieldsFromTypeVar(module_env, type_var);
-                        try builder.addMethodsFromTypeVar(module_env, type_var);
+                    if (!module_member_handled) {
+                        if (used_snapshot or cir_queries.findDotReceiverTypeVar(module_env, cursor_offset) == null) {
+                            std.debug.print("completion: using name-based lookup (snapshot={}, or findDotReceiverTypeVar failed)\n", .{used_snapshot});
+                            try builder.addRecordFieldCompletions(module_env, record_access.variable_name, record_access.variable_start);
+                            std.debug.print("completion: after addRecordFieldCompletions, items={d}\n", .{items.items.len});
+                            try builder.addMethodCompletions(module_env, record_access.variable_name, record_access.variable_start);
+                            std.debug.print("completion: after addMethodCompletions, items={d}\n", .{items.items.len});
+                        } else if (cir_queries.findDotReceiverTypeVar(module_env, cursor_offset)) |type_var| {
+                            std.debug.print("completion: using CIR-based lookup with type_var={}", .{type_var});
+                            try builder.addFieldsFromTypeVar(module_env, type_var);
+                            try builder.addMethodsFromTypeVar(module_env, type_var);
+                        }
                     }
                 } else {
                     std.debug.print("completion: NO module_env for record/method completions", .{});

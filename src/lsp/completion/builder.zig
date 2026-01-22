@@ -18,6 +18,7 @@ const completion_handler = @import("../handlers/completion.zig");
 const builtin_completion = @import("builtins.zig");
 const scope_map = @import("../scope_map.zig");
 const type_utils = @import("../type_utils.zig");
+const module_lookup = @import("../module_lookup.zig");
 
 const Allocator = std.mem.Allocator;
 const CIR = can.CIR;
@@ -583,6 +584,21 @@ pub const CompletionBuilder = struct {
 
         // Try to get record fields, handling aliases that wrap records
         try self.addFieldsFromContent(module_env, content, 0);
+    }
+
+    /// Add record field completions for a named definition in a specific module.
+    ///
+    /// This is used for module member accesses (e.g., Module.value.) where the
+    /// member is a record. We resolve the member's type from the module's
+    /// definition table, then extract its record fields.
+    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) !bool {
+        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
+            const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
+            try self.addFieldsFromTypeVar(module_env, type_var);
+            return true;
+        }
+
+        return false;
     }
 
     /// Recursively extract fields from type content, unwrapping aliases.
