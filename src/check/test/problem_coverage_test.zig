@@ -717,6 +717,45 @@ test "static dispatch - method return type mismatch" {
     try test_env.assertFirstTypeError("TYPE MISMATCH");
 }
 
+// FUNCTION TYPES IN TYPE APPLICATIONS
+// Tests for function types inside type applications like List(I64 -> I64)
+
+test "function type in type application - list of functions" {
+    // List(I64 -> I64) should be valid syntax
+    const source =
+        \\funcs : List(I64 -> I64)
+        \\funcs = [|x| x + 1, |x| x * 2]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(I64 -> I64)");
+}
+
+test "function type in type application - effectful function" {
+    // List(I64 => I64) with effectful arrow should work too
+    const source =
+        \\funcs : List(I64 => I64)
+        \\funcs = []
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(I64 => I64)");
+}
+
+test "function type in nested type application" {
+    // Nested type applications with function types
+    const source =
+        \\nested : List(List(I64 -> Str))
+        \\nested = []
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(List(I64 -> Str))");
+}
+
 // EQUALITY EXPLANATION FOR COMPLEX TYPES
 // These tests verify the TYPE DOES NOT SUPPORT EQUALITY error is triggered
 // for types containing functions, which cannot be compared

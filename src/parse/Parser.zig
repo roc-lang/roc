@@ -3348,12 +3348,38 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) Error!AST.TypeAn
     return try self.store.addMalformed(AST.TypeAnno.Idx, .ty_anno_unexpected_token, .{ .start = start, .end = self.pos });
 }
 
-/// todo
+/// Parse a type annotation inside a type application's argument list.
+/// This handles function types like `List(I64 -> I64)` without requiring
+/// extra parentheses, while still treating commas as argument separators.
 pub fn parseTypeAnnoInCollection(self: *Parser) Error!AST.TypeAnno.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    return try self.parseTypeAnno(.looking_for_args);
+    const start = self.pos;
+    const first_type = try self.parseTypeAnno(.looking_for_args);
+
+    // Check if this is a function type (arrow after the first type)
+    const curr = self.peek();
+    if (curr == .OpArrow or curr == .OpFatArrow) {
+        // This is a function type like `I64 -> I64` inside a type application
+        const effectful = curr == .OpFatArrow;
+        self.advance(); // Advance past arrow
+        const ret = try self.parseTypeAnno(.looking_for_args);
+
+        // Create a function type with the first type as the single argument
+        const scratch_top = self.store.scratchTypeAnnoTop();
+        try self.store.addScratchTypeAnno(first_type);
+        const args = try self.store.typeAnnoSpanFrom(scratch_top);
+
+        return try self.store.addTypeAnno(.{ .@"fn" = .{
+            .region = .{ .start = start, .end = self.pos },
+            .args = args,
+            .ret = ret,
+            .effectful = effectful,
+        } });
+    }
+
+    return first_type;
 }
 
 /// todo
