@@ -25,7 +25,6 @@ const Tag = types_mod.Tag;
 const NominalType = types_mod.NominalType;
 const Tuple = types_mod.Tuple;
 const Rank = types_mod.Rank;
-const Mark = types_mod.Mark;
 const Ident = base.Ident;
 
 /// Type to manage instantiation.
@@ -148,7 +147,6 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
                     },
                 );
 
@@ -170,7 +168,6 @@ pub const Instantiator = struct {
                     .{
                         .content = fresh_content,
                         .rank = self.current_rank,
-                        .mark = Mark.none,
                     },
                 );
 

@@ -60,7 +60,6 @@ pub fn copyVar(
     try dest_store.dangerousSetVarDesc(placeholder_var, .{
         .content = dest_content,
         .rank = types_mod.Rank.generalized,
-        .mark = types_mod.Mark.none,
     });
 
     return placeholder_var;
