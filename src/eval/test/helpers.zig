@@ -168,10 +168,16 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             jit.callWithResultPtr(@ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
         },
-        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
+        layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32 => blk: {
             var result: u64 = undefined;
             jit.callWithResultPtr(@ptrCast(&result));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        },
+        layout_mod.Idx.bool => blk: {
+            var result: u64 = undefined;
+            jit.callWithResultPtr(@ptrCast(&result));
+            // Format as "True"/"False" to match LLVM evaluator
+            break :blk allocator.dupe(u8, if (result != 0) "True" else "False") catch @panic("dupe failed");
         },
         layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
             var result: f64 = undefined;
@@ -187,6 +193,14 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     };
 }
 
+/// Normalize boolean string representation for comparison.
+/// Treats "1"/"True" as equivalent and "0"/"False" as equivalent.
+fn normalizeBoolStr(s: []const u8) []const u8 {
+    if (std.mem.eql(u8, s, "1") or std.mem.eql(u8, s, "True")) return "True";
+    if (std.mem.eql(u8, s, "0") or std.mem.eql(u8, s, "False")) return "False";
+    return s;
+}
+
 /// Compare Interpreter result string with DevEvaluator result string.
 /// Only compares for expressions that DevEvaluator can handle.
 /// Fails the test if both can handle it but produce different strings.
@@ -199,7 +213,11 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
     defer allocator.free(dev_str);
 
-    if (!std.mem.eql(u8, interpreter_str, dev_str)) {
+    // Normalize boolean representations for comparison
+    const norm_interp = normalizeBoolStr(interpreter_str);
+    const norm_dev = normalizeBoolStr(dev_str);
+
+    if (!std.mem.eql(u8, norm_interp, norm_dev)) {
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
             .{ interpreter_str, dev_str },
@@ -331,7 +349,11 @@ fn compareWithLlvmEvaluator(allocator: std.mem.Allocator, interpreter_str: []con
     const llvm_str = try llvmEvaluatorStr(allocator, module_env, expr_idx);
     defer allocator.free(llvm_str);
 
-    if (!std.mem.eql(u8, interpreter_str, llvm_str)) {
+    // Normalize boolean representations for comparison
+    const norm_interp = normalizeBoolStr(interpreter_str);
+    const norm_llvm = normalizeBoolStr(llvm_str);
+
+    if (!std.mem.eql(u8, norm_interp, norm_llvm)) {
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, LlvmEvaluator: {s}\n",
             .{ interpreter_str, llvm_str },
@@ -453,10 +475,10 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     };
 
     // Compare with DevEvaluator and LlvmEvaluator using string representation
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
-    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    // Format as "True"/"False" to match LLVM evaluator's Bool formatting
+    const bool_str = if (int_val != 0) "True" else "False";
+    try compareWithDevEvaluator(test_allocator, bool_str, resources.module_env, resources.expr_idx);
+    try compareWithLlvmEvaluator(test_allocator, bool_str, resources.module_env, resources.expr_idx);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);

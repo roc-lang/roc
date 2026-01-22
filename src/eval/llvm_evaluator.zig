@@ -622,10 +622,8 @@ pub const LlvmEvaluator = struct {
             if (is_float) {
                 return ctx.wip.un(.fneg, operand, "") catch return error.CompilationFailed;
             } else {
-                // For integers, subtract from zero
-                const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, operand_expr) catch return error.CompilationFailed;
-                const zero = (ctx.builder.intConst(llvm_type, 0) catch return error.CompilationFailed).toValue();
-                return ctx.wip.bin(.sub, zero, operand, "") catch return error.CompilationFailed;
+                // For integers, use the neg instruction which gets the type from the value
+                return ctx.wip.neg(operand, "") catch return error.CompilationFailed;
             }
         }
 

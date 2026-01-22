@@ -6417,6 +6417,54 @@ pub const Interpreter = struct {
         };
     }
 
+    /// Evaluate unary minus (negate) on a numeric value
+    fn evalNumericUnaryMinus(self: *Interpreter, operand: StackValue, roc_ops: *RocOps) !StackValue {
+        const val = try self.extractNumericValue(operand);
+        const result_layout = operand.layout;
+
+        var out = try self.pushRaw(result_layout, 0, operand.rt_var);
+        out.is_initialized = false;
+
+        switch (val) {
+            .int => |i| try out.setInt(-i),
+            .f32 => |f| out.setF32(-f),
+            .f64 => |f| out.setF64(-f),
+            .dec => |d| {
+                if (d.negate()) |negated| {
+                    out.setDec(negated, roc_ops);
+                } else {
+                    return error.IntegerOverflow;
+                }
+            },
+        }
+        out.is_initialized = true;
+        return out;
+    }
+
+    /// Evaluate abs on a numeric value
+    fn evalNumericAbs(self: *Interpreter, operand: StackValue, roc_ops: *RocOps) !StackValue {
+        const val = try self.extractNumericValue(operand);
+        const result_layout = operand.layout;
+
+        var out = try self.pushRaw(result_layout, 0, operand.rt_var);
+        out.is_initialized = false;
+
+        switch (val) {
+            .int => |i| try out.setInt(if (i < 0) -i else i),
+            .f32 => |f| out.setF32(@abs(f)),
+            .f64 => |f| out.setF64(@abs(f)),
+            .dec => |d| {
+                if (d.abs()) |absolute| {
+                    out.setDec(absolute, roc_ops);
+                } else |_| {
+                    return error.IntegerOverflow;
+                }
+            },
+        }
+        out.is_initialized = true;
+        return out;
+    }
+
     fn compareNumericScalars(self: *Interpreter, lhs: StackValue, rhs: StackValue) !std.math.Order {
         const lhs_value = try self.extractNumericValue(lhs);
         const rhs_value = try self.extractNumericValue(rhs);
@@ -8425,10 +8473,25 @@ pub const Interpreter = struct {
                 return error.MethodLookupFailed;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            const node_idx = exposed_blk: {
+                // First try getExposedNodeIndexById
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Check if the node is actually a def (not exposed_item or type_var_slot)
+                    const nid: can.CIR.Node.Idx = @enumFromInt(exposed_idx);
+                    const node = origin_env.store.nodes.get(nid);
+                    if (node.tag == .def) {
+                        break :exposed_blk exposed_idx;
+                    }
+                    // Not a def, fall through to search all_defs
+                }
                 // Fallback: search all definitions for the method
                 const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
                 for (all_defs) |def_idx| {
+                    // Defensive check: verify this is actually a def node
+                    const def_node_idx: can.CIR.Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+                    const def_node = origin_env.store.nodes.get(def_node_idx);
+                    if (def_node.tag != .def) continue;
+
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
                     if (pat == .assign and pat.assign.ident == method_ident) {
@@ -8542,10 +8605,25 @@ pub const Interpreter = struct {
                 return null;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
+            const node_idx = exposed_blk: {
+                // First try getExposedNodeIndexById
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Check if the node is actually a def (not exposed_item or type_var_slot)
+                    const nid: can.CIR.Node.Idx = @enumFromInt(exposed_idx);
+                    const node = origin_env.store.nodes.get(nid);
+                    if (node.tag == .def) {
+                        break :exposed_blk exposed_idx;
+                    }
+                    // Not a def, fall through to search all_defs
+                }
                 // Fallback: search all definitions for the method
                 const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
                 for (all_defs) |def_idx| {
+                    // Defensive check: verify this is actually a def node
+                    const def_node_idx: can.CIR.Node.Idx = @enumFromInt(@intFromEnum(def_idx));
+                    const def_node = origin_env.store.nodes.get(def_node_idx);
+                    if (def_node.tag != .def) continue;
+
                     const def = origin_env.store.getDef(def_idx);
                     const pat = origin_env.store.getPattern(def.pattern);
                     if (pat == .assign and pat.assign.ident == method_ident) {
@@ -16729,6 +16807,21 @@ pub const Interpreter = struct {
                     }
                 }
 
+                // Check if this is a numeric operation we can handle directly
+                const is_numeric_layout = operand.layout.tag == .scalar and
+                    (operand.layout.data.scalar.tag == .int or operand.layout.data.scalar.tag == .frac);
+                if (is_numeric_layout) {
+                    if (ua.method_ident == self.root_env.idents.negate) {
+                        const result = try self.evalNumericUnaryMinus(operand, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ua.method_ident == self.root_env.idents.abs) {
+                        const result = try self.evalNumericAbs(operand, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    }
+                }
+
                 // Get nominal type info
                 const nominal_info = switch (operand_resolved.desc.content) {
                     .structure => |s| switch (s) {
@@ -17127,6 +17220,61 @@ pub const Interpreter = struct {
                         }
                     }
                     return error.InvalidMethodReceiver;
+                }
+
+                // Before resolving method, check if this is a numeric operation we can handle directly.
+                // Numeric nominal types (I64, Dec, etc.) should use the fast path instead of method lookup.
+                if (is_numeric_layout) {
+                    if (ba.method_ident == self.root_env.idents.plus) {
+                        const result = try self.evalNumericBinop(.add, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.minus) {
+                        const result = try self.evalNumericBinop(.sub, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.times) {
+                        const result = try self.evalNumericBinop(.mul, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_by) {
+                        const result = try self.evalNumericBinop(.div, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.div_trunc_by) {
+                        const result = try self.evalNumericBinop(.div_trunc, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.rem_by) {
+                        const result = try self.evalNumericBinop(.rem, lhs, rhs, roc_ops);
+                        try value_stack.push(result);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_gt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_gte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .gte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lt) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lt);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_lte) {
+                        const result = try self.compareNumericValues(lhs, rhs, .lte);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    } else if (ba.method_ident == self.root_env.idents.is_eq) {
+                        const result = try self.compareNumericValues(lhs, rhs, .eq);
+                        const result_val = try self.makeBoolValue(if (ba.negate_result) !result else result);
+                        try value_stack.push(result_val);
+                        return true;
+                    }
                 }
 
                 // Resolve the method function
