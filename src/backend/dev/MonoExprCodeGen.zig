@@ -2477,7 +2477,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             } else {
                 // Restore RBX
                 try self.codegen.emit.pop(.RBX);
-                try self.codegen.emit.retq();
+                try self.codegen.emit.ret();
             }
         }
 
