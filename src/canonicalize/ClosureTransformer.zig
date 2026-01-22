@@ -643,51 +643,6 @@ pub const LambdaSet = struct {
     }
 };
 
-/// Information about a capture for layout optimization
-pub const CaptureLayoutInfo = struct {
-    pattern_idx: CIR.Pattern.Idx,
-    name: base.Ident.Idx,
-    lookup_expr: CIR.Expr.Idx,
-};
-
-/// Sort captures alphabetically by name for consistent ABI layout.
-/// This ensures that the same captures always produce the same record layout,
-/// regardless of the order they appear in the source code.
-pub fn sortCapturesAlphabetically(
-    captures: []CaptureLayoutInfo,
-    idents: *const base.Ident.Store,
-) void {
-    std.sort.insertion(CaptureLayoutInfo, captures, idents, struct {
-        pub fn lessThan(ident_store: *const base.Ident.Store, a: CaptureLayoutInfo, b: CaptureLayoutInfo) bool {
-            const a_text = ident_store.getText(a.name);
-            const b_text = ident_store.getText(b.name);
-            return std.mem.order(u8, a_text, b_text) == .lt;
-        }
-    }.lessThan);
-}
-
-/// Remove duplicate captures (same pattern_idx).
-/// Returns the deduplicated slice length.
-pub fn deduplicateCaptures(captures: []CaptureLayoutInfo) usize {
-    if (captures.len <= 1) return captures.len;
-
-    var write_idx: usize = 1;
-    for (1..captures.len) |read_idx| {
-        var is_duplicate = false;
-        for (0..write_idx) |check_idx| {
-            if (captures[read_idx].pattern_idx == captures[check_idx].pattern_idx) {
-                is_duplicate = true;
-                break;
-            }
-        }
-        if (!is_duplicate) {
-            captures[write_idx] = captures[read_idx];
-            write_idx += 1;
-        }
-    }
-    return write_idx;
-}
-
 /// The allocator for intermediate allocations
 allocator: std.mem.Allocator,
 
@@ -763,20 +718,6 @@ pub const StaticDispatchInfo = struct {
     args: CIR.Expr.Span,
 };
 
-/// Check if an expression is a static dispatch reference (e_type_var_dispatch).
-/// Returns the static dispatch info if so, null otherwise.
-pub fn isStaticDispatchRef(self: *const Self, expr_idx: Expr.Idx) ?StaticDispatchInfo {
-    const expr = self.module_env.store.getExpr(expr_idx);
-    return switch (expr) {
-        .e_type_var_dispatch => |tvd| StaticDispatchInfo{
-            .method_name = tvd.method_name,
-            .type_var_alias_stmt = tvd.type_var_alias_stmt,
-            .args = tvd.args,
-        },
-        else => null,
-    };
-}
-
 /// Create an unspecialized closure entry for a static dispatch reference.
 /// This records that we need to resolve this dispatch at monomorphization time.
 pub fn createUnspecializedClosure(
@@ -796,21 +737,6 @@ pub fn createUnspecializedClosure(
         .member = member_info.method_name,
         .member_expr = expr_idx,
         .region = self.current_region,
-    };
-}
-
-/// Get the type variable from an expression, if it's a type var dispatch.
-/// Returns null for other expression types.
-pub fn getTypeVarFromExpr(self: *const Self, expr_idx: Expr.Idx) ?types.Var {
-    const expr = self.module_env.store.getExpr(expr_idx);
-    return switch (expr) {
-        .e_type_var_dispatch => |tvd| blk: {
-            // Get the type var from the type var alias statement
-            const stmt = self.module_env.store.getStatement(tvd.type_var_alias_stmt);
-            const type_var_anno = stmt.s_type_var_alias.type_var_anno;
-            break :blk ModuleEnv.varFrom(type_var_anno);
-        },
-        else => null,
     };
 }
 
@@ -840,18 +766,6 @@ pub fn addUnspecializedWithTracking(
         .lambda_set = lambda_set,
         .index = index,
     });
-}
-
-/// Add an unspecialized entry with tracking, creating the entry from dispatch info.
-/// Convenience method that combines createUnspecializedClosure and addUnspecializedWithTracking.
-pub fn addUnspecializedFromDispatchInfo(
-    self: *Self,
-    lambda_set: *LambdaSet,
-    dispatch_info: StaticDispatchInfo,
-    expr_idx: Expr.Idx,
-) !void {
-    const unspec = self.createUnspecializedClosure(dispatch_info, expr_idx);
-    try self.addUnspecializedWithTracking(lambda_set, unspec);
 }
 
 /// Mark a pattern as a top-level definition (doesn't need to be captured)
@@ -1157,57 +1071,6 @@ pub fn markLambdaSetRecursive(
     closure_info: *ClosureInfo,
 ) void {
     lambda_set.recursion_closure = closure_info;
-}
-
-/// Check if a lambda set is recursive.
-pub fn isLambdaSetRecursive(lambda_set: *const LambdaSet) bool {
-    return lambda_set.recursion_closure != null;
-}
-
-/// Detect recursion in a closure and mark the lambda set if recursive.
-///
-/// This combines `detectRecursion` and `markLambdaSetRecursive` into a single
-/// operation that:
-/// 1. Checks if the closure body contains a self-reference
-/// 2. If so, marks the lambda set as recursive
-///
-/// This should be called after a closure is added to a lambda set.
-///
-/// Returns true if the closure was found to be recursive.
-pub fn detectAndMarkRecursion(
-    self: *const Self,
-    lambda_set: *LambdaSet,
-    closure_info: *ClosureInfo,
-    closure_pattern: CIR.Pattern.Idx,
-) bool {
-    if (self.detectRecursion(closure_pattern, closure_info.lambda_body)) {
-        markLambdaSetRecursive(lambda_set, closure_info);
-        return true;
-    }
-    return false;
-}
-
-/// Check all closures in a lambda set for recursion.
-///
-/// This iterates through all closures in the lambda set and marks the set
-/// as recursive if any closure references itself.
-///
-/// Note: This modifies `closures.items` to get mutable pointers to ClosureInfo.
-pub fn detectRecursionInLambdaSet(
-    self: *const Self,
-    lambda_set: *LambdaSet,
-) bool {
-    for (lambda_set.closures.items, 0..) |*closure_info, i| {
-        // For each closure, check if it references itself
-        // We need the pattern that binds this closure, which is stored in lifted_fn_pattern
-        if (closure_info.lifted_fn_pattern) |fn_pattern| {
-            if (self.detectRecursion(fn_pattern, closure_info.lambda_body)) {
-                markLambdaSetRecursive(lambda_set, &lambda_set.closures.items[i]);
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 /// Check if a lambda set is empty (no closures can reach the variable).

@@ -11075,22 +11075,6 @@ fn currentScopeIdx(self: *Self) usize {
     return self.scopes.items.len - 1;
 }
 
-/// This will be used later for builtins like Num.nan, Num.infinity, etc.
-pub fn addNonFiniteFloat(self: *Self, value: f64, region: base.Region) !Expr.Idx {
-    // then in the final slot the actual expr is inserted
-    const expr_idx = try self.env.addExpr(
-        CIR.Expr{
-            .e_frac_f64 = .{
-                .value = value,
-                .has_suffix = false,
-            },
-        },
-        region,
-    );
-
-    return expr_idx;
-}
-
 /// Check if an identifier is in scope
 fn scopeContains(
     self: *Self,
