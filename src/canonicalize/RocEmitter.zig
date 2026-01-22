@@ -699,13 +699,6 @@ fn emitStatement(self: *Self, stmt_idx: CIR.Statement.Idx) EmitError!void {
             try self.write(" = ");
             try self.emitExpr(decl.expr);
         },
-        .s_decl_gen => |decl| {
-            // Add the declared name to scope
-            try self.addPatternToScope(decl.pattern);
-            try self.emitPattern(decl.pattern);
-            try self.write(" = ");
-            try self.emitExpr(decl.expr);
-        },
         .s_type_anno, .s_type_var_alias, .s_alias_decl, .s_nominal_decl => {
             // Type declarations are not emitted for now
         },

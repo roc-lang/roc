@@ -1517,18 +1517,6 @@ fn duplicateExpr(
                         );
                         try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
                     },
-                    .s_decl_gen => |decl| {
-                        const new_expr = try self.duplicateExpr(decl.expr, type_subs);
-                        const new_stmt_idx = try self.module_env.store.addStatement(
-                            CIR.Statement{ .s_decl_gen = .{
-                                .pattern = decl.pattern,
-                                .expr = new_expr,
-                                .anno = decl.anno,
-                            } },
-                            base.Region.zero(),
-                        );
-                        try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
-                    },
                     else => {
                         try self.module_env.store.scratch.?.statements.append(stmt_idx);
                     },
@@ -1712,7 +1700,7 @@ fn duplicateExpr(
             const new_expr = try self.duplicateExpr(ret.expr, type_subs);
             if (new_expr == ret.expr) return expr_idx;
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
         },
 

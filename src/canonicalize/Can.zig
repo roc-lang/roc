@@ -116,10 +116,19 @@ processing_alias_declarations: bool = false,
 /// The name of the alias currently being defined (if any).
 /// This allows self-references to pass through (to be caught as RECURSIVE ALIAS in Check).
 current_alias_name: ?Ident.Idx = null,
-/// The pattern being defined in the current non-lambda assignment (if any).
-/// Used to detect self-referential definitions like `a = a` or `a = [a]`.
-/// This is null when we're inside a lambda (where self-references are valid for recursion).
+/// The node index at which pattern definitions for the current declaration started.
+/// Used to detect self-referential definitions like `(_, var $n) = f($n)` where
+/// newly created patterns are referenced in the RHS.
+/// This is null when we're inside a lambda or other context where inner definitions
+/// are independent of outer ones.
+defining_patterns_start: ?u32 = null,
+/// The main pattern being defined (for top-level declarations where the pattern
+/// was created in a first pass, or for simple ident patterns).
+/// Used to detect self-referential definitions like `a = a`.
 defining_pattern: ?Pattern.Idx = null,
+/// The expression index of the enclosing lambda, if any.
+/// Used to track which lambda a return expression belongs to.
+enclosing_lambda: ?Expr.Idx = null,
 const Ident = base.Ident;
 const Region = base.Region;
 // ModuleEnv is already imported at the top
@@ -2564,6 +2573,7 @@ pub fn canonicalizeFile(
                                     .name = name_ident,
                                     .anno_idx = type_anno_idx,
                                     .where = where_clauses,
+                                    .anno_region = region,
                                 });
                             } else {
                                 // Names don't match - create an anno-only def for this annotation
@@ -2823,6 +2833,9 @@ const TypeAnnoIdent = struct {
     name: base.Ident.Idx,
     anno_idx: TypeAnno.Idx,
     where: ?WhereClause.Span,
+    /// The region of the type annotation line (e.g., "dog : Animal")
+    /// Used to create a combined region covering both annotation and declaration
+    anno_region: Region,
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) !void {
@@ -3841,6 +3854,11 @@ fn canonicalizeDeclWithAnnotation(
     const trace = tracy.trace(@src());
     defer trace.end();
 
+    // Save the current node count BEFORE canonicalizing the pattern.
+    // This allows us to detect self-references: any pattern with index >= this value
+    // was newly created by this declaration (as opposed to existing vars being reassigned).
+    const patterns_start_idx: u32 = @intCast(self.env.store.nodes.len());
+
     // Either find the placeholder pattern insert in the first past if ident,
     // otherwise canonicalize the pattern
     const pattern = self.parse_ir.store.getPattern(decl.pattern);
@@ -3863,19 +3881,24 @@ fn canonicalizeDeclWithAnnotation(
     };
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
-    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
     const ast_body_expr = self.parse_ir.store.getExpr(decl.body);
     const is_lambda = ast_body_expr == .lambda;
 
-    // Save and set defining_pattern for self-reference detection
+    // Save and set self-reference tracking for issues #8831, #9043:
+    // - defining_pattern: the main pattern (handles `a = a` for top-level placeholders)
+    // - defining_patterns_start: node index for new patterns (handles tuple cases)
+    const saved_defining_patterns_start = self.defining_patterns_start;
     const saved_defining_pattern = self.defining_pattern;
     if (!is_lambda) {
+        self.defining_patterns_start = patterns_start_idx;
         self.defining_pattern = pattern_idx;
     }
 
     const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
 
-    // Restore defining_pattern
+    // Restore self-reference tracking
+    self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
 
     const region = self.parse_ir.tokenizedRegionToRegion(decl.region);
@@ -4520,20 +4543,34 @@ pub fn canonicalizeExpr(
                 // Not a module-qualified lookup, or qualifier not found, proceed with normal lookup
                 switch (self.scopeLookup(.ident, ident)) {
                     .found => |found_pattern_idx| {
-                        // Check for self-reference outside of lambda (issue #8831).
-                        // If we're defining a non-lambda pattern and this lookup references it,
-                        // that's an invalid self-reference like `a = a` or `a = [a]`.
-                        if (self.defining_pattern) |defining_pat_idx| {
-                            if (found_pattern_idx == defining_pat_idx) {
-                                // Self-reference detected (issue #8831) - emit error and return malformed expr.
-                                // Non-function values cannot reference themselves as that would cause
-                                // an infinite loop at runtime.
-                                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
-                                    .ident = ident,
-                                    .region = region,
-                                } });
-                                return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
+                        // Check for self-reference outside of lambda (issues #8831, #9043).
+                        // We detect self-reference in two cases:
+                        // 1. The found pattern IS the main defining pattern (for simple cases like `a = a`)
+                        // 2. The found pattern was newly created by this definition (for tuple cases
+                        //    like `(_, var $n) = f($n)` where $n is referenced before being defined)
+                        // Note: For var reassignments like `(a, $x) = f($x)` where $x already existed,
+                        // the existing pattern has an index < defining_patterns_start, so it's valid.
+                        const is_self_ref = blk: {
+                            // Check if it matches the main defining pattern (handles `a = a`)
+                            if (self.defining_pattern) |def_pat| {
+                                if (found_pattern_idx == def_pat) break :blk true;
                             }
+                            // Check if it's a newly created pattern (handles tuple cases)
+                            if (self.defining_patterns_start) |def_start| {
+                                if (@intFromEnum(found_pattern_idx) >= def_start) break :blk true;
+                            }
+                            break :blk false;
+                        };
+
+                        if (is_self_ref) {
+                            // Self-reference detected - emit error and return malformed expr.
+                            // Non-function values cannot reference themselves as that would cause
+                            // an infinite loop at runtime.
+                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .self_referential_definition = .{
+                                .ident = ident,
+                                .region = region,
+                            } });
+                            return CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
                         }
 
                         // Mark this pattern as used for unused variable checking
@@ -5237,6 +5274,20 @@ pub fn canonicalizeExpr(
             }
             const args_span = try self.env.store.patternSpanFrom(args_start);
 
+            // Create lambda with undefined body first (for enclosing_lambda tracking)
+            const lambda_expr = Expr{
+                .e_lambda = .{
+                    .args = args_span,
+                    .body = undefined, // Placeholder, will be updated after body canonicalization
+                },
+            };
+            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+
+            // Set enclosing lambda context for return expressions
+            const saved_enclosing_lambda = self.enclosing_lambda;
+            self.enclosing_lambda = lambda_idx;
+            defer self.enclosing_lambda = saved_enclosing_lambda;
+
             // Define the set of captures
             const captures_top = self.scratch_captures.top();
             defer self.scratch_captures.clearFrom(captures_top);
@@ -5245,6 +5296,16 @@ pub fn canonicalizeExpr(
             const body_idx = blk: {
                 const body_free_vars_start = self.scratch_free_vars.top();
                 defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+                // Reset self-reference tracking for the lambda body - lambda bodies
+                // have their own scope and shouldn't inherit self-reference detection
+                // from outer declarations
+                const saved_defining_patterns_start = self.defining_patterns_start;
+                const saved_defining_pattern = self.defining_pattern;
+                self.defining_patterns_start = null;
+                self.defining_pattern = null;
+                defer self.defining_patterns_start = saved_defining_patterns_start;
+                defer self.defining_pattern = saved_defining_pattern;
 
                 const can_body = try self.canonicalizeExpr(e.body) orelse {
                     const ast_body = self.parse_ir.store.getExpr(e.body);
@@ -5275,15 +5336,8 @@ pub fn canonicalizeExpr(
                 break :blk can_body.idx;
             };
 
-            // Create the pure lambda expression first
-            const lambda_expr = Expr{
-                .e_lambda = .{
-                    .args = args_span,
-                    .body = body_idx,
-                },
-            };
-
-            const lambda_idx = try self.env.addExpr(lambda_expr, region);
+            // Update lambda with the actual body
+            self.env.store.updateLambdaBody(lambda_idx, body_idx);
 
             // Get a slice of the captured vars in the body
             const captures_slice = self.scratch_captures.sliceFromStart(captures_top);
@@ -5582,6 +5636,24 @@ pub fn canonicalizeExpr(
             const ok_tag_ident = self.env.idents.ok;
             const err_tag_ident = self.env.idents.err;
 
+            // Look up Try type for nominal wrapping (improves error messages)
+            const try_ident = self.env.idents.@"try";
+            const try_nominal_info: ?struct { import_idx: CIR.Import.Idx, target_node_idx: u16 } = blk: {
+                if (self.scopeLookupTypeBinding(try_ident)) |type_binding_loc| {
+                    switch (type_binding_loc.binding.*) {
+                        .external_nominal => |ext| {
+                            if (ext.import_idx) |import_idx| {
+                                if (ext.target_node_idx) |target_node_idx| {
+                                    break :blk .{ .import_idx = import_idx, .target_node_idx = target_node_idx };
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+                break :blk null;
+            };
+
             // Mark the start of scratch match branches
             const scratch_top = self.env.store.scratchMatchBranchTop();
 
@@ -5604,13 +5676,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(ok_assign_pattern_idx);
                 const ok_args_span = try self.env.store.patternSpanFrom(ok_patterns_start);
 
-                // Create the Ok tag pattern: Ok(#ok)
-                const ok_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = ok_tag_ident,
-                        .args = ok_args_span,
-                    },
-                }, region);
+                // Create the Ok tag pattern: Ok(#ok), wrapped in nominal_external if Try type is available
+                const ok_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = ok_tag_ident,
+                            .args = ok_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5660,13 +5746,27 @@ pub fn canonicalizeExpr(
                 try self.env.store.addScratchPattern(err_assign_pattern_idx);
                 const err_args_span = try self.env.store.patternSpanFrom(err_patterns_start);
 
-                // Create the Err tag pattern: Err(#err)
-                const err_tag_pattern_idx = try self.env.addPattern(Pattern{
-                    .applied_tag = .{
-                        .name = err_tag_ident,
-                        .args = err_args_span,
-                    },
-                }, region);
+                // Create the Err tag pattern: Err(#err), wrapped in nominal_external if Try type is available
+                const err_tag_pattern_idx = blk: {
+                    const applied_tag_pattern = try self.env.addPattern(Pattern{
+                        .applied_tag = .{
+                            .name = err_tag_ident,
+                            .args = err_args_span,
+                        },
+                    }, region);
+
+                    if (try_nominal_info) |info| {
+                        break :blk try self.env.addPattern(Pattern{
+                            .nominal_external = .{
+                                .module_idx = info.import_idx,
+                                .target_node_idx = info.target_node_idx,
+                                .backing_pattern = applied_tag_pattern,
+                                .backing_type = .tag,
+                            },
+                        }, region);
+                    }
+                    break :blk applied_tag_pattern;
+                };
 
                 // Create branch pattern
                 const branch_pat_scratch_top = self.env.store.scratchMatchBranchPatternTop();
@@ -5693,22 +5793,44 @@ pub fn canonicalizeExpr(
                     // Mark the pattern as used
                     try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-                    // Create Err(#err) tag expression
+                    // Create Err(#err) tag expression, wrapped in e_nominal_external if Try type is available
                     const err_tag_args_start = self.env.store.scratchExprTop();
                     try self.env.store.addScratchExpr(err_lookup_idx);
                     const err_tag_args_span = try self.env.store.exprSpanFrom(err_tag_args_start);
 
-                    const err_tag_expr_idx = try self.env.addExpr(CIR.Expr{
-                        .e_tag = .{
-                            .name = err_tag_ident,
-                            .args = err_tag_args_span,
-                        },
-                    }, region);
+                    const err_tag_expr_idx = expr_blk: {
+                        const tag_expr = try self.env.addExpr(CIR.Expr{
+                            .e_tag = .{
+                                .name = err_tag_ident,
+                                .args = err_tag_args_span,
+                            },
+                        }, region);
+
+                        if (try_nominal_info) |info| {
+                            break :expr_blk try self.env.addExpr(CIR.Expr{
+                                .e_nominal_external = .{
+                                    .module_idx = info.import_idx,
+                                    .target_node_idx = info.target_node_idx,
+                                    .backing_expr = tag_expr,
+                                    .backing_type = .tag,
+                                },
+                            }, region);
+                        }
+                        break :expr_blk tag_expr;
+                    };
 
                     // Create return Err(#err) expression
-                    break :blk try self.env.addExpr(CIR.Expr{ .e_return = .{
-                        .expr = err_tag_expr_idx,
-                    } }, region);
+                    break :blk if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(CIR.Expr{ .e_return = .{
+                            .expr = err_tag_expr_idx,
+                            .lambda = lambda_idx,
+                            .context = .try_suffix,
+                        } }, region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = region,
+                            .context = .try_suffix,
+                        } });
                 };
 
                 // Create the Err branch
@@ -6073,6 +6195,15 @@ pub fn canonicalizeExpr(
                 // Save position before canonicalizing body so we can filter pattern-bound vars
                 const body_free_vars_start = self.scratch_free_vars.top();
 
+                // Reset self-reference tracking for the branch body - variables bound by the
+                // branch pattern are valid to use in the body and aren't self-references
+                const saved_defining_patterns_start = self.defining_patterns_start;
+                const saved_defining_pattern = self.defining_pattern;
+                self.defining_patterns_start = null;
+                self.defining_pattern = null;
+                defer self.defining_patterns_start = saved_defining_patterns_start;
+                defer self.defining_pattern = saved_defining_pattern;
+
                 // Canonicalize the branch's body
                 const can_body = try self.canonicalizeExpr(ast_branch.body) orelse {
                     const body = self.parse_ir.store.getExpr(ast_branch.body);
@@ -6246,6 +6377,15 @@ fn canonicalizeForLoop(
         defer self.loop_depth -= 1;
         const body_free_vars_start = self.scratch_free_vars.top();
         defer self.scratch_free_vars.clearFrom(body_free_vars_start);
+
+        // Reset defining_patterns_start for the loop body - variables bound by the
+        // loop pattern are valid to use in the body and aren't self-references
+        const saved_defining_patterns_start = self.defining_patterns_start;
+        const saved_defining_pattern = self.defining_pattern;
+        self.defining_patterns_start = null;
+        self.defining_pattern = null;
+        defer self.defining_patterns_start = saved_defining_patterns_start;
+        defer self.defining_pattern = saved_defining_pattern;
 
         const body_expr = try self.canonicalizeExprOrMalformed(ast_body);
 
@@ -9667,6 +9807,16 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
     try self.scopeEnter(self.env.gpa, false); // false = not a function boundary
     defer self.scopeExit(self.env.gpa) catch {};
 
+    // Blocks create a new scope where declarations are independent of any outer
+    // declarations being defined. Reset self-reference tracking to prevent false
+    // self-reference errors for inner declarations (issue #9043).
+    const saved_defining_patterns_start = self.defining_patterns_start;
+    const saved_defining_pattern = self.defining_pattern;
+    self.defining_patterns_start = null;
+    self.defining_pattern = null;
+    defer self.defining_patterns_start = saved_defining_patterns_start;
+    defer self.defining_pattern = saved_defining_pattern;
+
     // Statements inside a block are in statement position.
     // This is important for constructs like `if` without `else`, which are only
     // valid in statement position (where their value is not used).
@@ -9718,9 +9868,17 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                     // This is for when return is the final expression in a block
                     const inner_expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
                     const return_region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-                    const return_expr_idx = try self.env.addExpr(Expr{ .e_return = .{
-                        .expr = inner_expr.idx,
-                    } }, return_region);
+                    const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
+                        try self.env.addExpr(Expr{ .e_return = .{
+                            .expr = inner_expr.idx,
+                            .lambda = lambda_idx,
+                            .context = .return_expr,
+                        } }, return_region)
+                    else
+                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .return_outside_fn = .{
+                            .region = return_region,
+                            .context = .return_expr,
+                        } });
                     last_expr = CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = inner_expr.free_vars };
                 },
                 .crash => |crash_stmt| {
@@ -9778,7 +9936,6 @@ fn canonicalizeBlock(self: *Self, e: AST.Block) std.mem.Allocator.Error!Canonica
                 const cir_stmt = self.env.store.getStatement(canonicailzed_stmt.idx);
                 switch (cir_stmt) {
                     .s_decl => |decl| try self.collectBoundVarsToScratch(decl.pattern),
-                    .s_decl_gen => |decl| try self.collectBoundVarsToScratch(decl.pattern),
                     .s_var => |var_stmt| try self.collectBoundVarsToScratch(var_stmt.pattern_idx),
                     else => {},
                 }
@@ -10010,11 +10167,18 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
             // Canonicalize the return expression
             const expr = try self.canonicalizeExprOrMalformed(r.expr);
 
-            // Create return statement (lambda is null for now - will be implemented later)
-            const stmt_idx = try self.env.addStatement(Statement{ .s_return = .{
-                .expr = expr.idx,
-                .lambda = null,
-            } }, region);
+            // Create return statement with enclosing lambda, or emit error if outside function
+            const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+                try self.env.addStatement(Statement{ .s_return = .{
+                    .expr = expr.idx,
+                    .lambda = lambda_idx,
+                } }, region)
+            else
+                // Return outside function - create malformed statement
+                try self.env.pushMalformed(Statement.Idx, Diagnostic{ .return_outside_fn = .{
+                    .region = region,
+                    .context = .return_statement,
+                } });
 
             mb_canonicailzed_stmt = CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
         },
@@ -10224,6 +10388,7 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                                 .name = name_ident,
                                 .anno_idx = type_anno_idx,
                                 .where = where_clauses,
+                                .anno_region = region,
                             });
                             stmts_processed = .two;
                         } else {
@@ -10663,7 +10828,16 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
 
 /// Canonicalize a block declarataion
 pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?TypeAnnoIdent) std.mem.Allocator.Error!CanonicalizedStatement {
-    const region = self.parse_ir.tokenizedRegionToRegion(d.region);
+    const decl_region = self.parse_ir.tokenizedRegionToRegion(d.region);
+    // When there's a matching annotation, create a combined region covering both lines
+    // This ensures hover/goto-definition work on the annotation line
+    const region = if (mb_last_anno) |anno_info|
+        Region{
+            .start = anno_info.anno_region.start,
+            .end = decl_region.end,
+        }
+    else
+        decl_region;
 
     // Check if this is a var reassignment
     const ast_pattern = self.parse_ir.store.getPattern(d.pattern);
@@ -10732,6 +10906,11 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         }
     }
 
+    // Save the current node count BEFORE canonicalizing the pattern.
+    // This allows us to detect self-references: any pattern with index >= this value
+    // was newly created by this declaration (as opposed to existing vars being reassigned).
+    const patterns_start_idx: u32 = @intCast(self.env.store.nodes.len());
+
     // Regular declaration - canonicalize as usual
     const pattern_idx = try self.canonicalizePattern(d.pattern) orelse inner_blk: {
         const pattern = self.parse_ir.store.getPattern(d.pattern);
@@ -10741,34 +10920,29 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
     };
 
     // Check if the RHS is a lambda - if so, self-references are valid (for recursion).
-    // Otherwise, set defining_pattern so lookups can detect invalid self-references.
+    // Otherwise, set defining_patterns_start and defining_pattern for self-reference detection.
     const ast_body_expr = self.parse_ir.store.getExpr(d.body);
     const is_lambda = ast_body_expr == .lambda;
 
-    // Save and set defining_pattern for self-reference detection (issue #8831)
+    // Save and set self-reference tracking for issues #8831, #9043:
+    // - defining_pattern: the main pattern (handles `a = a`)
+    // - defining_patterns_start: node index for new patterns (handles tuple cases)
+    const saved_defining_patterns_start = self.defining_patterns_start;
     const saved_defining_pattern = self.defining_pattern;
     if (!is_lambda) {
+        self.defining_patterns_start = patterns_start_idx;
         self.defining_pattern = pattern_idx;
     }
 
     // Canonicalize the decl expr
     const expr = try self.canonicalizeExprOrMalformed(d.body);
 
-    // Restore defining_pattern
+    // Restore self-reference tracking
+    self.defining_patterns_start = saved_defining_patterns_start;
     self.defining_pattern = saved_defining_pattern;
 
-    // Determine if we should generalize based on RHS
-    // TODO: Remove, generalization is handled solely in type checking
-    const should_generalize = self.shouldGeneralizeBinding(expr.idx);
-
-    // Create a declaration statement (generalized or not)
-    const stmt_idx = if (should_generalize)
-        try self.env.addStatement(Statement{ .s_decl_gen = .{
-            .pattern = pattern_idx,
-            .expr = expr.idx,
-            .anno = mb_validated_anno,
-        } }, region)
-    else
+    // Create a declaration statement
+    const stmt_idx =
         try self.env.addStatement(Statement{ .s_decl = .{
             .pattern = pattern_idx,
             .expr = expr.idx,
@@ -10776,23 +10950,6 @@ pub fn canonicalizeBlockDecl(self: *Self, d: AST.Statement.Decl, mb_last_anno: ?
         } }, region);
 
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = expr.free_vars };
-}
-
-/// Determines whether a let binding should be generalized based on its RHS expression.
-/// According to Roc's value restriction, only lambdas and number literals should be generalized.
-// TODO: Remove, generalization is handled solely in type checking
-fn shouldGeneralizeBinding(self: *Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    return switch (expr) {
-        // Lambdas should be generalized (both closures and pure lambdas)
-        .e_closure, .e_lambda => true,
-
-        // Number literals should be generalized
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
-
-        // Everything else should NOT be generalized
-        else => false,
-    };
 }
 
 // A canonicalized statement
@@ -11308,7 +11465,7 @@ fn checkScopeForUnusedVariables(self: *Self, scope: *const Scope) std.mem.Alloca
         const node = self.env.store.nodes.get(node_idx);
 
         if (node.tag == .pattern_identifier) {
-            const assign_ident: base.Ident.Idx = @bitCast(node.data_1);
+            const assign_ident: base.Ident.Idx = @bitCast(node.getPayload().pattern_identifier.ident);
             if (self.env.common.exposed_items.containsById(self.env.gpa, @bitCast(assign_ident))) {
                 continue;
             }

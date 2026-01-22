@@ -200,9 +200,6 @@ fn collectExprDependencies(
                     .s_decl => |decl| {
                         try collectExprDependencies(cir, decl.expr, dependencies, allocator);
                     },
-                    .s_decl_gen => |decl| {
-                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
-                    },
                     .s_var => |var_stmt| {
                         try collectExprDependencies(cir, var_stmt.expr, dependencies, allocator);
                     },

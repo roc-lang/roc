@@ -390,11 +390,6 @@ fn checkForCapturesRecursive(module_env: *can.ModuleEnv, expr_idx: can.CIR.Expr.
                             return true;
                         }
                     },
-                    .s_decl_gen => |decl| {
-                        if (checkForCapturesRecursive(module_env, decl.expr)) {
-                            return true;
-                        }
-                    },
                     else => {},
                 }
             }
