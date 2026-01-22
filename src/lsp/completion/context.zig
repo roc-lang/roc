@@ -18,6 +18,11 @@ pub const CompletionContext = union(enum) {
         /// Byte offset of the start of the segment before the dot
         member_start: u32,
     },
+    /// After a dot whose receiver is not a plain identifier (e.g., "func().")
+    after_receiver_dot: struct {
+        /// Byte offset of the dot character
+        dot_offset: u32,
+    },
     /// After a colon (type annotation context)
     after_colon,
     /// General expression context
@@ -102,6 +107,9 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
                         } };
                     }
                 }
+            } else {
+                // No identifier before the dot; treat as a receiver dot (e.g., call chaining).
+                return .{ .after_receiver_dot = .{ .dot_offset = @intCast(pos - 1) } };
             }
         } else if (prev_char == ':') {
             return .after_colon;
@@ -154,6 +162,13 @@ test "detectCompletionContext: after nested record dot" {
     try std.testing.expectEqualStrings("myrec.subrec", ctx.after_record_dot.access_chain);
     try std.testing.expectEqual(@as(u32, 0), ctx.after_record_dot.chain_start);
     try std.testing.expectEqual(@as(u32, 6), ctx.after_record_dot.member_start);
+}
+
+test "detectCompletionContext: after receiver dot" {
+    const source = "val.func().";
+    const ctx = detectCompletionContext(source, 0, 11);
+    try std.testing.expect(ctx == .after_receiver_dot);
+    try std.testing.expectEqual(@as(u32, 10), ctx.after_receiver_dot.dot_offset);
 }
 
 test "detectCompletionContext: after colon" {
