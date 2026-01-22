@@ -1348,18 +1348,9 @@ pub const LlvmEvaluator = struct {
                 return try ctx.emitExpr(dot.receiver);
             }
 
-            // Try record field access - if the receiver is a record literal
-            const receiver_expr = ctx.module_env.store.getExpr(dot.receiver);
-            if (receiver_expr == .e_record) {
-                const record = receiver_expr.e_record;
-                const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
-                for (field_indices) |field_idx| {
-                    const field = ctx.module_env.store.getRecordField(field_idx);
-                    if (field.name == field_ident) {
-                        return ctx.emitExpr(field.value);
-                    }
-                }
-                return error.UnsupportedType;
+            // Try record field access (handles nested dot access chains on record literals)
+            if (ctx.resolveRecordFieldChain(dot.receiver, field_ident)) |field_expr_idx| {
+                return ctx.emitExpr(field_expr_idx);
             }
 
             return error.UnsupportedType;
@@ -1447,6 +1438,33 @@ pub const LlvmEvaluator = struct {
                 },
                 else => null,
             };
+        }
+
+        /// Resolves a chain of dot accesses on record literals, returning the final field's expression index.
+        /// For example: {a: {b: 42}}.a.b resolves through the chain to find the expression for 42.
+        fn resolveRecordFieldChain(ctx: *ExprContext, expr_idx: CIR.Expr.Idx, field_ident: base.Ident.Idx) ?CIR.Expr.Idx {
+            const expr = ctx.module_env.store.getExpr(expr_idx);
+
+            switch (expr) {
+                .e_record => |record| {
+                    // Base case: we have a record, find the field
+                    const field_indices = ctx.module_env.store.sliceRecordFields(record.fields);
+                    for (field_indices) |field_idx| {
+                        const field = ctx.module_env.store.getRecordField(field_idx);
+                        if (field.name == field_ident) {
+                            return field.value;
+                        }
+                    }
+                    return null;
+                },
+                .e_dot_access => |dot| {
+                    // Recursive case: first resolve the receiver to get intermediate record
+                    const intermediate = ctx.resolveRecordFieldChain(dot.receiver, dot.field_name) orelse return null;
+                    // Then find our field in that intermediate result
+                    return ctx.resolveRecordFieldChain(intermediate, field_ident);
+                },
+                else => return null,
+            }
         }
     };
 
