@@ -15,6 +15,7 @@ const types = @import("types");
 const compile = @import("compile");
 
 const completion_handler = @import("../handlers/completion.zig");
+const builtin_completion = @import("builtins.zig");
 const scope_map = @import("../scope_map.zig");
 const type_utils = @import("../type_utils.zig");
 
@@ -32,13 +33,15 @@ pub const CompletionBuilder = struct {
     allocator: Allocator,
     items: *std.ArrayList(CompletionItem),
     seen_labels: std.StringHashMap(void),
+    builtin_module_env: ?*ModuleEnv,
 
     /// Initialize a new CompletionBuilder.
-    pub fn init(allocator: Allocator, items: *std.ArrayList(CompletionItem)) CompletionBuilder {
+    pub fn init(allocator: Allocator, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
         return .{
             .allocator = allocator,
             .items = items,
             .seen_labels = std.StringHashMap(void).init(allocator),
+            .builtin_module_env = builtin_module_env,
         };
     }
 
@@ -88,6 +91,11 @@ pub const CompletionBuilder = struct {
 
     /// Add module name completions from all loaded packages/modules in BuildEnv.
     pub fn addModuleNameCompletionsFromEnv(self: *CompletionBuilder, env: *BuildEnv) !void {
+        // Surface builtin modules (Str, List, etc.) even when they are not
+        // present in schedulers. This keeps completions available while
+        // preserving real backing data for members/types.
+        try self.addBuiltinModuleNameCompletions();
+
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
             const sched = entry.value_ptr.*;
@@ -217,6 +225,12 @@ pub const CompletionBuilder = struct {
         module_name: []const u8,
         module_env_opt: ?*ModuleEnv,
     ) !void {
+        // Builtins are backed by a single Builtin module env. Treat builtin type
+        // names (Str, List, etc.) as top-level modules for member completions.
+        if (builtin_completion.isBuiltinType(module_name)) {
+            try self.addModuleMemberCompletionsFromModuleEnv(env.builtin_modules.builtin_module.env, module_name);
+        }
+
         // Try to find the module in imported modules
         var sched_it = env.schedulers.iterator();
         while (sched_it.next()) |entry| {
@@ -287,6 +301,19 @@ pub const CompletionBuilder = struct {
         // Fall back to local module env for associated items in the current module
         if (module_env_opt) |module_env| {
             try self.addLocalModuleMemberCompletions(module_env, module_name);
+        }
+    }
+
+    /// Add builtin module name completions (Str, List, Bool, etc.).
+    fn addBuiltinModuleNameCompletions(self: *CompletionBuilder) !void {
+        // We use the builtin type list as module names, because builtin modules
+        // are surfaced as top-level namespaces for completion.
+        for (builtin_completion.BUILTIN_TYPES) |builtin_name| {
+            _ = try self.addItem(.{
+                .label = builtin_name,
+                .kind = @intFromEnum(CompletionItemKind.module),
+                .detail = null,
+            });
         }
     }
 
@@ -955,8 +982,20 @@ pub const CompletionBuilder = struct {
             };
 
             if (type_ident_opt) |type_ident| {
-                std.debug.print("addMethodsFromTypeVar: type_ident={}\n", .{type_ident});
-                try self.addMethodsForTypeIdent(module_env, type_ident);
+                const type_name = module_env.getIdentText(type_ident);
+                std.debug.print("addMethodsFromTypeVar: type_ident={} name={s}\n", .{ type_ident, type_name });
+
+                // Route builtin type methods through the builtin module env to ensure
+                // completions include real Builtin.roc backing data.
+                if (self.builtin_module_env) |builtin_env| {
+                    if (builtin_completion.isBuiltinType(type_name)) {
+                        try self.addMethodsForTypeNameInEnv(builtin_env, type_name);
+                    } else {
+                        try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                    }
+                } else {
+                    try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+                }
             }
 
             switch (content) {
@@ -1059,7 +1098,7 @@ pub const CompletionBuilder = struct {
     }
 
     /// Add methods for a specific type identifier by searching method_idents.
-    fn addMethodsForTypeIdent(self: *CompletionBuilder, module_env: *ModuleEnv, type_ident: base.Ident.Idx) !void {
+    fn addMethodsForTypeIdentInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_ident: base.Ident.Idx) !void {
         // Initialize type writer for formatting method signatures
         var type_writer = module_env.initTypeWriter() catch null;
         defer if (type_writer) |*tw| tw.deinit();
@@ -1106,6 +1145,26 @@ pub const CompletionBuilder = struct {
                     .detail = detail,
                 });
             }
+        }
+    }
+
+    /// Add methods for a type name within the provided module environment.
+    ///
+    /// This is used to bridge from local types to builtin module methods by
+    /// resolving the type name in the builtin module ident table.
+    fn addMethodsForTypeNameInEnv(self: *CompletionBuilder, module_env: *ModuleEnv, type_name: []const u8) !void {
+        // Try direct lookup first (e.g., "Str")
+        if (module_env.common.findIdent(type_name)) |type_ident| {
+            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
+            return;
+        }
+
+        // Fall back to fully-qualified lookup (e.g., "Builtin.Str")
+        const qualified = std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ module_env.module_name, type_name }) catch return;
+        defer self.allocator.free(qualified);
+
+        if (module_env.common.findIdent(qualified)) |type_ident| {
+            try self.addMethodsForTypeIdentInEnv(module_env, type_ident);
         }
     }
 

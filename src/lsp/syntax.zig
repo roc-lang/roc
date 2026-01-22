@@ -1639,7 +1639,8 @@ pub const SyntaxChecker = struct {
         std.debug.print("completion: context={any}, module_env_opt={any}, build_succeeded={}, used_snapshot={}\n", .{ context, module_env_opt != null, session.build_succeeded, used_snapshot });
 
         // Initialize CompletionBuilder for deduplication and organized completion item building
-        var builder = completion_builder.CompletionBuilder.init(self.allocator, &items);
+        // Provide the builtin module env so completion can resolve builtin method data.
+        var builder = completion_builder.CompletionBuilder.init(self.allocator, &items, env.builtin_modules.builtin_module.env);
         defer builder.deinit();
 
         switch (context) {
