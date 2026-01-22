@@ -68,9 +68,7 @@ jobs:
           roc check src/PROFILING/exec_bench.roc
           roc test src/PROFILING/exec_bench.roc
 
-      - name: Run Playground Tests
-        run: |
-          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
+      # NOTE: Playground tests removed along with interpreter/playground
 
       - name: Verify Serialized Type Sizes
         run: |
