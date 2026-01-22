@@ -167,9 +167,6 @@ fn collectClosuresFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_decl => |decl| {
             try self.collectClosuresFromExpr(module, decl.expr);
         },
-        .s_decl_gen => |decl| {
-            try self.collectClosuresFromExpr(module, decl.expr);
-        },
         .s_var => |var_stmt| {
             try self.collectClosuresFromExpr(module, var_stmt.expr);
         },
@@ -399,9 +396,6 @@ fn buildLambdaSetsFromStatement(self: *Self, module: *ModuleEnv, stmt_idx: CIR.S
         .s_decl => |decl| {
             try self.buildLambdaSetsFromExpr(module, decl.expr);
         },
-        .s_decl_gen => |decl| {
-            try self.buildLambdaSetsFromExpr(module, decl.expr);
-        },
         .s_var => |var_stmt| {
             try self.buildLambdaSetsFromExpr(module, var_stmt.expr);
         },
@@ -524,9 +518,7 @@ pub fn getCollectedClosures(self: *const Self) []const CollectedClosure {
     return self.collected_closures.items;
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 test "LambdaSetInference: init and deinit" {
     const allocator = std.testing.allocator;

@@ -49,9 +49,6 @@ const fmt = @import("fmt");
 const eval = @import("eval");
 const lsp = @import("lsp");
 const cli_repl = @import("repl.zig");
-const compiled_builtins = @import("compiled_builtins");
-const builtin_loading = eval.builtin_loading;
-const BuiltinTypes = eval.BuiltinTypes;
 
 const cli_args = @import("cli_args.zig");
 const roc_target = @import("target.zig");

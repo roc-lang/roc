@@ -350,6 +350,30 @@ pub fn ret(self: *Emit) !void {
     try self.buf.append(self.allocator, 0xC3);
 }
 
+/// PUSH r64 (push register onto stack)
+pub fn push(self: *Emit, reg: GeneralReg) !void {
+    // PUSH r64: 50+rd (or REX.B 50+rd for R8-R15)
+    if (reg.enc() >= 8) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0x50 + (reg.enc() & 0x7));
+}
+
+/// POP r64 (pop register from stack)
+pub fn pop(self: *Emit, reg: GeneralReg) !void {
+    // POP r64: 58+rd (or REX.B 58+rd for R8-R15)
+    if (reg.enc() >= 8) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0x58 + (reg.enc() & 0x7));
+}
+
+/// JMP rel32 (unconditional jump with 32-bit offset)
+/// This is an alias for jmpRel32 for code compatibility
+pub fn jmp(self: *Emit, rel: i32) !void {
+    try self.jmpRel32(rel);
+}
+
 /// CALL rel32 (relative call)
 pub fn callRel32(self: *Emit, rel: i32) !void {
     try self.buf.append(self.allocator, 0xE8);

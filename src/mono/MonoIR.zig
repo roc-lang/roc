@@ -34,7 +34,6 @@ const types = @import("types");
 
 const Ident = base.Ident;
 const StringLiteral = base.StringLiteral;
-const Region = base.Region;
 const CalledVia = base.CalledVia;
 
 /// Global identifier - combines module index with local identifier.
@@ -331,7 +330,6 @@ pub const MonoFieldNameSpan = extern struct {
 /// Lowered expression - all types are layouts, all references are global symbols.
 /// This is the core type that backends consume for code generation.
 pub const MonoExpr = union(enum) {
-    // ============ Literals ============
     // Layout is implied by the value type
 
     /// Integer literal that fits in i64
@@ -355,15 +353,11 @@ pub const MonoExpr = union(enum) {
     /// Boolean literal
     bool_literal: bool,
 
-    // ============ Lookups ============
-
     /// Lookup a symbol - globally unique identifier + its layout
     lookup: struct {
         symbol: MonoSymbol,
         layout_idx: layout.Idx,
     },
-
-    // ============ Function calls ============
 
     /// Function call
     call: struct {
@@ -412,8 +406,6 @@ pub const MonoExpr = union(enum) {
         is_bound_to_variable: bool,
     },
 
-    // ============ Data structures ============
-
     /// Empty list `[]`
     empty_list: struct {
         elem_layout: layout.Idx,
@@ -442,8 +434,6 @@ pub const MonoExpr = union(enum) {
         elems: MonoExprSpan,
     },
 
-    // ============ Field/element access ============
-
     /// Record field access by index
     field_access: struct {
         record_expr: MonoExprId,
@@ -464,8 +454,6 @@ pub const MonoExpr = union(enum) {
         elem_idx: u16,
     },
 
-    // ============ Tags ============
-
     /// Zero-argument tag (just the discriminant)
     zero_arg_tag: struct {
         discriminant: u16,
@@ -478,8 +466,6 @@ pub const MonoExpr = union(enum) {
         union_layout: layout.Idx,
         args: MonoExprSpan,
     },
-
-    // ============ Control flow ============
 
     /// If-then-else expression
     if_then_else: struct {
@@ -498,8 +484,6 @@ pub const MonoExpr = union(enum) {
         result_layout: layout.Idx,
     },
 
-    // ============ Blocks ============
-
     /// Block with statements and final expression
     block: struct {
         stmts: MonoStmtSpan,
@@ -512,8 +496,6 @@ pub const MonoExpr = union(enum) {
         expr: MonoExprId,
         ret_layout: layout.Idx,
     },
-
-    // ============ Binary operations ============
 
     /// Binary operation (specialized, not a method call)
     binop: struct {
@@ -534,16 +516,12 @@ pub const MonoExpr = union(enum) {
         expr: MonoExprId,
     },
 
-    // ============ Low-level operations ============
-
     /// Low-level builtin operation
     low_level: struct {
         op: LowLevel,
         args: MonoExprSpan,
         ret_layout: layout.Idx,
     },
-
-    // ============ Debugging/errors ============
 
     /// Debug expression (prints and returns value)
     dbg: struct {
@@ -567,15 +545,11 @@ pub const MonoExpr = union(enum) {
     /// Runtime error (unreachable code)
     runtime_error: void,
 
-    // ============ Nominal types ============
-
     /// Nominal wrapper (transparent at runtime)
     nominal: struct {
         backing_expr: MonoExprId,
         nominal_layout: layout.Idx,
     },
-
-    // ============ Inspect operations (str_inspekt support) ============
 
     /// Concatenate multiple strings into one
     /// Used by str_inspekt to build output strings
@@ -608,8 +582,6 @@ pub const MonoExpr = union(enum) {
         /// One expression per variant, indexed by discriminant value
         branches: MonoExprSpan,
     },
-
-    // ============ Reference counting operations ============
 
     /// Increment reference count of a refcounted value
     /// If the value has static refcount (isize::MIN), this is a no-op
@@ -817,8 +789,6 @@ pub const MonoPattern = union(enum) {
     },
 };
 
-// ============ Control Flow Statement IR (for tail recursion) ============
-
 /// Index into control flow statements storage
 pub const CFStmtId = enum(u32) {
     _,
@@ -958,8 +928,6 @@ pub const MonoProc = struct {
     /// Whether this procedure is self-recursive
     is_self_recursive: SelfRecursive,
 };
-
-// ============ Tests ============
 
 test "MonoSymbol size and alignment" {
     // MonoSymbol is a packed(u48) but may be padded to 8 bytes depending on platform

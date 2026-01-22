@@ -1,17 +1,5 @@
 //! Tests for the REPL
 const std = @import("std");
-const can_mod = @import("can");
-const check_mod = @import("check");
-const eval = @import("eval");
-const base = @import("base");
-const parse = @import("parse");
-const types = @import("types");
-const collections = @import("collections");
-const compiled_builtins = @import("compiled_builtins");
-const ModuleEnv = can_mod.ModuleEnv;
-const Canon = can_mod.Can;
-const Check = check_mod.Check;
-const CIR = can_mod.CIR;
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 
@@ -22,90 +10,6 @@ const testing = std.testing;
 // The interpreter/REPL has known memory leak issues that we're not fixing now.
 // We want to focus on getting the dev backend working without leaks.
 const interpreter_allocator = std.heap.page_allocator;
-
-/// Wrapper for a loaded compiled module that tracks the buffer
-const LoadedModule = struct {
-    env: *ModuleEnv,
-    buffer: []align(collections.CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8,
-    gpa: std.mem.Allocator,
-
-    fn deinit(self: *LoadedModule) void {
-        // Only free the hashmap that was allocated during deserialization
-        // Most other data (like the SafeList contents) points into the buffer
-        self.env.imports.map.deinit(self.gpa);
-
-        // Free the buffer (the env points into this buffer for most data)
-        self.gpa.free(self.buffer);
-        // Free the env struct itself
-        self.gpa.destroy(self.env);
-    }
-};
-
-/// Deserialize BuiltinIndices from the binary data generated at build time
-fn deserializeBuiltinIndices(gpa: std.mem.Allocator, bin_data: []const u8) !CIR.BuiltinIndices {
-    // Copy to properly aligned memory
-    const aligned_buffer = try gpa.alignedAlloc(u8, @enumFromInt(@alignOf(CIR.BuiltinIndices)), bin_data.len);
-    defer gpa.free(aligned_buffer);
-    @memcpy(aligned_buffer, bin_data);
-
-    const indices_ptr = @as(*const CIR.BuiltinIndices, @ptrCast(aligned_buffer.ptr));
-    return indices_ptr.*;
-}
-
-/// Load a compiled ModuleEnv from embedded binary data
-fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name: []const u8, source: []const u8) !LoadedModule {
-    // Copy the embedded data to properly aligned memory
-    // CompactWriter requires specific alignment for serialization
-    const CompactWriter = collections.CompactWriter;
-    const buffer = try gpa.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, bin_data.len);
-    @memcpy(buffer, bin_data);
-
-    // Cast to the serialized structure
-    const serialized_ptr = @as(
-        *ModuleEnv.Serialized,
-        @ptrCast(@alignCast(buffer.ptr)),
-    );
-
-    const env = try gpa.create(ModuleEnv);
-    errdefer gpa.destroy(env);
-
-    // Deserialize
-    const base_ptr = @intFromPtr(buffer.ptr);
-
-    // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(base_ptr, source).*;
-
-    env.* = ModuleEnv{
-        .gpa = gpa,
-        .common = common,
-        .types = serialized_ptr.types.deserialize(base_ptr, gpa).*, // Pass gpa to types deserialize
-        .module_kind = serialized_ptr.module_kind.decode(),
-        .all_defs = serialized_ptr.all_defs,
-        .all_statements = serialized_ptr.all_statements,
-        .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
-        .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-        .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
-        .module_name = module_name,
-        .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
-        .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
-        .evaluation_order = null,
-        .idents = ModuleEnv.CommonIdents.find(&common),
-        .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
-        .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
-        .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
-    };
-
-    return LoadedModule{
-        .env = env,
-        .buffer = buffer,
-        .gpa = gpa,
-    };
-}
 
 test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(interpreter_allocator);

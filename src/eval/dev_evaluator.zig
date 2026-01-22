@@ -14,9 +14,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const parse = @import("parse");
 const can = @import("can");
-const check = @import("check");
 const layout = @import("layout");
 const backend = @import("backend");
 const mono = @import("mono");
@@ -26,8 +24,6 @@ const builtins = @import("builtins");
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const Can = can.Can;
-const Check = check.Check;
 const LoadedModule = builtin_loading.LoadedModule;
 
 // Host ABI types for RocOps
@@ -42,7 +38,6 @@ const RocCrashed = builtins.host_abi.RocCrashed;
 // Mono IR types
 const MonoExprStore = mono.MonoExprStore;
 const MonoLower = mono.Lower;
-const MonoExprId = mono.MonoExprId;
 
 // Static data interner for string literals
 const StaticDataInterner = backend.StaticDataInterner;
@@ -272,9 +267,6 @@ pub const DevEvaluator = struct {
                     const stmt = module.store.getStatement(stmt_idx);
                     switch (stmt) {
                         .s_decl => |decl| {
-                            top_level_patterns.put(decl.pattern, {}) catch {};
-                        },
-                        .s_decl_gen => |decl| {
                             top_level_patterns.put(decl.pattern, {}) catch {};
                         },
                         else => {},
@@ -669,30 +661,6 @@ fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, 
                 if (decl.anno) |anno_idx| {
                     const result_layout = getAnnotationLayout(module_env, anno_idx);
                     type_env.put(pattern_key, result_layout) catch {};
-                } else {
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    var found_annotation = false;
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (type_annos.get(assign.ident)) |anno_layout| {
-                                type_env.put(pattern_key, anno_layout) catch {};
-                                found_annotation = true;
-                            }
-                        },
-                        else => {},
-                    }
-                    if (!found_annotation) {
-                        const decl_expr = module_env.store.getExpr(decl.expr);
-                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
-                        type_env.put(pattern_key, inferred_layout) catch {};
-                    }
-                }
-            },
-            .s_decl_gen => |decl| {
-                const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    const anno_layout = getAnnotationLayout(module_env, anno_idx);
-                    type_env.put(pattern_key, anno_layout) catch {};
                 } else {
                     const pattern = module_env.store.getPattern(decl.pattern);
                     var found_annotation = false;

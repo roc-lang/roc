@@ -25,11 +25,9 @@ const store_mod = @import("MonoExprStore.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const NodeStore = CIR.NodeStore;
 const LambdaSetInference = can.LambdaSetInference;
 const Region = base.Region;
 const Ident = base.Ident;
-const StringLiteral = base.StringLiteral;
 const Allocator = std.mem.Allocator;
 
 const MonoExpr = ir.MonoExpr;
@@ -51,16 +49,12 @@ const MonoIfBranch = ir.MonoIfBranch;
 const MonoStmt = ir.MonoStmt;
 
 // Control flow statement types (for tail recursion)
-const CFStmt = ir.CFStmt;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
-const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 const MonoProc = ir.MonoProc;
 
 const TailRecursion = @import("TailRecursion.zig");
-
-const ClosureTransformer = can.ClosureTransformer;
 
 const MonoExprStore = store_mod;
 const LayoutIdx = layout_mod.Idx;
@@ -289,31 +283,6 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
                     }
                 }
             },
-            .s_decl_gen => |decl| {
-                const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
-                    self.type_env.put(pattern_key, anno_layout) catch {};
-                } else {
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (self.pending_type_annos.get(assign.ident)) |anno_layout| {
-                                self.type_env.put(pattern_key, anno_layout) catch {};
-                            } else {
-                                const decl_expr = module_env.store.getExpr(decl.expr);
-                                const inferred = self.getExprLayout(module_env, decl_expr);
-                                self.type_env.put(pattern_key, inferred) catch {};
-                            }
-                        },
-                        else => {
-                            const decl_expr = module_env.store.getExpr(decl.expr);
-                            const inferred = self.getExprLayout(module_env, decl_expr);
-                            self.type_env.put(pattern_key, inferred) catch {};
-                        },
-                    }
-                }
-            },
             else => {},
         }
     }
@@ -389,7 +358,6 @@ pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!Mon
 /// Lower an expression with its CIR representation
 fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region) Error!MonoExprId {
     const mono_expr: MonoExpr = switch (expr) {
-        // ============ Literals ============
         .e_num => |num| blk: {
             const val = num.value.toI128();
             if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
@@ -429,7 +397,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_empty_record => .{ .empty_record = {} },
         .e_empty_list => .{ .empty_list = .{ .elem_layout = .i64 } }, // TODO: get actual elem layout
 
-        // ============ Lookups ============
         .e_lookup_local => |lookup| blk: {
             const symbol = self.patternToSymbol(lookup.pattern_idx);
             break :blk .{ .lookup = .{
@@ -446,7 +413,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             } };
         },
 
-        // ============ Function calls ============
         .e_call => |call| blk: {
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
@@ -473,24 +439,28 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
             const args = try self.lowerExprSpan(module_env, call.args);
-            break :blk .{ .call = .{
-                .fn_expr = fn_id,
-                .fn_layout = .i64, // TODO: proper function layout
-                .args = args,
-                .ret_layout = self.getExprLayout(module_env, expr),
-                .called_via = call.called_via,
-            } };
+            break :blk .{
+                .call = .{
+                    .fn_expr = fn_id,
+                    .fn_layout = .i64, // TODO: proper function layout
+                    .args = args,
+                    .ret_layout = self.getExprLayout(module_env, expr),
+                    .called_via = call.called_via,
+                },
+            };
         },
 
         .e_lambda => |lambda| blk: {
             const params = try self.lowerPatternSpan(module_env, lambda.args);
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
-            break :blk .{ .lambda = .{
-                .fn_layout = .i64, // TODO
-                .params = params,
-                .body = body,
-                .ret_layout = .i64, // TODO
-            } };
+            break :blk .{
+                .lambda = .{
+                    .fn_layout = .i64, // TODO
+                    .params = params,
+                    .body = body,
+                    .ret_layout = .i64, // TODO
+                },
+            };
         },
 
         .e_closure => |closure| blk: {
@@ -523,56 +493,63 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
-            break :blk .{ .closure = .{
-                .closure_layout = .i64, // TODO: compute from representation
-                .lambda = lambda_id,
-                .captures = captures,
-                .representation = representation,
-                .recursion = recursion_info.recursion,
-                .self_recursive = recursion_info.self_recursive,
-                .is_bound_to_variable = is_bound,
-            } };
+            break :blk .{
+                .closure = .{
+                    .closure_layout = .i64, // TODO: compute from representation
+                    .lambda = lambda_id,
+                    .captures = captures,
+                    .representation = representation,
+                    .recursion = recursion_info.recursion,
+                    .self_recursive = recursion_info.self_recursive,
+                    .is_bound_to_variable = is_bound,
+                },
+            };
         },
 
-        // ============ Data structures ============
         .e_list => |list| blk: {
             const elems = try self.lowerExprSpan(module_env, list.elems);
-            break :blk .{ .list = .{
-                .elem_layout = .i64, // TODO: get from type
-                .elems = elems,
-            } };
+            break :blk .{
+                .list = .{
+                    .elem_layout = .i64, // TODO: get from type
+                    .elems = elems,
+                },
+            };
         },
 
         .e_tuple => |tuple| blk: {
             const elems = try self.lowerExprSpan(module_env, tuple.elems);
-            break :blk .{ .tuple = .{
-                .tuple_layout = .i64, // TODO
-                .elems = elems,
-            } };
+            break :blk .{
+                .tuple = .{
+                    .tuple_layout = .i64, // TODO
+                    .elems = elems,
+                },
+            };
         },
 
         .e_record => |rec| blk: {
             const result = try self.lowerRecordFields(module_env, rec.fields);
-            break :blk .{ .record = .{
-                .record_layout = .i64, // TODO
-                .fields = result.fields,
-                .field_names = result.field_names,
-            } };
+            break :blk .{
+                .record = .{
+                    .record_layout = .i64, // TODO
+                    .fields = result.fields,
+                    .field_names = result.field_names,
+                },
+            };
         },
 
-        // ============ Field access ============
         .e_dot_access => |dot| blk: {
             const receiver = try self.lowerExprFromIdx(module_env, dot.receiver);
-            break :blk .{ .field_access = .{
-                .record_expr = receiver,
-                .record_layout = .i64, // TODO
-                .field_layout = .i64, // TODO
-                .field_idx = 0, // TODO: resolve field index from layout
-                .field_name = dot.field_name,
-            } };
+            break :blk .{
+                .field_access = .{
+                    .record_expr = receiver,
+                    .record_layout = .i64, // TODO
+                    .field_layout = .i64, // TODO
+                    .field_idx = 0, // TODO: resolve field index from layout
+                    .field_name = dot.field_name,
+                },
+            };
         },
 
-        // ============ Tags ============
         .e_zero_argument_tag => |tag| blk: {
             // Get discriminant from tag name by comparing text
             // For Bool, True = 1, False = 0
@@ -625,14 +602,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 } };
             }
 
-            break :blk .{ .tag = .{
-                .discriminant = discriminant,
-                .union_layout = .i64, // TODO
-                .args = args,
-            } };
+            break :blk .{
+                .tag = .{
+                    .discriminant = discriminant,
+                    .union_layout = .i64, // TODO
+                    .args = args,
+                },
+            };
         },
 
-        // ============ Control flow ============
         .e_if => |if_expr| blk: {
             // Check if this if-then-else returns closures (lambda set dispatch case)
             const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
@@ -670,15 +648,16 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_match => |match_expr| blk: {
             const cond = try self.lowerExprFromIdx(module_env, match_expr.cond);
             const branches = try self.lowerWhenBranches(module_env, match_expr.branches);
-            break :blk .{ .when = .{
-                .value = cond,
-                .value_layout = .i64, // TODO
-                .branches = branches,
-                .result_layout = self.getExprLayout(module_env, expr),
-            } };
+            break :blk .{
+                .when = .{
+                    .value = cond,
+                    .value_layout = .i64, // TODO
+                    .branches = branches,
+                    .result_layout = self.getExprLayout(module_env, expr),
+                },
+            };
         },
 
-        // ============ Blocks ============
         .e_block => |block| blk: {
             // Process type annotations FIRST to populate type_env before lowering
             const result_layout = self.getBlockLayout(module_env, block);
@@ -699,7 +678,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             } };
         },
 
-        // ============ Operations ============
         .e_binop => |binop| blk: {
             const lhs = try self.lowerExprFromIdx(module_env, binop.lhs);
             const rhs = try self.lowerExprFromIdx(module_env, binop.rhs);
@@ -725,44 +703,50 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{ .unary_not = .{ .expr = inner } };
         },
 
-        // ============ Debugging/errors ============
         .e_dbg => |dbg| blk: {
             const inner = try self.lowerExprFromIdx(module_env, dbg.expr);
-            break :blk .{ .dbg = .{
-                .msg = @enumFromInt(std.math.maxInt(u32)), // dbg doesn't have a msg in CIR
-                .expr = inner,
-                .result_layout = self.getExprLayout(module_env, expr),
-            } };
+            break :blk .{
+                .dbg = .{
+                    .msg = @enumFromInt(std.math.maxInt(u32)), // dbg doesn't have a msg in CIR
+                    .expr = inner,
+                    .result_layout = self.getExprLayout(module_env, expr),
+                },
+            };
         },
 
         .e_expect => |expect| blk: {
             // e_expect only has a body (the condition expression)
             const body = try self.lowerExprFromIdx(module_env, expect.body);
-            break :blk .{ .expect = .{
-                .cond = body, // The body is the condition
-                .body = body, // Same expression for both
-                .result_layout = self.getExprLayout(module_env, expr),
-            } };
+            break :blk .{
+                .expect = .{
+                    .cond = body, // The body is the condition
+                    .body = body, // Same expression for both
+                    .result_layout = self.getExprLayout(module_env, expr),
+                },
+            };
         },
 
         .e_crash => |crash| .{ .crash = .{ .msg = crash.msg } },
         .e_runtime_error => .{ .runtime_error = {} },
 
-        // ============ Nominal ============
         .e_nominal => |nom| blk: {
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
-            break :blk .{ .nominal = .{
-                .backing_expr = backing,
-                .nominal_layout = .i64, // TODO
-            } };
+            break :blk .{
+                .nominal = .{
+                    .backing_expr = backing,
+                    .nominal_layout = .i64, // TODO
+                },
+            };
         },
 
         .e_nominal_external => |nom| blk: {
             const backing = try self.lowerExprFromIdx(module_env, nom.backing_expr);
-            break :blk .{ .nominal = .{
-                .backing_expr = backing,
-                .nominal_layout = .i64, // TODO
-            } };
+            break :blk .{
+                .nominal = .{
+                    .backing_expr = backing,
+                    .nominal_layout = .i64, // TODO
+                },
+            };
         },
 
         // Expressions that need more context or aren't supported yet
@@ -785,47 +769,58 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{ .runtime_error = {} };
         },
 
-        // ============ Reference counting operations ============
         // These are inserted by the RC insertion pass after canonicalization
 
         .e_incref => |rc_op| blk: {
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{ .lookup = .{
-                .symbol = symbol,
-                .layout_idx = .i64, // TODO: get actual layout from pattern
-            } }, region);
-            break :blk .{ .incref = .{
-                .value = lookup_id,
-                .layout_idx = .i64, // TODO: get actual layout
-                .count = rc_op.count,
-            } };
+            const lookup_id = try self.store.addExpr(.{
+                .lookup = .{
+                    .symbol = symbol,
+                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                },
+            }, region);
+            break :blk .{
+                .incref = .{
+                    .value = lookup_id,
+                    .layout_idx = .i64, // TODO: get actual layout
+                    .count = rc_op.count,
+                },
+            };
         },
 
         .e_decref => |rc_op| blk: {
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{ .lookup = .{
-                .symbol = symbol,
-                .layout_idx = .i64, // TODO: get actual layout from pattern
-            } }, region);
-            break :blk .{ .decref = .{
-                .value = lookup_id,
-                .layout_idx = .i64, // TODO: get actual layout
-            } };
+            const lookup_id = try self.store.addExpr(.{
+                .lookup = .{
+                    .symbol = symbol,
+                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                },
+            }, region);
+            break :blk .{
+                .decref = .{
+                    .value = lookup_id,
+                    .layout_idx = .i64, // TODO: get actual layout
+                },
+            };
         },
 
         .e_free => |rc_op| blk: {
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
-            const lookup_id = try self.store.addExpr(.{ .lookup = .{
-                .symbol = symbol,
-                .layout_idx = .i64, // TODO: get actual layout from pattern
-            } }, region);
-            break :blk .{ .free = .{
-                .value = lookup_id,
-                .layout_idx = .i64, // TODO: get actual layout
-            } };
+            const lookup_id = try self.store.addExpr(.{
+                .lookup = .{
+                    .symbol = symbol,
+                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                },
+            }, region);
+            break :blk .{
+                .free = .{
+                    .value = lookup_id,
+                    .layout_idx = .i64, // TODO: get actual layout
+                },
+            };
         },
 
         else => .{ .runtime_error = {} }, // Placeholder for unsupported expressions
@@ -921,10 +916,12 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
     const region = module_env.store.getPatternRegion(pattern_idx);
 
     const mono_pattern: MonoPattern = switch (pattern) {
-        .assign => |_| .{ .bind = .{
-            .symbol = self.patternToSymbol(pattern_idx),
-            .layout_idx = .i64, // TODO: get from type
-        } },
+        .assign => |_| .{
+            .bind = .{
+                .symbol = self.patternToSymbol(pattern_idx),
+                .layout_idx = .i64, // TODO: get from type
+            },
+        },
 
         .underscore => .{ .wildcard = {} },
 
@@ -937,11 +934,13 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);
-            break :blk .{ .tag = .{
-                .discriminant = 0, // TODO
-                .union_layout = .i64, // TODO
-                .args = args,
-            } };
+            break :blk .{
+                .tag = .{
+                    .discriminant = 0, // TODO
+                    .union_layout = .i64, // TODO
+                    .args = args,
+                },
+            };
         },
 
         .record_destructure => |r| blk: {
@@ -961,27 +960,33 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             }
 
             const fields = try self.store.addPatternSpan(field_patterns.items);
-            break :blk .{ .record = .{
-                .record_layout = .i64, // TODO
-                .fields = fields,
-            } };
+            break :blk .{
+                .record = .{
+                    .record_layout = .i64, // TODO
+                    .fields = fields,
+                },
+            };
         },
 
         .tuple => |t| blk: {
             const elems = try self.lowerPatternSpan(module_env, t.patterns);
-            break :blk .{ .tuple = .{
-                .tuple_layout = .i64, // TODO
-                .elems = elems,
-            } };
+            break :blk .{
+                .tuple = .{
+                    .tuple_layout = .i64, // TODO
+                    .elems = elems,
+                },
+            };
         },
 
         .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
-            break :blk .{ .as_pattern = .{
-                .symbol = self.patternToSymbol(pattern_idx),
-                .layout_idx = .i64, // TODO
-                .inner = inner,
-            } };
+            break :blk .{
+                .as_pattern = .{
+                    .symbol = self.patternToSymbol(pattern_idx),
+                    .layout_idx = .i64, // TODO
+                    .inner = inner,
+                },
+            };
         },
 
         else => .{ .wildcard = {} }, // Fallback for unsupported patterns
@@ -1049,10 +1054,12 @@ fn selectClosureRepresentation(self: *Self, captures: MonoCaptureSpan) ClosureRe
         // Multiple captures - store in a struct
         // TODO: Sort captures by alignment (largest first) for memory efficiency
         // For now, just use the captures as-is
-        return .{ .struct_captures = .{
-            .captures = captures,
-            .struct_layout = .i64, // TODO: compute actual struct layout
-        } };
+        return .{
+            .struct_captures = .{
+                .captures = captures,
+                .struct_layout = .i64, // TODO: compute actual struct layout
+            },
+        };
     }
 }
 
@@ -1144,11 +1151,6 @@ fn exprContainsPatternRef(
                 const stmt = module_env.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        if (self.exprContainsPatternRef(module_env, decl.expr, target_pattern)) {
-                            return true;
-                        }
-                    },
-                    .s_decl_gen => |decl| {
                         if (self.exprContainsPatternRef(module_env, decl.expr, target_pattern)) {
                             return true;
                         }
@@ -1383,15 +1385,17 @@ fn lowerExprWithLambdaSet(
             // Check if bound to variable (same logic as regular closure lowering)
             const is_bound = self.current_binding_pattern != null;
 
-            const mono_expr: MonoExpr = .{ .closure = .{
-                .closure_layout = .i64, // TODO
-                .lambda = lambda_id,
-                .captures = captures,
-                .representation = representation,
-                .recursion = recursion_info.recursion,
-                .self_recursive = recursion_info.self_recursive,
-                .is_bound_to_variable = is_bound,
-            } };
+            const mono_expr: MonoExpr = .{
+                .closure = .{
+                    .closure_layout = .i64, // TODO
+                    .lambda = lambda_id,
+                    .captures = captures,
+                    .representation = representation,
+                    .recursion = recursion_info.recursion,
+                    .self_recursive = recursion_info.self_recursive,
+                    .is_bound_to_variable = is_bound,
+                },
+            };
 
             return self.store.addExpr(mono_expr, Region.zero());
         },
@@ -1400,12 +1404,14 @@ fn lowerExprWithLambdaSet(
             const params = try self.lowerPatternSpan(module_env, lambda.args);
             const body = try self.lowerExprFromIdx(module_env, lambda.body);
 
-            const lambda_expr: MonoExpr = .{ .lambda = .{
-                .fn_layout = .i64, // TODO
-                .params = params,
-                .body = body,
-                .ret_layout = .i64, // TODO
-            } };
+            const lambda_expr: MonoExpr = .{
+                .lambda = .{
+                    .fn_layout = .i64, // TODO
+                    .params = params,
+                    .body = body,
+                    .ret_layout = .i64, // TODO
+                },
+            };
             const lambda_id = try self.store.addExpr(lambda_expr, Region.zero());
 
             // Wrap in closure with enum_dispatch representation
@@ -1481,12 +1487,14 @@ fn selectLambdaSetRepresentation(
         } };
     } else {
         // Some functions have captures - use union_repr
-        return .{ .union_repr = .{
-            .tag = tag,
-            .captures = captures,
-            .union_layout = .i64, // TODO: compute actual union layout
-            .lambda_set = lambda_set_members,
-        } };
+        return .{
+            .union_repr = .{
+                .tag = tag,
+                .captures = captures,
+                .union_layout = .i64, // TODO: compute actual union layout
+                .lambda_set = lambda_set_members,
+            },
+        };
     }
 }
 
@@ -1555,26 +1563,6 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
                     .expr = value,
                 });
             },
-            .s_decl_gen => |decl| {
-                const pattern = try self.lowerPattern(module_env, decl.pattern);
-                // Set current binding pattern and symbol for recursive closure detection
-                const old_binding = self.current_binding_pattern;
-                const old_symbol = self.current_binding_symbol;
-                self.current_binding_pattern = decl.pattern;
-                const binding_symbol = self.patternToSymbol(decl.pattern);
-                self.current_binding_symbol = binding_symbol;
-                const value = try self.lowerExprFromIdx(module_env, decl.expr);
-                self.current_binding_pattern = old_binding;
-                self.current_binding_symbol = old_symbol;
-
-                // Register the symbol definition for lookups
-                try self.store.registerSymbolDef(binding_symbol, value);
-
-                try lowered.append(self.allocator, .{
-                    .pattern = pattern,
-                    .expr = value,
-                });
-            },
             else => {}, // Skip non-decl statements for now
         }
     }
@@ -1601,8 +1589,6 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .div_trunc => .div, // Truncating division maps to div for now
     };
 }
-
-// ============ str_inspekt lowering ============
 
 /// Lower str_inspekt(value) by expanding it into a tree of MonoExprs
 /// that directly build the result string with all names embedded as literals.
@@ -1704,13 +1690,6 @@ fn lowerInspectByLayout(
         .list, .list_of_zst => try self.addStrLiteral("[...]", region),
         else => try self.addStrLiteral("<value>", region),
     };
-}
-
-/// Check if layout represents a Bool type (int with u8 precision)
-fn isBoolLayout(layout_val: layout_mod.Layout) bool {
-    return layout_val.tag == .scalar and
-        layout_val.data.scalar.tag == .int and
-        layout_val.data.scalar.data.int == .u8;
 }
 
 /// Inspect a boolean value
@@ -2011,8 +1990,6 @@ fn getTupleElemLayout(
     return .i64;
 }
 
-// ============ Statement-Based Lowering (for tail recursion) ============
-
 /// Lower an expression to a control flow statement.
 /// This is used for function bodies where we need explicit control flow.
 ///
@@ -2055,28 +2032,6 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_lay
             .s_decl => |decl| {
                 const pattern_id = try self.lowerPattern(module_env, decl.pattern);
                 // Set binding pattern and symbol for recursive closure detection
-                const old_binding = self.current_binding_pattern;
-                const old_symbol = self.current_binding_symbol;
-                self.current_binding_pattern = decl.pattern;
-                const binding_symbol = self.patternToSymbol(decl.pattern);
-                self.current_binding_symbol = binding_symbol;
-                const value_id = try self.lowerExprFromIdx(module_env, decl.expr);
-                self.current_binding_pattern = old_binding;
-                self.current_binding_symbol = old_symbol;
-
-                // Register the symbol definition for lookups
-                try self.store.registerSymbolDef(binding_symbol, value_id);
-
-                current_stmt = try self.store.addCFStmt(.{
-                    .let_stmt = .{
-                        .pattern = pattern_id,
-                        .value = value_id,
-                        .next = current_stmt,
-                    },
-                });
-            },
-            .s_decl_gen => |decl| {
-                const pattern_id = try self.lowerPattern(module_env, decl.pattern);
                 const old_binding = self.current_binding_pattern;
                 const old_symbol = self.current_binding_symbol;
                 self.current_binding_pattern = decl.pattern;
@@ -2261,8 +2216,6 @@ fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan
     return self.store.addLayoutIdxSpan(layouts.items);
 }
 
-// ============ Public API ============
-
 /// Lower a single expression (for REPL/constant folding)
 /// Returns the MonoExprId of the lowered expression
 pub fn lowerExpression(
@@ -2380,8 +2333,6 @@ pub fn lowerFromEntryPoints(
         _ = try lowerer.lowerExpr(entry.module_idx, entry.expr_idx);
     }
 }
-
-// ============ Tests ============
 
 test "basic lowering" {
     // This is a smoke test - proper testing requires a full ModuleEnv

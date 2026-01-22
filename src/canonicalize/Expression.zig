@@ -457,7 +457,6 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
     },
 
-    // ==========================================================================
     // Reference Counting Operations
     //
     // These expressions are inserted by the RC insertion pass (src/rc/insert.zig)
@@ -466,7 +465,6 @@ pub const Expr = union(enum) {
     //
     // All backends (interpreter, dev backend, LLVM) consume these expressions
     // uniformly, so RC logic is implemented once in the IR transformation.
-    // ==========================================================================
 
     /// Increment the reference count of a value by a given amount.
     /// Inserted when a refcounted value is used multiple times and we need

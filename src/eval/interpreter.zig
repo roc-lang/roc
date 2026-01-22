@@ -2750,14 +2750,14 @@ pub const Interpreter = struct {
                 // If either list is empty, just return a copy of the other (avoid allocation)
                 // Since ownership is consume, we must decref the empty list.
                 if (list_a.len() == 0) {
-                                        // list_b ownership is transferred to the result (pushCopy increfs)
+                    // list_b ownership is transferred to the result (pushCopy increfs)
                     const result = try self.pushCopy(list_b_arg, roc_ops);
-                                        return result;
+                    return result;
                 }
                 if (list_b.len() == 0) {
-                                        // list_a ownership is transferred to the result (pushCopy increfs)
+                    // list_a ownership is transferred to the result (pushCopy increfs)
                     const result = try self.pushCopy(list_a_arg, roc_ops);
-                                        return result;
+                    return result;
                 }
 
                 // Determine if elements are refcounted
@@ -2824,7 +2824,7 @@ pub const Interpreter = struct {
                 // Each lookup/copy created its own reference via copyToPtr incref, so each
                 // StackValue holds its own reference that must be released. The underlying
                 // list won't be freed until its refcount reaches 0, so decrefing both is safe.
-                                
+
                 return out;
             },
             .list_append => {
@@ -2889,8 +2889,7 @@ pub const Interpreter = struct {
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
-                                            }
+                    if (elements_refcounted) {}
 
                     // Append to an empty list (ignoring the old list_of_zst content)
                     const empty_list = builtins.list.RocList.empty();
@@ -2908,7 +2907,7 @@ pub const Interpreter = struct {
                     );
 
                     // Decref the original list_of_zst (it may have capacity allocated)
-                    
+
                     // Push result with upgraded layout and runtime type.
                     // When upgrading from list_of_zst, we need to update the runtime type
                     // to reflect the element's actual type. This is critical for closures
@@ -2974,8 +2973,7 @@ pub const Interpreter = struct {
                 // so we need to increment its refcount before the copy.
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
-                if (elements_refcounted) {
-                                    }
+                if (elements_refcounted) {}
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
@@ -3064,8 +3062,7 @@ pub const Interpreter = struct {
                     const copy_fn = selectCopyFallbackFn(elem_layout);
 
                     // Increment refcount of the element being appended
-                    if (elements_refcounted) {
-                                            }
+                    if (elements_refcounted) {}
 
                     // Append to an empty list (ignoring the old list_of_zst content)
                     const empty_list = builtins.list.RocList.empty();
@@ -3083,7 +3080,7 @@ pub const Interpreter = struct {
                     );
 
                     // Decref the original list_of_zst (it may have capacity allocated)
-                    
+
                     // Push result with upgraded layout and runtime type.
                     // When upgrading from list_of_zst, we need to update the runtime type
                     // to reflect the element's actual type. (fixes issue #8946)
@@ -3146,8 +3143,7 @@ pub const Interpreter = struct {
                 // so we need to increment its refcount before the copy.
                 // Without this, when the original element is freed, the list would
                 // hold a dangling reference (use-after-free bug).
-                if (elements_refcounted) {
-                                    }
+                if (elements_refcounted) {}
 
                 const result_list = builtins.list.listAppend(roc_list.*, elem_alignment_u32, append_elt, elem_size, elements_refcounted, if (elements_refcounted) @ptrCast(&refcount_context) else null, if (elements_refcounted) &listElementInc else &builtins.list.rcNone, update_mode, copy_fn, roc_ops);
 
@@ -6826,24 +6822,24 @@ pub const Interpreter = struct {
         // Bind parameters - create copies for proper ownership
         const lhs_copy = self.pushCopy(lhs, roc_ops) catch return error.OutOfMemory;
         const rhs_copy = self.pushCopy(rhs, roc_ops) catch {
-                        return error.OutOfMemory;
+            return error.OutOfMemory;
         };
 
         // patternMatchesBind will create its own copies
         const lhs_matched = self.patternMatchesBind(params[0], lhs_copy, lhs.rt_var, roc_ops, &self.bindings, null) catch {
-                                    return error.OutOfMemory;
+            return error.OutOfMemory;
         };
         if (!lhs_matched) {
-                                    return error.TypeMismatch;
+            return error.TypeMismatch;
         }
-        
+
         const rhs_matched = self.patternMatchesBind(params[1], rhs_copy, rhs.rt_var, roc_ops, &self.bindings, null) catch {
-                        return error.OutOfMemory;
+            return error.OutOfMemory;
         };
         if (!rhs_matched) {
-                        return error.TypeMismatch;
+            return error.TypeMismatch;
         }
-        
+
         // Evaluate the function body synchronously
         const result = self.evalWithExpectedType(closure_header.body_idx, roc_ops, null) catch {
             return error.NotImplemented;
@@ -7463,8 +7459,7 @@ pub const Interpreter = struct {
 
             // If the element is refcounted, increment its refcount since we're
             // creating a new reference (the box still holds its own reference)
-            if (self.runtime_layout_store.layoutContainsRefcounted(elem_layout)) {
-                            }
+            if (self.runtime_layout_store.layoutContainsRefcounted(elem_layout)) {}
 
             try value_stack.push(result);
             return;
@@ -7696,7 +7691,6 @@ pub const Interpreter = struct {
 
         try self.bindings.append(binding);
     }
-
 
     /// Pop values from the value stack during early return cleanup.
     /// Used when draining collect-style continuations (tag_collect, list_collect, etc.).
@@ -8131,7 +8125,6 @@ pub const Interpreter = struct {
             else => return false,
         }
     }
-
 
     pub fn deinit(self: *Interpreter) void {
         self.empty_scope.deinit();
@@ -11391,7 +11384,7 @@ pub const Interpreter = struct {
                 };
 
                 if (method_func.layout.tag != .closure) {
-                                        return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
 
                 const arg_exprs = self.env.store.exprSlice(tvd.args);
@@ -11418,7 +11411,7 @@ pub const Interpreter = struct {
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                         const result = try self.callLowLevelBuiltin(low_level.op, &no_args, roc_ops, return_rt_var);
 
-                                                self.env = saved_env;
+                        self.env = saved_env;
                         self.bindings.items.len = saved_bindings_len;
 
                         try value_stack.push(result);
@@ -11446,12 +11439,11 @@ pub const Interpreter = struct {
                             .expr_idx = lambda_expr.e_lambda.body,
                             .expected_rt_var = return_rt_var,
                         } });
-
-                                            } else if (lambda_expr == .e_closure) {
+                    } else if (lambda_expr == .e_closure) {
                         // Closure - follow to underlying lambda
                         const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
                         if (underlying_lambda != .e_lambda) {
-                                                        self.env = saved_env;
+                            self.env = saved_env;
                             return error.TypeMismatch;
                         }
 
@@ -11477,20 +11469,19 @@ pub const Interpreter = struct {
                             .expr_idx = underlying_lambda.e_lambda.body,
                             .expected_rt_var = return_rt_var,
                         } });
-
-                                            } else {
+                    } else {
                         // Check if hosted lambda and invoke with no arguments
                         const return_ct_var = can.ModuleEnv.varFrom(expr_idx);
                         const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
                         var no_args = [0]StackValue{};
 
                         if (try self.tryInvokeHostedClosure(closure_header, &no_args, return_rt_var, roc_ops)) |result| {
-                                                        self.env = saved_env;
+                            self.env = saved_env;
                             self.bindings.items.len = saved_bindings_len;
 
                             try value_stack.push(result);
                         } else {
-                                                        self.env = saved_env;
+                            self.env = saved_env;
                             return error.TypeMismatch;
                         }
                     }
@@ -14584,7 +14575,7 @@ pub const Interpreter = struct {
                 if (bc.should_discard_value) {
                     const val = value_stack.pop() orelse return error.Crash;
                     traceDbg(roc_ops, "block_continue: discarding value with layout.tag={s}", .{@tagName(val.layout.tag)});
-                                        traceDbg(roc_ops, "block_continue: decref complete", .{});
+                    traceDbg(roc_ops, "block_continue: decref complete", .{});
                 }
 
                 if (bc.remaining_stmts.len == 0) {
@@ -14622,7 +14613,7 @@ pub const Interpreter = struct {
                         }) catch "[INTERP] bind_decl defer decref\n";
                         stderr_file.writeAll(msg) catch {};
                     }
-                                    }
+                }
 
                 // Get the runtime type for pattern matching
                 const expr_ct_var = can.ModuleEnv.varFrom(bd.expr_idx);
@@ -14777,7 +14768,7 @@ pub const Interpreter = struct {
 
                                 // Box the value
                                 const boxed = try self.makeBoxValueFromLayout(box_layout, values[idx], roc_ops, values[idx].rt_var);
-                                                                values[idx] = boxed;
+                                values[idx] = boxed;
                                 elem_layouts[idx] = box_layout;
                             } else {
                                 elem_layouts[idx] = values[idx].layout;
@@ -15091,7 +15082,7 @@ pub const Interpreter = struct {
 
                                 // Box the value
                                 const boxed = try self.makeBoxValueFromLayout(box_layout, field_values[i], roc_ops, field_values[i].rt_var);
-                                                                field_values[i] = boxed;
+                                field_values[i] = boxed;
                             }
                         }
                     }
@@ -15102,7 +15093,7 @@ pub const Interpreter = struct {
                         base_value_opt = value_stack.pop() orelse return error.Crash;
                         const base_value = base_value_opt.?;
                         if (base_value.layout.tag != .record) {
-                                                                                    return error.TypeMismatch;
+                            return error.TypeMismatch;
                         }
                         var base_accessor = try base_value.asRecord(&self.runtime_layout_store);
 
@@ -15338,11 +15329,11 @@ pub const Interpreter = struct {
                         var dest = try self.pushRaw(layout_val, 0, tc.rt_var);
                         var acc = try dest.asRecord(&self.runtime_layout_store);
                         const tag_field_idx = acc.findFieldIndex(self.env.idents.tag) orelse {
-                                                        self.triggerCrash("e_tag: tag field not found", false, roc_ops);
+                            self.triggerCrash("e_tag: tag field not found", false, roc_ops);
                             return error.Crash;
                         };
                         const payload_field_idx = acc.findFieldIndex(self.env.idents.payload) orelse {
-                                                        self.triggerCrash("e_tag: payload field not found", false, roc_ops);
+                            self.triggerCrash("e_tag: payload field not found", false, roc_ops);
                             return error.Crash;
                         };
 
@@ -15792,7 +15783,7 @@ pub const Interpreter = struct {
                 const scrutinee_temp = value_stack.pop() orelse return error.Crash;
                 // Make a copy to protect from corruption
                 const scrutinee = try self.pushCopy(scrutinee_temp, roc_ops);
-                
+
                 // Use the match expression's scrutinee_rt_var (from the unified type after type checking)
                 // instead of the value's rt_var. The value's rt_var may reflect a narrower type
                 // that was computed before unification with all pattern variants.
@@ -15854,7 +15845,7 @@ pub const Interpreter = struct {
                         }
 
                         // No guard - evaluate body directly
-                        
+
                         try work_stack.push(.{ .apply_continuation = .{ .match_cleanup = .{
                             .bindings_start = start_len,
                         } } });
@@ -15867,7 +15858,7 @@ pub const Interpreter = struct {
                 }
 
                 // No branch matched - this should be caught by compile-time exhaustiveness checking
-                                unreachable;
+                unreachable;
             },
             .match_guard => |mg| {
                 const cont_trace = tracy.traceNamed(@src(), "cont.match_guard");
@@ -15969,7 +15960,7 @@ pub const Interpreter = struct {
 
                     // Convert to RocStr
                     const segment_str = try self.stackValueToRocStr(seg_value, seg_value.rt_var, roc_ops);
-                    
+
                     // Push as string value
                     const str_rt_var = try self.getCanonicalStrRuntimeVar();
                     const str_value = try self.pushStr(str_rt_var);
@@ -16161,7 +16152,7 @@ pub const Interpreter = struct {
                     const body_expr = self.env.store.getExpr(header.body_idx);
                     if (body_expr == .e_anno_only) {
                         self.env = saved_env;
-                                                                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                         self.triggerCrash("This function has no implementation. It is only a type annotation for now.", false, roc_ops);
                         return error.Crash;
                     }
@@ -16231,11 +16222,11 @@ pub const Interpreter = struct {
 
                             // Restore environment before setting up sort (helper saves env for comparison cleanup)
                             self.env = saved_env;
-                                                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
 
                             switch (try self.setupSortWith(list_arg, compare_fn, ret_rt_var, saved_rigid_subst, roc_ops, work_stack)) {
                                 .already_sorted => |result_list| {
-                                                                        try value_stack.push(result_list);
+                                    try value_stack.push(result_list);
                                 },
                                 .sorting_started => {},
                             }
@@ -16252,7 +16243,7 @@ pub const Interpreter = struct {
 
                         // Restore environment and free arg_rt_vars
                         self.env = saved_env;
-                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                         // rt_var is set by the builtin - builtins like list_get_unsafe set rt_var
                         // to the element's concrete type, which is more specific than the call site's
                         // polymorphic type and needed for correct method dispatch on the result.
@@ -16271,7 +16262,7 @@ pub const Interpreter = struct {
 
                         // Restore environment and free arg_rt_vars
                         self.env = saved_env;
-                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                         // rt_var is already set by callHostedFunction
                         try value_stack.push(result);
                         return true;
@@ -16281,7 +16272,7 @@ pub const Interpreter = struct {
                     const params = self.env.store.slicePatterns(header.params);
                     if (params.len != arg_count) {
                         self.env = saved_env;
-                                                                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                        if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                         return error.TypeMismatch;
                     }
 
@@ -16327,7 +16318,7 @@ pub const Interpreter = struct {
                             // Pattern match failed - cleanup and error
                             self.env = saved_env;
                             _ = self.active_closures.pop();
-                                                                                    if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                            if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                             // Restore flex_type_context on error
                             self.flex_type_context.deinit();
                             self.flex_type_context = saved_flex_type_context;
@@ -16335,7 +16326,7 @@ pub const Interpreter = struct {
                             return error.TypeMismatch;
                         }
                         // Decref the original argument value since patternMatchesBind made copies
-                                            }
+                    }
 
                     // Push cleanup continuation, then evaluate body
                     const cleanup_saved_rigid_subst = saved_rigid_subst;
@@ -16361,7 +16352,7 @@ pub const Interpreter = struct {
                 }
 
                 // Not a closure - check if it's a direct lambda expression
-                                                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
+                if (ci.arg_rt_vars_to_free) |vars| self.allocator.free(vars);
                 self.triggerCrash("e_call: func is neither closure nor lambda", false, roc_ops);
                 return error.Crash;
             },
@@ -16592,7 +16583,7 @@ pub const Interpreter = struct {
                     roc_ops,
                     ua.operand_rt_var,
                 );
-        
+
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
                     self.triggerCrash("Internal error: method function is not a closure", false, roc_ops);
@@ -16983,7 +16974,7 @@ pub const Interpreter = struct {
 
                 // Call the method closure
                 if (method_func.layout.tag != .closure) {
-                                        return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
 
                 const closure_header = method_func.asClosure().?;
@@ -17007,12 +16998,12 @@ pub const Interpreter = struct {
                     // also don't decref - the builtin is responsible for the memory.
 
                     // Decref the method closure (for low-level, we handle it here)
-                                        self.env = saved_env;
+                    self.env = saved_env;
 
                     // For != operator, negate boolean result
                     if (ba.negate_result) {
                         const is_eq_result = self.boolValueEquals(true, result, roc_ops);
-                                                result = try self.makeBoolValue(!is_eq_result);
+                        result = try self.makeBoolValue(!is_eq_result);
                     }
 
                     try value_stack.push(result);
@@ -17022,7 +17013,7 @@ pub const Interpreter = struct {
                 // Regular closure invocation
                 const params = self.env.store.slicePatterns(closure_header.params);
                 if (params.len != 2) {
-                                        self.env = saved_env;
+                    self.env = saved_env;
                     return error.TypeMismatch;
                 }
 
@@ -17142,7 +17133,7 @@ pub const Interpreter = struct {
                     // Apply negate if needed (for != operator)
                     if (ba.negate_result) {
                         const is_true = self.boolValueEquals(true, result, roc_ops);
-                                                const negated = try self.makeBoolValue(!is_true);
+                        const negated = try self.makeBoolValue(!is_true);
                         try value_stack.push(negated);
                     } else {
                         try value_stack.push(result);
@@ -17184,7 +17175,7 @@ pub const Interpreter = struct {
 
                 // Decref the original receiver_value since we made a copy.
                 // This is necessary for records/tuples containing refcounted values like lists.
-                
+
                 // After evaluation, prefer the actual runtime type from the receiver value
                 // over the translated/defaulted compile-time type. This handles cases like:
                 // - `s_str = x.to_str()` where s_str's CT type is a flex var but the
@@ -17412,7 +17403,7 @@ pub const Interpreter = struct {
                                     // Check if the field is a closure - if so, invoke it with the args
                                     if (field_value.layout.tag == .closure) {
                                         const copied_field = try self.pushCopy(field_value, roc_ops);
-                                        
+
                                         // Push the closure to value stack and set up call continuation
                                         try value_stack.push(copied_field);
 
@@ -17492,7 +17483,7 @@ pub const Interpreter = struct {
                                 const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
-                                                                        switch (err) {
+                                    switch (err) {
                                         error.NotImplemented => {
                                             self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                             return error.Crash;
@@ -17500,7 +17491,7 @@ pub const Interpreter = struct {
                                         else => return err,
                                     }
                                 };
-                                                                const result_val = try self.makeBoolValue(result);
+                                const result_val = try self.makeBoolValue(result);
                                 try value_stack.push(result_val);
                                 return true;
                             }
@@ -17517,7 +17508,7 @@ pub const Interpreter = struct {
                                 const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
                                 const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                                 const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
-                                                                        switch (err) {
+                                    switch (err) {
                                         error.NotImplemented => {
                                             self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                             return error.Crash;
@@ -17525,7 +17516,7 @@ pub const Interpreter = struct {
                                         else => return err,
                                     }
                                 };
-                                                                const result_val = try self.makeBoolValue(result);
+                                const result_val = try self.makeBoolValue(result);
                                 try value_stack.push(result_val);
                                 return true;
                             }
@@ -17544,10 +17535,10 @@ pub const Interpreter = struct {
                                     // Evaluate the RHS argument
                                     const rhs_expr_idx = arg_exprs[0];
                                     const rhs_value = try self.evalWithExpectedType(rhs_expr_idx, roc_ops, null);
-    
+
                                     // Use numeric comparison
                                     const result = try self.compareNumericValues(receiver_value, rhs_value, .eq);
-                                                                        const result_val = try self.makeBoolValue(result);
+                                    const result_val = try self.makeBoolValue(result);
                                     try value_stack.push(result_val);
                                     return true;
                                 }
@@ -17559,7 +17550,7 @@ pub const Interpreter = struct {
                             const rhs_ct_var = can.ModuleEnv.varFrom(rhs_expr_idx);
                             const rhs_rt_var = try self.translateTypeVar(self.env, rhs_ct_var);
                             const result = self.valuesStructurallyEqual(receiver_value, effective_receiver_rt_var, rhs_value, rhs_rt_var, roc_ops) catch |err| {
-                                                                switch (err) {
+                                switch (err) {
                                     error.NotImplemented => {
                                         self.triggerCrash("Structural equality not implemented for this type", false, roc_ops);
                                         return error.Crash;
@@ -17567,7 +17558,7 @@ pub const Interpreter = struct {
                                     else => return err,
                                 }
                             };
-                                                        const result_val = try self.makeBoolValue(result);
+                            const result_val = try self.makeBoolValue(result);
                             try value_stack.push(result_val);
                             return true;
                         }
@@ -17651,7 +17642,7 @@ pub const Interpreter = struct {
                 };
 
                 if (nominal_info == null) {
-                                        return error.InvalidMethodReceiver;
+                    return error.InvalidMethodReceiver;
                 }
 
                 // Handle Box.box intrinsic - must intercept before resolveMethodFunction
@@ -17665,7 +17656,7 @@ pub const Interpreter = struct {
 
                     const result = try self.evalBoxIntrinsic(arg_value, da.expr_idx, roc_ops);
 
-                                        try value_stack.push(result);
+                    try value_stack.push(result);
                     return true;
                 }
 
@@ -17686,7 +17677,7 @@ pub const Interpreter = struct {
                     roc_ops,
                     effective_receiver_rt_var,
                 ) catch |err| {
-                                        switch (err) {
+                    switch (err) {
                         error.MethodLookupFailed => {
                             const layout_env = self.runtime_layout_store.env;
                             const type_name = import_mapping_mod.getDisplayName(
@@ -17707,13 +17698,13 @@ pub const Interpreter = struct {
                 };
 
                 if (method_func.layout.tag != .closure) {
-                                                            return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
 
                 // If no additional args, invoke method directly with receiver
                 if (arg_exprs.len == 0) {
                     if (method_func.ptr == null) {
-                                                                        self.triggerCrash("Hosted lambda closure has null pointer", false, roc_ops);
+                        self.triggerCrash("Hosted lambda closure has null pointer", false, roc_ops);
                         return error.Crash;
                     }
                     const closure_header = method_func.asClosure().?;
@@ -17736,10 +17727,9 @@ pub const Interpreter = struct {
 
                         // Decref based on ownership semantics
                         const arg_ownership = low_level.op.getArgOwnership();
-                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {
-                                                    }
+                        if (arg_ownership.len > 0 and arg_ownership[0] == .borrow) {}
 
-                                                self.env = saved_env;
+                        self.env = saved_env;
                         try value_stack.push(result);
                         return true;
                     }
@@ -17751,8 +17741,8 @@ pub const Interpreter = struct {
 
                     if (try self.tryInvokeHostedClosure(closure_header, &args, return_rt_var, roc_ops)) |result| {
                         // Decref receiver (borrowed)
-                        
-                                                self.env = saved_env;
+
+                        self.env = saved_env;
                         try value_stack.push(result);
                         return true;
                     }
@@ -17760,7 +17750,7 @@ pub const Interpreter = struct {
                     const params = self.env.store.slicePatterns(closure_header.params);
                     if (params.len != 1) {
                         self.env = saved_env;
-                                                                        return error.TypeMismatch;
+                        return error.TypeMismatch;
                     }
 
                     // Get the method function's type and unify parameter with receiver.
@@ -17827,10 +17817,10 @@ pub const Interpreter = struct {
                         // Pattern match failed - cleanup and error
                         self.env = saved_env;
                         _ = self.active_closures.pop();
-                                                                        return error.TypeMismatch;
+                        return error.TypeMismatch;
                     }
                     // Decref original receiver value since patternMatchesBind made a copy
-                    
+
                     try work_stack.push(.{ .apply_continuation = .{ .call_cleanup = .{
                         .saved_env = saved_env,
                         .saved_bindings_len = saved_bindings_len,
@@ -18029,10 +18019,10 @@ pub const Interpreter = struct {
 
                         // Restore environment before setting up sort (helper saves env for comparison cleanup)
                         self.env = saved_env;
-                        
+
                         switch (try self.setupSortWith(list_arg, compare_fn, null, null, roc_ops, work_stack)) {
                             .already_sorted => |result_list| {
-                                                                try value_stack.push(result_list);
+                                try value_stack.push(result_list);
                             },
                             .sorting_started => {},
                         }
@@ -18123,7 +18113,7 @@ pub const Interpreter = struct {
                 const expected_params = 1 + total_args;
                 if (params.len != expected_params) {
                     self.env = saved_env;
-                                                                                return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
 
                 // Instantiate the method's type parameters for polymorphic dispatch.
@@ -18224,14 +18214,14 @@ pub const Interpreter = struct {
                     // Pattern match failed - cleanup and error
                     self.env = saved_env;
                     _ = self.active_closures.pop();
-                                                                                if (saved_rigid_subst) |*saved| saved.deinit();
+                    if (saved_rigid_subst) |*saved| saved.deinit();
                     self.flex_type_context.deinit();
                     self.flex_type_context = saved_flex_type_context;
                     self.poly_context_generation +%= 1;
                     return error.TypeMismatch;
                 }
                 // Decref the original receiver value since patternMatchesBind made a copy
-                
+
                 // Bind explicit arguments using patternMatchesBind
                 for (arg_values, 0..) |arg, idx| {
                     const param_rt_var = try self.translateTypeVar(self.env, can.ModuleEnv.varFrom(params[1 + idx]));
@@ -18317,7 +18307,7 @@ pub const Interpreter = struct {
                 const method_func = value_stack.pop() orelse return error.Crash;
 
                 if (method_func.layout.tag != .closure) {
-                                                            return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
 
                 const closure_header = method_func.asClosure().?;
@@ -18364,10 +18354,10 @@ pub const Interpreter = struct {
                         if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             self.env = saved_env;
                             self.bindings.items.len = saved_bindings_len;
-                                                                                    return error.TypeMismatch;
+                            return error.TypeMismatch;
                         }
                         // patternMatchesBind makes a copy, so decref the original
-                                            }
+                    }
 
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
@@ -18401,7 +18391,7 @@ pub const Interpreter = struct {
                         // Cleanup
                         self.env = saved_env;
                         self.bindings.items.len = saved_bindings_len;
-                        
+
                         try value_stack.push(result);
                         return true;
                     }
@@ -18426,13 +18416,13 @@ pub const Interpreter = struct {
                         .expected_rt_var = return_rt_var,
                     } });
 
-                                        return true;
+                    return true;
                 } else if (lambda_expr == .e_closure) {
                     // Closure - follow to underlying lambda
                     const underlying_lambda = self.env.store.getExpr(lambda_expr.e_closure.lambda_idx);
                     if (underlying_lambda != .e_lambda) {
-                                                self.env = saved_env;
-                                                return error.TypeMismatch;
+                        self.env = saved_env;
+                        return error.TypeMismatch;
                     }
 
                     const params_slice = self.env.store.slicePatterns(underlying_lambda.e_lambda.args);
@@ -18444,10 +18434,10 @@ pub const Interpreter = struct {
                         if (!try self.patternMatchesBind(param, arg_values[idx], param_rt_var, roc_ops, &self.bindings, null)) {
                             self.env = saved_env;
                             self.bindings.items.len = saved_bindings_len;
-                                                                                    return error.TypeMismatch;
+                            return error.TypeMismatch;
                         }
                         // patternMatchesBind makes a copy, so decref the original
-                                            }
+                    }
 
                     const return_ct_var = can.ModuleEnv.varFrom(tvdi.expr_idx);
                     const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
@@ -18481,7 +18471,7 @@ pub const Interpreter = struct {
                         // Cleanup
                         self.env = saved_env;
                         self.bindings.items.len = saved_bindings_len;
-                        
+
                         try value_stack.push(result);
                         return true;
                     }
@@ -18506,7 +18496,7 @@ pub const Interpreter = struct {
                         .expected_rt_var = return_rt_var,
                     } });
 
-                                        return true;
+                    return true;
                 }
 
                 // Check if this is a hosted lambda and invoke it
@@ -18522,8 +18512,8 @@ pub const Interpreter = struct {
                     try value_stack.push(result);
                     return true;
                 } else {
-                                        self.env = saved_env;
-                                        return error.TypeMismatch;
+                    self.env = saved_env;
+                    return error.TypeMismatch;
                 }
             },
             .for_iterate => |fl_in| {
@@ -18541,14 +18531,14 @@ pub const Interpreter = struct {
                     const list_len = list_header.len();
                     if (list_len == 0) {
                         // Empty list
-                                                try self.handleForLoopComplete(work_stack, value_stack, fl_in.stmt_context, fl_in.bindings_start, roc_ops);
+                        try self.handleForLoopComplete(work_stack, value_stack, fl_in.stmt_context, fl_in.bindings_start, roc_ops);
                         return true;
                     }
                 }
 
                 // Get the list layout
                 if (list_value.layout.tag != .list and list_value.layout.tag != .list_of_zst) {
-                                        return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
                 var elem_layout = if (list_value.layout.tag == .list)
                     self.runtime_layout_store.getLayout(list_value.layout.data.list)
@@ -18625,7 +18615,7 @@ pub const Interpreter = struct {
 
                 // If list is empty, handle completion
                 if (list_len == 0) {
-                                        try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 }
 
@@ -18640,14 +18630,14 @@ pub const Interpreter = struct {
                     .is_initialized = true,
                     .rt_var = fl.patt_rt_var,
                 };
-                
+
                 // Bind the pattern
                 const loop_bindings_start = self.bindings.items.len;
                 // expr_idx not used for for-loop pattern bindings
                 if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, null)) {
-                                                            return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
-                
+
                 // Push body_done continuation
                 try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
@@ -18708,9 +18698,9 @@ pub const Interpreter = struct {
                 const new_loop_bindings_start = self.bindings.items.len;
                 // expr_idx not used for for-loop pattern bindings
                 if (!try self.patternMatchesBind(fl.pattern, elem_value, fl.patt_rt_var, roc_ops, &self.bindings, null)) {
-                                                            return error.TypeMismatch;
+                    return error.TypeMismatch;
                 }
-                
+
                 // Push body_done continuation for next iteration
                 try work_stack.push(.{ .apply_continuation = .{ .for_body_done = .{
                     .list_value = fl.list_value,
@@ -18821,7 +18811,7 @@ pub const Interpreter = struct {
                 if (work.apply_continuation == .for_body_done) {
                     const fl = work.apply_continuation.for_body_done;
                     // For loop aborted, handle completion
-                                        try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
+                    try self.handleForLoopComplete(work_stack, value_stack, fl.stmt_context, fl.bindings_start, roc_ops);
                     return true;
                 } else {
                     // While loop aborted, continue with remaining statements
@@ -18873,7 +18863,7 @@ pub const Interpreter = struct {
                 while (j > 0) {
                     j -= 1;
                     if (self.bindings.items[j].pattern_idx == rv.pattern_idx) {
-                                                self.bindings.items[j].value = new_val;
+                        self.bindings.items[j].value = new_val;
                         break;
                     }
                 }
@@ -19219,7 +19209,7 @@ pub const Interpreter = struct {
                 }
 
                 // Sorting complete - return the sorted list
-                                if (saved_rigid_subst) |saved| {
+                if (saved_rigid_subst) |saved| {
                     self.rigid_subst.deinit();
                     self.rigid_subst = saved;
                     saved_rigid_subst = null;
@@ -19239,7 +19229,7 @@ pub const Interpreter = struct {
                     return error.Crash;
                 };
                 const is_true = self.boolValueEquals(true, result, roc_ops);
-                                const negated = try self.makeBoolValue(!is_true);
+                const negated = try self.makeBoolValue(!is_true);
                 try value_stack.push(negated);
                 return true;
             },

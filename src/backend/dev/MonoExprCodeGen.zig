@@ -26,11 +26,6 @@ const builtins = @import("builtins");
 const x86_64 = @import("x86_64/mod.zig");
 const aarch64 = @import("aarch64/mod.zig");
 
-// Dec builtin functions for calling from generated code
-const RocDec = builtins.dec.RocDec;
-const dec_mulOrPanicC = builtins.dec.mulOrPanicC;
-const dec_divC = builtins.dec.divC;
-
 // Num builtin functions for 128-bit integer operations
 const num_divTruncI128 = builtins.num.divTruncI128;
 const num_divTruncU128 = builtins.num.divTruncU128;
@@ -42,23 +37,16 @@ const StaticDataInterner = @import("StaticDataInterner.zig");
 
 const MonoExprStore = mono.MonoExprStore;
 const MonoExpr = mono.MonoExpr;
-const MonoPattern = mono.MonoPattern;
 const MonoExprId = mono.MonoExprId;
 const MonoPatternId = mono.MonoPatternId;
 const MonoSymbol = mono.MonoSymbol;
-const ClosureRepresentation = mono.ClosureRepresentation;
-const MonoCapture = mono.MonoCapture;
-const Recursive = mono.Recursive;
 const SelfRecursive = mono.SelfRecursive;
 const JoinPointId = mono.JoinPointId;
 const LambdaSetMember = mono.LambdaSetMember;
 const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
 
 // Control flow statement types (for two-pass compilation)
-const CFStmt = mono.CFStmt;
 const CFStmtId = mono.CFStmtId;
-const CFSwitchBranch = mono.CFSwitchBranch;
-const CFSwitchBranchSpan = mono.CFSwitchBranchSpan;
 const LayoutIdxSpan = mono.LayoutIdxSpan;
 const MonoProc = mono.MonoProc;
 
@@ -97,8 +85,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// The symbol currently being bound (during let statement processing).
         current_binding_symbol: ?MonoSymbol,
-
-        // ============ Two-Pass Compilation Fields ============
 
         /// Registry of compiled procedures (symbol -> CompiledProc)
         /// Used to find call targets during second pass
@@ -329,15 +315,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
                 const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
-            }
-        }
-
-        /// Emit return instruction (architecture-specific)
-        fn emitRet(self: *Self) !void {
-            if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.ret();
-            } else {
-                try self.codegen.emit.ret();
             }
         }
 
@@ -1343,8 +1320,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        // ============ Calling Convention Helpers ============
-
         /// Get the register used for argument N in the calling convention
         fn getArgumentRegister(self: *Self, index: u8) GeneralReg {
             _ = self;
@@ -1892,41 +1867,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for a recursive jump (tail call to current recursive closure)
-        ///
-        /// NOTE: This function is a placeholder. Proper recursive support requires
-        /// compiling closures as procedures via compileAllProcs() BEFORE generating
-        /// the main expression. The inline approach cannot handle non-tail recursive
-        /// calls like `n * factorial(n-1)`.
-        fn generateRecursiveJump(self: *Self, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            _ = self;
-            _ = args_span;
-            _ = ret_layout;
-            // This path cannot work for non-tail recursive calls.
-            // Recursive closures must be compiled as procedures first.
-            return Error.UnsupportedExpression;
-        }
-
-        /// Emit an unconditional jump to a specific code offset
-        fn emitJumpToOffset(self: *Self, target_offset: usize) !void {
-            const current = self.codegen.currentOffset();
-            // Calculate relative offset (negative for backward jump)
-            const rel_offset: i32 = @intCast(@as(i64, @intCast(target_offset)) - @as(i64, @intCast(current)));
-
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // B instruction with relative offset
-                // Note: AArch64 branch offsets are in instructions (4 bytes each)
-                const instr_offset = @divTrunc(rel_offset - 4, 4); // -4 because PC is ahead
-                try self.codegen.emit.b(@bitCast(instr_offset));
-            } else {
-                // JMP rel32
-                // x86_64 jmp instruction: 0xE9 followed by 32-bit relative offset
-                // The offset is relative to the instruction after the jmp (current + 5)
-                const jmp_rel = rel_offset - 5;
-                try self.codegen.emit.jmp(@bitCast(jmp_rel));
-            }
-        }
-
         /// Generate code for a chained/curried call: ((|a| |b| a * b)(5))(10)
         fn generateChainedCall(self: *Self, inner_call: anytype, outer_args: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             // First, execute the inner call to get the resulting lambda/closure
@@ -2239,86 +2179,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Store the result to the output buffer pointed to by the first argument register
-        fn storeResult(self: *Self, loc: ValueLocation, result_layout: layout.Idx) Error!void {
-            // First argument register: X0 on aarch64, RDI on x86_64
-            const result_ptr_reg = if (comptime builtin.cpu.arch == .aarch64)
-                aarch64.GeneralReg.X0
-            else
-                x86_64.GeneralReg.RDI;
-
-            switch (result_layout) {
-                .i64, .i32, .i16, .i8, .u64, .u32, .u16, .u8, .bool => {
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(result_ptr_reg, reg);
-                },
-                .f64 => {
-                    switch (loc) {
-                        .float_reg => |reg| {
-                            try self.emitStoreFloatToMem(result_ptr_reg, reg);
-                        },
-                        .immediate_f64 => |val| {
-                            // Store via integer register (8 bytes for f64)
-                            const bits: i64 = @bitCast(val);
-                            const reg = try self.codegen.allocGeneralFor(0);
-                            try self.codegen.emitLoadImm(reg, bits);
-                            try self.emitStoreToMem(result_ptr_reg, reg);
-                            self.codegen.freeGeneral(reg);
-                        },
-                        else => {
-                            const reg = try self.ensureInGeneralReg(loc);
-                            try self.emitStoreToMem(result_ptr_reg, reg);
-                        },
-                    }
-                },
-                .f32 => {
-                    // F32: Convert from F64 and store 4 bytes
-                    switch (loc) {
-                        .float_reg => |reg| {
-                            // Convert F64 to F32, then store 4 bytes
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.fcvtFloatFloat(.single, reg, .double, reg);
-                                try self.codegen.emit.fstrRegMemUoff(.single, reg, result_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.cvtsd2ssRegReg(reg, reg);
-                                try self.codegen.emit.movssMemReg(result_ptr_reg, 0, reg);
-                            }
-                        },
-                        .immediate_f64 => |val| {
-                            // Convert to f32 bits and store 4 bytes
-                            const f32_val: f32 = @floatCast(val);
-                            const bits: u32 = @bitCast(f32_val);
-                            const reg = try self.codegen.allocGeneralFor(0);
-                            try self.codegen.emitLoadImm(reg, @as(i64, bits));
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.strRegMemUoff(.w32, reg, result_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w32, result_ptr_reg, 0, reg);
-                            }
-                            self.codegen.freeGeneral(reg);
-                        },
-                        else => {
-                            // Store 4 bytes
-                            const reg = try self.ensureInGeneralReg(loc);
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.strRegMemUoff(.w32, reg, result_ptr_reg, 0);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w32, result_ptr_reg, 0, reg);
-                            }
-                        },
-                    }
-                },
-                .i128, .u128, .dec => {
-                    try self.storeI128ToMem(result_ptr_reg, loc);
-                },
-                else => {
-                    // For other types, just do a basic store
-                    const reg = try self.ensureInGeneralReg(loc);
-                    try self.emitStoreToMem(result_ptr_reg, reg);
-                },
-            }
-        }
-
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
         fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg) Error!void {
@@ -2479,8 +2339,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        // ============ Two-Pass Compilation (for proper recursion support) ============
-
         /// Compile all procedures first, before generating any calls.
         /// This ensures all call targets are known before we need to patch calls.
         pub fn compileAllProcs(self: *Self, procs: []const MonoProc) Error!void {
@@ -2590,7 +2448,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // ret                          ; Return to caller
                 try self.codegen.emit.movRegReg(.w64, .RSP, .RBP);
                 try self.codegen.emit.pop(.RBP);
-                try self.codegen.emit.retq();
+                try self.codegen.emit.ret();
             }
         }
 

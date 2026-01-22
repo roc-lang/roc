@@ -43,28 +43,46 @@ pub const Lower = @import("Lower.zig");
 /// Tail recursion detection and transformation
 pub const TailRecursion = @import("TailRecursion.zig");
 
-// Re-export commonly used types
+/// Re-export commonly used types from MonoIR
 pub const MonoExpr = MonoIR.MonoExpr;
+/// Re-export pattern type
 pub const MonoPattern = MonoIR.MonoPattern;
+/// Re-export symbol type
 pub const MonoSymbol = MonoIR.MonoSymbol;
+/// Re-export expression ID type
 pub const MonoExprId = MonoIR.MonoExprId;
+/// Re-export pattern ID type
 pub const MonoPatternId = MonoIR.MonoPatternId;
+/// Re-export expression span type
 pub const MonoExprSpan = MonoIR.MonoExprSpan;
+/// Re-export pattern span type
 pub const MonoPatternSpan = MonoIR.MonoPatternSpan;
+/// Re-export closure representation type
 pub const ClosureRepresentation = MonoIR.ClosureRepresentation;
+/// Re-export capture type
 pub const MonoCapture = MonoIR.MonoCapture;
+/// Re-export recursive flag type
 pub const Recursive = MonoIR.Recursive;
+/// Re-export self-recursive flag type
 pub const SelfRecursive = MonoIR.SelfRecursive;
+/// Re-export join point ID type
 pub const JoinPointId = MonoIR.JoinPointId;
+/// Re-export lambda set member type
 pub const LambdaSetMember = MonoIR.LambdaSetMember;
+/// Re-export lambda set member span type
 pub const LambdaSetMemberSpan = MonoIR.LambdaSetMemberSpan;
 
-// Control flow statement types (for tail recursion)
+/// Control flow statement type for tail recursion
 pub const CFStmt = MonoIR.CFStmt;
+/// Control flow statement ID type
 pub const CFStmtId = MonoIR.CFStmtId;
+/// Control flow switch branch type
 pub const CFSwitchBranch = MonoIR.CFSwitchBranch;
+/// Control flow switch branch span type
 pub const CFSwitchBranchSpan = MonoIR.CFSwitchBranchSpan;
+/// Layout index span type
 pub const LayoutIdxSpan = MonoIR.LayoutIdxSpan;
+/// Monomorphized procedure type
 pub const MonoProc = MonoIR.MonoProc;
 
 test "mono tests" {

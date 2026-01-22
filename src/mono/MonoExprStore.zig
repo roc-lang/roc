@@ -149,8 +149,6 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit(self.allocator);
 }
 
-// ============ Expression operations ============
-
 /// Add an expression and return its ID
 pub fn addExpr(self: *Self, expr: MonoExpr, region: Region) Allocator.Error!MonoExprId {
     const idx = self.exprs.items.len;
@@ -174,8 +172,6 @@ pub fn getExprPtr(self: *Self, id: MonoExprId) *MonoExpr {
     return &self.exprs.items[@intFromEnum(id)];
 }
 
-// ============ Pattern operations ============
-
 /// Add a pattern and return its ID
 pub fn addPattern(self: *Self, pattern: MonoPattern, region: Region) Allocator.Error!MonoPatternId {
     const idx = self.patterns.items.len;
@@ -193,8 +189,6 @@ pub fn getPattern(self: *const Self, id: MonoPatternId) MonoPattern {
 pub fn getPatternRegion(self: *const Self, id: MonoPatternId) Region {
     return self.pattern_regions.items[@intFromEnum(id)];
 }
-
-// ============ Span operations ============
 
 /// Add a span of expression IDs and return the span descriptor
 pub fn addExprSpan(self: *Self, expr_ids: []const MonoExprId) Allocator.Error!MonoExprSpan {
@@ -246,8 +240,6 @@ pub fn getPatternSpan(self: *const Self, span: MonoPatternSpan) []const MonoPatt
     return @ptrCast(slice);
 }
 
-// ============ Field name operations ============
-
 /// Add a span of field names (Ident.Idx)
 pub fn addFieldNameSpan(self: *Self, field_names: []const base.Ident.Idx) Allocator.Error!ir.MonoFieldNameSpan {
     if (field_names.len == 0) {
@@ -273,8 +265,6 @@ pub fn getFieldNameSpan(self: *const Self, span: ir.MonoFieldNameSpan) []const b
     return @ptrCast(slice);
 }
 
-// ============ When branch operations ============
-
 /// Add when branches and return a span
 pub fn addWhenBranches(self: *Self, branches: []const MonoWhenBranch) Allocator.Error!MonoWhenBranchSpan {
     if (branches.len == 0) {
@@ -296,8 +286,6 @@ pub fn getWhenBranches(self: *const Self, span: MonoWhenBranchSpan) []const Mono
     return self.when_branches.items[span.start..][0..span.len];
 }
 
-// ============ If branch operations ============
-
 /// Add if branches and return a span
 pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Error!MonoIfBranchSpan {
     const start = @as(u32, @intCast(self.if_branches.items.len));
@@ -313,8 +301,6 @@ pub fn addIfBranches(self: *Self, branches: []const MonoIfBranch) Allocator.Erro
 pub fn getIfBranches(self: *const Self, span: MonoIfBranchSpan) []const MonoIfBranch {
     return self.if_branches.items[span.start..][0..span.len];
 }
-
-// ============ Statement operations ============
 
 /// Add statements (let bindings) and return a span
 pub fn addStmts(self: *Self, statements: []const MonoStmt) Allocator.Error!MonoStmtSpan {
@@ -337,8 +323,6 @@ pub fn getStmts(self: *const Self, span: MonoStmtSpan) []const MonoStmt {
     return self.stmts.items[span.start..][0..span.len];
 }
 
-// ============ Capture operations ============
-
 /// Add captures and return a span
 pub fn addCaptures(self: *Self, capture_list: []const MonoCapture) Allocator.Error!MonoCaptureSpan {
     if (capture_list.len == 0) {
@@ -359,8 +343,6 @@ pub fn getCaptures(self: *const Self, span: MonoCaptureSpan) []const MonoCapture
     if (span.len == 0) return &.{};
     return self.captures.items[span.start..][0..span.len];
 }
-
-// ============ Lambda set member operations ============
 
 /// Add lambda set members and return a span
 pub fn addLambdaSetMembers(self: *Self, members: []const LambdaSetMember) Allocator.Error!LambdaSetMemberSpan {
@@ -383,8 +365,6 @@ pub fn getLambdaSetMembers(self: *const Self, span: LambdaSetMemberSpan) []const
     return self.lambda_set_members.items[span.start..][0..span.len];
 }
 
-// ============ Symbol definition operations ============
-
 /// Register a top-level symbol definition
 pub fn registerSymbolDef(self: *Self, symbol: MonoSymbol, expr_id: MonoExprId) Allocator.Error!void {
     try self.symbol_defs.put(@bitCast(symbol), expr_id);
@@ -395,8 +375,6 @@ pub fn getSymbolDef(self: *const Self, symbol: MonoSymbol) ?MonoExprId {
     return self.symbol_defs.get(@bitCast(symbol));
 }
 
-// ============ String literal operations ============
-
 /// Insert a string literal and return its index
 pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLiteral.Idx {
     return self.strings.insert(self.allocator, text);
@@ -406,8 +384,6 @@ pub fn insertString(self: *Self, text: []const u8) Allocator.Error!base.StringLi
 pub fn getString(self: *const Self, idx: base.StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
 }
-
-// ============ Control Flow Statement operations (for tail recursion) ============
 
 /// Add a control flow statement and return its ID
 pub fn addCFStmt(self: *Self, stmt: CFStmt) Allocator.Error!CFStmtId {
@@ -472,8 +448,6 @@ pub fn getLayoutIdxSpan(self: *const Self, span: LayoutIdxSpan) []const layout.I
     return @ptrCast(slice);
 }
 
-// ============ Procedure operations (for two-pass compilation) ============
-
 /// Add a procedure and return its index
 pub fn addProc(self: *Self, proc: MonoProc) Allocator.Error!usize {
     const idx = self.procs.items.len;
@@ -496,8 +470,6 @@ pub fn procCount(self: *const Self) usize {
     return self.procs.items.len;
 }
 
-// ============ Statistics ============
-
 /// Get the number of expressions in the store
 pub fn exprCount(self: *const Self) usize {
     return self.exprs.items.len;
@@ -507,8 +479,6 @@ pub fn exprCount(self: *const Self) usize {
 pub fn patternCount(self: *const Self) usize {
     return self.patterns.items.len;
 }
-
-// ============ Tests ============
 
 test "basic expr storage" {
     const allocator = std.testing.allocator;

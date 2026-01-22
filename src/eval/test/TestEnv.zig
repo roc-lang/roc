@@ -6,7 +6,6 @@
 //! - Use-after-free: detected via POISON_VALUE written to refcount slot
 
 const std = @import("std");
-const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval_mod = @import("../mod.zig");
 

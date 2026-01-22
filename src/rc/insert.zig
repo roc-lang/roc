@@ -37,8 +37,6 @@ const types = @import("types");
 
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
-const NodeStore = can.NodeStore;
-const Layout = layout_mod.Layout;
 const LayoutStore = layout_mod.Store;
 const Region = base.Region;
 const Var = types.Var;
@@ -355,10 +353,6 @@ pub const InsertPass = struct {
                 try self.registerPattern(decl.pattern, .owned, decl.expr);
                 try self.countUsagesInExpr(decl.expr);
             },
-            .s_decl_gen => |decl| {
-                try self.registerPattern(decl.pattern, .owned, decl.expr);
-                try self.countUsagesInExpr(decl.expr);
-            },
             .s_var => |var_decl| {
                 try self.registerPattern(var_decl.pattern_idx, .owned, var_decl.expr);
                 try self.countUsagesInExpr(var_decl.expr);
@@ -532,9 +526,7 @@ pub const InsertPass = struct {
         return self.layout_store.addTypeVar(type_var, &self.type_scope) catch null;
     }
 
-    // ============================================================================
     // Phase 2: Transform IR to insert RC operations
-    // ============================================================================
 
     /// Insert RC operations into the IR by walking and transforming expressions
     fn insertRcOperations(self: *Self) !void {
@@ -711,7 +703,7 @@ pub const InsertPass = struct {
                     const needs_rc = if (state.layout_idx) |layout_idx|
                         self.layoutNeedsRc(layout_idx)
                     else
-                        true;  // Assume RC needed if layout unknown
+                        true; // Assume RC needed if layout unknown
 
                     if (needs_rc) {
                         any_changed = true;
@@ -765,23 +757,6 @@ pub const InsertPass = struct {
                 if (new_expr != decl.expr) {
                     break :blk try self.module_env.store.addStatement(
                         .{ .s_decl = .{
-                            .pattern = decl.pattern,
-                            .expr = new_expr,
-                            .anno = decl.anno,
-                        } },
-                        self.module_env.store.getStatementRegion(stmt_idx),
-                    );
-                }
-                break :blk stmt_idx;
-            },
-            .s_decl_gen => |decl| blk: {
-                if (self.current_scope) |scope| {
-                    try scope.introduced_patterns.append(decl.pattern);
-                }
-                const new_expr = try self.transformExpr(decl.expr);
-                if (new_expr != decl.expr) {
-                    break :blk try self.module_env.store.addStatement(
-                        .{ .s_decl_gen = .{
                             .pattern = decl.pattern,
                             .expr = new_expr,
                             .anno = decl.anno,
@@ -874,9 +849,7 @@ pub const InsertPass = struct {
         };
     }
 
-    // ============================================================================
     // Expression transformers - recursively transform sub-expressions
-    // ============================================================================
 
     fn transformIf(self: *Self, expr_idx: CIR.Expr.Idx, if_expr: anytype) !CIR.Expr.Idx {
         // Phase 3B: Handle divergent consumption in branches
@@ -1330,7 +1303,6 @@ pub const InsertPass = struct {
             self.module_env.store.getExprRegion(expr_idx),
         );
     }
-
 
     fn transformMatch(self: *Self, expr_idx: CIR.Expr.Idx, match: anytype) !CIR.Expr.Idx {
         // Phase 3B: Handle divergent consumption in match branches
@@ -1796,9 +1768,7 @@ pub const InsertPass = struct {
         return expr_idx;
     }
 
-    // ============================================================================
     // Branch Reconciliation: Snapshot and Restore Symbol States
-    // ============================================================================
 
     /// Snapshot the current state of all symbols for branch reconciliation.
     /// Returns a list of snapshots that can be used to restore/reconcile after branches.
@@ -1844,9 +1814,7 @@ pub const InsertPass = struct {
         return consumed;
     }
 
-    // ============================================================================
     // Helper methods
-    // ============================================================================
 
     /// Check if a layout needs reference counting
     pub fn layoutNeedsRc(self: *const Self, layout_idx: layout_mod.Idx) bool {

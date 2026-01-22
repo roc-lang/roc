@@ -46,6 +46,7 @@ test "eval tests" {
     std.testing.refAllDecls(@import("interpreter.zig"));
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
+    std.testing.refAllDecls(@import("llvm_evaluator.zig"));
 
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));
@@ -62,4 +63,11 @@ test "eval tests" {
     std.testing.refAllDecls(@import("test/list_refcount_builtins.zig"));
     std.testing.refAllDecls(@import("test/list_refcount_strings.zig"));
     std.testing.refAllDecls(@import("test/arithmetic_comprehensive_test.zig"));
+    std.testing.refAllDecls(@import("test/anno_only_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/comptime_eval_test.zig"));
+    std.testing.refAllDecls(@import("test/interpreter_polymorphism_test.zig"));
+    std.testing.refAllDecls(@import("test/interpreter_style_test.zig"));
+    std.testing.refAllDecls(@import("test/low_level_interp_test.zig"));
+    std.testing.refAllDecls(@import("test/mono_emit_test.zig"));
+    std.testing.refAllDecls(@import("test/stack_test.zig"));
 }

@@ -130,8 +130,6 @@ pub fn count(self: *const Self) usize {
     return self.intern_map.count();
 }
 
-// ============ JIT Static Backend ============
-
 /// Simple JIT backend that allocates from an arena
 /// Data lives as long as the JIT code execution
 pub const JitStaticBackend = struct {
@@ -187,8 +185,6 @@ pub const JitStaticBackend = struct {
         };
     }
 };
-
-// ============ Tests ============
 
 test "basic interning" {
     const allocator = std.testing.allocator;

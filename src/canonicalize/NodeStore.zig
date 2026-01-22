@@ -932,19 +932,22 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
 
         // RC expressions (inserted by RC insertion pass after canonicalization)
         .expr_incref => {
+            const p = payload.expr_incref;
             return CIR.Expr{ .e_incref = .{
-                .pattern_idx = @enumFromInt(node.data_1),
-                .count = @intCast(node.data_2),
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .count = @intCast(p.count),
             } };
         },
         .expr_decref => {
+            const p = payload.expr_decref;
             return CIR.Expr{ .e_decref = .{
-                .pattern_idx = @enumFromInt(node.data_1),
+                .pattern_idx = @enumFromInt(p.pattern_idx),
             } };
         },
         .expr_free => {
+            const p = payload.expr_free;
             return CIR.Expr{ .e_free = .{
-                .pattern_idx = @enumFromInt(node.data_1),
+                .pattern_idx = @enumFromInt(p.pattern_idx),
             } };
         },
 
@@ -2153,16 +2156,22 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
         // RC expressions - inserted by RC insertion pass after canonicalization
         .e_incref => |e| {
             node.tag = .expr_incref;
-            node.data_1 = @intFromEnum(e.pattern_idx);
-            node.data_2 = e.count;
+            node.setPayload(.{ .expr_incref = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
+                .count = e.count,
+            } });
         },
         .e_decref => |e| {
             node.tag = .expr_decref;
-            node.data_1 = @intFromEnum(e.pattern_idx);
+            node.setPayload(.{ .expr_decref = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
+            } });
         },
         .e_free => |e| {
             node.tag = .expr_free;
-            node.data_1 = @intFromEnum(e.pattern_idx);
+            node.setPayload(.{ .expr_free = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
+            } });
         },
     }
 

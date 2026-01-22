@@ -1368,9 +1368,7 @@ fn duplicateExpr(
                 const is_simple = switch (arg_expr) {
                     .e_lookup_local => true,
                     // Literals and other non-refcounted values don't need normalization
-                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small,
-                    .e_typed_int, .e_typed_frac, .e_zero_argument_tag,
-                    .e_empty_record => true,
+                    .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_zero_argument_tag, .e_empty_record => true,
                     else => false,
                 };
 

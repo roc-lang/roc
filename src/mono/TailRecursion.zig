@@ -43,23 +43,18 @@ const ir = @import("MonoIR.zig");
 const store_mod = @import("MonoExprStore.zig");
 
 const MonoExprStore = store_mod;
-const MonoExpr = ir.MonoExpr;
 const MonoExprId = ir.MonoExprId;
 const MonoExprSpan = ir.MonoExprSpan;
-const MonoPatternId = ir.MonoPatternId;
 const MonoPatternSpan = ir.MonoPatternSpan;
-const MonoPattern = ir.MonoPattern;
 const MonoSymbol = ir.MonoSymbol;
 const JoinPointId = ir.JoinPointId;
-const SelfRecursive = ir.SelfRecursive;
-const CFStmt = ir.CFStmt;
 const CFStmtId = ir.CFStmtId;
 const CFSwitchBranch = ir.CFSwitchBranch;
-const CFSwitchBranchSpan = ir.CFSwitchBranchSpan;
 const LayoutIdxSpan = ir.LayoutIdxSpan;
 
 const Allocator = std.mem.Allocator;
 
+/// Transforms tail-recursive calls into loops using join points
 pub const TailRecursionPass = struct {
     store: *MonoExprStore,
     target_symbol: MonoSymbol,
@@ -309,8 +304,6 @@ pub fn makeTailRecursive(
 
     return join_stmt;
 }
-
-// ============ Tests ============
 
 test "TailRecursionPass initialization" {
     const allocator = std.testing.allocator;
