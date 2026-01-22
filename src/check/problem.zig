@@ -47,7 +47,6 @@ pub const Problem = union(enum) {
     static_dispatch: StaticDispatch,
     cannot_access_opaque_nominal: CannotAccessOpaqueNominal,
     nominal_type_resolution_failed: NominalTypeResolutionFailed,
-    unused_value: UnusedValue,
     recursive_alias: RecursiveAlias,
     unsupported_alias_where_clause: UnsupportedAliasWhereClause,
     infinite_recursion: VarWithSnapshot,
@@ -60,7 +59,6 @@ pub const Problem = union(enum) {
     non_exhaustive_match: NonExhaustiveMatch,
     redundant_pattern: RedundantPattern,
     unmatchable_pattern: UnmatchablePattern,
-    bug: Bug,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -104,12 +102,6 @@ pub const ComptimeEvalError = struct {
 /// A problem involving a single type variable, with a snapshot for error reporting.
 /// Used for recursion errors, invalid extension types, etc.
 pub const VarWithSnapshot = struct {
-    var_: Var,
-    snapshot: SnapshotContentIdx,
-};
-
-/// Error when a stmt expression returns a non-empty record value
-pub const UnusedValue = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
 };
@@ -351,16 +343,6 @@ pub const UnsupportedAliasWhereClause = struct {
     region: base.Region,
 };
 
-// bug //
-
-/// A bug that occurred during unification
-pub const Bug = struct {
-    expected_var: Var,
-    expected: SnapshotContentIdx,
-    actual_var: Var,
-    actual: SnapshotContentIdx,
-};
-
 // reporting //
 
 /// Build reports for problems
@@ -525,9 +507,6 @@ pub const ReportBuilder = struct {
                     .type_does_not_support_equality => |data| return self.buildTypeDoesNotSupportEquality(data),
                 }
             },
-            .unused_value => |data| {
-                return self.buildUnusedValueReport(data);
-            },
             .recursive_alias => |data| {
                 return self.buildRecursiveAliasReport(data);
             },
@@ -548,7 +527,6 @@ pub const ReportBuilder = struct {
             .non_exhaustive_match => |data| return self.buildNonExhaustiveMatchReport(data),
             .redundant_pattern => |data| return self.buildRedundantPatternReport(data),
             .unmatchable_pattern => |data| return self.buildUnmatchablePatternReport(data),
-            .bug => |data| return self.buildBugReport(data),
         }
     }
 
@@ -2242,47 +2220,6 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    /// Build a report for internal compiler bugs
-    fn buildBugReport(self: *Self, data: Bug) !Report {
-        var report = Report.init(self.gpa, "COMPILER BUG", .runtime_error);
-        errdefer report.deinit();
-
-        const expected_str = try report.addOwnedString(self.getFormattedString(data.expected));
-        const actual_str = try report.addOwnedString(self.getFormattedString(data.actual));
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.actual_var)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
-        try report.document.addReflowingText("The Roc compiler encountered an internal error while type checking this code:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("Expected type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_str);
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("Actual type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_str);
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("This is a bug in the Roc compiler. Please report it at ");
-        try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .inline_code);
-        try report.document.addReflowingText(" with the code that triggered this error.");
-
-        return report;
-    }
-
     // static dispatch //
 
     /// Build a report for when a type is not nominal, but you're trying to
@@ -2964,36 +2901,6 @@ pub const ReportBuilder = struct {
             },
             else => return false,
         }
-    }
-
-    /// Build a report for "unused value" diagnostic
-    fn buildUnusedValueReport(self: *Self, data: UnusedValue) !Report {
-        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_expected = try report.addOwnedString(self.getFormattedString(data.snapshot));
-
-        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
-        const region_info = self.module_env.calcRegionInfo(region.*);
-
-        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
-        try report.document.addLineBreak();
-
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        try report.document.addReflowingText("It has the type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(owned_expected);
-
-        return report;
     }
 
     /// Build a report for when a platform expects a type alias but it's not found

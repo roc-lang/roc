@@ -945,3 +945,644 @@ test "box type - nested box" {
 
     try test_env.assertLastDefType("Box(Box(I64))");
 }
+
+// ADDITIONAL NOMINAL TAG ERRORS
+// Tests for more edge cases in nominal tag handling
+
+test "nominal type - tag with deeply nested wrong type" {
+    // Nominal with nested payload - inner type is wrong
+    const source =
+        \\Wrapper := [Wrap([Inner(I64)])].{}
+        \\
+        \\w : Wrapper
+        \\w = Wrapper.Wrap(Inner("string"))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+test "nominal type - multiple constructors wrong one" {
+    // Nominal with multiple valid constructors - check wrong constructor gets error
+    const source =
+        \\Result := [Success(I64), Failure(Str)].{}
+        \\
+        \\r : Result
+        \\r = Result.Pending
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID NOMINAL TAG");
+}
+
+// BOUND TYPE VARIABLE CONFLICTS
+// Tests for incompatible_fn_args_bound_var
+
+test "bound var conflict - explicit annotation" {
+    // Function expects same type for both args, but called with different types
+    const source =
+        \\swap : a, a -> (a, a)
+        \\swap = |x, y| (y, x)
+        \\
+        \\result = swap(1i64, "string")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "bound var conflict - three arguments same type" {
+    // Function expects three args of same type
+    const source =
+        \\triple : a, a, a -> (a, a, a)
+        \\triple = |x, y, z| (x, y, z)
+        \\
+        \\result = triple(1i64, 2i64, "oops")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "bound var conflict - nested in tuple return" {
+    // Function expects same type and returns tuple of them
+    const source =
+        \\pair : a, a -> (a, a)
+        \\pair = |x, y| (x, y)
+        \\
+        \\result = pair("hello", 42i64)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// TRY SUFFIX RETURN ERRORS
+// Tests for buildTrySuffixReturn function
+
+test "try suffix return - in function returning try" {
+    // Using try operator inside a function that returns Try
+    // The ? operator extracts the Ok value and returns early with Err on failure
+    const source =
+        \\helper : I64 -> Try(I64, Str)
+        \\helper = |x|
+        \\    if x > 0 { Ok(x) } else { Err("negative") }
+        \\
+        \\f : I64 -> Try(I64, Str)
+        \\f = |x| {
+        \\    val = helper(x)?
+        \\    Ok(val + 1)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    // The error type from helper (Str) must match return's error type (Str) - should work
+    try test_env.assertLastDefType("I64 -> Try(I64, Str)");
+}
+
+test "try suffix return - error type mismatch" {
+    // The ? operator returns Err(Str) but function body returns Err(I64) - should fail
+    const source =
+        \\helper : I64 -> Try(I64, Str)
+        \\helper = |x|
+        \\    if x > 0 { Ok(x) } else { Err("negative") }
+        \\
+        \\f : I64 -> Try(I64, I64)
+        \\f = |x| {
+        \\    val = helper(x)?
+        \\    Err(42)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "try suffix return - multiple try operators different errors" {
+    // Multiple ? operators with different error types that need to match
+    const source =
+        \\helper1 : I64 -> Try(I64, Str)
+        \\helper1 = |x|
+        \\    if x > 0 { Ok(x) } else { Err("negative") }
+        \\
+        \\helper2 : I64 -> Try(I64, I64)
+        \\helper2 = |x|
+        \\    if x > 0 { Ok(x) } else { Err(-1) }
+        \\
+        \\f : I64 -> Try(I64, Str)
+        \\f = |x| {
+        \\    a = helper1(x)?
+        \\    b = helper2(x)?
+        \\    Ok(a + b)
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// EARLY RETURN TYPE MISMATCH
+// Tests for early_return in nested blocks
+
+test "early return - nested block value vs return" {
+    // Return type differs from function return type
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| {
+        \\    y = {
+        \\        if x > 10 { return x }
+        \\        x + 1
+        \\    }
+        \\    "result"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "early return - multiple return type mismatch" {
+    // Multiple returns with inconsistent types
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| {
+        \\    if x > 0 { return x }
+        \\    if x < 0 { return "negative" }
+        \\    "zero"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// ADDITIONAL TYPE MISMATCH TESTS
+// Tests for more type mismatch scenarios
+
+test "type mismatch - list element type conflict" {
+    // List elements must have consistent types
+    const source =
+        \\list = [1, 2, "three"]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "type mismatch - tuple element type annotation" {
+    // Tuple with wrong element type for annotation
+    const source =
+        \\pair : (I64, I64)
+        \\pair = (1, "two")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "type mismatch - record field type annotation" {
+    // Record with wrong field type for annotation
+    const source =
+        \\rec : { x: I64, y: I64 }
+        \\rec = { x: 1, y: "two" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// NUMBER LITERAL IN NON-NUMBER CONTEXT
+// Tests for number used as non-number error
+
+test "number literal - used as string" {
+    // Number literal where string is expected
+    const source =
+        \\str : Str
+        \\str = 42
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "number literal - in string list" {
+    // Number literal in a list of strings
+    const source =
+        \\list : List(Str)
+        \\list = ["a", "b", 3]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// ARITHMETIC WITH NON-NUMBERS
+// Tests for arithmetic operations with wrong types
+
+test "arithmetic - string plus operator" {
+    // Attempting to use + on strings
+    const source =
+        \\x : Str
+        \\x = "hello"
+        \\
+        \\y : Str
+        \\y = "world"
+        \\
+        \\result = x + y
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+test "arithmetic - bool negation as number" {
+    // Attempting to negate a bool as if it were a number
+    const source =
+        \\x : Bool
+        \\x = True
+        \\
+        \\result = -x
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+// COMPARISON OPERATIONS WITH WRONG TYPES
+// Tests for comparison operators with incompatible types
+
+test "comparison - strings with less than" {
+    // Attempting to use < on strings
+    const source =
+        \\x : Str
+        \\x = "hello"
+        \\
+        \\y : Str
+        \\y = "world"
+        \\
+        \\result = x < y
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+test "comparison - bool with greater than" {
+    // Attempting to use > on bools
+    const source =
+        \\x : Bool
+        \\x = True
+        \\
+        \\y : Bool
+        \\y = False
+        \\
+        \\result = x > y
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+// FUNCTION APPLICATION ERRORS
+// Tests for function call type mismatches
+
+test "function call - argument count correct but types wrong" {
+    // Correct number of args but wrong types
+    const source =
+        \\add : I64, I64 -> I64
+        \\add = |x, y| x + y
+        \\
+        \\result = add(1, "two")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "function call - multiple wrong argument types" {
+    // Multiple arguments with wrong types
+    const source =
+        \\triple : I64, I64, I64 -> I64
+        \\triple = |x, y, z| x + y + z
+        \\
+        \\result = triple("one", "two", "three")
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// LAMBDA RETURN TYPE ERRORS
+// Tests for lambda expression return type mismatches
+
+test "lambda - return type mismatch" {
+    // Lambda body returns wrong type
+    const source =
+        \\f : I64 -> Str
+        \\f = |x| x + 1
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "lambda - parameter type used incorrectly" {
+    // Using string parameter where number is expected
+    const source =
+        \\f : Str -> I64
+        \\f = |s| s + 1
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("MISSING METHOD");
+}
+
+// ARITY MISMATCH TESTS
+// Tests for function call arity errors
+
+test "arity - too many type arguments" {
+    // Providing too many type arguments
+    const source =
+        \\x : List(I64, Str)
+        \\x = []
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TOO MANY ARGS");
+}
+
+test "arity - too few type arguments" {
+    // Providing too few type arguments (Try needs 2)
+    const source =
+        \\x : Try(I64)
+        \\x = Ok(42)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TOO FEW ARGS");
+}
+
+// ADDITIONAL IF CONDITION TESTS
+// Tests for if condition type errors
+
+test "if condition - list as condition" {
+    // Using a list as an if condition
+    const source =
+        \\x = if [1, 2, 3] { "yes" } else { "no" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID IF CONDITION");
+}
+
+test "if condition - record as condition" {
+    // Using a record as an if condition
+    const source =
+        \\x = if { a: 1 } { "yes" } else { "no" }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INVALID IF CONDITION");
+}
+
+// MORE INCOMPATIBLE IF BRANCHES TESTS
+// Tests for different types in if branches
+
+test "if branches - list vs tuple" {
+    // If branches with list and tuple
+    const source =
+        \\x = if True { [1, 2] } else { (1, 2) }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+}
+
+test "if branches - record vs tag" {
+    // If branches with record and tag
+    const source =
+        \\x = if True { { a: 1 } } else { Ok(1) }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INCOMPATIBLE IF BRANCHES");
+}
+
+// MATCH PATTERN TESTS
+// Tests for pattern matching errors
+
+test "match - pattern type mismatch" {
+    // Matching with wrong pattern type
+    const source =
+        \\x : I64
+        \\x = 42
+        \\
+        \\result = match x {
+        \\    "hello" => 1
+        \\    _ => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
+}
+
+test "match - condition pattern type conflict" {
+    // Pattern type conflicts with condition type
+    const source =
+        \\f : Str -> I64
+        \\f = |s| match s {
+        \\    Ok(_) => 1
+        \\    Err(_) => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("INCOMPATIBLE MATCH PATTERNS");
+}
+
+// NESTED FUNCTION TYPE TESTS
+// Tests for nested function type mismatches
+
+test "nested function - wrong inner return type" {
+    // Higher-order function with wrong inner type
+    const source =
+        \\apply : (I64 -> I64), I64 -> I64
+        \\apply = |f, x| f(x)
+        \\
+        \\strFunc : I64 -> Str
+        \\strFunc = |_| "hello"
+        \\
+        \\result = apply(strFunc, 42)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "nested function - wrong inner arg type" {
+    // Higher-order function with wrong inner argument type
+    const source =
+        \\apply : (I64 -> I64), I64 -> I64
+        \\apply = |f, x| f(x)
+        \\
+        \\strArgFunc : Str -> I64
+        \\strArgFunc = |_| 42
+        \\
+        \\result = apply(strArgFunc, 42)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// LIST ELEMENT TYPE TESTS
+// Tests for incompatible list element types
+
+test "list - incompatible element in middle" {
+    // String in the middle of number list
+    const source =
+        \\list = [1, 2, "three", 4, 5]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "list - nested list type mismatch" {
+    // Nested list with wrong inner type
+    const source =
+        \\list : List(List(I64))
+        \\list = [[1, 2], ["a", "b"]]
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// RECORD FIELD TYPE TESTS
+// Tests for record field type mismatches
+
+test "record - missing field" {
+    // Record missing a required field
+    const source =
+        \\rec : { x: I64, y: I64, z: I64 }
+        \\rec = { x: 1, y: 2 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "record - extra field" {
+    // Record with extra field
+    const source =
+        \\rec : { x: I64 }
+        \\rec = { x: 1, y: 2 }
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// TUPLE ARITY TESTS
+// Tests for tuple size mismatches
+
+test "tuple - wrong arity" {
+    // Tuple with wrong number of elements
+    const source =
+        \\pair : (I64, I64)
+        \\pair = (1, 2, 3)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+test "tuple - nested wrong type" {
+    // Nested tuple with wrong inner type
+    const source =
+        \\nested : ((I64, I64), I64)
+        \\nested = (("a", "b"), 1)
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// FUNCTION COMPOSITION TESTS
+// Tests for function composition type errors
+
+test "composition - incompatible return to arg" {
+    // Function return type doesn't match next arg type
+    const source =
+        \\toStr : I64 -> Str
+        \\toStr = |_| "num"
+        \\
+        \\addOne : I64 -> I64
+        \\addOne = |x| x + 1
+        \\
+        \\result = addOne(toStr(42))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}
+
+// BLOCK EXPRESSION TESTS
+// Tests for block expression type errors
+
+test "block - final expression type mismatch" {
+    // Block final expression doesn't match annotation
+    const source =
+        \\f : I64 -> I64
+        \\f = |x| {
+        \\    y = x + 1
+        \\    "result"
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("TYPE MISMATCH");
+}

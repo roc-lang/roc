@@ -1008,7 +1008,7 @@ test "type mismatch - incompatible match branches return different types" {
 test "type mismatch - if branches with incompatible types" {
     // If expression with branches returning incompatible types
     const source =
-        \\x = if Bool.true { 42i64 } else { "string" }
+        \\x = if True { 42i64 } else { "string" }
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
@@ -1025,7 +1025,7 @@ test "type mismatch - boolean and with non-Bool left side" {
         \\x = 42i64
         \\
         \\b : Bool
-        \\b = Bool.true
+        \\b = True
         \\
         \\result = x and b
     ;
@@ -1042,7 +1042,7 @@ test "type mismatch - boolean or with non-Bool right side" {
         \\x = 42i64
         \\
         \\b : Bool
-        \\b = Bool.true
+        \\b = True
         \\
         \\result = b or x
     ;
@@ -1186,4 +1186,211 @@ test "redundant - overlapping list patterns" {
     defer test_env.deinit();
 
     try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+// COMPLEX NESTED PATTERNS
+// Tests for deeply nested tag unions and complex pattern matching
+
+test "exhaustive - nested try with ok and err" {
+    // Match on nested Try type with all cases covered
+    const source =
+        \\classify : Try(Try(I64, Str), Str) -> I64
+        \\classify = |outer| match outer {
+        \\    Ok(Ok(n)) => n
+        \\    Ok(Err(_)) => -1
+        \\    Err(_) => -2
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Try(Try(I64, Str), Str) -> I64");
+}
+
+test "non-exhaustive - missing nested ok-err" {
+    // Missing one case in nested Try type
+    const source =
+        \\classify : Try(Try(I64, Str), Str) -> I64
+        \\classify = |outer| match outer {
+        \\    Ok(Ok(n)) => n
+        \\    Err(_) => -2
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - tuple of try types" {
+    // Match on tuple with all combinations
+    const source =
+        \\classify : (Try(I64, Str), Try(I64, Str)) -> I64
+        \\classify = |pair| match pair {
+        \\    (Ok(a), Ok(b)) => a + b
+        \\    (Ok(_), Err(_)) => -1
+        \\    (Err(_), Ok(_)) => -2
+        \\    (Err(_), Err(_)) => -3
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("(Try(I64, Str), Try(I64, Str)) -> I64");
+}
+
+test "non-exhaustive - missing tuple combination try" {
+    // Missing one combination in tuple of Try types
+    const source =
+        \\classify : (Try(I64, Str), Try(I64, Str)) -> I64
+        \\classify = |pair| match pair {
+        \\    (Ok(a), Ok(b)) => a + b
+        \\    (Ok(_), Err(_)) => -1
+        \\    (Err(_), Ok(_)) => -2
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - three level deep nesting" {
+    // Three levels of nesting with all cases
+    const source =
+        \\classify : Try(Try(Try(I64, Str), Str), Str) -> I64
+        \\classify = |v| match v {
+        \\    Ok(Ok(Ok(n))) => n
+        \\    Ok(Ok(Err(_))) => -1
+        \\    Ok(Err(_)) => -2
+        \\    Err(_) => -3
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("Try(Try(Try(I64, Str), Str), Str) -> I64");
+}
+
+test "redundant - specific after general in try" {
+    // Redundant pattern in Try structure
+    const source =
+        \\classify : Try(I64, Str) -> I64
+        \\classify = |v| match v {
+        \\    _ => 1
+        \\    Ok(_) => 2
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "exhaustive - list with nested tag in element" {
+    // Match on list with Try elements
+    const source =
+        \\getFirst : List(Try(I64, Str)) -> I64
+        \\getFirst = |lst| match lst {
+        \\    [Ok(x), ..] => x
+        \\    [Err(_), ..] => -1
+        \\    [] => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(Try(I64, Str)) -> I64");
+}
+
+// ADDITIONAL EXHAUSTIVENESS EDGE CASES
+
+test "exhaustive - multiple wildcards in sequence" {
+    // Multiple wildcards should still be exhaustive
+    const source =
+        \\classify : (I64, I64, I64) -> I64
+        \\classify = |triple| match triple {
+        \\    (_, _, _) => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("(I64, I64, I64) -> I64");
+}
+
+test "exhaustive - nested list patterns" {
+    // Nested list with different length patterns
+    const source =
+        \\process : List(List(I64)) -> I64
+        \\process = |lists| match lists {
+        \\    [[x, ..], ..] => x
+        \\    [[], ..] => -1
+        \\    [] => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("List(List(I64)) -> I64");
+}
+
+test "non-exhaustive - missing empty inner list case" {
+    // Missing case for empty inner list
+    const source =
+        \\process : List(List(I64)) -> I64
+        \\process = |lists| match lists {
+        \\    [[x, ..], ..] => x
+        \\    [] => 0
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("NON-EXHAUSTIVE MATCH");
+}
+
+test "exhaustive - record with optional field patterns" {
+    // Record matching with different field values
+    const source =
+        \\getValue : { x: Try(I64, Str) } -> I64
+        \\getValue = |rec| match rec {
+        \\    { x: Ok(n) } => n
+        \\    { x: Err(_) } => -1
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("{ x: Try(I64, Str) } -> I64");
+}
+
+test "redundant - duplicate literal in list" {
+    // Duplicate literal pattern
+    const source =
+        \\check : List(I64) -> I64
+        \\check = |lst| match lst {
+        \\    [0] => 1
+        \\    [0] => 2
+        \\    _ => 3
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertFirstTypeError("REDUNDANT PATTERN");
+}
+
+test "exhaustive - four way tuple" {
+    // Four element tuple with all wildcards
+    const source =
+        \\extract : (I64, I64, I64, I64) -> I64
+        \\extract = |quad| match quad {
+        \\    (a, _, _, _) => a
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertLastDefType("(I64, I64, I64, I64) -> I64");
 }

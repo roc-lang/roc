@@ -3539,7 +3539,7 @@ test "check type - if branch type mismatch" {
     // If branches return different types
     const source =
         \\x : Bool
-        \\x = Bool.true
+        \\x = True
         \\
         \\result = if x { 42 } else { "hello" }
     ;
@@ -3924,7 +3924,7 @@ test "check type - match branches incompatible types" {
 test "check type - if branches incompatible types" {
     // If branches return different types
     const source =
-        \\x = if Bool.true { "yes" } else { 0 }
+        \\x = if True { "yes" } else { 0 }
     ;
     try checkTypesModule(source, .fail_first, "TYPE MISMATCH");
 }
