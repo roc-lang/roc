@@ -35,11 +35,10 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-
 ~~~
 # CANONICALIZE
 ~~~clojure
-(can-ir)
+(can-ir (empty true))
 ~~~
 # TYPES
 ~~~clojure
