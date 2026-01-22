@@ -1749,7 +1749,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Load immediate into temporary register and compare
                 const temp = try self.codegen.allocGeneralFor(0);
                 try self.codegen.emitLoadImm(temp, value);
-                try self.codegen.emit.cmpRegReg(reg, temp);
+                try self.codegen.emit.cmpRegReg(.w64, reg, temp);
                 self.codegen.freeGeneral(temp);
             }
         }
@@ -2154,13 +2154,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     } else {
                         if (comptime builtin.cpu.arch == .aarch64) {
                             // Load bits into scratch register, then FMOV to float register
-                            try self.codegen.emit.movRegImm64(.IP0, bits);
+                            try self.codegen.emit.movRegImm64(.IP0, @bitCast(bits));
                             try self.codegen.emit.fmovFloatFromGen(.double, reg, .IP0);
                         } else {
                             // x86_64: Store bits to stack, then load into float register
                             // Use a temporary stack slot
                             const stack_offset: i32 = -16; // Below any local variables
-                            try self.codegen.emit.movRegImm64(.R11, bits);
+                            try self.codegen.emit.movRegImm64(.R11, @bitCast(bits));
                             try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
                             try self.codegen.emit.movsdRegMem(reg, .RBP, stack_offset);
                         }

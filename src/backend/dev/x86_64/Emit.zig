@@ -356,7 +356,7 @@ pub fn push(self: *Emit, reg: GeneralReg) !void {
     if (reg.enc() >= 8) {
         try self.buf.append(self.allocator, 0x41); // REX.B
     }
-    try self.buf.append(self.allocator, 0x50 + (reg.enc() & 0x7));
+    try self.buf.append(self.allocator, 0x50 + @as(u8, reg.enc() & 0x7));
 }
 
 /// POP r64 (pop register from stack)
@@ -365,7 +365,7 @@ pub fn pop(self: *Emit, reg: GeneralReg) !void {
     if (reg.enc() >= 8) {
         try self.buf.append(self.allocator, 0x41); // REX.B
     }
-    try self.buf.append(self.allocator, 0x58 + (reg.enc() & 0x7));
+    try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc() & 0x7));
 }
 
 /// JMP rel32 (unconditional jump with 32-bit offset)
@@ -402,6 +402,11 @@ pub fn callReg(self: *Emit, reg: GeneralReg) !void {
     }
     try self.buf.append(self.allocator, 0xFF);
     try self.buf.append(self.allocator, modRM(0b11, 2, reg.enc())); // /2 = CALL
+}
+
+/// CALL rel32 (relative call)
+pub fn call(self: *Emit, rel: i32) !void {
+    try self.callRel32(rel);
 }
 
 /// JMP rel32 (relative jump)
@@ -451,6 +456,11 @@ pub fn jccRel32(self: *Emit, cond: Condition, rel: i32) !void {
 pub fn jccRel8(self: *Emit, cond: Condition, rel: i8) !void {
     try self.buf.append(self.allocator, 0x70 + @as(u8, @intFromEnum(cond)));
     try self.buf.append(self.allocator, @bitCast(rel));
+}
+
+/// JNE rel32 (jump if not equal)
+pub fn jne(self: *Emit, rel: i32) !void {
+    try self.jccRel32(.not_equal, rel);
 }
 
 /// CMOVcc reg, reg (conditional move)
