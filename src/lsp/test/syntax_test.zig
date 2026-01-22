@@ -168,7 +168,7 @@ test "completion context detects after_record_dot for lowercase identifier" {
     const context = completion_context.detectCompletionContext(source, 0, 14);
 
     switch (context) {
-        .after_record_dot => |access| {
+        .after_value_dot => |access| {
             try std.testing.expectEqualStrings("my_var", access.access_chain);
         },
         else => try std.testing.expect(false), // Should be after_record_dot

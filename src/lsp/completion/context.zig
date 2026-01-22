@@ -9,14 +9,16 @@ const std = @import("std");
 pub const CompletionContext = union(enum) {
     /// After a dot with a module prefix: "Str." or "List."
     after_module_dot: []const u8,
-    /// After a dot with a record variable: "myRecord."
-    after_record_dot: struct {
+    /// After a dot with a value, either a record or a normal value for method completion : "myVal."
+    after_value_dot: struct {
         /// The full dotted access chain before the dot (e.g., "myrec.subrec")
         access_chain: []const u8,
         /// Byte offset of the start of the chain
         chain_start: u32,
         /// Byte offset of the start of the segment before the dot
         member_start: u32,
+
+        dot_offset: u32,
     },
     /// After a dot whose receiver is not a plain identifier (e.g., "func().")
     after_receiver_dot: struct {
@@ -100,9 +102,10 @@ pub fn detectCompletionContext(source: []const u8, line: u32, character: u32) Co
                         return .{ .after_module_dot = ident_name };
                     } else {
                         // Lowercase - record field access (e.g., "myRecord.")
-                        return .{ .after_record_dot = .{
+                        return .{ .after_value_dot = .{
                             .access_chain = access_chain,
                             .chain_start = @intCast(chain_start),
+                            .dot_offset = @intCast(pos - 1),
                             .member_start = @intCast(ident_start),
                         } };
                     }
@@ -151,17 +154,17 @@ test "detectCompletionContext: after module dot" {
 test "detectCompletionContext: after record dot" {
     const source = "myRecord.";
     const ctx = detectCompletionContext(source, 0, 9);
-    try std.testing.expect(ctx == .after_record_dot);
-    try std.testing.expectEqualStrings("myRecord", ctx.after_record_dot.access_chain);
+    try std.testing.expect(ctx == .after_value_dot);
+    try std.testing.expectEqualStrings("myRecord", ctx.after_value_dot.access_chain);
 }
 
 test "detectCompletionContext: after nested record dot" {
     const source = "myrec.subrec.";
     const ctx = detectCompletionContext(source, 0, 13);
-    try std.testing.expect(ctx == .after_record_dot);
-    try std.testing.expectEqualStrings("myrec.subrec", ctx.after_record_dot.access_chain);
-    try std.testing.expectEqual(@as(u32, 0), ctx.after_record_dot.chain_start);
-    try std.testing.expectEqual(@as(u32, 6), ctx.after_record_dot.member_start);
+    try std.testing.expect(ctx == .after_value_dot);
+    try std.testing.expectEqualStrings("myrec.subrec", ctx.after_value_dot.access_chain);
+    try std.testing.expectEqual(@as(u32, 0), ctx.after_value_dot.chain_start);
+    try std.testing.expectEqual(@as(u32, 6), ctx.after_value_dot.member_start);
 }
 
 test "detectCompletionContext: after receiver dot" {
