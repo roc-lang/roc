@@ -1278,11 +1278,7 @@ fn generateDispatchMatch(
                 .called_via = .apply,
             },
         }, base.Region.zero());
-    } else blk: {
-        // Fallback: no lifted function pattern (shouldn't happen)
-        // Transform the lambda body to handle nested closures (old behavior)
-        break :blk try self.transformExpr(closure_info.lambda_body);
-    };
+    } else unreachable; // lifted_fn_pattern is always set
 
     // Step 4: Create the match branch
     const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
@@ -1416,10 +1412,7 @@ fn generateLambdaSetDispatchMatch(
                     .called_via = .apply,
                 },
             }, base.Region.zero());
-        } else blk: {
-            // Fallback: no lifted function pattern (shouldn't happen)
-            break :blk try self.transformExpr(closure_info.lambda_body);
-        };
+        } else unreachable; // lifted_fn_pattern is always set
 
         // Step 4: Create match branch pattern
         const branch_pattern_start = self.module_env.store.scratchMatchBranchPatternTop();
