@@ -285,8 +285,10 @@ jobs:
           - aarch64-linux-musl
           - aarch64-macos-none
           - aarch64-windows-gnu
-          - arm-linux-musleabihf
-          - x86-linux-musl
+          # NOTE: 32-bit targets skipped on more-dev-backend branch
+          # because MonoExprCodeGen only supports 64-bit architectures (x86_64, aarch64)
+          # - arm-linux-musleabihf
+          # - x86-linux-musl
           - x86_64-linux-musl
           - x86_64-macos-none
           - x86_64-windows-gnu
