@@ -266,6 +266,6 @@ main! = |_| {}
 		(patt (type "a, b -> a"))
 		(patt (type "_arg -> {}")))
 	(expressions
-		(expr (type "a, Error -> a"))
+		(expr (type "a, b -> a"))
 		(expr (type "_arg -> {}"))))
 ~~~

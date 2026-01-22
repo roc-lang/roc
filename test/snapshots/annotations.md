@@ -30,9 +30,9 @@ mkPairInvalid = |x, y| Pair.Pair(x, y)
 ~~~
 # EXPECTED
 TYPE MISMATCH - annotations.md:16:21:16:35
-MISSING METHOD - annotations.md:16:33:16:34
+TYPE MISMATCH - annotations.md:16:33:16:34
 TYPE MISMATCH - annotations.md:19:22:19:41
-MISSING METHOD - annotations.md:19:32:19:33
+TYPE MISMATCH - annotations.md:19:32:19:33
 INVALID NOMINAL TAG - annotations.md:22:24:22:39
 # PROBLEMS
 **TYPE MISMATCH**
@@ -51,19 +51,17 @@ But the type annotation says it should have the type:
 
     Pair(U8)
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **annotations.md:16:33:16:34:**
 ```roc
 failPairDiffTypes = mkPair("1", 2)
 ```
                                 ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -81,19 +79,24 @@ But the type annotation says it should have the type:
 
     Pair(U64)
 
-**MISSING METHOD**
-This **from_numeral** method is being called on a value whose type doesn't have that method:
+**TYPE MISMATCH**
+This number is being used where a non-number type is needed:
 **annotations.md:19:32:19:33:**
 ```roc
 failPairDiffTypes2 = Pair.Pair(1, "str")
 ```
                                ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The type was determined to be non-numeric here:
+**annotations.md:19:35:19:40:**
+```roc
+failPairDiffTypes2 = Pair.Pair(1, "str")
+```
+                                  ^^^^^
+
+Other code expects this to have the type:
 
     Str
-
-**Hint:** For this to work, the type would need to have a method named **from_numeral** associated with it in the type's declaration.
 
 **INVALID NOMINAL TAG**
 I'm having trouble with this nominal tag:
@@ -363,7 +366,7 @@ NO CHANGE
 		(expr (type "Pair(Str)"))
 		(expr (type "a, a -> Pair(a)"))
 		(expr (type "Pair(U8)"))
-		(expr (type "Error"))
-		(expr (type "Error"))
-		(expr (type "a, b -> Error"))))
+		(expr (type "Pair(U8)"))
+		(expr (type "Pair(U64)"))
+		(expr (type "a, b -> Pair(a)"))))
 ~~~

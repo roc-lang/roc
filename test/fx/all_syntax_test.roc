@@ -195,21 +195,38 @@ record_update_2 = |person| {
 	{ ..person, age: 31 }
 }
 
+number_literals : {
+	usage_based: I64,
+	explicit_u8: U8,
+	explicit_i8: I8,
+	explicit_u16: U16,
+	explicit_i16: I16,
+	explicit_u32: U32,
+	explicit_i32: I32,
+	explicit_u64: U64,
+	explicit_i64: I64,
+	explicit_u128: U128,
+	explicit_i128: I128,
+	# Note: F32, F64, and Dec literals use type inference which doesn't work with Str.inspect
+	# So we use simple Dec literals here
+	explicit_dec: Dec,
+	hex: I64,
+	octal: I64,
+	binary: I64,
+}
 number_literals = {
-	usage_based: 5, # Dec by default
-	explicit_u8: 5u8,
-	explicit_i8: 5i8,
-	explicit_u16: 5u16,
-	explicit_i16: 5i16,
-	explicit_u32: 5u32,
-	explicit_i32: 5i32,
-	explicit_u64: 5u64,
-	explicit_i64: 5i64,
-	explicit_u128: 5u128,
-	explicit_i128: 5i128,
-	explicit_f32: 5.0f32,
-	explicit_f64: 5.0f64,
-	explicit_dec: 5.0dec,
+	usage_based: 5,
+	explicit_u8: 5,
+	explicit_i8: 5,
+	explicit_u16: 5,
+	explicit_i16: 5,
+	explicit_u32: 5,
+	explicit_i32: 5,
+	explicit_u64: 5,
+	explicit_i64: 5,
+	explicit_u128: 5,
+	explicit_i128: 5,
+	explicit_dec: 5.0,
 	hex: 0x5,
 	octal: 0o5,
 	binary: 0b0101,
@@ -240,6 +257,36 @@ early_return = |arg| {
 }
 
 my_concat = Str.concat
+
+# Tags can have multiple payloads
+multi_payload_tag : [Foo(I64, Str), Bar] -> Str
+multi_payload_tag = |tag| match tag {
+	Foo(num, name) => "Foo with ${num.to_str()} and ${name}"
+	Bar => "Just Bar"
+}
+
+# Mark a tag union as open using `..`.
+# This function accepts any tag union containing at least Red and Green.
+color_to_str : [Red, Green, ..] -> Str
+color_to_str = |color| match color {
+	Red => "red"
+	Green => "green"
+	_ => "other color"
+}
+
+# TODO: Closed tag unions with `..[]]` - syntax not implemented yet
+# str_to_color : Str -> [Red, Green, Blue, Other, ..[]]
+
+# Type alias for an extensible tag union. You can use a type var (`others`) like so:
+Letters(others) : [A, B, ..others]
+
+# Use the type alias in a function signature. Pass `[C]` as `others`.
+letter_to_str : Letters([C]) -> Str
+letter_to_str = |letter| match letter {
+	A => "A"
+	B => "B"
+	_ => "other letter"
+}
 
 # If you want to define a function that works for any type that has a specific method, you can use `where`:
 stringify : a -> Str where [a.to_str : a -> Str]
@@ -306,6 +353,17 @@ main! = || {
 	print!(early_return(Bool.False))
 
 	print!(stringify(12345))
+
+	# Tags with multiple payloads
+	print!(multi_payload_tag(Foo(42, "hello")))
+
+	# Open tag unions with `..`
+	# This function accepts [Red, Green, ..] so we can pass Blue too
+	print!(color_to_str(Blue))
+
+	# Type alias for extensible tag union
+	print!(letter_to_str(A))
+	print!(letter_to_str(C)) # C is not in [A, B] but we passed it in the signature of letter_to_str
 
 	# TODO Stdout.line!(readme);
 

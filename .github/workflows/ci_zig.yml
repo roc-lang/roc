@@ -92,9 +92,12 @@ jobs:
           - os: ubuntu-22.04
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: -Dtarget=x86_64-linux-musl
+          - os: ubuntu-24.04
+            cpu_flag: ''
+            target_flag: -Dtarget=x86_64-linux-musl
           - os: ubuntu-24.04-arm
             cpu_flag: ''
-            target_flag: -Dtarget=aarch64-linux-musl
+            target_flag: ''  # Native build for kcov (Zig 0.15.2 x86_64 has DWARF bug)
           - os: windows-2022
             cpu_flag: -Dcpu=x86_64_v3
             target_flag: ''
@@ -112,11 +115,6 @@ jobs:
         with:
           version: 0.15.2
           use-cache: true
-      - if: startsWith(matrix.os, 'ubuntu') || startsWith(matrix.os, 'macos')
-        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # ratchet:cachix/install-nix-action@v31
-        with:
-          nix_path: nixpkgs=channel:nixos-25.05
-
       # temp fix, see https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/CI/near/542085291
       - name: delete llvm-config
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
@@ -127,7 +125,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build -Dfuzz -Dsystem-afl=false -Doptimize=ReleaseFast ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "EndOfStream|Timeout"
+          error_string_contains: "build.zig.zon"
           retry_count: 3
 
       - name: Check Builtin.roc formatting (Unix)
@@ -179,7 +177,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Dfuzz -Dsystem-afl=false ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
           retry_count: 3
 
       # 2) in release mode
@@ -187,7 +185,7 @@ jobs:
         uses: ./.github/actions/flaky-retry
         with:
           command: "zig build test -Doptimize=ReleaseFast -Dfuzz -Dsystem-afl=false ${{ matrix.cpu_flag }} ${{ matrix.target_flag }}"
-          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile"
+          error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
           retry_count: 3
 
       - name: Check for snapshot changes
@@ -252,12 +250,27 @@ jobs:
               exit 1
           }
 
-      - name: Test inside nix too
-        if: ${{ runner.os == 'Linux' || (runner.os == 'macOS' && runner.arch != 'X64') }}
+      # Parser code coverage - run on ARM64 Linux (native build)
+      # Note: Zig 0.15.2 on x86_64 generates invalid DWARF .debug_line sections,
+      # causing libdw to fail parsing user source files. ARM64 works correctly.
+      - name: Install kcov dependencies
+        if: matrix.os == 'ubuntu-24.04-arm'
         run: |
-          git clean -fdx
-          git reset --hard HEAD
-          nix develop ./src/ -c zig build ${{ matrix.target_flag }} && zig build snapshot ${{ matrix.target_flag }} && zig build test ${{ matrix.target_flag }}
+          sudo apt-get update
+          sudo apt-get install -y libdw-dev libcurl4-openssl-dev
+
+      - name: Parser Code Coverage
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          # Build kcov and the test binary via the coverage step
+          # (coverage step runs kcov and generates the report)
+          zig build coverage
+
+          echo "=== Coverage summary ==="
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq '{total: .total_lines, covered: .covered_lines, percent: .percent_covered}'
+
+          echo "=== Files found ==="
+          cat kcov-output/parser/parse_unit_coverage/coverage.json | jq -r '.files[].file' | head -10
 
   zig-cross-compile:
     needs: check-once
@@ -292,3 +305,26 @@ jobs:
   # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
   roc-cross-compile:
     uses: ./.github/workflows/ci_cross_compile.yml
+
+  # Check if nix-related files changed
+  check-nix-changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      nix: ${{ steps.filter.outputs.nix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # ratchet:dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            nix:
+              - 'build.zig'
+              - 'build.zig.zon'
+              - 'flake.lock'
+              - '**/*.nix'
+
+  # Test building inside nix environment
+  nix-build:
+    needs: [check-once, check-nix-changes]
+    if: needs.check-nix-changes.outputs.nix == 'true'
+    uses: ./.github/workflows/ci_zig_nix.yml

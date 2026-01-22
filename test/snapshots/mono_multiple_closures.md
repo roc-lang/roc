@@ -14,9 +14,9 @@ result = func(10, 20)
 ~~~
 # MONO
 ~~~roc
-c1_add_x = |a, captures| a + captures.x
-
 c2_add_y = |b, captures| b + captures.y
+
+c1_add_x = |a, captures| a + captures.x
 
 func = |x, y| {
 	add_x = C1_add_x({ x: x })
@@ -166,9 +166,9 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "c, c -> c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
-		(patt (type "_c where [_d.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), _f.plus : e, e -> (Numeral -> Try(e, [InvalidNumeral(Str)])), e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, e -> e]")))
+		(patt (type "c, d -> e where [c.from_numeral : Numeral -> Try(c, []), c.plus : c, d -> c, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]), e.plus : e, c -> e]"))
+		(patt (type "c where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, d -> c, d.from_numeral : Numeral -> Try(d, []), d.plus : d, e -> d, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]")))
 	(expressions
-		(expr (type "c, c -> (Numeral -> Try(c, [InvalidNumeral(Str)])) where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))
-		(expr (type "Numeral -> Try(c, [InvalidNumeral(Str)]) where [c.from_numeral : Numeral -> Try(c, [InvalidNumeral(Str)]), c.plus : c, c -> c]"))))
+		(expr (type "c, d -> [] where [c.from_numeral : Numeral -> Try(c, []), c.plus : c, d -> c]"))
+		(expr (type "[]"))))
 ~~~

@@ -404,6 +404,7 @@ fn generateAllReports(
             module_env,
             can_ir,
             &solver.snapshots,
+            &solver.problems,
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
@@ -2557,7 +2558,7 @@ fn computeTransformedExprType(
 fn getDefaultedTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, type_var: types.Var) ![]const u8 {
     var seen = std.ArrayList(types.Var).empty;
     defer seen.deinit(allocator);
-    return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen);
+    return getDefaultedTypeStringWithSeen(allocator, can_ir, type_var, &seen, true);
 }
 
 fn getDefaultedTypeStringWithSeen(
@@ -2565,6 +2566,7 @@ fn getDefaultedTypeStringWithSeen(
     can_ir: *ModuleEnv,
     type_var: types.Var,
     seen: *std.ArrayList(types.Var),
+    is_top_level: bool,
 ) ![]const u8 {
     const resolved = can_ir.types.resolveVar(type_var);
 
@@ -2594,40 +2596,46 @@ fn getDefaultedTypeStringWithSeen(
         .structure => |flat_type| {
             switch (flat_type) {
                 .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                    // Recursively default function argument and return types
-                    // Use Roc syntax: a, b -> c (not curried a -> b -> c)
-                    var result = std.array_list.Managed(u8).init(allocator);
-                    errdefer result.deinit();
-
-                    const arg_vars = can_ir.types.sliceVars(func.args);
-                    for (arg_vars, 0..) |arg_var, i| {
-                        if (i > 0) try result.appendSlice(", ");
-                        const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
-                        defer allocator.free(arg_type);
-                        try result.appendSlice(arg_type);
-                    }
-
-                    try result.appendSlice(" -> ");
-
-                    // Check if return type is also a function - if so, wrap in parens
-                    const ret_resolved = can_ir.types.resolveVar(func.ret);
-                    const ret_is_fn = ret_resolved.desc.content == .structure and
-                        (ret_resolved.desc.content.structure == .fn_pure or
-                            ret_resolved.desc.content.structure == .fn_effectful or
-                            ret_resolved.desc.content.structure == .fn_unbound);
-
-                    const ret_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, func.ret, seen);
-                    defer allocator.free(ret_type);
-
-                    if (ret_is_fn) {
-                        try result.append('(');
-                        try result.appendSlice(ret_type);
-                        try result.append(')');
+                    // For top-level function types, let TypeWriter handle it
+                    // so that where clauses are properly included
+                    if (is_top_level) {
+                        // Fall through to TypeWriter at the end
                     } else {
-                        try result.appendSlice(ret_type);
-                    }
+                        // For nested function types (e.g., in record fields), build manually
+                        // Use Roc syntax: a, b -> c (not curried a -> b -> c)
+                        var result = std.array_list.Managed(u8).init(allocator);
+                        errdefer result.deinit();
 
-                    return result.toOwnedSlice();
+                        const arg_vars = can_ir.types.sliceVars(func.args);
+                        for (arg_vars, 0..) |arg_var, i| {
+                            if (i > 0) try result.appendSlice(", ");
+                            const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen, false);
+                            defer allocator.free(arg_type);
+                            try result.appendSlice(arg_type);
+                        }
+
+                        try result.appendSlice(" -> ");
+
+                        // Check if return type is also a function - if so, wrap in parens
+                        const ret_resolved = can_ir.types.resolveVar(func.ret);
+                        const ret_is_fn = ret_resolved.desc.content == .structure and
+                            (ret_resolved.desc.content.structure == .fn_pure or
+                                ret_resolved.desc.content.structure == .fn_effectful or
+                                ret_resolved.desc.content.structure == .fn_unbound);
+
+                        const ret_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, func.ret, seen, false);
+                        defer allocator.free(ret_type);
+
+                        if (ret_is_fn) {
+                            try result.append('(');
+                            try result.appendSlice(ret_type);
+                            try result.append(')');
+                        } else {
+                            try result.appendSlice(ret_type);
+                        }
+
+                        return result.toOwnedSlice();
+                    }
                 },
                 .tag_union => |tag_union| {
                     // Emit tag union as closed union (without extension variable)
@@ -2648,7 +2656,7 @@ fn getDefaultedTypeStringWithSeen(
                             try result.append('(');
                             for (arg_vars, 0..) |arg_var, j| {
                                 if (j > 0) try result.appendSlice(", ");
-                                const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen);
+                                const arg_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, arg_var, seen, false);
                                 defer allocator.free(arg_type);
                                 try result.appendSlice(arg_type);
                             }
@@ -2675,7 +2683,7 @@ fn getDefaultedTypeStringWithSeen(
                         try result.appendSlice(field_name);
                         try result.appendSlice(" : ");
 
-                        const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen);
+                        const field_type = try getDefaultedTypeStringWithSeen(allocator, can_ir, field_var, seen, false);
                         defer allocator.free(field_type);
                         try result.appendSlice(field_type);
                     }
@@ -2692,7 +2700,16 @@ fn getDefaultedTypeStringWithSeen(
     // Use TypeWriter for all other cases - it has proper cycle detection
     var type_writer = try can_ir.initTypeWriter();
     defer type_writer.deinit();
-    try type_writer.write(type_var, .one_line);
+
+    // Enable numeral defaulting for MONO output - flex vars with from_numeral
+    // constraint should display as "Dec" instead of showing the constraint
+    type_writer.setDefaultNumeralsToDec(true);
+
+    if (is_top_level) {
+        try type_writer.write(type_var, .one_line);
+    } else {
+        try type_writer.writeWithoutConstraints(type_var);
+    }
 
     // Copy the result since type_writer will be deinitialized
     return allocator.dupe(u8, type_writer.get());

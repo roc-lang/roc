@@ -200,9 +200,6 @@ fn collectExprDependencies(
                     .s_decl => |decl| {
                         try collectExprDependencies(cir, decl.expr, dependencies, allocator);
                     },
-                    .s_decl_gen => |decl| {
-                        try collectExprDependencies(cir, decl.expr, dependencies, allocator);
-                    },
                     .s_var => |var_stmt| {
                         try collectExprDependencies(cir, var_stmt.expr, dependencies, allocator);
                     },
@@ -246,7 +243,7 @@ fn collectExprDependencies(
         },
 
         // Literals and hosted lambdas have no dependencies
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_str, .e_str_segment, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_hosted_lambda => {},
 
         .e_low_level_lambda => |ll| {
             try collectExprDependencies(cir, ll.body, dependencies, allocator);

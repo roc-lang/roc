@@ -180,6 +180,8 @@ pub const PackageEnv = struct {
 
     // Build status
     remaining_modules: usize = 0,
+    /// ID of the root module (the module passed to buildRoot)
+    root_module_id: ?ModuleId = null,
 
     // Track module discovery order and which modules have had their reports emitted
     discovered: std.ArrayList(ModuleId),
@@ -297,16 +299,18 @@ pub const PackageEnv = struct {
         self.additional_known_modules.deinit(self.gpa);
     }
 
-    /// Get the root module's env (first module added)
+    /// Get the root module's env (the module passed to buildRoot)
     pub fn getRootEnv(self: *PackageEnv) ?*ModuleEnv {
-        if (self.modules.items.len == 0) return null;
-        return if (self.modules.items[0].env) |*env| env else null;
+        const root_id = self.root_module_id orelse return null;
+        if (root_id >= self.modules.items.len) return null;
+        return if (self.modules.items[root_id].env) |*env| env else null;
     }
 
-    /// Get the root module state (first module added)
+    /// Get the root module state (the module passed to buildRoot)
     pub fn getRootModule(self: *PackageEnv) ?*ModuleState {
-        if (self.modules.items.len == 0) return null;
-        return &self.modules.items[0];
+        const root_id = self.root_module_id orelse return null;
+        if (root_id >= self.modules.items.len) return null;
+        return &self.modules.items[root_id];
     }
 
     fn internModuleName(self: *PackageEnv, name: []const u8) !ModuleId {
@@ -325,6 +329,8 @@ pub const PackageEnv = struct {
         const name = moduleNameFromPath(root_file_path);
         const prev_module_count = self.modules.items.len;
         const module_id = try self.ensureModule(name, root_file_path);
+        // Track which module is the root (for getRootEnv)
+        self.root_module_id = module_id;
         // root depth = 0
         try self.setDepthIfSmaller(module_id, 0);
         // Only increment remaining_modules if the root module is new (wasn't already scheduled)
@@ -523,6 +529,17 @@ pub const PackageEnv = struct {
     pub fn getModuleState(self: *PackageEnv, module_name: []const u8) ?*ModuleState {
         if (self.module_names.get(module_name)) |module_id| {
             return &self.modules.items[module_id];
+        }
+        return null;
+    }
+
+    /// Public API to find a module by its filesystem path.
+    /// Returns the ModuleState if found, null otherwise.
+    pub fn findModuleByPath(self: *PackageEnv, path: []const u8) ?*ModuleState {
+        for (self.modules.items) |*module| {
+            if (std.mem.eql(u8, module.path, path)) {
+                return module;
+            }
         }
         return null;
     }
@@ -978,17 +995,49 @@ pub const PackageEnv = struct {
         // Add additional known modules (e.g., from platform exposes for URL platforms)
         // Use the resolver to get the ACTUAL module env if available
         for (additional_known_modules) |km| {
-            const module_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
+            // Extract base module name (e.g., "Stdout" from "pf.Stdout")
+            const base_module_name = if (std.mem.lastIndexOfScalar(u8, km.qualified_name, '.')) |dot_idx|
+                km.qualified_name[dot_idx + 1 ..]
+            else
+                km.qualified_name;
+
+            // Create identifiers for both the unqualified name and the qualified name
+            const base_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
             const qualified_ident = try env.insertIdent(base.Ident.for_text(km.qualified_name));
-            if (!module_envs_map.contains(module_ident)) {
-                // Try to get the actual module env using the resolver
-                const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
-                    if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
-                        break :blk mod_env;
-                    }
-                    break :blk builtin_module_env;
-                } else builtin_module_env;
-                try module_envs_map.put(module_ident, .{ .env = actual_env, .qualified_type_ident = qualified_ident });
+
+            // Try to get the actual module env using the resolver
+            const actual_env: *const ModuleEnv = if (resolver) |res| blk: {
+                if (res.getEnv(res.ctx, package_name, km.import_name)) |mod_env| {
+                    break :blk mod_env;
+                }
+                break :blk builtin_module_env;
+            } else builtin_module_env;
+
+            // For platform type modules, set statement_idx so method lookups work correctly
+            const statement_idx: ?can.CIR.Statement.Idx = if (actual_env != builtin_module_env) stmt_blk: {
+                // Look up the type in the module's exposed_items to get the actual node index
+                const type_ident_in_module = actual_env.common.findIdent(base_module_name) orelse break :stmt_blk null;
+                const type_node_idx = actual_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
+                break :stmt_blk @enumFromInt(type_node_idx);
+            } else null;
+
+            const entry = Can.AutoImportedType{
+                .env = actual_env,
+                .statement_idx = statement_idx,
+                .qualified_type_ident = base_ident,
+                .is_package_qualified = true,
+            };
+
+            // Add entry for the UNQUALIFIED name (e.g., "Stdout", "Builder")
+            // This is used for type annotations like `my_var : Builder`
+            if (!module_envs_map.contains(base_ident)) {
+                try module_envs_map.put(base_ident, entry);
+            }
+
+            // Also add entry for the QUALIFIED name (e.g., "pf.Stdout", "pf.Builder")
+            // This is used when scopeLookupModule returns the qualified module name
+            if (!module_envs_map.contains(qualified_ident)) {
+                try module_envs_map.put(qualified_ident, entry);
             }
         }
 
@@ -1108,7 +1157,7 @@ pub const PackageEnv = struct {
 
         // Build reports from problems
         const check_diag_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, st.path, imported_envs.items, &checker.import_mapping);
+        var rb = ReportBuilder.init(self.gpa, env, env, &checker.snapshots, &checker.problems, st.path, imported_envs.items, &checker.import_mapping);
         defer rb.deinit();
         for (checker.problems.problems.items) |prob| {
             const rep = rb.build(prob) catch continue;
@@ -1226,7 +1275,7 @@ pub const PackageEnv = struct {
         return null;
     }
 
-    fn moduleNameFromPath(path: []const u8) []const u8 {
+    pub fn moduleNameFromPath(path: []const u8) []const u8 {
         const base_name = std.fs.path.basename(path);
         if (std.mem.lastIndexOfScalar(u8, base_name, '.')) |dot| return base_name[0..dot];
         return base_name;

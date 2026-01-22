@@ -196,7 +196,7 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -227,7 +227,7 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -385,11 +385,6 @@ fn checkForCapturesRecursive(module_env: *can.ModuleEnv, expr_idx: can.CIR.Expr.
                 const stmt = module_env.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        if (checkForCapturesRecursive(module_env, decl.expr)) {
-                            return true;
-                        }
-                    },
-                    .s_decl_gen => |decl| {
                         if (checkForCapturesRecursive(module_env, decl.expr)) {
                             return true;
                         }
@@ -747,7 +742,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();

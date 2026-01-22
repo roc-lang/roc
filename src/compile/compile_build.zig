@@ -22,17 +22,23 @@ const unbundle = @import("unbundle");
 const Report = reporting.Report;
 const ReportBuilder = check.ReportBuilder;
 const BuiltinModules = eval.BuiltinModules;
-const Mode = @import("compile_package.zig").Mode;
+const compile_package = @import("compile_package.zig");
+const Mode = compile_package.Mode;
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const Can = can.Can;
 const Check = check.Check;
-const PackageEnv = @import("compile_package.zig").PackageEnv;
-const ModuleTimingInfo = @import("compile_package.zig").TimingInfo;
-const ImportResolver = @import("compile_package.zig").ImportResolver;
-const ScheduleHook = @import("compile_package.zig").ScheduleHook;
+const PackageEnv = compile_package.PackageEnv;
+const ModuleTimingInfo = compile_package.TimingInfo;
+const ImportResolver = compile_package.ImportResolver;
+const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
-const FileProvider = @import("compile_package.zig").FileProvider;
+const FileProvider = compile_package.FileProvider;
+
+/// Cache version string that includes the build mode to prevent debug/release cache incompatibility.
+/// A cache created by a debug build should not be loaded by a release build (and vice versa)
+/// because the struct layouts may differ between build modes.
+const cache_compiler_version = "roc-zig-dev-" ++ @tagName(builtin.mode);
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -217,7 +223,7 @@ const GlobalQueue = struct {
                                 };
                                 defer be.gpa.free(source);
 
-                                const cache_result = cm.loadFromCache("roc-zig-dev", source, task.module_name);
+                                const cache_result = cm.loadFromCache(cache_compiler_version, source, task.module_name);
                                 switch (cache_result) {
                                     .hit => |hit| {
                                         // Cache hit! Update the module state with cached data
@@ -255,7 +261,7 @@ const GlobalQueue = struct {
                                     };
                                     defer be.gpa.free(source);
 
-                                    const cache_key = CacheManager.generateCacheKey(source, "roc-zig-dev");
+                                    const cache_key = CacheManager.generateCacheKey(source, cache_compiler_version);
                                     // For now, just pass 0 for error and warning counts
                                     // TODO: Extract actual error/warning counts from reports
                                     const error_count: u32 = 0;
@@ -592,30 +598,41 @@ pub const BuildEnv = struct {
     /// This is called after all modules are compiled and type-checked.
     fn checkPlatformRequirements(self: *BuildEnv) !void {
         // Find the app and platform packages
-        var app_pkg: ?[]const u8 = null;
-        var platform_pkg: ?[]const u8 = null;
+        var app_pkg_info: ?Package = null;
+        var platform_pkg_info: ?Package = null;
+        var app_pkg_name: ?[]const u8 = null;
+        var platform_pkg_name: ?[]const u8 = null;
 
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
             const pkg = entry.value_ptr.*;
             if (pkg.kind == .app) {
-                app_pkg = entry.key_ptr.*;
+                app_pkg_info = pkg;
+                app_pkg_name = entry.key_ptr.*;
             } else if (pkg.kind == .platform) {
-                platform_pkg = entry.key_ptr.*;
+                platform_pkg_info = pkg;
+                platform_pkg_name = entry.key_ptr.*;
             }
         }
 
         // If we don't have both an app and a platform, nothing to check
-        const app_name = app_pkg orelse return;
-        const platform_name = platform_pkg orelse return;
+        const app_name = app_pkg_name orelse return;
+        const platform_name = platform_pkg_name orelse return;
+        const platform_pkg = platform_pkg_info orelse return;
 
         // Get the schedulers for both packages
         const app_sched = self.schedulers.get(app_name) orelse return;
         const platform_sched = self.schedulers.get(platform_name) orelse return;
 
-        // Get the root module envs for both packages
+        // Get the app's root module env
         const app_root_env = app_sched.getRootEnv() orelse return;
-        const platform_root_env = platform_sched.getRootEnv() orelse return;
+
+        // Get the platform's root module by finding the module that matches the root file
+        // Note: getRootEnv() returns modules.items[0], but that may not be the actual platform
+        // root file if other modules (like exposed imports) were scheduled first.
+        const platform_root_module_name = PackageEnv.moduleNameFromPath(platform_pkg.root_file);
+        const platform_module_state = platform_sched.getModuleState(platform_root_module_name) orelse return;
+        const platform_root_env = if (platform_module_state.env) |*env| env else return;
 
         // If the platform has no requires_types, nothing to check
         if (platform_root_env.requires_types.items.items.len == 0) {
@@ -665,6 +682,25 @@ pub const BuildEnv = struct {
             if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
                 try platform_to_app_idents.put(required_type.ident, app_ident);
             }
+
+            // Also add for-clause type alias names (Model, model) to the translation map
+            const all_aliases = platform_root_env.for_clause_aliases.items.items;
+            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+            for (type_aliases_slice) |alias| {
+                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
+                // the mapping can be created even if canonicalization hasn't added it yet.
+                // The app will provide the actual type alias definition which will be checked later.
+                const alias_name_text = platform_root_env.getIdent(alias.alias_name);
+                const alias_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
+                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
+
+                // Add rigid name (e.g., "model") - insert it into app's ident store since
+                // the rigid name is a platform concept that gets copied during type processing.
+                // Using insert (not find) ensures the app's ident store has this name for later lookups.
+                const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
+                const rigid_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
+                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
+            }
         }
 
         // Check platform requirements against app exports
@@ -679,6 +715,7 @@ pub const BuildEnv = struct {
                 app_root_env,
                 app_root_env,
                 &checker.snapshots,
+                &checker.problems,
                 app_root_module.path,
                 &.{},
                 &checker.import_mapping,
@@ -1024,7 +1061,7 @@ pub const BuildEnv = struct {
                 defer self.gpa.free(plat_rel);
 
                 // Check if this is a URL - if so, resolve it to a cached local path
-                const plat_path = if (isUrl(plat_rel)) blk: {
+                const plat_path = if (base.url.isSafeUrl(plat_rel)) blk: {
                     const cached_path = try self.resolveUrlPackage(plat_rel);
                     break :blk cached_path;
                 } else blk: {
@@ -1043,7 +1080,7 @@ pub const BuildEnv = struct {
 
                 // For URL-resolved packages, add the cache directory to workspace roots
                 // so that imports within the cached package can be resolved
-                if (isUrl(plat_rel)) {
+                if (base.url.isSafeUrl(plat_rel)) {
                     if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
                         try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
                     }
@@ -1063,7 +1100,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1098,7 +1135,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1139,7 +1176,7 @@ pub const BuildEnv = struct {
                     defer self.gpa.free(relp);
 
                     // Check if this is a URL - if so, resolve it to a cached local path
-                    const v = if (isUrl(relp)) blk: {
+                    const v = if (base.url.isSafeUrl(relp)) blk: {
                         const cached_path = try self.resolveUrlPackage(relp);
                         // Add cache directory to workspace roots for URL packages
                         if (std.fs.path.dirname(cached_path)) |cache_pkg_dir| {
@@ -1257,11 +1294,6 @@ pub const BuildEnv = struct {
         // This reallocates to the correct size if normalization occurs, ensuring
         // proper memory management when the buffer is freed later.
         return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
-    }
-
-    /// Check if a path is a URL (http:// or https://)
-    fn isUrl(path: []const u8) bool {
-        return std.mem.startsWith(u8, path, "http://") or std.mem.startsWith(u8, path, "https://");
     }
 
     /// Cross-platform environment variable lookup.
@@ -1516,7 +1548,7 @@ pub const BuildEnv = struct {
 
             const p_path = info.platform_path.?;
 
-            const abs = if (isUrl(p_path))
+            const abs = if (base.url.isSafeUrl(p_path))
                 try self.resolveUrlPackage(p_path)
             else
                 try self.makeAbsolute(p_path);
@@ -1533,6 +1565,9 @@ pub const BuildEnv = struct {
             const dep_key = try self.gpa.dupe(u8, alias);
             const dep_name = try self.gpa.dupe(u8, alias);
             try self.ensurePackage(dep_name, .platform, abs);
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {
@@ -1565,6 +1600,9 @@ pub const BuildEnv = struct {
                     try self.ensurePackage(module_name, .module, module_path);
                 }
 
+                // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+                pack = self.packages.getPtr(pkg_name).?;
+
                 // Also add to app's shorthands so imports resolve correctly
                 const mod_key = try self.gpa.dupe(u8, module_name);
                 if (pack.shorthands.fetchRemove(mod_key)) |old_entry| {
@@ -1594,7 +1632,7 @@ pub const BuildEnv = struct {
             const alias = e.key_ptr.*;
             const path = e.value_ptr.*;
 
-            const abs = if (isUrl(path))
+            const abs = if (base.url.isSafeUrl(path))
                 try self.resolveUrlPackage(path)
             else
                 try self.makeAbsolute(path);
@@ -1626,6 +1664,9 @@ pub const BuildEnv = struct {
             const dep_name = try self.gpa.dupe(u8, alias);
 
             try self.ensurePackage(dep_name, child_info.kind, abs);
+
+            // Re-fetch pack pointer since ensurePackage may have caused HashMap reallocation
+            pack = self.packages.getPtr(pkg_name).?;
 
             // If key already exists, free the old value before overwriting
             if (pack.shorthands.fetchRemove(dep_key)) |old_entry| {

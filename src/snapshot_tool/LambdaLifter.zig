@@ -298,18 +298,6 @@ fn transformBodyWithCaptures(
                         );
                         try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
                     },
-                    .s_decl_gen => |decl| {
-                        const new_expr = try self.transformBodyWithCaptures(decl.expr);
-                        const new_stmt_idx = try self.module_env.store.addStatement(
-                            CIR.Statement{ .s_decl_gen = .{
-                                .pattern = decl.pattern,
-                                .expr = new_expr,
-                                .anno = decl.anno,
-                            } },
-                            base.Region.zero(),
-                        );
-                        try self.module_env.store.scratch.?.statements.append(new_stmt_idx);
-                    },
                     else => {
                         try self.module_env.store.scratch.?.statements.append(stmt_idx);
                     },
@@ -561,7 +549,7 @@ fn transformBodyWithCaptures(
             const new_expr = try self.transformBodyWithCaptures(ret.expr);
             if (new_expr == ret.expr) return body_idx;
             return try self.module_env.store.addExpr(Expr{
-                .e_return = .{ .expr = new_expr },
+                .e_return = .{ .expr = new_expr, .lambda = ret.lambda, .context = ret.context },
             }, base.Region.zero());
         },
 
@@ -587,6 +575,8 @@ fn transformBodyWithCaptures(
         .e_frac_f64,
         .e_dec,
         .e_dec_small,
+        .e_typed_int,
+        .e_typed_frac,
         .e_str_segment,
         .e_str,
         .e_lookup_external,
@@ -612,6 +602,7 @@ fn transformBodyWithCaptures(
                     .cond = new_cond,
                     .branches = match.branches,
                     .exhaustive = match.exhaustive,
+                    .is_try_suffix = match.is_try_suffix,
                 },
             }, base.Region.zero());
         },

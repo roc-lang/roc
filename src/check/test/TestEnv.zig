@@ -547,6 +547,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
         self.module_env,
         self.module_env,
         &self.checker.snapshots,
+        &self.checker.problems,
         "test",
         &.{},
         &self.checker.import_mapping,
@@ -557,6 +558,40 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     defer report.deinit();
 
     try testing.expectEqualStrings(expected, report.title);
+}
+
+/// Assert that there was a single type error when checking the input. Assert
+/// that the title of the type error matches the expected title.
+pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
+    try self.assertNoParseProblems();
+    // try self.assertNoCanProblems();
+
+    // Assert 1 problem
+    try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    // Assert the rendered problem matches the expected problem
+    var report_builder = problem_mod.ReportBuilder.init(
+        self.gpa,
+        self.module_env,
+        self.module_env,
+        &self.checker.snapshots,
+        &self.checker.problems,
+        "test",
+        &.{},
+        &self.checker.import_mapping,
+    );
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    try renderReportToMarkdownBuffer(&report_buf, &report);
+
+    try testing.expectEqualStrings(expected, report_buf.items);
 }
 
 /// Assert that the first type error matches the expected title (allows multiple errors).
@@ -573,6 +608,7 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
         self.module_env,
         self.module_env,
         &self.checker.snapshots,
+        &self.checker.problems,
         "test",
         &.{},
         &self.checker.import_mapping,
@@ -645,7 +681,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
 }
 
 fn assertNoTypeProblems(self: *TestEnv) !void {
-    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, "test", &.{}, &self.checker.import_mapping);
+    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping);
     defer report_builder.deinit();
 
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);

@@ -269,7 +269,7 @@ pub const ModuleTest = struct {
 /// unnamed wrappers) so callers can correct the reported totals.
 pub const ModuleTestsResult = struct {
     /// Compile/run steps for each module's tests, in creation order.
-    tests: [20]ModuleTest,
+    tests: [21]ModuleTest,
     /// Number of synthetic passes the summary must subtract when filters were injected.
     /// Includes aggregator ensures and unconditional wrapper tests.
     forced_passes: usize,
@@ -300,6 +300,7 @@ pub const ModuleType = enum {
     unbundle,
     base58,
     lsp,
+    backend,
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
@@ -317,16 +318,17 @@ pub const ModuleType = enum {
             .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options },
             .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting },
             .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting },
+            .eval => &.{ .tracy, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .build_options, .reporting, .backend },
             .compile => &.{ .tracy, .build_options, .fs, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .eval, .unbundle },
             .ipc => &.{},
-            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval },
+            .repl => &.{ .base, .collections, .compile, .parse, .types, .can, .check, .builtins, .layout, .eval, .backend },
             .fmt => &.{ .base, .parse, .collections, .can, .fs, .tracy },
             .watch => &.{.build_options},
             .bundle => &.{ .base, .collections, .base58, .unbundle },
             .unbundle => &.{ .base, .collections, .base58 },
             .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .fs },
+            .lsp => &.{ .compile, .reporting, .build_options, .fs, .base, .parse, .can, .types, .fmt },
+            .backend => &.{ .base, .layout },
         };
     }
 };
@@ -356,6 +358,7 @@ pub const RocModules = struct {
     unbundle: *Module,
     base58: *Module,
     lsp: *Module,
+    backend: *Module,
     roc_target: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
@@ -389,6 +392,7 @@ pub const RocModules = struct {
             .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
             .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
             .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
+            .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/dev/mod.zig") }),
             .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
         };
 
@@ -428,6 +432,7 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp,
+            .backend,
         };
 
         // Setup dependencies for each module
@@ -471,6 +476,7 @@ pub const RocModules = struct {
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
+        step.root_module.addImport("backend", self.backend);
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
@@ -503,6 +509,7 @@ pub const RocModules = struct {
             .unbundle => self.unbundle,
             .base58 => self.base58,
             .lsp => self.lsp,
+            .backend => self.backend,
         };
     }
 
@@ -544,6 +551,7 @@ pub const RocModules = struct {
             .unbundle,
             .base58,
             .lsp,
+            .backend,
         };
 
         var tests: [test_configs.len]ModuleTest = undefined;

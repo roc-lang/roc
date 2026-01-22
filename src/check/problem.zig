@@ -21,7 +21,15 @@ const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 const Ident = base.Ident;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
-const ExtraStringIdx = snapshot.ExtraStringIdx;
+
+const ByteList = std.array_list.Managed(u8);
+const ByteListRange = struct { start: usize, count: usize };
+
+/// Alias into the Store.extra_strings_backing array
+pub const ExtraStringIdx = ByteListRange;
+
+/// A range of patterns
+pub const MissingPatternsRange = struct { start: usize, count: usize };
 
 const Var = types_mod.Var;
 
@@ -83,19 +91,19 @@ pub const PlatformDefNotFound = struct {
 
 /// A crash that occurred during compile-time evaluation
 pub const ComptimeCrash = struct {
-    message: []const u8,
+    message: ExtraStringIdx,
     region: base.Region,
 };
 
 /// An expect that failed during compile-time evaluation
 pub const ComptimeExpectFailed = struct {
-    message: []const u8,
+    message: ExtraStringIdx,
     region: base.Region,
 };
 
 /// An error that occurred during compile-time evaluation
 pub const ComptimeEvalError = struct {
-    error_name: []const u8,
+    error_name: ExtraStringIdx,
     region: base.Region,
 };
 
@@ -160,10 +168,16 @@ pub const TypePair = struct {
 pub const TypeMismatchDetail = union(enum) {
     incompatible_list_elements: IncompatibleListElements,
     incompatible_if_cond,
+    early_return,
+    try_suffix_return,
+    /// A statement expression must evaluate to {} but has a different type
+    statement_not_unit,
     incompatible_if_branches: IncompatibleIfBranches,
     incompatible_match_cond_pattern: IncompatibleMatchCondPattern,
     incompatible_match_patterns: IncompatibleMatchPatterns,
     incompatible_match_branches: IncompatibleMatchBranches,
+    non_exhaustive_match: NonExhaustiveMatch,
+    invalid_try_operator: InvalidTryOperator,
     invalid_bool_binop: InvalidBoolBinop,
     invalid_nominal_tag,
     invalid_nominal_record,
@@ -172,6 +186,14 @@ pub const TypeMismatchDetail = union(enum) {
     cross_module_import: CrossModuleImport,
     incompatible_fn_call_arg: IncompatibleFnCallArg,
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
+    /// App's export type doesn't match the platform's required type
+    incompatible_platform_requirement: IncompatiblePlatformRequirement,
+};
+
+/// Problem data for platform requirement type mismatches
+pub const IncompatiblePlatformRequirement = struct {
+    /// The identifier that the platform requires
+    required_ident: Ident.Idx,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -249,8 +271,8 @@ pub const NonExhaustiveMatch = struct {
     match_expr: CIR.Expr.Idx,
     /// Snapshot of the condition type for error messages
     condition_snapshot: SnapshotContentIdx,
-    /// Indices into the snapshot store's extra strings for missing pattern descriptions
-    missing_patterns: []const ExtraStringIdx,
+    /// Range into the problems store's missing_patterns_backing for pattern indices
+    missing_patterns: MissingPatternsRange,
 };
 
 /// Problem data for a redundant pattern in a match
@@ -265,6 +287,12 @@ pub const UnmatchablePattern = struct {
     match_expr: CIR.Expr.Idx,
     num_branches: u32,
     problem_branch_index: u32,
+};
+
+/// Problem data for when the `?` operator is used on a non-Try type.
+/// A Try type is a tag union with Ok and Err tags.
+pub const InvalidTryOperator = struct {
+    expr: CIR.Expr.Idx,
 };
 
 /// Problem data for when a bool binop (`and` or `or`) is invalid
@@ -302,6 +330,8 @@ pub const DispatcherDoesNotImplMethod = struct {
     fn_var: Var,
     method_name: Ident.Idx,
     origin: types_mod.StaticDispatchConstraint.Origin,
+    /// Optional numeric literal info for from_numeral constraints
+    num_literal: ?types_mod.NumeralInfo = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
@@ -379,6 +409,7 @@ pub const ReportBuilder = struct {
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
+    problems: *const Store,
     source: []const u8,
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
@@ -391,6 +422,7 @@ pub const ReportBuilder = struct {
         module_env: *ModuleEnv,
         can_ir: *const ModuleEnv,
         snapshots: *const snapshot.Store,
+        problems: *const Store,
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
@@ -401,6 +433,7 @@ pub const ReportBuilder = struct {
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
+            .problems = problems,
             .import_mapping = import_mapping,
             .source = module_env.common.source,
             .filename = filename,
@@ -459,6 +492,15 @@ pub const ReportBuilder = struct {
                         .incompatible_if_cond => {
                             return self.buildInvalidIfCondition(mismatch.types);
                         },
+                        .statement_not_unit => {
+                            return self.buildStatementNotUnit(mismatch.types);
+                        },
+                        .early_return => {
+                            return self.buildEarlyReturn(mismatch.types);
+                        },
+                        .try_suffix_return => {
+                            return self.buildTrySuffixReturn(mismatch.types);
+                        },
                         .incompatible_if_branches => |data| {
                             return self.buildIncompatibleIfBranches(mismatch.types, data);
                         },
@@ -470,6 +512,12 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_match_branches => |data| {
                             return self.buildIncompatibleMatchBranches(mismatch.types, data);
+                        },
+                        .non_exhaustive_match => |data| {
+                            return self.buildNonExhaustiveMatch(data);
+                        },
+                        .invalid_try_operator => |data| {
+                            return self.buildInvalidTryOperator(mismatch.types, data);
                         },
                         .invalid_bool_binop => |data| {
                             return self.buildInvalidBoolBinop(mismatch.types, data);
@@ -494,6 +542,10 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(mismatch.types, data);
+                        },
+                        .incompatible_platform_requirement => {
+                            // For now, use generic type mismatch report for platform requirements
+                            return self.buildGenericTypeMismatchReport(mismatch.types);
                         },
                     }
                 } else {
@@ -836,6 +888,176 @@ pub const ReportBuilder = struct {
         try report.document.addText(" or ");
         try report.document.addAnnotated("False", .tag_name);
         try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for statement expressions that don't return {}
+    fn buildStatementNotUnit(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "UNUSED VALUE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned strings
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addReflowingText("This expression produces a value, but it's not being used:");
+        try report.document.addLineBreak();
+
+        // Get the region info for the expression
+        const actual_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+        const actual_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            actual_region.start.offset,
+            actual_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, actual_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = actual_region_info.start_line_idx + 1,
+            .start_column = actual_region_info.start_col_idx + 1,
+            .end_line = actual_region_info.end_line_idx + 1,
+            .end_column = actual_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        // Create underline regions
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = actual_region_info.start_line_idx + 1,
+                .start_column = actual_region_info.start_col_idx + 1,
+                .end_line = actual_region_info.end_line_idx + 1,
+                .end_column = actual_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        // Show the type
+        try report.document.addReflowingText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_type);
+        try report.document.addLineBreak();
+
+        // Add explanation
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("Since this expression is used as a statement, it must evaluate to ");
+        try report.document.addAnnotated("{}", .type_variable);
+        try report.document.addText(". ");
+        try report.document.addReflowingText("If you don't need the value, you can ignore it with ");
+        try report.document.addAnnotated("_ =", .keyword);
+        try report.document.addText(".");
+
+        return report;
+    }
+
+    /// Build a report for statement expressions that don't return {}
+    fn buildEarlyReturn(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This ");
+        try report.document.addAnnotated("return", .keyword);
+        try report.document.addReflowingText(" does not match the function's return type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("It has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_actual);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the function's return type is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" All ");
+        try report.document.addAnnotated("return", .keyword);
+        try report.document.addReflowingText(" statements and the final expression in a function must have the same type.");
+
+        return report;
+    }
+
+    /// Build a report for try suffix (?) returning a type that doesn't match the function's return type
+    fn buildTrySuffixReturn(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const owned_actual = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+        const owned_expected = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(types.actual_var)));
+
+        // Add source region highlighting
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addReflowingText("This ");
+        try report.document.addAnnotated("?", .inline_code);
+        try report.document.addReflowingText(" may return early with a type that doesn't match the function body:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addText("On error, this would return:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_actual);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("But the function body evaluates to:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(owned_expected);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" The error types from all ");
+        try report.document.addAnnotated("?", .inline_code);
+        try report.document.addReflowingText(" operators and the function body must be compatible since any of them could be the actual return value.");
 
         return report;
     }
@@ -1291,6 +1513,138 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("To learn about tags, see ");
         try report.document.addLink("https://www.roc-lang.org/tutorial#tags");
+
+        return report;
+    }
+
+    /// Build a report for non-exhaustive match
+    fn buildNonExhaustiveMatch(
+        self: *Self,
+        data: NonExhaustiveMatch,
+    ) !Report {
+        var report = Report.init(self.gpa, "NON-EXHAUSTIVE MATCH", .runtime_error);
+        errdefer report.deinit();
+
+        // Add description
+        try report.document.addText("This ");
+        try report.document.addAnnotated("match", .keyword);
+        try report.document.addText(" expression may not handle all possible values:");
+        try report.document.addLineBreak();
+
+        // Get the match expression region
+        const match_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.match_expr)));
+        const match_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            match_region.start.offset,
+            match_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, match_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = match_region_info.start_line_idx + 1,
+            .start_column = match_region_info.start_col_idx + 1,
+            .end_line = match_region_info.end_line_idx + 1,
+            .end_column = match_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = match_region_info.start_line_idx + 1,
+                .start_column = match_region_info.start_col_idx + 1,
+                .end_line = match_region_info.end_line_idx + 1,
+                .end_column = match_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("The value being matched has an open type (can contain additional tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but none of the branches is a catch-all pattern like ");
+        try report.document.addAnnotated("_", .type_variable);
+        try report.document.addText(".");
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for when the `?` operator is used on a non-Try type
+    fn buildInvalidTryOperator(
+        self: *Self,
+        types: TypePair,
+        data: InvalidTryOperator,
+    ) !Report {
+        var report = Report.init(self.gpa, "EXPECTED TRY TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        // Create owned string for the actual type
+        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Add description
+        try report.document.addText("The ");
+        try report.document.addAnnotated("?", .keyword);
+        try report.document.addText(" operator expects a ");
+        try report.document.addAnnotated("Try", .type_variable);
+        try report.document.addText(" type (a tag union containing ONLY ");
+        try report.document.addAnnotated("Ok", .type_variable);
+        try report.document.addText(" and ");
+        try report.document.addAnnotated("Err", .type_variable);
+        try report.document.addText(" tags),");
+        try report.document.addLineBreak();
+        try report.document.addText("but I found:");
+        try report.document.addLineBreak();
+
+        // Get the expression region
+        const expr_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.expr)));
+        const expr_region_info = base.RegionInfo.position(
+            self.source,
+            self.module_env.getLineStarts(),
+            expr_region.start.offset,
+            expr_region.end.offset,
+        ) catch return report;
+
+        // Create the display region
+        const display_region = SourceCodeDisplayRegion{
+            .line_text = self.gpa.dupe(u8, expr_region_info.calculateLineText(self.source, self.module_env.getLineStarts())) catch return report,
+            .start_line = expr_region_info.start_line_idx + 1,
+            .start_column = expr_region_info.start_col_idx + 1,
+            .end_line = expr_region_info.end_line_idx + 1,
+            .end_column = expr_region_info.end_col_idx + 1,
+            .region_annotation = .dimmed,
+            .filename = self.filename,
+        };
+
+        const underline_regions = [_]UnderlineRegion{
+            .{
+                .start_line = expr_region_info.start_line_idx + 1,
+                .start_column = expr_region_info.start_col_idx + 1,
+                .end_line = expr_region_info.end_line_idx + 1,
+                .end_column = expr_region_info.end_col_idx + 1,
+                .annotation = .error_highlight,
+            },
+        };
+
+        try report.document.addSourceCodeWithUnderlines(display_region, &underline_regions);
+        try report.document.addLineBreak();
+
+        try report.document.addText("This expression has type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addAnnotated(actual_type, .type_variable);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addText("Tip: Maybe wrap a value using ");
+        try report.document.addAnnotated("Ok(value)", .type_variable);
+        try report.document.addText(" or ");
+        try report.document.addAnnotated("Err(value)", .type_variable);
+        try report.document.addText(".");
 
         return report;
     }
@@ -2008,6 +2362,11 @@ pub const ReportBuilder = struct {
         self: *Self,
         data: DispatcherDoesNotImplMethod,
     ) !Report {
+        // Special case: number literal being used where a non-number type is expected
+        if (data.origin == .from_numeral) {
+            return self.buildNumberUsedAsNonNumber(data);
+        }
+
         var report = Report.init(self.gpa, "MISSING METHOD", .runtime_error);
         errdefer report.deinit();
 
@@ -2103,6 +2462,63 @@ pub const ReportBuilder = struct {
                 }
             },
         }
+
+        return report;
+    }
+
+    /// Build a report for when a number literal is used where a non-number type is expected
+    fn buildNumberUsedAsNonNumber(
+        self: *Self,
+        data: DispatcherDoesNotImplMethod,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
+
+        // Get the region of the number literal from the num_literal info
+        const num_literal = data.num_literal.?;
+        const num_region = num_literal.region;
+        const num_region_info = self.module_env.calcRegionInfo(num_region);
+
+        // Get the region of the dispatcher (the type that was expected)
+        // This might be different if the type came from somewhere else (e.g., a type annotation)
+        const dispatcher_region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.dispatcher_var))).*;
+
+        try report.document.addReflowingText("This number is being used where a non-number type is needed:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            num_region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        // Check if we have a different origin region we can show
+        if (dispatcher_region.start.offset != num_region.start.offset or
+            dispatcher_region.end.offset != num_region.end.offset)
+        {
+            const dispatcher_region_info = self.module_env.calcRegionInfo(dispatcher_region);
+            try report.document.addReflowingText("The type was determined to be non-numeric here:");
+            try report.document.addLineBreak();
+
+            try report.document.addSourceRegion(
+                dispatcher_region_info,
+                .error_highlight,
+                self.filename,
+                self.source,
+                self.module_env.getLineStarts(),
+            );
+            try report.document.addLineBreak();
+        }
+
+        try report.document.addReflowingText("Other code expects this to have the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(snapshot_str);
 
         return report;
     }
@@ -2932,7 +3348,9 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPTIME CRASH", .runtime_error);
         errdefer report.deinit();
 
-        const owned_message = try report.addOwnedString(data.message);
+        const owned_message = try report.addOwnedString(
+            self.problems.getExtraString(data.message),
+        );
 
         try report.document.addText("This definition crashed during compile-time evaluation:");
         try report.document.addLineBreak();
@@ -2988,7 +3406,9 @@ pub const ReportBuilder = struct {
         var report = Report.init(self.gpa, "COMPTIME EVAL ERROR", .runtime_error);
         errdefer report.deinit();
 
-        const owned_error_name = try report.addOwnedString(data.error_name);
+        const owned_error_name = try report.addOwnedString(
+            self.problems.getExtraString(data.error_name),
+        );
 
         try report.document.addText("This definition could not be evaluated at compile time:");
         try report.document.addLineBreak();
@@ -3044,8 +3464,9 @@ pub const ReportBuilder = struct {
         try report.document.addText("Missing patterns:");
         try report.document.addLineBreak();
 
-        for (data.missing_patterns) |pattern_idx| {
-            const pattern = self.snapshots.getExtraString(pattern_idx);
+        const missing_patterns = self.problems.getMissingPatterns(data.missing_patterns);
+        for (missing_patterns) |pattern_idx| {
+            const pattern = self.problems.getExtraString(pattern_idx);
             const owned_pattern = try report.addOwnedString(pattern);
             try report.document.addText("    ");
             try report.document.addCodeBlock(owned_pattern);
@@ -3210,22 +3631,58 @@ pub const Store = struct {
 
     problems: std.ArrayListAligned(Problem, ALIGNMENT) = .{},
 
+    /// Backing storage for formatted pattern strings
+    extra_strings_backing: ByteList,
+    /// Backing storage for missing patterns index arrays
+    missing_patterns_backing: std.array_list.Managed(ExtraStringIdx),
+
+    pub fn init(gpa: Allocator) std.mem.Allocator.Error!Self {
+        return .{
+            .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, 16),
+            .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
+            .missing_patterns_backing = try std.array_list.Managed(ExtraStringIdx).initCapacity(gpa, 64),
+        };
+    }
+
     pub fn initCapacity(gpa: Allocator, capacity: usize) std.mem.Allocator.Error!Self {
         return .{
             .problems = try std.ArrayListAligned(Problem, ALIGNMENT).initCapacity(gpa, capacity),
+            .extra_strings_backing = try ByteList.initCapacity(gpa, 512),
+            .missing_patterns_backing = try std.array_list.Managed(ExtraStringIdx).initCapacity(gpa, 64),
         };
     }
 
     pub fn deinit(self: *Self, gpa: Allocator) void {
-        // Free the indices slice in non_exhaustive_match problems
-        // (the actual strings are managed by the SnapshotStore)
-        for (self.problems.items) |prob| {
-            switch (prob) {
-                .non_exhaustive_match => |nem| gpa.free(nem.missing_patterns),
-                else => {},
-            }
-        }
+        self.extra_strings_backing.deinit();
+        self.missing_patterns_backing.deinit();
         self.problems.deinit(gpa);
+    }
+
+    /// Put an extra string in the backing store, returning an "id" (range)
+    pub fn putExtraString(self: *Self, str: []const u8) std.mem.Allocator.Error!ExtraStringIdx {
+        const start = self.extra_strings_backing.items.len;
+        try self.extra_strings_backing.appendSlice(str);
+        const end = self.extra_strings_backing.items.len;
+        return ByteListRange{ .start = start, .count = end - start };
+    }
+
+    /// Put an extra string in the backing store, returning an "id" (range)
+    pub fn putFmtExtraString(self: *Self, comptime format: []const u8, args: anytype) std.mem.Allocator.Error!ExtraStringIdx {
+        const start = self.extra_strings_backing.items.len;
+        var writer = self.extra_strings_backing.writer();
+        try writer.print(format, args);
+        const end = self.extra_strings_backing.items.len;
+        return ByteListRange{ .start = start, .count = end - start };
+    }
+
+    /// Get a stored pattern string by its range
+    pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
+        return self.extra_strings_backing.items[idx.start..][0..idx.count];
+    }
+
+    /// Get the slice of missing pattern indices by range
+    pub fn getMissingPatterns(self: *const Self, range: MissingPatternsRange) []const ExtraStringIdx {
+        return self.missing_patterns_backing.items[range.start..][0..range.count];
     }
 
     /// Create a deep snapshot from a Var, storing it in this SnapshotStore
