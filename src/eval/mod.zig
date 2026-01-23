@@ -33,6 +33,8 @@ pub const Interpreter = @import("interpreter.zig").Interpreter;
 pub const StackValue = @import("StackValue.zig");
 /// Render helpers for outputting values
 pub const render_helpers = @import("render_helpers.zig");
+/// LLVM-based evaluator for native code generation
+pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 
 test "eval tests" {
     std.testing.refAllDecls(@This());
