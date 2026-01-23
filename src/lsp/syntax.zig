@@ -1269,8 +1269,8 @@ pub const SyntaxChecker = struct {
                             .range = range,
                         };
                     },
-                    .builtin, .external => {
-                        // Builtin or external type - find the module
+                    .builtin, .external, .pending => {
+                        // Builtin, external, or pending type - find the module
                         return self.findModuleByName(type_name);
                     },
                 }
@@ -1300,8 +1300,8 @@ pub const SyntaxChecker = struct {
                             .range = range,
                         };
                     },
-                    .builtin, .external => {
-                        // Builtin or external type - find the module
+                    .builtin, .external, .pending => {
+                        // Builtin, external, or pending type - find the module
                         return self.findModuleByName(type_name);
                     },
                 }

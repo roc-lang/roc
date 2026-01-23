@@ -66,6 +66,7 @@ pub const Tag = enum {
     expr_field_access,
     expr_static_dispatch,
     expr_external_lookup,
+    expr_pending_lookup,
     expr_required_lookup,
     expr_dot_access,
     expr_apply,
@@ -264,6 +265,7 @@ pub const Payload = extern union {
     // === Expression payloads ===
     expr_var: ExprVar,
     expr_external_lookup: ExprExternalLookup,
+    expr_pending_lookup: ExprPendingLookup,
     expr_required_lookup: ExprRequiredLookup,
     expr_tuple: ExprTuple,
     expr_list: ExprList,
@@ -461,6 +463,13 @@ pub const Payload = extern union {
         module_idx: u32,
         target_node_idx: u32,
         ident_idx: u32,
+    };
+
+    /// expr_pending_lookup: deferred lookup from another module (not yet resolved)
+    pub const ExprPendingLookup = extern struct {
+        module_idx: u32,
+        ident_idx: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
     /// expr_required_lookup: lookup from platform requires clause

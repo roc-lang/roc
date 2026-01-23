@@ -2038,6 +2038,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         try self.unifyWith(anno_var, .err, env);
                     }
                 },
+                .pending => {
+                    // Pending lookups must be resolved before type-checking
+                    unreachable;
+                },
             }
         },
         .apply => |a| {
@@ -2239,6 +2243,10 @@ fn generateAnnoTypeInPlace(self: *Self, anno_idx: CIR.TypeAnno.Idx, env: *Env, c
                         // an error. So we set to error and continue
                         try self.unifyWith(anno_var, .err, env);
                     }
+                },
+                .pending => {
+                    // Pending lookups must be resolved before type-checking
+                    unreachable;
                 },
             }
         },
@@ -3400,6 +3408,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             } else {
                 try self.unifyWith(expr_var, .err, env);
             }
+        },
+        .e_lookup_pending => {
+            // Pending lookups must be resolved before type-checking
+            unreachable;
         },
         .e_lookup_required => |req| {
             // Look up the type from the platform's requires clause

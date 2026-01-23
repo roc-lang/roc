@@ -4454,8 +4454,9 @@ pub fn canonicalizeExpr(
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_package_qualified) module_text else info.env.module_name
+                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
                             else
                                 module_text;
 
@@ -4463,9 +4464,10 @@ pub fn canonicalizeExpr(
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
+                                    // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
+                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -4519,11 +4521,27 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
-                                // If this is a placeholder module (not yet compiled), skip to regular lookup.
-                                // With proper dependency ordering, this case only occurs in fallback paths
-                                // (snapshot tool, tests) where type checking isn't the focus.
+                                // If this is a placeholder module (not yet compiled), create a pending lookup
+                                // that will be resolved after all modules are canonicalized.
                                 if (auto_imported_type_info.?.is_placeholder) {
-                                    break :blk_qualified;
+                                    const info = auto_imported_type_info.?;
+                                    // Build the fully qualified member name like we do for non-placeholder modules.
+                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
+                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
+                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
+                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    } else try self.env.insertQualifiedIdent(self.env.getIdent(module_name), field_text);
+
+                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
+                                        .module_idx = import_idx,
+                                        .ident_idx = qualified_ident_idx,
+                                        .region = region,
+                                    } }, region);
+                                    return CanonicalizedExpr{
+                                        .idx = expr_idx,
+                                        .free_vars = DataSpan.empty(),
+                                    };
                                 }
 
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
@@ -9290,6 +9308,15 @@ fn canonicalizeTypeAnnoBasicType(
             const auto_imported_type = envs_map.get(module_name) orelse {
                 break :blk 0;
             };
+
+            // If this is a placeholder module (not yet compiled), create a pending lookup
+            // that will be resolved after all modules are canonicalized.
+            if (auto_imported_type.is_placeholder) {
+                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .pending = .{
+                    .module_idx = import_idx,
+                    .type_name = type_name_ident,
+                } } } }, region);
+            }
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module

@@ -99,7 +99,7 @@ const ModuleId = u32;
 
 const Task = struct { module_id: ModuleId };
 
-const Phase = enum { Parse, WaitingForDependencies, Canonicalize, WaitingOnImports, TypeCheck, Done };
+const Phase = enum { Parse, Canonicalize, WaitingOnImports, TypeCheck, Done };
 
 const ModuleState = struct {
     name: []const u8, // Module name is needed for error reporting and the schedule hook
@@ -116,8 +116,15 @@ const ModuleState = struct {
     visit_color: u8 = 0,
     /// Atomic flag to prevent concurrent processing of the same module (0=free, 1=working)
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
+    /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
+    cached_ast: ?*parse.AST = null,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        // Free cached AST if present
+        if (self.cached_ast) |ast| {
+            ast.deinit(gpa);
+            gpa.destroy(ast);
+        }
         // Save source before deinitiating env so we can free it
         const source = if (self.env) |*e| e.common.source else null;
         if (self.env) |*e| e.deinit();
@@ -601,9 +608,6 @@ pub const PackageEnv = struct {
             .Parse => {
                 try self.doParse(task.module_id);
             },
-            .WaitingForDependencies => {
-                try self.tryUnblockForCanonicalization(task.module_id);
-            },
             .Canonicalize => {
                 try self.doCanonicalize(task.module_id);
             },
@@ -643,63 +647,25 @@ pub const PackageEnv = struct {
         if (old_source) |s| self.gpa.free(s);
         st.env = env;
 
-        // Parse AST to discover imports (we'll parse again in doCanonicalize)
-        var parse_ast = parse.parse(&env.common, self.gpa) catch {
+        // Parse AST and cache for reuse in doCanonicalize (avoids double parsing)
+        // IMPORTANT: Use st.env.?.common (not local env.common) so the AST's pointer
+        // to CommonEnv remains valid after this function returns.
+        var parse_ast = parse.parse(&st.env.?.common, self.gpa) catch {
             // If parsing fails, proceed to canonicalization to report errors
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
             return;
         };
-        defer parse_ast.deinit(self.gpa);
         parse_ast.store.emptyScratch();
 
-        // Extract local imports using module_discovery
-        const sibling_imports = module_discovery.extractImportsFromAST(&parse_ast, self.gpa) catch {
-            st.phase = .Canonicalize;
-            try self.enqueue(module_id);
-            return;
-        };
-        defer {
-            for (sibling_imports) |imp| self.gpa.free(imp);
-            self.gpa.free(sibling_imports);
-        }
+        // Cache AST on heap for reuse in doCanonicalize
+        const ast_ptr = try self.gpa.create(parse.AST);
+        ast_ptr.* = parse_ast;
+        st.cached_ast = ast_ptr;
 
-        // Schedule sibling imports that exist as .roc files
-        for (sibling_imports) |sibling_name| {
-            // Skip self
-            if (std.mem.eql(u8, sibling_name, st.name)) continue;
-
-            // Check if the .roc file exists
-            const sibling_path = self.resolveModulePath(sibling_name) catch continue;
-            defer self.gpa.free(sibling_path);
-
-            std.fs.cwd().access(sibling_path, .{}) catch continue;
-
-            // Schedule this sibling module
-            const prev_count = self.modules.items.len;
-            const sibling_id = try self.ensureModule(sibling_name, sibling_path);
-            // Refresh st pointer after ensureModule (might have reallocated)
-            st = &self.modules.items[module_id];
-
-            // Track dependency
-            try st.imports.append(self.gpa, sibling_id);
-
-            // Set depth if smaller
-            try self.setDepthIfSmaller(sibling_id, st.depth + 1);
-
-            // Add ourselves as dependent of the sibling
-            var sibling_st = &self.modules.items[sibling_id];
-            try sibling_st.dependents.append(self.gpa, module_id);
-
-            // If this is a new module, increment count and enqueue it
-            if (sibling_id >= prev_count) {
-                self.remaining_modules += 1;
-                try self.enqueue(sibling_id);
-            }
-        }
-
-        // Transition to WaitingForDependencies
-        st.phase = .WaitingForDependencies;
+        // Go directly to Canonicalize - sibling discovery happens after canonicalization
+        // based on ModuleEnv.imports
+        st.phase = .Canonicalize;
         try self.enqueue(module_id);
     }
 
@@ -721,14 +687,13 @@ pub const PackageEnv = struct {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
 
-        // Parse and canonicalize in one step to avoid double parsing
-        const parse_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var parse_ast = try parse.parse(&env.common, self.gpa);
-        defer parse_ast.deinit(self.gpa);
-        parse_ast.store.emptyScratch();
-        const parse_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        if (@import("builtin").target.cpu.arch != .wasm32) {
-            self.total_tokenize_parse_ns += @intCast(parse_end - parse_start);
+        // Use cached AST from doParse - it should always be available
+        const parse_ast: *parse.AST = st.cached_ast orelse
+            std.debug.panic("Internal compiler error: cached AST missing for module '{s}'. Please report this bug.", .{st.name});
+        st.cached_ast = null; // Take ownership
+        defer {
+            parse_ast.deinit(self.gpa);
+            self.gpa.destroy(parse_ast);
         }
 
         // Convert parse diagnostics to reports
@@ -747,14 +712,16 @@ pub const PackageEnv = struct {
         // Use shared canonicalization function to ensure consistency with snapshot tool
         // Pass sibling module names from the same directory so MODULE NOT FOUND isn't
         // reported prematurely for modules that exist but haven't been loaded yet.
-        // Also include additional known modules from platform exposes (for URL platforms).
+        // Use the MODULE's directory (not package root) for sibling lookup - this is
+        // important for platform modules where siblings are in the same subdir.
+        const module_dir = std.fs.path.dirname(st.path) orelse self.root_dir;
         try canonicalizeModuleWithSiblings(
             self.gpa,
             env,
-            &parse_ast,
+            parse_ast,
             self.builtin_modules.builtin_module.env,
             self.builtin_modules.builtin_indices,
-            self.root_dir,
+            module_dir,
             self.package_name,
             self.resolver,
             self.additional_known_modules.items,
@@ -892,29 +859,6 @@ pub const PackageEnv = struct {
         }
         // Also re-enqueue self to check for unblocking
         try self.enqueue(module_id);
-    }
-
-    /// Check if all local sibling imports are Done before proceeding to canonicalization.
-    /// This ensures dependencies are fully compiled before we canonicalize this module.
-    fn tryUnblockForCanonicalization(self: *PackageEnv, module_id: ModuleId) !void {
-        const st = &self.modules.items[module_id];
-
-        // Check if all local imports are Done
-        var ready = true;
-        for (st.imports.items) |imp| {
-            const child = &self.modules.items[imp];
-            if (child.phase != .Done) {
-                ready = false;
-                break;
-            }
-        }
-
-        if (ready) {
-            // All dependencies are ready - proceed to canonicalization
-            self.modules.items[module_id].phase = .Canonicalize;
-            try self.enqueue(module_id);
-        }
-        // If not ready, do nothing - we'll be re-enqueued when a dependency finishes
     }
 
     fn tryUnblock(self: *PackageEnv, module_id: ModuleId) !void {
@@ -1062,52 +1006,60 @@ pub const PackageEnv = struct {
             builtin_indices,
         );
 
-        // Add sibling modules using the resolver.
-        // Dependencies are guaranteed to be Done before canonicalization starts
-        // (enforced by WaitingForDependencies phase), so resolver.getEnv always succeeds.
-        if (resolver) |res| {
-            const sibling_imports = try module_discovery.extractImportsFromAST(parse_ast, gpa);
-            defer {
-                for (sibling_imports) |imp| gpa.free(imp);
-                gpa.free(sibling_imports);
-            }
+        // Add sibling modules - use placeholder-based approach for all paths.
+        // In canonicalize-first mode, modules use placeholders during canonicalization.
+        // Actual module envs are resolved during type-checking after topological sort.
+        // The resolver's getEnv may return null for siblings not yet processed, so we
+        // always add placeholders first. If the resolver has the actual env, we use it.
+        const sibling_imports = try module_discovery.extractImportsFromAST(parse_ast, gpa);
+        defer {
+            for (sibling_imports) |imp| gpa.free(imp);
+            gpa.free(sibling_imports);
+        }
 
-            for (sibling_imports) |sibling_name| {
-                // Skip Builtin and self
-                if (std.mem.eql(u8, sibling_name, "Builtin")) continue;
-                if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
+        for (sibling_imports) |sibling_name| {
+            // Skip Builtin and self
+            if (std.mem.eql(u8, sibling_name, "Builtin")) continue;
+            if (std.mem.eql(u8, sibling_name, env.module_name)) continue;
 
-                // Get actual env from resolver (guaranteed to be ready due to WaitingForDependencies)
+            const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
+            const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
+
+            // Check if sibling file exists
+            const file_name = try std.fmt.allocPrint(gpa, "{s}.roc", .{sibling_name});
+            defer gpa.free(file_name);
+            const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
+            defer gpa.free(file_path);
+            std.fs.cwd().access(file_path, .{}) catch continue; // Skip non-existent files
+
+            // Try to get actual env from resolver if available
+            if (resolver) |res| {
                 if (res.getEnv(res.ctx, package_name, sibling_name)) |sibling_env| {
-                    const sibling_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
-
-                    // Check if this is a type module (defines a type with the same name)
+                    // Resolver has actual env - use it
                     const statement_idx: ?can.CIR.Statement.Idx = stmt_blk: {
                         const type_ident_in_module = sibling_env.common.findIdent(sibling_name) orelse break :stmt_blk null;
                         const type_node_idx = sibling_env.getExposedNodeIndexById(type_ident_in_module) orelse break :stmt_blk null;
                         break :stmt_blk @enumFromInt(type_node_idx);
                     };
 
-                    const qualified_ident = try env.insertIdent(base.Ident.for_text(sibling_name));
                     try module_envs_map.put(sibling_ident, .{
                         .env = sibling_env,
                         .statement_idx = statement_idx,
                         .qualified_type_ident = qualified_ident,
                     });
+                    continue;
                 }
             }
-        } else {
-            // No resolver - use placeholder-based approach for non-BuildEnv paths
-            // (e.g., snapshot tool, tests). This maintains backward compatibility.
-            try module_discovery.addImportedModulesToEnvMap(
-                parse_ast,
-                root_dir,
-                env.module_name,
-                env,
-                &module_envs_map,
-                builtin_module_env,
-                gpa,
-            );
+
+            // Resolver doesn't have env yet (or no resolver) - add placeholder
+            // Canonicalization will proceed with placeholder, actual env resolved later
+            if (!module_envs_map.contains(sibling_ident)) {
+                try module_envs_map.put(sibling_ident, .{
+                    .env = builtin_module_env, // Placeholder
+                    .qualified_type_ident = qualified_ident,
+                    .is_placeholder = true, // Mark as placeholder
+                });
+            }
         }
 
         // Add additional known modules (e.g., from platform exposes for URL platforms)
@@ -1220,6 +1172,13 @@ pub const PackageEnv = struct {
         return checker;
     }
 
+    /// Resolve all pending lookups in a module's CIR.
+    /// Called before type-checking, when all dependencies are canonicalized.
+    /// This converts e_lookup_pending to e_lookup_external (or error).
+    fn resolvePendingLookups(env: *ModuleEnv, imported_envs: []const *ModuleEnv) void {
+        env.store.resolvePendingLookups(env, imported_envs);
+    }
+
     fn doTypeCheck(self: *PackageEnv, module_id: ModuleId) !void {
         var st = &self.modules.items[module_id];
         var env = &st.env.?;
@@ -1264,6 +1223,10 @@ pub const PackageEnv = struct {
         // Resolve all imports using the shared function
         // This matches import names to module names in imported_envs
         env.imports.resolveImports(env, imported_envs.items);
+
+        // Resolve pending lookups that were deferred during canonicalization
+        // This converts e_lookup_pending to e_lookup_external now that all dependencies are available
+        resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);

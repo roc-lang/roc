@@ -11291,6 +11291,12 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
+            .e_lookup_pending => {
+                // Pending lookups should be resolved before evaluation - they should never
+                // reach the interpreter. If we get here, there's a bug in the resolution phase.
+                unreachable;
+            },
+
             .e_lookup_required => |lookup| {
                 // Required lookups reference values from the app that provides values to the
                 // platform's `requires` clause.

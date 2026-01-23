@@ -294,6 +294,10 @@ pub const DevEvaluator = struct {
                 self.setCrashMessage("Dev evaluator: external module lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
             },
+            .e_lookup_pending => {
+                // Pending lookups must be resolved before evaluation
+                unreachable;
+            },
             .e_lookup_required => {
                 self.setCrashMessage("Dev evaluator: required value lookup not yet supported") catch return error.OutOfMemory;
                 return error.Crash;
@@ -1812,7 +1816,7 @@ pub const DevEvaluator = struct {
     fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
         switch (loe) {
             .builtin => |b| return layoutFromBuiltin(b),
-            .local, .external => return .i64,
+            .local, .external, .pending => return .i64,
         }
     }
 

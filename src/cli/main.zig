@@ -2641,62 +2641,36 @@ fn extractModuleImports(
     };
     defer ctx.gpa.free(source);
 
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(module_path);
-    const module_name = basename[0 .. basename.len - 4]; // Remove .roc
-
-    // Create ModuleEnv and parse
-    var env = ModuleEnv.init(ctx.gpa, source) catch {
+    // Create lightweight CommonEnv for parsing (no need for full ModuleEnv or canonicalization)
+    var common_env = base.CommonEnv.init(ctx.gpa, source) catch {
         return &[_][]const u8{};
     };
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
+    defer common_env.deinit(ctx.gpa);
 
     // Parse the source
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch {
+    var parse_ast = parse.parse(&common_env, ctx.gpa) catch {
         return &[_][]const u8{};
     };
     defer parse_ast.deinit(ctx.gpa);
     parse_ast.store.emptyScratch();
 
-    // Initialize CIR fields (needed for canonicalization)
-    try env.initCIRFields(module_name);
-
-    // Create a minimal module_envs map (just builtins would go here, but for import extraction we don't need them)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs_map.deinit();
-
-    // Canonicalize to discover imports
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
-    defer canonicalizer.deinit();
-    canonicalizer.canonicalizeFile() catch {
-        // Even if canonicalization fails, we might have discovered some imports
+    // Use lightweight import extraction directly from AST (no canonicalization needed)
+    const all_imports = compile.module_discovery.extractImportsFromAST(&parse_ast, ctx.gpa) catch {
+        return &[_][]const u8{};
     };
+    defer {
+        for (all_imports) |imp| ctx.gpa.free(imp);
+        ctx.gpa.free(all_imports);
+    }
 
-    // Extract imports from env.imports.imports
-    const import_count = env.imports.imports.items.items.len;
+    // Filter to only imports that are in available_modules
     var result = std.ArrayList([]const u8).empty;
     errdefer {
         for (result.items) |item| ctx.gpa.free(item);
         result.deinit(ctx.gpa);
     }
 
-    for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-        const import_name = env.common.getString(str_idx);
-
-        // Skip qualified imports (e.g., "pf.Stdout") - we only care about local imports
-        if (std.mem.indexOfScalar(u8, import_name, '.') != null) {
-            continue;
-        }
-
-        // Skip "Builtin" - it's always available
-        if (std.mem.eql(u8, import_name, "Builtin")) {
-            continue;
-        }
-
+    for (all_imports) |import_name| {
         // Only include imports that are in the available_modules set
         var found = false;
         for (available_modules) |avail| {
@@ -2707,7 +2681,7 @@ fn extractModuleImports(
         }
         if (!found) continue;
 
-        // Add to result (duplicate the string since env will be freed)
+        // Add to result (duplicate since all_imports will be freed)
         try result.append(ctx.gpa, try ctx.gpa.dupe(u8, import_name));
     }
 
