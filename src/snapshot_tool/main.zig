@@ -34,7 +34,7 @@ const RocAlloc = builtins.host_abi.RocAlloc;
 const RocOps = builtins.host_abi.RocOps;
 const RocDbg = builtins.host_abi.RocDbg;
 const ModuleEnv = can.ModuleEnv;
-const LambdaLifter = @import("LambdaLifter.zig");
+const LambdaLifter = can.LambdaLifter;
 const Allocator = std.mem.Allocator;
 const SExprTree = base.SExprTree;
 const LineColMode = base.SExprTree.LineColMode;
@@ -3500,7 +3500,7 @@ fn generateReplOutputSection(output: *DualOutput, snapshot_path: []const u8, con
     defer snapshot_ops.deinit();
 
     // Initialize REPL
-    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops(), snapshot_ops.crashContextPtr());
+    var repl_instance = try Repl.init(output.gpa, snapshot_ops.get_ops());
     defer repl_instance.deinit();
 
     // Enable debug snapshots for CAN/TYPES generation

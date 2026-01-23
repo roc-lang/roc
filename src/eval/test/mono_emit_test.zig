@@ -23,7 +23,8 @@ const Emitter = can.RocEmitter;
 const Monomorphizer = can.Monomorphizer;
 
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = helpers.interpreter_allocator;
 
 /// Helper to check if output contains a closure tag (format: C followed by digit)
 /// Closure tags use internal format #N_hint which RocEmitter transforms to CN_hint
@@ -203,7 +204,7 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -234,7 +235,7 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Boolean represented as integer (discriminant)
     if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) {
@@ -749,7 +750,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Get the first element of the tuple
     if (result.layout.tag == .tuple) {

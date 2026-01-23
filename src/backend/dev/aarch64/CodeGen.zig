@@ -159,6 +159,17 @@ pub const AArch64CodeGen = struct {
         }
     }
 
+    /// Mark a register as in use so it won't be allocated.
+    /// Used for return values from function calls that need to persist.
+    pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
+        const idx = @intFromEnum(reg);
+        // Remove from free pool (it's now in use)
+        self.free_general &= ~(@as(u32, 1) << idx);
+        self.callee_saved_available &= ~(@as(u32, 1) << idx);
+        // Set ownership to a sentinel value (0 = temporary)
+        self.general_owners[idx] = 0;
+    }
+
     /// Spill a register to make room and allocate it for the given local.
     fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
         // Find a register to spill - prefer lowest-numbered for consistency
@@ -324,9 +335,33 @@ pub const AArch64CodeGen = struct {
         return self.stack_offset;
     }
 
+    /// Alias for allocStack - allocate a stack slot of the given size
+    pub fn allocStackSlot(self: *Self, size: u32) i32 {
+        return self.allocStack(size);
+    }
+
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
         return (size + 15) & ~@as(u32, 15);
+    }
+
+    /// Spill a register to the stack and return the stack slot offset.
+    /// This is used to save caller-saved registers before function calls.
+    /// Note: For aarch64 with pre-allocated stack frames, stack_offset is positive
+    /// and grows upward within the frame.
+    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
+        // If stack_offset is positive (aarch64 procedure frame), grow upward
+        // If negative (x86_64 style), grow downward
+        const slot = self.stack_offset;
+        try self.emitStoreStack(.w64, slot, reg);
+        if (self.stack_offset >= 0) {
+            // aarch64 procedure: grow upward within pre-allocated frame
+            self.stack_offset += 16; // 16-byte aligned
+        } else {
+            // Legacy path: grow downward (shouldn't be used anymore for procedures)
+            self.stack_offset -= 16;
+        }
+        return slot;
     }
 
     // Function prologue/epilogue
@@ -414,9 +449,49 @@ pub const AArch64CodeGen = struct {
         try self.emit.mulRegRegReg(width, dst, a, b);
     }
 
+    /// Emit signed integer division: dst = a / b
+    pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.sdivRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit unsigned integer division: dst = a / b
+    pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.udivRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit signed integer modulo: dst = a % b
+    /// Uses SDIV + MSUB: remainder = a - (a/b) * b
+    pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // We need a temp register for the quotient
+        // Since dst might be the same as a or b, we use dst for intermediate if safe
+        // quotient = a / b
+        try self.emit.sdivRegRegReg(width, dst, a, b);
+        // remainder = a - quotient * b
+        try self.emit.msubRegRegRegReg(width, dst, dst, b, a);
+    }
+
+    /// Emit unsigned integer modulo: dst = a % b
+    /// Uses UDIV + MSUB: remainder = a - (a/b) * b
+    pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // quotient = a / b
+        try self.emit.udivRegRegReg(width, dst, a, b);
+        // remainder = a - quotient * b
+        try self.emit.msubRegRegRegReg(width, dst, dst, b, a);
+    }
+
     /// Emit integer negation: dst = -src
     pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
         try self.emit.negRegReg(width, dst, src);
+    }
+
+    /// Emit bitwise AND: dst = a & b
+    pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.andRegRegReg(width, dst, a, b);
+    }
+
+    /// Emit bitwise OR: dst = a | b
+    pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        try self.emit.orrRegRegReg(width, dst, a, b);
     }
 
     // Comparison operations
@@ -449,16 +524,52 @@ pub const AArch64CodeGen = struct {
         try self.emit.fdivRegRegReg(.double, dst, a, b);
     }
 
+    /// Emit float64 negation: dst = -src
+    pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        try self.emit.fnegRegReg(.double, dst, src);
+    }
+
+    /// Emit float32 addition: dst = a + b
+    pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.faddRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 subtraction: dst = a - b
+    pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fsubRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 multiplication: dst = a * b
+    pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fmulRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 division: dst = a / b
+    pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        try self.emit.fdivRegRegReg(.single, dst, a, b);
+    }
+
+    /// Emit float32 negation: dst = -src
+    pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        try self.emit.fnegRegReg(.single, dst, src);
+    }
+
     // Memory operations
 
     /// Load from stack slot into register
     pub fn emitLoadStack(self: *Self, width: RegisterWidth, dst: GeneralReg, offset: i32) !void {
         if (offset >= -256 and offset <= 255) {
             try self.emit.ldurRegMem(width, dst, .FP, @intCast(offset));
-        } else {
-            // For larger offsets, need scaled unsigned offset
-            const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> (if (width == .w64) 3 else 2));
+        } else if (offset > 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
             try self.emit.ldrRegMemUoff(width, dst, .FP, uoffset);
+        } else {
+            // Large negative offset - add offset to FP, then load
+            // Use IP0 as scratch register
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.ldrRegMemUoff(width, dst, .IP0, 0);
         }
     }
 
@@ -466,23 +577,45 @@ pub const AArch64CodeGen = struct {
     pub fn emitStoreStack(self: *Self, width: RegisterWidth, offset: i32, src: GeneralReg) !void {
         if (offset >= -256 and offset <= 255) {
             try self.emit.sturRegMem(width, src, .FP, @intCast(offset));
-        } else {
-            const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> (if (width == .w64) 3 else 2));
+        } else if (offset > 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> (if (width == .w64) 3 else 2));
             try self.emit.strRegMemUoff(width, src, .FP, uoffset);
+        } else {
+            // Large negative offset - add offset to FP, then store
+            // Use IP0 as scratch register
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.strRegMemUoff(width, src, .IP0, 0);
         }
     }
 
     /// Load float64 from stack slot
     pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
-        // Use unsigned offset form (scaled by 8 for 64-bit)
-        const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> 3);
-        try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
+        if (offset >= 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
+            try self.emit.fldrRegMemUoff(.double, dst, .FP, uoffset);
+        } else {
+            // Negative offset - add offset to FP, then load
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.fldrRegMemUoff(.double, dst, .IP0, 0);
+        }
     }
 
     /// Store float64 to stack slot
     pub fn emitStoreStackF64(self: *Self, offset: i32, src: FloatReg) !void {
-        const uoffset: u12 = @intCast(@as(u32, @bitCast(offset)) >> 3);
-        try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
+        if (offset >= 0) {
+            // Positive offset - use scaled unsigned form
+            const uoffset: u12 = @intCast(@as(u32, @intCast(offset)) >> 3);
+            try self.emit.fstrRegMemUoff(.double, src, .FP, uoffset);
+        } else {
+            // Negative offset - add offset to FP, then store
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.fstrRegMemUoff(.double, src, .IP0, 0);
+        }
     }
 
     // Immediate loading
@@ -523,6 +656,11 @@ pub const AArch64CodeGen = struct {
             inst = (inst & 0xFC000000) | imm26;
         } else if ((inst >> 24) == 0b01010100) {
             // B.cond: imm19 in bits [23:5]
+            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
+            inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
+        } else if (((inst >> 24) & 0b01111111) == 0b0110100 or ((inst >> 24) & 0b01111111) == 0b0110101) {
+            // CBZ/CBNZ: sf 011010 x imm19 Rt
+            // imm19 is in bits [23:5]
             const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
             inst = (inst & 0xFF00001F) | (@as(u32, imm19) << 5);
         }

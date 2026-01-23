@@ -154,6 +154,17 @@ pub const SystemVCodeGen = struct {
         }
     }
 
+    /// Mark a register as in use so it won't be allocated.
+    /// Used for return values from function calls that need to persist.
+    pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
+        const idx = @intFromEnum(reg);
+        // Remove from free pool (it's now in use)
+        self.free_general &= ~(@as(u16, 1) << @intCast(idx));
+        self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
+        // Set ownership to a sentinel value (0 = temporary)
+        self.general_owners[idx] = 0;
+    }
+
     /// Spill a register to make room and allocate it for the given local.
     fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
         // Find a register to spill - prefer lowest-numbered for consistency
@@ -319,9 +330,22 @@ pub const SystemVCodeGen = struct {
         return self.stack_offset;
     }
 
+    /// Alias for allocStack - allocate a stack slot of the given size
+    pub fn allocStackSlot(self: *Self, size: u32) i32 {
+        return self.allocStack(size);
+    }
+
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
         return (size + 15) & ~@as(u32, 15);
+    }
+
+    /// Spill a register to the stack and return the stack slot offset.
+    /// This is used to save caller-saved registers before function calls.
+    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
+        const slot = self.allocStack(8);
+        try self.emitStoreStack(.w64, slot, reg);
+        return slot;
     }
 
     // Function prologue/epilogue
@@ -400,6 +424,103 @@ pub const SystemVCodeGen = struct {
         try self.emit.imulRegReg(width, dst, b);
     }
 
+    /// Emit signed integer division: dst = a / b
+    /// Uses IDIV which requires dividend in RDX:RAX, result in RAX
+    pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // IDIV uses RAX for dividend/quotient and RDX for high bits/remainder
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Sign-extend RAX into RDX:RAX
+        if (width == .w64) {
+            try self.emit.cqo();
+        } else {
+            try self.emit.cdq();
+        }
+        // 3. Perform IDIV (must not divide by RAX or RDX)
+        // If b is RAX or RDX, we need to handle it
+        if (b == .RAX or b == .RDX) {
+            // Move b to a temp register first
+            // Use R11 as scratch (caller-saved, not commonly used)
+            try self.emit.movRegReg(width, .R11, b);
+            try self.emit.idivReg(width, .R11);
+        } else {
+            try self.emit.idivReg(width, b);
+        }
+        // 4. Quotient is in RAX, move to dst
+        if (dst != .RAX) {
+            try self.emit.movRegReg(width, dst, .RAX);
+        }
+    }
+
+    /// Emit unsigned integer division: dst = a / b
+    /// Uses DIV which requires dividend in RDX:RAX, result in RAX
+    pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // DIV uses RAX for dividend/quotient and RDX for high bits/remainder
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Zero-extend: set RDX to 0
+        try self.emit.xorRegReg(width, .RDX, .RDX);
+        // 3. Perform DIV (must not divide by RAX or RDX)
+        if (b == .RAX or b == .RDX) {
+            try self.emit.movRegReg(width, .R11, b);
+            try self.emit.divReg(width, .R11);
+        } else {
+            try self.emit.divReg(width, b);
+        }
+        // 4. Quotient is in RAX, move to dst
+        if (dst != .RAX) {
+            try self.emit.movRegReg(width, dst, .RAX);
+        }
+    }
+
+    /// Emit signed integer modulo: dst = a % b
+    /// Uses IDIV which puts remainder in RDX
+    pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // Same as emitSDiv but result is in RDX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        if (width == .w64) {
+            try self.emit.cqo();
+        } else {
+            try self.emit.cdq();
+        }
+        if (b == .RAX or b == .RDX) {
+            try self.emit.movRegReg(width, .R11, b);
+            try self.emit.idivReg(width, .R11);
+        } else {
+            try self.emit.idivReg(width, b);
+        }
+        // Remainder is in RDX
+        if (dst != .RDX) {
+            try self.emit.movRegReg(width, dst, .RDX);
+        }
+    }
+
+    /// Emit unsigned integer modulo: dst = a % b
+    /// Uses DIV which puts remainder in RDX
+    pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // Same as emitUDiv but result is in RDX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        try self.emit.xorRegReg(width, .RDX, .RDX);
+        if (b == .RAX or b == .RDX) {
+            try self.emit.movRegReg(width, .R11, b);
+            try self.emit.divReg(width, .R11);
+        } else {
+            try self.emit.divReg(width, b);
+        }
+        // Remainder is in RDX
+        if (dst != .RDX) {
+            try self.emit.movRegReg(width, dst, .RDX);
+        }
+    }
+
     /// Emit integer negation: dst = -src
     pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
         if (dst != src) {
@@ -408,10 +529,27 @@ pub const SystemVCodeGen = struct {
         try self.emit.negReg(width, dst);
     }
 
+    /// Emit bitwise AND: dst = a & b
+    pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.andRegReg(width, dst, b);
+    }
+
+    /// Emit bitwise OR: dst = a | b
+    pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.orRegReg(width, dst, b);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
     pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
+        std.debug.print("[DEBUG emitCmp x86_64] cmp {s},{s} then setcc {} to {s}\n", .{ @tagName(a), @tagName(b), @intFromEnum(cond), @tagName(dst) });
         try self.emit.cmpRegReg(width, a, b);
         try self.emit.setcc(cond, dst);
         // Zero-extend the byte result to full register width
@@ -450,6 +588,55 @@ pub const SystemVCodeGen = struct {
             try self.emit.movsdRegReg(dst, a);
         }
         try self.emit.divsdRegReg(dst, b);
+    }
+
+    /// Emit float64 negation: dst = -src
+    /// Uses the approach: load 0.0, then subtract src from 0
+    pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        // Zero the destination register
+        try self.emit.xorpdRegReg(dst, dst);
+        // dst = 0 - src = -src
+        try self.emit.subsdRegReg(dst, src);
+    }
+
+    /// Emit float32 addition: dst = a + b
+    pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.addssRegReg(dst, b);
+    }
+
+    /// Emit float32 subtraction: dst = a - b
+    pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.subssRegReg(dst, b);
+    }
+
+    /// Emit float32 multiplication: dst = a * b
+    pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.mulssRegReg(dst, b);
+    }
+
+    /// Emit float32 division: dst = a / b
+    pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.divssRegReg(dst, b);
+    }
+
+    /// Emit float32 negation: dst = -src
+    pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        // Zero the destination register
+        try self.emit.xorpsRegReg(dst, dst);
+        // dst = 0 - src = -src
+        try self.emit.subssRegReg(dst, src);
     }
 
     // Memory operations

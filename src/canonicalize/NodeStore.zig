@@ -274,7 +274,7 @@ pub fn relocate(store: *NodeStore, offset: isize) void {
 /// Count of the diagnostic nodes in the ModuleEnv
 pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 65;
 /// Count of the expression nodes in the ModuleEnv
-pub const MODULEENV_EXPR_NODE_COUNT = 42;
+pub const MODULEENV_EXPR_NODE_COUNT = 45;
 /// Count of the statement nodes in the ModuleEnv
 pub const MODULEENV_STATEMENT_NODE_COUNT = 17;
 /// Count of the type annotation nodes in the ModuleEnv
@@ -927,6 +927,27 @@ pub fn getExpr(store: *const NodeStore, expr: CIR.Expr.Idx) CIR.Expr {
             const p = payload.diag_single_value;
             return CIR.Expr{ .e_runtime_error = .{
                 .diagnostic = @enumFromInt(p.value),
+            } };
+        },
+
+        // RC expressions (inserted by RC insertion pass after canonicalization)
+        .expr_incref => {
+            const p = payload.expr_incref;
+            return CIR.Expr{ .e_incref = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+                .count = @intCast(p.count),
+            } };
+        },
+        .expr_decref => {
+            const p = payload.expr_decref;
+            return CIR.Expr{ .e_decref = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
+            } };
+        },
+        .expr_free => {
+            const p = payload.expr_free;
+            return CIR.Expr{ .e_free = .{
+                .pattern_idx = @enumFromInt(p.pattern_idx),
             } };
         },
 
@@ -2129,6 +2150,27 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .patt = @intFromEnum(e.patt),
                 .expr = @intFromEnum(e.expr),
                 .body = @intFromEnum(e.body),
+            } });
+        },
+
+        // RC expressions - inserted by RC insertion pass after canonicalization
+        .e_incref => |e| {
+            node.tag = .expr_incref;
+            node.setPayload(.{ .expr_incref = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
+                .count = e.count,
+            } });
+        },
+        .e_decref => |e| {
+            node.tag = .expr_decref;
+            node.setPayload(.{ .expr_decref = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
+            } });
+        },
+        .e_free => |e| {
+            node.tag = .expr_free;
+            node.setPayload(.{ .expr_free = .{
+                .pattern_idx = @intFromEnum(e.pattern_idx),
             } });
         },
     }

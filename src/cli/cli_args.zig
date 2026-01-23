@@ -144,7 +144,7 @@ pub const ExperimentalLspArgs = struct {
 
 /// Arguments for `roc repl`
 pub const ReplArgs = struct {
-    backend: Backend = .interpreter,
+    backend: Backend = .dev,
 };
 
 /// Parse a list of arguments.
@@ -588,7 +588,7 @@ fn parseTest(args: []const []const u8) CliArgs {
 }
 
 fn parseRepl(args: []const []const u8) CliArgs {
-    var backend: Backend = .interpreter;
+    var backend: Backend = .dev;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
@@ -598,7 +598,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
             \\Usage: roc repl [OPTIONS]
             \\
             \\Options:
-            \\      --backend=<interpreter|dev>  Evaluation backend (default: interpreter)
+            \\      --backend=<dev>  Evaluation backend (default: dev)
             \\  -h, --help                       Print help
             \\
         };

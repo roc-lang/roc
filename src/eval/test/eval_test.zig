@@ -20,7 +20,8 @@ const Check = check.Check;
 const ModuleEnv = can.ModuleEnv;
 const CompactWriter = collections.CompactWriter;
 const testing = std.testing;
-const test_allocator = testing.allocator;
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const test_allocator = helpers.interpreter_allocator;
 
 const runExpectI64 = helpers.runExpectI64;
 const runExpectIntDec = helpers.runExpectIntDec;
@@ -295,7 +296,7 @@ test "crash message storage and retrieval - host-managed context" {
     // Verify the crash callback stores the message in the host CrashContext
     const test_message = "Direct API test message";
 
-    var test_env_instance = TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
     defer test_env_instance.deinit();
 
     try testing.expect(test_env_instance.crashState() == .did_not_crash);
@@ -363,11 +364,14 @@ test "lambdas with unary minus" {
 }
 
 test "lambdas closures" {
-    // Curried functions still have interpreter issues with TypeMismatch
-    // try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
-    // try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
-    // try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
-    // try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
+    // Curried functions - lambdas returning lambdas
+    try runExpectI64("(|a| |b| a * b)(5)(10)", 50, .no_trace);
+    // Triple curried
+    try runExpectI64("(((|a| |b| |c| a + b + c)(100))(20))(3)", 123, .no_trace);
+    // Multi-param lambda returning lambda
+    try runExpectI64("(|a, b, c| |d| a + b + c + d)(10, 20, 5)(7)", 42, .no_trace);
+    // Nested lambda calls with captures
+    try runExpectI64("(|y| (|x| (|z| x + y + z)(3))(2))(1)", 6, .no_trace);
 }
 
 test "lambdas with capture" {
@@ -390,27 +394,27 @@ test "lambdas with capture" {
 }
 
 test "lambdas nested closures" {
-    // Nested closures still have interpreter issues with TypeMismatch
-    // try runExpectI64(
-    //     \\(((|a| {
-    //     \\    a_loc = a * 2
-    //     \\    |b| {
-    //     \\        b_loc = a_loc + b
-    //     \\        |c| b_loc + c
-    //     \\    }
-    //     \\})(100))(20))(3)
-    // , 223, .no_trace);
+    // Nested closures with block locals
+    try runExpectI64(
+        \\(((|a| {
+        \\    a_loc = a * 2
+        \\    |b| {
+        \\        b_loc = a_loc + b
+        \\        |c| b_loc + c
+        \\    }
+        \\})(100))(20))(3)
+    , 223, .no_trace);
 }
 
 // Helper function to test that evaluation succeeds without checking specific values
 fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !void {
-    var test_env_instance = TestEnv.init(testing.allocator);
+    var test_env_instance = TestEnv.init(helpers.interpreter_allocator);
     defer test_env_instance.deinit();
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(helpers.interpreter_allocator, src);
+    defer helpers.cleanupParseAndCanonical(helpers.interpreter_allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(helpers.interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -805,9 +809,11 @@ test "ModuleEnv serialization and interpreter evaluation" {
         };
         defer writer.deinit(arena_alloc);
 
-        // Allocate space for ModuleEnv and serialize
-        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv);
-        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv);
+        // Allocate space for ModuleEnv.Serialized (NOT ModuleEnv!) and serialize
+        // IMPORTANT: ModuleEnv.Serialized may be larger than ModuleEnv. Allocating only
+        // @sizeOf(ModuleEnv) bytes causes a buffer overflow that corrupts subsequent data.
+        const env_ptr = try writer.appendAlloc(arena_alloc, ModuleEnv.Serialized);
+        const env_start_offset = writer.total_bytes - @sizeOf(ModuleEnv.Serialized);
         const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
         try serialized_ptr.serialize(&original_env, arena_alloc, &writer);
 
@@ -842,6 +848,20 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // Test 4: Evaluate the same expression using the deserialized ModuleEnv
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
+            // Enable runtime inserts on all deserialized interners so the interpreter can add new idents.
+            // Both the test module and the builtin module were deserialized (via loadCompiledModule).
+            try deserialized_env.common.idents.interner.enableRuntimeInserts(gpa);
+            try @constCast(builtin_module.env).common.idents.interner.enableRuntimeInserts(gpa);
+
+            // Fix up module_name_idx for deserialized modules (critical for method dispatch).
+            // Deserialized modules have module_name_idx set to NONE - we need to re-intern the name.
+            if (deserialized_env.module_name_idx.isNone() and deserialized_env.module_name.len > 0) {
+                deserialized_env.module_name_idx = try deserialized_env.insertIdent(base.Ident.for_text(deserialized_env.module_name));
+            }
+            if (builtin_module.env.module_name_idx.isNone() and builtin_module.env.module_name.len > 0) {
+                @constCast(builtin_module.env).module_name_idx = try @constCast(builtin_module.env).insertIdent(base.Ident.for_text(builtin_module.env.module_name));
+            }
+
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
             var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
             defer interpreter.deinit();
@@ -2379,4 +2399,46 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\    n
         \\}
     , 42, .no_trace);
+}
+
+// ============ str_inspekt (Str.inspect) tests ============
+
+test "str_inspekt - integer" {
+    // Str.inspect on an integer should return its string representation
+    try runExpectStr("Str.inspect(42)", "42", .no_trace);
+}
+
+test "str_inspekt - negative integer" {
+    try runExpectStr("Str.inspect(-123)", "-123", .no_trace);
+}
+
+test "str_inspekt - zero" {
+    try runExpectStr("Str.inspect(0)", "0", .no_trace);
+}
+
+test "str_inspekt - boolean true" {
+    // Str.inspect on Bool.true should return "Bool.true"
+    try runExpectStr("Str.inspect(Bool.true)", "Bool.true", .no_trace);
+}
+
+test "str_inspekt - boolean false" {
+    try runExpectStr("Str.inspect(Bool.false)", "Bool.false", .no_trace);
+}
+
+test "str_inspekt - simple string" {
+    // Str.inspect on a string should return it quoted and escaped
+    try runExpectStr("Str.inspect(\"hello\")", "\"hello\"", .no_trace);
+}
+
+test "str_inspekt - string with quotes" {
+    // Quotes inside strings should be escaped
+    try runExpectStr("Str.inspect(\"say \\\"hi\\\"\")", "\"say \\\"hi\\\"\"", .no_trace);
+}
+
+test "str_inspekt - empty string" {
+    try runExpectStr("Str.inspect(\"\")", "\"\"", .no_trace);
+}
+
+test "str_inspekt - large integer" {
+    try runExpectStr("Str.inspect(1234567890)", "1234567890", .no_trace);
 }

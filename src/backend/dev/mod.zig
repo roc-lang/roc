@@ -10,15 +10,14 @@
 const std = @import("std");
 const base = @import("base");
 const layout = @import("layout");
+const builtins = @import("builtins");
 
 /// Backend selection for code evaluation
 pub const EvalBackend = enum {
-    interpreter,
     dev,
     // llvm, // Future: LLVM backend
 
     pub fn fromString(s: []const u8) ?EvalBackend {
-        if (std.mem.eql(u8, s, "interpreter")) return .interpreter;
         if (std.mem.eql(u8, s, "dev")) return .dev;
         // if (std.mem.eql(u8, s, "llvm")) return .llvm;
         return null;
@@ -28,11 +27,22 @@ pub const EvalBackend = enum {
 pub const x86_64 = @import("x86_64/mod.zig");
 pub const aarch64 = @import("aarch64/mod.zig");
 pub const object = @import("object/mod.zig");
-pub const Relocation = @import("Relocation.zig").Relocation;
+const relocation_mod = @import("Relocation.zig");
+pub const Relocation = relocation_mod.Relocation;
+pub const applyRelocations = relocation_mod.applyRelocations;
+pub const SymbolResolver = relocation_mod.SymbolResolver;
 pub const CodeGen = @import("CodeGen.zig");
 pub const Backend = @import("Backend.zig");
-pub const jit = @import("jit.zig");
-pub const JitCode = jit.JitCode;
+pub const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
+/// Backwards compatibility alias
+pub const JitCode = ExecutableMemory;
+
+// Static data interner for string literals and other static data
+pub const StaticDataInterner = @import("StaticDataInterner.zig");
+
+/// Mono IR code generator for x86_64
+pub const MonoExprCodeGen = @import("MonoExprCodeGen.zig").MonoExprCodeGen;
+
 /// Object file reader for extracting code sections from ELF/Mach-O/COFF
 pub const object_reader = @import("object_reader.zig");
 
@@ -226,6 +236,48 @@ pub const AArch64Backend = DevBackend(
     aarch64.FloatReg,
 );
 
+/// Resolve builtin function names to their addresses.
+/// This is used by JitCode to patch function call relocations.
+///
+/// Supported function names:
+/// - "incref_data_ptr" -> increfDataPtrC
+/// - "decref_data_ptr" -> decrefDataPtrC
+/// - "free_data_ptr" -> freeDataPtrC
+pub fn resolveBuiltinFunction(name: []const u8) ?usize {
+    const utils = builtins.utils;
+
+    if (std.mem.eql(u8, name, "incref_data_ptr")) {
+        return @intFromPtr(&utils.increfDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_data_ptr")) {
+        return @intFromPtr(&utils.decrefDataPtrC);
+    }
+    if (std.mem.eql(u8, name, "free_data_ptr")) {
+        return @intFromPtr(&utils.freeDataPtrC);
+    }
+    // RC pointer functions (for direct refcount manipulation)
+    if (std.mem.eql(u8, name, "incref_rc_ptr")) {
+        return @intFromPtr(&utils.increfRcPtrC);
+    }
+    if (std.mem.eql(u8, name, "decref_rc_ptr")) {
+        return @intFromPtr(&utils.decrefRcPtrC);
+    }
+
+    return null;
+}
+
 test "backend module imports" {
     std.testing.refAllDecls(@This());
+}
+
+test "resolve builtin functions" {
+    // Test that all RC functions resolve
+    try std.testing.expect(resolveBuiltinFunction("incref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("free_data_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("incref_rc_ptr") != null);
+    try std.testing.expect(resolveBuiltinFunction("decref_rc_ptr") != null);
+
+    // Test unknown function returns null
+    try std.testing.expect(resolveBuiltinFunction("unknown_func") == null);
 }

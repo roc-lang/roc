@@ -56,6 +56,48 @@ pub const Relocation = union(enum) {
     }
 };
 
+/// Function that resolves a symbol name to its address.
+pub const SymbolResolver = *const fn (name: []const u8) ?usize;
+
+/// Apply relocations to a mutable code buffer.
+/// The buffer should be writable. After this returns, the buffer can be
+/// made executable via ExecutableMemory.
+///
+/// For x86_64 call instructions, this patches the 4-byte relative offset
+/// after the E8 opcode.
+pub fn applyRelocations(
+    code: []u8,
+    code_base_addr: usize,
+    relocations: []const Relocation,
+    resolver: SymbolResolver,
+) error{UnresolvedSymbol}!void {
+    for (relocations) |reloc| {
+        switch (reloc) {
+            .linked_function => |func_reloc| {
+                const target_addr = resolver(func_reloc.name) orelse {
+                    return error.UnresolvedSymbol;
+                };
+                // Calculate relative offset for x86_64 call instruction
+                // The call is relative to the instruction after the call (offset + 4)
+                const offset: usize = @intCast(func_reloc.offset);
+                const call_site = code_base_addr + offset;
+                const rel_offset: i32 = @intCast(@as(i64, @intCast(target_addr)) - @as(i64, @intCast(call_site + 4)));
+                const offset_bytes: [4]u8 = @bitCast(rel_offset);
+                @memcpy(code[offset..][0..4], &offset_bytes);
+            },
+            .local_data => {
+                // Local data relocations not yet supported
+            },
+            .linked_data => {
+                // Linked data relocations not yet supported
+            },
+            .jmp_to_return => {
+                // Jump relocations not yet supported
+            },
+        }
+    }
+}
+
 test "relocation creation" {
     const data = [_]u8{ 1, 2, 3, 4 };
     const local = Relocation{ .local_data = .{
