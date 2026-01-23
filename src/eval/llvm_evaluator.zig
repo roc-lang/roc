@@ -1532,15 +1532,46 @@ pub const LlvmEvaluator = struct {
         return self.generateBitcode(&module_env, final_expr_idx);
     }
 
+    /// Scope for tracking local variable types during layout resolution
+    const LocalScope = std.AutoHashMapUnmanaged(CIR.Pattern.Idx, layout.Idx);
+
+    /// Get layout from a type annotation (e.g., `a : U64` -> .u64)
+    fn getLayoutFromAnnotation(_: *LlvmEvaluator, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) ?layout.Idx {
+        const annotation = module_env.store.getAnnotation(anno_idx);
+        const type_anno = module_env.store.getTypeAnno(annotation.anno);
+
+        // Handle simple type lookups like U64, I32, F64, etc.
+        if (type_anno == .lookup) {
+            const lookup = type_anno.lookup;
+            const idents = module_env.idents;
+            if (lookup.name == idents.i8) return .i8;
+            if (lookup.name == idents.u8) return .u8;
+            if (lookup.name == idents.i16) return .i16;
+            if (lookup.name == idents.u16) return .u16;
+            if (lookup.name == idents.i32) return .i32;
+            if (lookup.name == idents.u32) return .u32;
+            if (lookup.name == idents.i64) return .i64;
+            if (lookup.name == idents.u64) return .u64;
+            if (lookup.name == idents.i128) return .i128;
+            if (lookup.name == idents.u128) return .u128;
+            if (lookup.name == idents.f32) return .f32;
+            if (lookup.name == idents.f64) return .f64;
+            if (lookup.name == idents.dec) return .dec;
+            if (lookup.name == idents.bool_type) return .bool;
+        }
+
+        return null; // Unknown annotation type
+    }
+
     /// Get the output layout for JIT execution from a CIR expression index
     /// This captures signedness which LLVM types don't distinguish
     fn getExprOutputLayout(self: *LlvmEvaluator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) layout.Idx {
         const expr = module_env.store.getExpr(expr_idx);
-        return self.getExprOutputLayoutFromExpr(module_env, expr);
+        return self.getExprOutputLayoutWithScope(module_env, expr, null);
     }
 
-    /// Get the output layout for JIT execution from a CIR expression
-    fn getExprOutputLayoutFromExpr(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) layout.Idx {
+    /// Get the output layout with an optional local scope for resolving variable types
+    fn getExprOutputLayoutWithScope(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr, local_scope: ?*const LocalScope) layout.Idx {
         return switch (expr) {
             .e_num => |num| switch (num.kind) {
                 .i8 => .i8,
@@ -1592,9 +1623,9 @@ pub const LlvmEvaluator = struct {
                 // Logical operators return Bool
                 .@"and", .@"or" => .bool,
                 // Arithmetic operators inherit from LHS
-                else => self.getExprOutputLayout(module_env, binop.lhs),
+                else => self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(binop.lhs), local_scope),
             },
-            .e_unary_minus => |unary| self.getExprOutputLayout(module_env, unary.expr),
+            .e_unary_minus => |unary| self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(unary.expr), local_scope),
             .e_unary_not => .bool,
             .e_zero_argument_tag => .bool, // For now, assume Bool tags
             .e_tag => |tag| {
@@ -1607,10 +1638,48 @@ pub const LlvmEvaluator = struct {
             },
             .e_if => |if_expr| {
                 // Get layout from final else (or first branch body)
-                return self.getExprOutputLayout(module_env, if_expr.final_else);
+                return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(if_expr.final_else), local_scope);
             },
-            .e_block => |blk| self.getExprOutputLayout(module_env, blk.final_expr),
-            .e_lookup_local => .i64, // Would need type info for proper layout
+            .e_block => |blk| {
+                // Build a scope from the block's declarations
+                var scope = LocalScope{};
+                const stmts = module_env.store.sliceStatements(blk.stmts);
+                for (stmts) |stmt_idx| {
+                    const stmt = module_env.store.getStatement(stmt_idx);
+                    switch (stmt) {
+                        .s_decl => |decl| {
+                            // First try to get layout from type annotation
+                            const decl_layout = if (decl.anno) |anno_idx|
+                                self.getLayoutFromAnnotation(module_env, anno_idx) orelse
+                                    self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(decl.expr), &scope)
+                            else
+                                self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(decl.expr), &scope);
+                            scope.put(self.allocator, decl.pattern, decl_layout) catch {};
+                        },
+                        .s_var => |var_stmt| {
+                            // First try to get layout from type annotation
+                            const var_layout = if (var_stmt.anno) |anno_idx|
+                                self.getLayoutFromAnnotation(module_env, anno_idx) orelse
+                                    self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(var_stmt.expr), &scope)
+                            else
+                                self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(var_stmt.expr), &scope);
+                            scope.put(self.allocator, var_stmt.pattern_idx, var_layout) catch {};
+                        },
+                        else => {},
+                    }
+                }
+                defer scope.deinit(self.allocator);
+                return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(blk.final_expr), &scope);
+            },
+            .e_lookup_local => |lookup| {
+                // Look up the layout from the scope if available
+                if (local_scope) |scope| {
+                    if (scope.get(lookup.pattern_idx)) |found_layout| {
+                        return found_layout;
+                    }
+                }
+                return .i64; // Default if not found
+            },
             .e_str_segment, .e_str => .str,
             .e_call => |call| {
                 const func_expr = module_env.store.getExpr(call.func);
@@ -1626,7 +1695,7 @@ pub const LlvmEvaluator = struct {
                     if (func_ident == idents.abs or func_ident == idents.negate) {
                         const args = module_env.store.sliceExpr(call.args);
                         if (args.len == 1) {
-                            return self.getExprOutputLayout(module_env, args[0]);
+                            return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(args[0]), local_scope);
                         }
                     }
                 }
@@ -1640,11 +1709,11 @@ pub const LlvmEvaluator = struct {
                         const args = module_env.store.sliceExpr(call.args);
                         for (params, 0..) |param_idx, i| {
                             if (param_idx == lookup.pattern_idx and i < args.len) {
-                                return self.getExprOutputLayout(module_env, args[i]);
+                                return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(args[i]), local_scope);
                             }
                         }
                     }
-                    return self.getExprOutputLayout(module_env, lambda.body);
+                    return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(lambda.body), local_scope);
                 }
                 return .i64;
             },
@@ -1653,7 +1722,7 @@ pub const LlvmEvaluator = struct {
                 const idents = module_env.idents;
                 // Method calls like (-3.14).abs() return the same type as the receiver
                 if (field_ident == idents.abs or field_ident == idents.negate or field_ident == idents.abs_diff) {
-                    return self.getExprOutputLayout(module_env, dot.receiver);
+                    return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(dot.receiver), local_scope);
                 }
                 // Type annotations via dot access
                 if (field_ident == idents.i8) return .i8;
@@ -1677,7 +1746,7 @@ pub const LlvmEvaluator = struct {
                     for (field_indices) |field_idx| {
                         const field = module_env.store.getRecordField(field_idx);
                         if (field.name == field_ident) {
-                            return self.getExprOutputLayout(module_env, field.value);
+                            return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(field.value), local_scope);
                         }
                     }
                 }
@@ -1685,7 +1754,7 @@ pub const LlvmEvaluator = struct {
             },
             .e_nominal_external => |nominal| {
                 // Get layout from the backing expression (e.g., Bool.True -> True tag)
-                return self.getExprOutputLayout(module_env, nominal.backing_expr);
+                return self.getExprOutputLayoutWithScope(module_env, module_env.store.getExpr(nominal.backing_expr), local_scope);
             },
             else => .i64, // Default for other expression types
         };
