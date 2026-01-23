@@ -416,12 +416,32 @@ pub const LlvmEvaluator = struct {
 
         /// Emit a numeric literal
         fn emitNum(ctx: *ExprContext, num: anytype, expr: CIR.Expr) ExprError!LlvmBuilder.Value {
-            const int_value = num.value.toI128();
             return switch (num.kind) {
-                .f32 => (ctx.builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue(),
-                .f64 => (ctx.builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue(),
+                .f32 => blk: {
+                    const int_value = num.value.toI128();
+                    break :blk (ctx.builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
+                },
+                .f64 => blk: {
+                    const int_value = num.value.toI128();
+                    break :blk (ctx.builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
+                },
+                .u128, .i128 => blk: {
+                    // 128-bit values: use u128 interpretation since LLVM doesn't distinguish signedness
+                    // This handles large unsigned values that would overflow i128 (like Rust's const_u128)
+                    const u128_value: u128 = @bitCast(num.value.bytes);
+                    break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
+                },
                 else => blk: {
+                    const int_value = num.value.toI128();
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, expr) catch return error.CompilationFailed;
+                    // Check if value exceeds the range of the inferred type - if so, use i128
+                    // This handles unbound numeric literals that are too large for i64
+                    if (llvm_type == .i64) {
+                        if (int_value > std.math.maxInt(i64) or int_value < std.math.minInt(i64)) {
+                            const u128_value: u128 = @bitCast(num.value.bytes);
+                            break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
+                        }
+                    }
                     break :blk (ctx.builder.intConst(llvm_type, int_value) catch return error.CompilationFailed).toValue();
                 },
             };
@@ -1381,15 +1401,25 @@ pub const LlvmEvaluator = struct {
             const target_type: LlvmBuilder.Type = switch (target_layout) {
                 .f32 => .float,
                 .f64 => .double,
-                else => return val, // No conversion needed for non-float targets
+                .i128, .u128 => .i128,
+                else => return val, // No conversion needed for other types
             };
 
             // If already the correct type, return as-is
             if (val_type == target_type) return val;
 
-            // Convert integer to float (like Rust mono's IntValue -> Float conversion)
+            // Convert integer to larger integer or float
             if (val_type == .i8 or val_type == .i16 or val_type == .i32 or val_type == .i64 or val_type == .i128) {
-                return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
+                // For float targets, convert int to float
+                if (target_type == .float or target_type == .double) {
+                    return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
+                }
+                // For int targets (like i128), use appropriate extension based on target signedness
+                if (target_layout.isSigned()) {
+                    return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
+                } else {
+                    return ctx.wip.conv(.unsigned, val, target_type, "") catch return error.CompilationFailed;
+                }
             }
 
             // Convert float to float (f32 <-> f64)
