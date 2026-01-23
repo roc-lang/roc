@@ -365,8 +365,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for a symbol lookup
-        fn generateLookup(self: *Self, symbol: MonoSymbol, layout_idx: layout.Idx) Error!ValueLocation {
-            _ = layout_idx;
+        fn generateLookup(self: *Self, symbol: MonoSymbol, _: layout.Idx) Error!ValueLocation {
 
             // Check if we have a location for this symbol
             const symbol_key: u48 = @bitCast(symbol);
@@ -1102,9 +1101,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for when/match expression
-        fn generateWhen(self: *Self, when_expr: anytype) Error!ValueLocation {
-            _ = self;
-            _ = when_expr;
+        fn generateWhen(_: *Self, _: anytype) Error!ValueLocation {
             // TODO: NOT IMPLEMENTED - Pattern matching (when/match expressions)
             // WHY: Pattern matching requires:
             //   1. Tag extraction: Load the tag byte from the scrutinee
@@ -1218,7 +1215,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a lambda expression (unevaluated function)
         /// Lambdas are not executed immediately - they're stored for later invocation
-        fn generateLambda(self: *Self, lambda: anytype) Error!ValueLocation {
+        fn generateLambda(_: *Self, _: anytype) Error!ValueLocation {
             // TODO: PLACEHOLDER - Standalone lambda returns 0 instead of closure value
             //
             // CURRENT BEHAVIOR:
@@ -1240,8 +1237,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // This is handled by closure expressions with direct_call representation,
             // so most lambdas should be wrapped in closures by Lower.zig before we
             // reach this point. This function is only called for rare edge cases.
-            _ = self;
-            _ = lambda;
             return .{ .immediate_i64 = 0 };
         }
 
@@ -1262,7 +1257,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // The closure is just a reference to the lambda body
                     return .{ .immediate_i64 = 0 };
                 },
-                .unwrapped_capture => |repr| {
+                .unwrapped_capture => |_| {
                     // Single capture - the closure IS the captured value
                     // Zero overhead representation
                     const captures = self.store.getCaptures(closure.captures);
@@ -1277,7 +1272,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             return try self.generateExpr(def_expr_id);
                         }
                     }
-                    _ = repr;
                     return .{ .immediate_i64 = 0 };
                 },
                 .struct_captures => |repr| {
@@ -1323,8 +1317,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Get the register used for argument N in the calling convention
-        fn getArgumentRegister(self: *Self, index: u8) GeneralReg {
-            _ = self;
+        fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
             if (comptime builtin.cpu.arch == .aarch64) {
                 // AArch64: X0-X7 for arguments
                 return @enumFromInt(index);
@@ -1336,8 +1329,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Get the register used for return values
-        fn getReturnRegister(self: *Self) GeneralReg {
-            _ = self;
+        fn getReturnRegister(_: *Self) GeneralReg {
             if (comptime builtin.cpu.arch == .aarch64) {
                 return .X0;
             } else {
@@ -1388,9 +1380,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for calling a lambda directly: (|x| x + 1)(5)
-        fn generateLambdaCall(self: *Self, lambda: anytype, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            _ = ret_layout;
-
+        fn generateLambdaCall(self: *Self, lambda: anytype, args_span: anytype, _: layout.Idx) Error!ValueLocation {
             // Get the parameter patterns
             const params = self.store.getPatternSpan(lambda.params);
             const args = self.store.getExprSpan(args_span);
@@ -1625,10 +1615,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             members: []const mono.LambdaSetMember,
             tag_loc: ValueLocation,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
         ) Error!ValueLocation {
-            _ = ret_layout;
-
             // Allocate result register
             const result_reg = try self.codegen.allocGeneralFor(0);
 
@@ -1681,10 +1669,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             members: []const mono.LambdaSetMember,
             tag_loc: ValueLocation,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
         ) Error!ValueLocation {
-            _ = ret_layout;
-
             // Allocate result register
             const result_reg = try self.codegen.allocGeneralFor(0);
 
@@ -1802,12 +1788,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self: *Self,
             lambda: anytype,
             args_span: anytype,
-            ret_layout: layout.Idx,
+            _: layout.Idx,
             self_recursive: SelfRecursive,
             symbol: ?MonoSymbol,
         ) Error!ValueLocation {
-            _ = ret_layout;
-
             // Get the parameter patterns and arguments
             const params = self.store.getPatternSpan(lambda.params);
             const args = self.store.getExprSpan(args_span);
@@ -2054,9 +2038,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
-        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
-            _ = ret_layout;
-
+        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, _: layout.Idx) Error!ValueLocation {
             // Evaluate arguments and place them in argument registers
             const args = self.store.getExprSpan(args_span);
             for (args, 0..) |arg_id, i| {
@@ -2601,8 +2583,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, join_id: JoinPointId, params: mono.MonoPatternSpan) Error!void {
-            _ = join_id;
+        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: mono.MonoPatternSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
 
             // For each parameter, allocate a register or stack slot
@@ -2621,8 +2602,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Rebind join point parameters to new argument values (for jump)
-        fn rebindJoinPointParams(self: *Self, join_id: JoinPointId, arg_locs: []const ValueLocation) Error!void {
-            _ = join_id;
+        fn rebindJoinPointParams(self: *Self, _: JoinPointId, arg_locs: []const ValueLocation) Error!void {
             // Move argument values to their parameter registers
             // This needs to be done carefully to avoid clobbering values we still need
             // For now, simple sequential assignment (works when args don't alias params)

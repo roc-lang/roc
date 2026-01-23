@@ -389,9 +389,7 @@ pub const DevEvaluator = struct {
     ///
     /// NOTE: Native code generation is not currently implemented.
     /// This function exists to maintain the API but always returns an error.
-    pub fn generateCodeFromSource(self: *DevEvaluator, source: []const u8) Error!CodeResult {
-        _ = self;
-        _ = source;
+    pub fn generateCodeFromSource(_: *DevEvaluator, _: []const u8) Error!CodeResult {
         return error.UnsupportedExpression;
     }
 

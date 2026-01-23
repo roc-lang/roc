@@ -293,8 +293,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 }
 
 /// Get layout from a type annotation
-fn getTypeAnnoLayout(self: *Self, type_anno: CIR.TypeAnno) LayoutIdx {
-    _ = self;
+fn getTypeAnnoLayout(_: *Self, type_anno: CIR.TypeAnno) LayoutIdx {
     return switch (type_anno) {
         .apply => |apply| layoutFromLocalOrExternal(apply.base),
         .lookup => |lookup| layoutFromLocalOrExternal(lookup.base),
@@ -761,11 +760,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_typed_frac => |tf| .{ .dec_literal = tf.value.toI128() },
 
         // Low-level lambda - these are compiler-generated intrinsics
-        .e_low_level_lambda => |ll| blk: {
+        .e_low_level_lambda => |_| blk: {
             // Low-level lambdas are typically called, not evaluated directly
             // When called, we intercept them in e_call handling
             // If we encounter one directly, it's like a closure reference
-            _ = ll;
             break :blk .{ .runtime_error = {} };
         },
 
@@ -1664,11 +1662,9 @@ fn lowerInspectByLayout(
     self: *Self,
     value_expr: MonoExprId,
     layout_val: layout_mod.Layout,
-    value_layout: LayoutIdx,
+    _: LayoutIdx,
     region: Region,
 ) Error!MonoExprId {
-    _ = value_layout;
-
     return switch (layout_val.tag) {
         .scalar => switch (layout_val.data.scalar.tag) {
             .int => try self.store.addExpr(.{ .int_to_str = .{
@@ -1952,12 +1948,11 @@ fn addStrLiteral(self: *Self, text: []const u8, region: Region) Error!MonoExprId
 
 /// Helper to get field layout from record layout
 fn getFieldLayoutFromRecord(
-    self: *Self,
+    _: *Self,
     layout_val: layout_mod.Layout,
     field_idx: u16,
     layout_store: *LayoutStore,
 ) LayoutIdx {
-    _ = self;
     if (layout_val.tag == .record) {
         const record_data = layout_store.getRecordData(layout_val.data.record.idx);
         const fields_range = record_data.getFields();
@@ -1972,12 +1967,11 @@ fn getFieldLayoutFromRecord(
 
 /// Helper to get tuple element layout
 fn getTupleElemLayout(
-    self: *Self,
+    _: *Self,
     layout_val: layout_mod.Layout,
     elem_idx: u16,
     layout_store: *LayoutStore,
 ) LayoutIdx {
-    _ = self;
     if (layout_val.tag == .tuple) {
         const tuple_data = layout_store.getTupleData(layout_val.data.tuple.idx);
         const fields_range = tuple_data.getFields();

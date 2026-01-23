@@ -36,7 +36,6 @@ const runExpectF32 = helpers.runExpectF32;
 const runExpectF64 = helpers.runExpectF64;
 const runExpectDec = helpers.runExpectDec;
 const runExpectStr = helpers.runExpectStr;
-const runExpectTypeMismatchAndCrash = helpers.runExpectTypeMismatchAndCrash;
 
 // U8 Tests (Unsigned 8-bit: 0 to 255)
 // Uses values > 127 to prove they're not I8
