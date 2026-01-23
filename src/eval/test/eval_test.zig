@@ -2417,12 +2417,12 @@ test "str_inspekt - zero" {
 }
 
 test "str_inspekt - boolean true" {
-    // Str.inspect on Bool.true should return "Bool.true"
-    try runExpectStr("Str.inspect(Bool.true)", "Bool.true", .no_trace);
+    // Str.inspect on Bool.True should return "Bool.true"
+    try runExpectStr("Str.inspect(Bool.True)", "Bool.true", .no_trace);
 }
 
 test "str_inspekt - boolean false" {
-    try runExpectStr("Str.inspect(Bool.false)", "Bool.false", .no_trace);
+    try runExpectStr("Str.inspect(Bool.False)", "Bool.false", .no_trace);
 }
 
 test "str_inspekt - simple string" {

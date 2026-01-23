@@ -172,8 +172,7 @@ pub fn run(ctx: *CliContext, backend: Backend) !void {
     var repl_ops = ReplOps.init(ctx.gpa);
     defer repl_ops.deinit();
 
-    _ = backend; // Backend selection is no longer needed - dev backend is always used
-    var repl_instance = Repl.init(ctx.gpa, repl_ops.get_ops()) catch |err| {
+    var repl_instance = Repl.initWithBackend(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr(), backend) catch |err| {
         ctx.io.stderr().print("Failed to initialize REPL: {}\n", .{err}) catch {};
         return error.NotImplemented;
     };

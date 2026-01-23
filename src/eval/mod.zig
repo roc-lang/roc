@@ -33,7 +33,15 @@ pub const Interpreter = @import("interpreter.zig").Interpreter;
 pub const StackValue = @import("StackValue.zig");
 /// Render helpers for outputting values
 pub const render_helpers = @import("render_helpers.zig");
-/// LLVM-based evaluator for native code generation
+/// Stack memory allocator for evaluating Roc IR
+const stack_mod = @import("stack.zig");
+pub const Stack = stack_mod.Stack;
+pub const StackOverflow = stack_mod.StackOverflow;
+/// Eval error type alias
+pub const EvalError = Interpreter.Error;
+/// Test runner for expect expressions
+pub const TestRunner = @import("test_runner.zig").TestRunner;
+/// LLVM-based evaluator for optimized code generation
 pub const LlvmEvaluator = @import("llvm_evaluator.zig").LlvmEvaluator;
 
 test "eval tests" {
@@ -49,6 +57,8 @@ test "eval tests" {
     std.testing.refAllDecls(@import("StackValue.zig"));
     std.testing.refAllDecls(@import("render_helpers.zig"));
     std.testing.refAllDecls(@import("llvm_evaluator.zig"));
+    std.testing.refAllDecls(@import("stack.zig"));
+    std.testing.refAllDecls(@import("test/TestEnv.zig"));
 
     // Test files that compare interpreter output with dev backend
     std.testing.refAllDecls(@import("test/helpers.zig"));

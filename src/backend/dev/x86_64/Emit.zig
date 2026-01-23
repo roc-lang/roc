@@ -275,6 +275,17 @@ pub fn andRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
 }
 
+/// AND r64, imm8 - AND register with sign-extended immediate byte
+/// Used after SETCC to mask the result to just the lowest bit.
+pub fn andRegImm8(self: *Emit, dst: GeneralReg, imm: i8) !void {
+    // REX.W prefix (0x48) + REX.B if dst is R8-R15
+    try self.buf.append(self.allocator, rex(1, 0, 0, dst.rexB()));
+    try self.buf.append(self.allocator, 0x83); // AND r/m64, imm8
+    // ModRM: mod=11 (register), reg=4 (/4 for AND), rm=dst
+    try self.buf.append(self.allocator, modRM(0b11, 4, dst.enc()));
+    try self.buf.append(self.allocator, @bitCast(imm));
+}
+
 /// OR reg, reg
 pub fn orRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     if (width.requiresSizeOverride()) {

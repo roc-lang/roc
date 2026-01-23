@@ -1,19 +1,18 @@
 //! The evaluation part of the Read-Eval-Print-Loop (REPL)
-//!
-//! Uses Mono IR-based native code generation for evaluation.
 
 const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
+const types = @import("types");
 const can = @import("can");
 const Can = can.Can;
 const check = @import("check");
 const Check = check.Check;
 const builtins = @import("builtins");
 const eval_mod = @import("eval");
+const CrashContext = eval_mod.CrashContext;
+const BuiltinTypes = eval_mod.BuiltinTypes;
 const builtin_loading = eval_mod.builtin_loading;
-
-const RocStr = builtins.str.RocStr;
 
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -22,6 +21,8 @@ const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
 const DevEvaluator = eval_mod.DevEvaluator;
 
+pub const Backend = @import("backend").EvalBackend;
+
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
     allocator: Allocator,
@@ -29,7 +30,11 @@ pub const Repl = struct {
     definitions: std.StringHashMap([]const u8),
     /// Operations for the Roc runtime
     roc_ops: *RocOps,
-    /// DevEvaluator instance for native code generation
+    /// Shared crash context managed by the host (optional)
+    crash_ctx: ?*CrashContext,
+    /// Backend for code evaluation
+    backend: Backend,
+    /// DevEvaluator instance (only initialized when backend is .dev)
     dev_evaluator: ?DevEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
@@ -44,7 +49,11 @@ pub const Repl = struct {
     /// Loaded Builtin module (loaded once at startup)
     builtin_module: LoadedModule,
 
-    pub fn init(allocator: Allocator, roc_ops: *RocOps) !Repl {
+    pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        return initWithBackend(allocator, roc_ops, crash_ctx, .interpreter);
+    }
+
+    pub fn initWithBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: Backend) !Repl {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
@@ -55,13 +64,18 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
-        // Initialize DevEvaluator
-        const dev_evaluator: ?DevEvaluator = DevEvaluator.init(allocator) catch null;
+        // Initialize DevEvaluator if using dev backend
+        var dev_evaluator: ?DevEvaluator = null;
+        if (backend == .dev) {
+            dev_evaluator = DevEvaluator.init(allocator) catch null;
+        }
 
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
+            .crash_ctx = crash_ctx,
+            .backend = backend,
             .dev_evaluator = dev_evaluator,
             .last_module_env = null,
             .debug_store_snapshots = false,
@@ -71,6 +85,10 @@ pub const Repl = struct {
             .builtin_module = builtin_module,
         };
     }
+
+    // pub fn setTraceWriter(self: *Repl, trace_writer: std.io.AnyWriter) void {
+    //     self.trace_writer = trace_writer;
+    // }
 
     /// Enable debug mode to store snapshot HTML for each REPL step
     pub fn enableDebugSnapshots(self: *Repl) void {
@@ -590,95 +608,73 @@ pub const Repl = struct {
             return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
         }
 
-        // Get type annotation string from type checker
-        const type_var = ModuleEnv.varFrom(final_expr_idx);
-        var type_writer = try module_env.initTypeWriter();
-        defer type_writer.deinit();
-        // Default numeric literals to Dec for display (rather than showing unsolved type constraints)
-        type_writer.setDefaultNumeralsToDec(true);
-        const type_annotation = type_writer.writeGet(type_var, .one_line) catch "?";
+        // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
+        if (self.backend == .dev) {
+            if (self.dev_evaluator) |*dev_eval| {
+                // Generate and execute native code
+                const all_module_envs = &.{module_env};
+                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
+                    // Fall back to interpreter on unsupported expressions
+                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                };
+                defer code_result.deinit();
 
-        // Use DevEvaluator for native code generation
-        if (self.dev_evaluator) |*dev_eval| {
-            // Build module list for code generation
-            var all_module_envs = [_]*ModuleEnv{ module_env, self.builtin_module.env };
+                // JIT execute
+                const backend = eval_mod;
+                var jit = backend.JitCode.init(code_result.code) catch {
+                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                };
+                defer jit.deinit();
 
-            // Generate and execute native code
-            var code_result = dev_eval.generateCode(module_env, final_expr_idx, &all_module_envs) catch |err| {
-                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Code generation error: {}", .{err}) };
-            };
-            defer code_result.deinit();
-
-            // Check for crash message
-            if (code_result.crash_message) |crash_msg| {
-                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{crash_msg}) };
+                // Format result based on layout
+                const LayoutIdx = eval_mod.layout.Idx;
+                const output = switch (code_result.result_layout) {
+                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{jit.callReturnI64()}),
+                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{jit.callReturnU64()}),
+                    LayoutIdx.bool => if (jit.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
+                    LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{jit.callReturnF64()}),
+                    LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{jit.callReturnI64()}), // TODO: proper Dec formatting
+                    else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                };
+                return .{ .expression = output };
             }
-
-            // Check if we got valid code
-            if (code_result.code.len == 0) {
-                return .{ .eval_error = try self.allocator.dupe(u8, "Code generation produced no output") };
-            }
-
-            // JIT execute
-            var jit = eval_mod.JitCode.init(code_result.code) catch |err| {
-                return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "JIT init error: {}", .{err}) };
-            };
-            defer jit.deinit();
-
-            // Generate debug HTML if enabled
-            if (self.debug_store_snapshots) {
-                try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
-            }
-
-            // Format result based on layout
-            const LayoutIdx = eval_mod.layout.Idx;
-
-            // Execute using result pointer calling convention
-            // Format: {value} : {type}
-            const output = switch (code_result.result_layout) {
-                LayoutIdx.str => blk: {
-                    // Execute to get RocStr result
-                    var roc_str_bytes: [@sizeOf(RocStr)]u8 align(@alignOf(RocStr)) = undefined;
-                    jit.callWithResultPtr(@ptrCast(&roc_str_bytes));
-
-                    // Extract the string content from RocStr
-                    const roc_str: *const RocStr = @ptrCast(&roc_str_bytes);
-                    const str_slice = roc_str.asSlice();
-
-                    // Format: "value" : Str
-                    break :blk try std.fmt.allocPrint(self.allocator, "\"{s}\" : {s}", .{ str_slice, type_annotation });
-                },
-                LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => blk: {
-                    var result: i64 = undefined;
-                    jit.callWithResultPtr(@ptrCast(&result));
-                    break :blk try std.fmt.allocPrint(self.allocator, "{} : {s}", .{ result, type_annotation });
-                },
-                LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => blk: {
-                    var result: u64 = undefined;
-                    jit.callWithResultPtr(@ptrCast(&result));
-                    break :blk try std.fmt.allocPrint(self.allocator, "{} : {s}", .{ result, type_annotation });
-                },
-                LayoutIdx.bool => blk: {
-                    var result: u64 = undefined;
-                    jit.callWithResultPtr(@ptrCast(&result));
-                    const val_str = if (result != 0) "Bool.true" else "Bool.false";
-                    break :blk try std.fmt.allocPrint(self.allocator, "{s} : {s}", .{ val_str, type_annotation });
-                },
-                LayoutIdx.f64, LayoutIdx.f32 => blk: {
-                    var result: f64 = undefined;
-                    jit.callWithResultPtr(@ptrCast(&result));
-                    break :blk try std.fmt.allocPrint(self.allocator, "{d} : {s}", .{ result, type_annotation });
-                },
-                LayoutIdx.dec => blk: {
-                    var result: i128 = undefined;
-                    jit.callWithResultPtr(@ptrCast(&result));
-                    break :blk try std.fmt.allocPrint(self.allocator, "{} : {s}", .{ result, type_annotation }); // TODO: proper Dec formatting
-                },
-                else => try self.allocator.dupe(u8, "<unsupported type>"),
-            };
-            return .{ .expression = output };
         }
 
-        return .{ .eval_error = try self.allocator.dupe(u8, "DevEvaluator not available") };
+        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+    }
+
+    /// Evaluate using the interpreter (fallback path)
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
+        const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null) catch |err| {
+            return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
+        };
+        defer interpreter.deinitAndFreeOtherEnvs();
+
+        if (self.crash_ctx) |ctx| {
+            ctx.reset();
+        }
+
+        const result = interpreter.eval(final_expr_idx, self.roc_ops) catch |err| switch (err) {
+            error.Crash => {
+                if (self.crash_ctx) |ctx| {
+                    if (ctx.crashMessage()) |msg| {
+                        return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Crash: {s}", .{msg}) };
+                    }
+                }
+                return .{ .eval_error = try self.allocator.dupe(u8, "Evaluation error: error.Crash") };
+            },
+            else => return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Evaluation error: {}", .{err}) },
+        };
+
+        if (self.debug_store_snapshots) {
+            try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
+        }
+
+        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
+
+        result.decref(&interpreter.runtime_layout_store, self.roc_ops);
+        interpreter.cleanupBindings(self.roc_ops);
+        return .{ .expression = output };
     }
 };

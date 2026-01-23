@@ -458,10 +458,11 @@ pub const RocModules = struct {
     }
 
     pub fn addAll(self: RocModules, step: *Step.Compile) void {
+        const is_wasm = step.rootModuleTarget().cpu.arch == .wasm32;
+
         step.root_module.addImport("base", self.base);
         step.root_module.addImport("collections", self.collections);
         step.root_module.addImport("types", self.types);
-        step.root_module.addImport("compile", self.compile);
         step.root_module.addImport("reporting", self.reporting);
         step.root_module.addImport("parse", self.parse);
         step.root_module.addImport("can", self.can);
@@ -472,22 +473,23 @@ pub const RocModules = struct {
         step.root_module.addImport("build_options", self.build_options);
         step.root_module.addImport("layout", self.layout);
         step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("ipc", self.ipc);
         step.root_module.addImport("repl", self.repl);
         step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("watch", self.watch);
-        step.root_module.addImport("lsp", self.lsp);
-
-        // Don't add bundle module for WASM targets (zstd C library not available)
-        if (step.rootModuleTarget().cpu.arch != .wasm32) {
-            step.root_module.addImport("bundle", self.bundle);
-        }
-
         step.root_module.addImport("unbundle", self.unbundle);
         step.root_module.addImport("base58", self.base58);
         step.root_module.addImport("roc_target", self.roc_target);
         step.root_module.addImport("backend", self.backend);
         step.root_module.addImport("mono", self.mono);
+
+        // Don't add thread-dependent modules for WASM targets (threads not supported)
+        if (!is_wasm) {
+            step.root_module.addImport("compile", self.compile);
+            step.root_module.addImport("ipc", self.ipc);
+            step.root_module.addImport("watch", self.watch);
+            step.root_module.addImport("lsp", self.lsp);
+            // Don't add bundle module for WASM targets (zstd C library not available)
+            step.root_module.addImport("bundle", self.bundle);
+        }
     }
 
     pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {

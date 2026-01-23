@@ -168,7 +168,7 @@ pub const JitStaticBackend = struct {
         // This allows RC operations to safely check and skip static data
         _ = alignment; // Strings just need byte alignment
         const total_size = @sizeOf(isize) + data.len;
-        const allocated = allocator.alloc(u8, total_size) catch return null;
+        const allocated = allocator.alignedAlloc(u8, .@"8", total_size) catch return null;
 
         // Write static refcount at the start
         const refcount_ptr: *isize = @ptrCast(@alignCast(allocated.ptr));

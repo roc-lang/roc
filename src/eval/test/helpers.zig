@@ -144,12 +144,12 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
-            var result: i128 = undefined;
+            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.dec => blk: {
-            var result: i128 = undefined;
+            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             // Dec values are stored scaled by 10^18 - show integer part for comparison
             const int_part = @divTrunc(result, dec_scale);
