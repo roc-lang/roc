@@ -802,9 +802,11 @@ pub const Coordinator = struct {
             const child = pkg.getModule(child_id).?;
             try child.dependents.append(self.gpa, result.module_id);
 
-            // Set depth
-            if (current_mod.depth + 1 < child.depth) {
-                child.depth = current_mod.depth + 1;
+            // Set depth - use saturating addition to prevent overflow when depth is
+            // maxInt (uninitialized, e.g. for modules created via external imports)
+            const new_depth = current_mod.depth +| 1;
+            if (new_depth < child.depth) {
+                child.depth = new_depth;
             }
 
             // Cycle detection
