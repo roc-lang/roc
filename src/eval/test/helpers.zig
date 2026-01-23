@@ -87,7 +87,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
         // Allocate buffer for tuple elements (each element is 8 bytes / i64)
-        var result_buf: [32]i64 = undefined;
+        var result_buf: [32]i64 = @splat(0);
         jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
 
         // Format as "(elem1, elem2, ...)"
@@ -113,23 +113,23 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
     const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            var result: i64 = undefined;
+            var result: i64 = 0;
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = undefined;
+            var result: u64 = 0;
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.f64 => blk: {
-            var result: f64 = undefined;
+            var result: f64 = 0;
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
         layout_mod.Idx.f32 => blk: {
             // F32 stores 4 bytes, use f32 buffer and print at f32 precision
-            var result: f32 = undefined;
+            var result: f32 = 0;
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
             break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
@@ -147,7 +147,7 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
         },
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes
-            var result: [24]u8 = undefined;
+            var result: [24]u8 = @splat(0);
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
 
             // Check if small string (last byte has high bit set)
