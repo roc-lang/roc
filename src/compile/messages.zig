@@ -43,10 +43,6 @@ pub const CycleInfo = struct {
     cycle_path: ?[]const ModuleId,
 };
 
-// ============================================================================
-// Task types - sent from coordinator to workers
-// ============================================================================
-
 /// Task to parse a module source file
 pub const ParseTask = struct {
     /// Package this module belongs to
@@ -135,10 +131,6 @@ pub const WorkerTask = union(enum) {
         };
     }
 };
-
-// ============================================================================
-// Result types - sent from workers back to coordinator
-// ============================================================================
 
 /// Result of successfully parsing a module
 pub const ParsedResult = struct {
@@ -317,10 +309,6 @@ pub const WorkerResult = union(enum) {
         }
     }
 };
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 test "WorkerTask accessors" {
     const task = WorkerTask{

@@ -3,7 +3,6 @@
 const std = @import("std");
 const fs_mod = @import("fs");
 const can = @import("can");
-const build_options = @import("build_options");
 
 const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 const CacheModule = @import("cache_module.zig").CacheModule;
@@ -13,9 +12,6 @@ const Filesystem = fs_mod.Filesystem;
 const CacheStats = @import("cache_config.zig").CacheStats;
 const CacheConfig = @import("cache_config.zig").CacheConfig;
 const builtin = @import("builtin");
-
-// Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
-const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
 
 const is_windows = builtin.target.os.tag == .windows;
 

@@ -249,10 +249,6 @@ pub fn Channel(comptime T: type) type {
     };
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 test "Channel basic send/recv" {
     var ch = try Channel(u32).init(std.testing.allocator, 4);
     defer ch.deinit();

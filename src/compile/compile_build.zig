@@ -36,18 +36,11 @@ const CacheManager = @import("cache_manager.zig").CacheManager;
 const FileProvider = compile_package.FileProvider;
 
 // Actor model components
-const messages = @import("messages.zig");
-const channel = @import("channel.zig");
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
 
 // Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
 const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
-
-/// Cache version string that includes the build mode to prevent debug/release cache incompatibility.
-/// A cache created by a debug build should not be loaded by a release build (and vice versa)
-/// because the struct layouts may differ between build modes.
-const cache_compiler_version = "roc-zig-dev-" ++ @tagName(builtin.mode);
 
 // Threading features aren't available when targeting WebAssembly,
 // so we disable them at comptime to prevent builds from failing.
@@ -57,23 +50,6 @@ const Thread = if (threads_available) std.Thread else struct {};
 const Mutex = if (threads_available) std.Thread.Mutex else struct {};
 const ThreadCondition = if (threads_available) std.Thread.Condition else struct {};
 
-// Inflight counter: atomic usize on non-wasm; no-op struct on wasm
-const InflightCounter = if (threads_available) struct {
-    value: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
-
-    pub fn inc(self: *@This()) void {
-        _ = self.value.fetchAdd(1, .monotonic);
-    }
-
-    pub fn dec(self: *@This()) void {
-        _ = self.value.fetchSub(1, .monotonic);
-    }
-
-    pub fn load(self: *@This()) usize {
-        return self.value.load(.monotonic);
-    }
-} else struct {};
-
 fn freeSlice(gpa: Allocator, s: []u8) void {
     gpa.free(s);
 }
@@ -81,356 +57,6 @@ fn freeSlice(gpa: Allocator, s: []u8) void {
 fn freeConstSlice(gpa: Allocator, s: []const u8) void {
     gpa.free(@constCast(s));
 }
-
-// Global unified work-stealing queue
-
-const GlobalQueue = struct {
-    const Task = struct {
-        pkg: []u8,
-        module_name: []u8,
-    };
-
-    gpa: Allocator,
-    tasks: std.array_list.Managed(Task),
-    lock: Mutex = .{},
-    cond: ThreadCondition = .{},
-    workers: std.array_list.Managed(Thread),
-    running: bool = false,
-    sink_ptr: ?*OrderedSink = null,
-    // Pointer back to BuildEnv for dispatch
-    build_env: ?*BuildEnv = null,
-    // Inflight counter for idle detection (no-op on wasm)
-    inflight: InflightCounter = .{},
-    // Track modules that are queued or being processed to prevent duplicates
-    in_progress: std.StringHashMap(void) = undefined,
-
-    pub fn init(gpa: Allocator) GlobalQueue {
-        return .{
-            .gpa = gpa,
-            .tasks = std.array_list.Managed(Task).init(gpa),
-            .workers = std.array_list.Managed(std.Thread).init(gpa),
-            .in_progress = std.StringHashMap(void).init(gpa),
-        };
-    }
-
-    pub fn deinit(self: *GlobalQueue, gpa: Allocator) void {
-        // Stop workers
-        self.lock.lock();
-        self.running = false;
-        self.cond.broadcast();
-        self.lock.unlock();
-
-        if (threads_available) {
-            for (self.workers.items) |t| t.join();
-        }
-        self.workers.deinit();
-
-        // Free queued tasks
-        for (self.tasks.items) |t| {
-            freeSlice(gpa, t.pkg);
-            freeSlice(gpa, t.module_name);
-        }
-        self.tasks.deinit();
-
-        // Free in_progress tracking keys
-        var iter = self.in_progress.keyIterator();
-        while (iter.next()) |key| {
-            gpa.free(key.*);
-        }
-        self.in_progress.deinit();
-
-        self.sink_ptr = null;
-        self.build_env = null;
-    }
-
-    pub fn start(self: *GlobalQueue, _: Allocator, max_threads: usize, sink: *OrderedSink) !void {
-        self.lock.lock();
-        self.sink_ptr = sink;
-        // On targets without threads (e.g. wasm32), do nothing.
-        if (builtin.target.cpu.arch == .wasm32) {
-            self.running = false;
-            self.lock.unlock();
-            return;
-        }
-        // Respect requested single-thread mode without spawning threads
-        if (max_threads <= 1) {
-            self.running = false;
-            self.lock.unlock();
-            return;
-        }
-        self.running = true;
-        self.lock.unlock();
-
-        const n = if (max_threads == 0) (std.Thread.getCpuCount() catch 1) else max_threads;
-        try self.workers.ensureTotalCapacity(n);
-        var i: usize = 0;
-        while (i < n) : (i += 1) {
-            const th = try std.Thread.spawn(.{}, worker, .{self});
-            try self.workers.append(th);
-        }
-    }
-
-    pub fn waitForIdle(self: *GlobalQueue) void {
-        // Wait until queue empty and no inflight work (non-wasm).
-        // BuildEnv.emitDeterministic() will be called after this.
-        while (true) {
-            if (threads_available) {
-                self.lock.lock();
-            }
-            const no_tasks = self.tasks.items.len == 0;
-            if (threads_available) {
-                self.lock.unlock();
-            }
-            const inflight_zero = if (threads_available) self.inflight.load() == 0 else true;
-            if (no_tasks and inflight_zero) break;
-        }
-    }
-
-    pub fn enqueue(self: *GlobalQueue, pkg: []const u8, module_name: []const u8) !void {
-        // For backwards compatibility, use pkg:module_name as key
-        return self.enqueueWithPath(pkg, module_name, "");
-    }
-
-    pub fn enqueueWithPath(self: *GlobalQueue, pkg: []const u8, module_name: []const u8, path: []const u8) !void {
-        self.lock.lock();
-        defer self.lock.unlock();
-
-        // Use file path as deduplication key if available (same file may exist in multiple packages)
-        // Fall back to pkg:module_name if path is empty
-        const key = if (path.len > 0)
-            try self.gpa.dupe(u8, path)
-        else
-            try std.fmt.allocPrint(self.gpa, "{s}:{s}", .{ pkg, module_name });
-
-        // Check if already queued or in progress
-        if (self.in_progress.contains(key)) {
-            if (comptime trace_cache) {
-                std.debug.print("[TRACE-QUEUE] SKIP duplicate: pkg={s} module={s} path={s}\n", .{ pkg, module_name, path });
-            }
-            self.gpa.free(key);
-            return; // Already being processed, skip duplicate
-        }
-
-        if (comptime trace_cache) {
-            std.debug.print("[TRACE-QUEUE] ENQUEUE: pkg={s} module={s} path={s}\n", .{ pkg, module_name, path });
-        }
-
-        // Mark as in progress
-        try self.in_progress.put(key, {});
-
-        try self.tasks.append(.{
-            .pkg = try self.gpa.dupe(u8, pkg),
-            .module_name = try self.gpa.dupe(u8, module_name),
-        });
-        self.cond.signal();
-    }
-
-    fn take(self: *GlobalQueue) ?Task {
-        if (threads_available) {
-            self.lock.lock();
-            defer self.lock.unlock();
-        }
-        if (self.tasks.items.len == 0) return null;
-        const idx = self.tasks.items.len - 1;
-        const t = self.tasks.items[idx];
-        self.tasks.items.len = idx;
-
-        // Note: We don't remove from in_progress here. The module stays tracked
-        // until it's fully done. The worker will loop until Done or blocked.
-
-        return t;
-    }
-
-    /// Remove a module from in_progress tracking (called when module is Done)
-    fn markComplete(self: *GlobalQueue, path: []const u8) void {
-        if (threads_available) {
-            self.lock.lock();
-            defer self.lock.unlock();
-        }
-        // Use path as key (must match what was used in enqueueWithPath)
-        if (self.in_progress.fetchRemove(path)) |kv| {
-            if (comptime trace_cache) {
-                std.debug.print("[TRACE-QUEUE] COMPLETE: path={s}\n", .{path});
-            }
-            self.gpa.free(kv.key);
-        } else if (comptime trace_cache) {
-            std.debug.print("[TRACE-QUEUE] COMPLETE (not found): path={s}\n", .{path});
-        }
-    }
-
-    fn worker(self: *GlobalQueue) void {
-        while (true) {
-            if (self.take()) |task| {
-                if (comptime trace_cache) {
-                    std.debug.print("[TRACE-QUEUE] WORKER processing: pkg={s} module={s}\n", .{ task.pkg, task.module_name });
-                }
-                // Dispatch to the corresponding ModuleBuild
-                if (self.build_env) |be| {
-                    if (be.schedulers.get(task.pkg)) |sched| {
-                        // Process module task if present in scheduler
-                        const exists = sched.hasModule(task.module_name);
-                        if (exists) {
-                            // Mark inflight before processing and decrement after
-                            if (threads_available) {
-                                self.inflight.inc();
-                                defer self.inflight.dec();
-                            }
-
-                            // Get module state (for path and cache checking)
-                            const module_state = sched.getModuleState(task.module_name).?;
-                            const module_path = module_state.path;
-
-                            // Check cache before processing
-                            if (be.cache_manager) |cm| {
-                                // Read the source file (normalize line endings for consistent behavior on Windows).
-                                const source = be.readFile(module_path, 10 * 1024 * 1024) catch {
-                                    // If we can't read the file, continue with normal processing
-                                    sched.processModuleByName(task.module_name) catch {
-                                        // Continue processing other modules despite this error
-                                    };
-
-                                    freeSlice(self.gpa, task.pkg);
-                                    freeSlice(self.gpa, task.module_name);
-                                    continue;
-                                };
-                                defer be.gpa.free(source);
-
-                                const cache_result = cm.loadFromCache(cache_compiler_version, source, task.module_name);
-                                switch (cache_result) {
-                                    .hit => |hit| {
-                                        if (comptime trace_cache) {
-                                            std.debug.print("[TRACE-CACHE] HIT: {s} (errors={d}, warnings={d})\n", .{
-                                                task.module_name,
-                                                hit.error_count,
-                                                hit.warning_count,
-                                            });
-                                        }
-                                        // Cache hit! Update the module state with cached data
-                                        module_state.*.phase = .Done;
-                                        module_state.*.env = hit.module_env.*;
-
-                                        // Skip normal processing since we loaded from cache
-                                        freeSlice(self.gpa, task.pkg);
-                                        freeSlice(self.gpa, task.module_name);
-                                        continue;
-                                    },
-                                    .miss => |miss| {
-                                        if (comptime trace_cache) {
-                                            const key_hex = std.fmt.bytesToHex(miss.key, .lower);
-                                            std.debug.print("[TRACE-CACHE] MISS: {s} (key={s})\n", .{
-                                                task.module_name,
-                                                &key_hex,
-                                            });
-                                        }
-                                        // Continue with normal processing
-                                    },
-                                    .not_enabled => {
-                                        // Continue with normal processing
-                                    },
-                                }
-                            }
-
-                            // Process module through all phases until Done or blocked
-                            var max_iterations: u32 = 100; // Safety limit
-                            var reached_done = false;
-                            while (max_iterations > 0) : (max_iterations -= 1) {
-                                const current_state = sched.getModuleState(task.module_name) orelse break;
-                                const current_phase = current_state.phase;
-
-                                // Stop if Done or waiting on dependencies
-                                if (current_phase == .Done) {
-                                    reached_done = true;
-                                    break;
-                                }
-                                if (current_phase == .WaitingOnImports) break;
-
-                                sched.processModuleByName(task.module_name) catch break;
-
-                                // Check if phase changed - if not, we're stuck
-                                const new_state = sched.getModuleState(task.module_name) orelse break;
-                                if (new_state.phase == current_phase) break;
-                            }
-
-                            // Only mark complete when module is truly Done
-                            // If WaitingOnImports, keep in in_progress to prevent re-enqueue
-                            // until explicitly notified by dependencies
-                            if (reached_done) {
-                                self.markComplete(module_path);
-                            }
-
-                            // After processing, store in cache
-                            if (be.cache_manager) |cm| {
-                                const final_state = sched.getModuleState(task.module_name).?;
-                                if (final_state.phase == .Done and final_state.env != null) {
-                                    // Read the source file again to generate the cache key
-                                    const source = be.readFile(final_state.path, 10 * 1024 * 1024) catch {
-                                        // If we can't read the file, skip caching
-                                        freeSlice(self.gpa, task.pkg);
-                                        freeSlice(self.gpa, task.module_name);
-                                        continue;
-                                    };
-                                    defer be.gpa.free(source);
-
-                                    const cache_key = CacheManager.generateCacheKey(source, cache_compiler_version);
-                                    // For now, just pass 0 for error and warning counts
-                                    // TODO: Extract actual error/warning counts from reports
-                                    const error_count: u32 = 0;
-                                    const warning_count: u32 = 0;
-
-                                    cm.store(
-                                        cache_key,
-                                        &final_state.env.?,
-                                        error_count,
-                                        warning_count,
-                                    ) catch |err| {
-                                        if (comptime trace_cache) {
-                                            std.debug.print("[TRACE-CACHE] STORE FAILED: {s} (error={any})\n", .{
-                                                task.module_name,
-                                                err,
-                                            });
-                                        }
-                                        // Cache store failed, but continue
-                                    };
-                                    if (comptime trace_cache) {
-                                        const key_hex = std.fmt.bytesToHex(cache_key, .lower);
-                                        std.debug.print("[TRACE-CACHE] STORED: {s} (key={s})\n", .{
-                                            task.module_name,
-                                            &key_hex,
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                freeSlice(self.gpa, task.pkg);
-                freeSlice(self.gpa, task.module_name);
-                continue;
-            }
-
-            const keep_running = if (threads_available) blk: {
-                self.lock.lock();
-                while (self.tasks.items.len == 0 and self.running) {
-                    self.cond.wait(&self.lock);
-                }
-                const running = self.running;
-                self.lock.unlock();
-                break :blk running;
-            } else self.running;
-
-            if (!keep_running) break;
-        }
-    }
-
-    // Hook from ModuleBuild to enqueue newly discovered/scheduled modules
-    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, path: []const u8, _: u32) void {
-        var self: *GlobalQueue = @ptrCast(@alignCast(ctx.?));
-        // Enqueue to global queue using path for deduplication (same module may exist in multiple packages)
-        self.enqueueWithPath(package_name, module_name, path) catch {
-            // Continue anyway - the module will still be processed by local scheduler
-        };
-    }
-};
 
 // Rooted path + normalization helper
 const PathUtils = struct {
@@ -488,9 +114,6 @@ pub const BuildEnv = struct {
     // Ordered sink over all packages (thread-safe, deterministic emission)
     sink: OrderedSink,
 
-    // Unified global work-stealing queue (WSQ) - legacy, kept for compatibility
-    global_queue: GlobalQueue,
-
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
 
@@ -532,7 +155,6 @@ pub const BuildEnv = struct {
             .max_threads = max_threads,
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
-            .global_queue = GlobalQueue.init(gpa),
             .builtin_modules = builtin_modules,
             .resolver_ctxs = std.array_list.Managed(*ResolverCtx).init(gpa),
             .pkg_sink_ctxs = std.array_list.Managed(*PkgSinkCtx).init(gpa),
@@ -562,13 +184,6 @@ pub const BuildEnv = struct {
 
         if (comptime trace_cache) {
             std.debug.print("[DEINIT] coordinator done\n", .{});
-        }
-
-        // Stop global queue workers
-        self.global_queue.deinit(self.gpa);
-
-        if (comptime trace_cache) {
-            std.debug.print("[DEINIT] global_queue done\n", .{});
         }
 
         // Deinit cache manager if present
@@ -634,9 +249,6 @@ pub const BuildEnv = struct {
         }
         self.packages.deinit(self.gpa);
 
-        // Clear back-pointer
-        self.global_queue.build_env = null;
-
         // Deinit roots and free the duplicated strings
         for (self.workspace_roots.items) |root| {
             self.gpa.free(root);
@@ -694,6 +306,7 @@ pub const BuildEnv = struct {
             self.max_threads,
             self.builtin_modules,
             self.compiler_version,
+            self.cache_manager,
         );
         coord.setFileProvider(self.file_provider);
         self.coordinator = coord;
@@ -794,9 +407,6 @@ pub const BuildEnv = struct {
         // Create schedulers for compatibility with existing code paths
         try self.createSchedulers();
         try self.processPendingKnownModules();
-
-        // Set back-pointer for dispatch (for legacy code paths)
-        self.global_queue.build_env = self;
 
         // Queue root module in coordinator
         const coord_pkg = coord.getPackage(pkg_name).?;
@@ -1162,51 +772,6 @@ pub const BuildEnv = struct {
                 const rep = rb.build(prob) catch continue;
                 // Emit via sink with the module name (not path) to match other reports
                 self.sink.emitReport(app_name, app_root_module.name, rep);
-            }
-        }
-    }
-
-    fn unblockExternalImports(self: *BuildEnv) !void {
-        var progress = true;
-        while (progress) {
-            progress = false;
-
-            var sched_it = self.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-
-                var mod_it = sched.moduleNamesIterator();
-                while (mod_it.next()) |m_entry| {
-                    const module_name = m_entry.key_ptr.*;
-                    const st = sched.getModuleState(module_name) orelse continue;
-                    if (st.phase != .WaitingOnImports or st.external_imports.items.len == 0) continue;
-
-                    const prev_remaining = sched.remaining_modules;
-                    var last_phase = st.phase;
-
-                    // Drive the module forward until it either finishes or stops making progress.
-                    while (true) {
-                        try sched.processModuleByName(module_name);
-                        const updated = sched.getModuleState(module_name) orelse break;
-                        if (updated.phase == .Done) {
-                            progress = true;
-                            break;
-                        }
-                        if (updated.phase == last_phase) {
-                            break;
-                        }
-                        last_phase = updated.phase;
-                    }
-
-                    if (sched.remaining_modules < prev_remaining) {
-                        progress = true;
-                    }
-                }
-            }
-
-            if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded) {
-                // If we queued any new work onto the global scheduler, wait for it.
-                self.global_queue.waitForIdle();
             }
         }
     }
@@ -1944,10 +1509,8 @@ pub const BuildEnv = struct {
             try self.schedule_ctxs.append(sc);
 
             const sched = try self.gpa.create(PackageEnv);
-            const schedule_hook: ScheduleHook = if (builtin.target.cpu.arch != .wasm32 and self.mode == .multi_threaded)
-                ScheduleHook{ .ctx = &self.global_queue, .onSchedule = GlobalQueue.hookOnSchedule }
-            else
-                ScheduleHook{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule };
+            // The coordinator handles all scheduling now, so we use a no-op hook
+            const schedule_hook = ScheduleHook{ .ctx = sc, .onSchedule = ScheduleCtx.onSchedule };
             sched.* = PackageEnv.initWithResolver(
                 self.gpa,
                 name,

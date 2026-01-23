@@ -46,6 +46,7 @@ const messages = @import("messages.zig");
 const channel = @import("channel.zig");
 const compile_package = @import("compile_package.zig");
 const module_discovery = @import("module_discovery.zig");
+const CacheManager = @import("cache_manager.zig").CacheManager;
 
 // Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
 const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
@@ -331,6 +332,9 @@ pub const Coordinator = struct {
     /// Compiler version for cache keys
     compiler_version: []const u8,
 
+    /// Optional cache manager for disk caching (not yet integrated)
+    cache_manager: ?*CacheManager,
+
     /// Cross-package dependents: when module (pkg, id) completes, notify these modules
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
     cross_package_dependents: std.StringHashMap(std.ArrayList(ModuleRef)),
@@ -348,6 +352,7 @@ pub const Coordinator = struct {
         max_threads: usize,
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
+        cache_manager: ?*CacheManager,
     ) !Coordinator {
         return .{
             .gpa = gpa,
@@ -364,6 +369,7 @@ pub const Coordinator = struct {
             .builtin_modules = builtin_modules,
             .file_provider = null,
             .compiler_version = compiler_version,
+            .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
@@ -611,17 +617,6 @@ pub const Coordinator = struct {
             .type_check => |t| self.executeTypeCheck(t),
             .shutdown => unreachable,
         };
-    }
-
-    /// Dispatch pending tasks to workers
-    fn dispatchPendingWork(self: *Coordinator) !void {
-        if (!threads_available) return;
-
-        self.task_mutex.lock();
-        defer self.task_mutex.unlock();
-
-        // Move tasks to workers by sending them via the task queue
-        // Workers will pick them up
     }
 
     /// Handle a result from a worker
@@ -1162,10 +1157,6 @@ pub const Coordinator = struct {
         return try std.fs.path.join(self.gpa, &.{ root_dir, rel });
     }
 
-    // ========================================================================
-    // Pure execution functions (used by workers and inline processing)
-    // ========================================================================
-
     /// Execute a parse task (pure function)
     fn executeParse(self: *Coordinator, task: ParseTask) WorkerResult {
         const start_time = if (threads_available) std.time.nanoTimestamp() else 0;
@@ -1509,10 +1500,6 @@ pub const Coordinator = struct {
     }
 };
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 test "Coordinator basic initialization" {
     const allocator = std.testing.allocator;
 
@@ -1523,6 +1510,7 @@ test "Coordinator basic initialization" {
         1,
         undefined, // builtin_modules - not used in this test
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1540,6 +1528,7 @@ test "Coordinator package creation" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1563,6 +1552,7 @@ test "Coordinator module creation" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1588,6 +1578,7 @@ test "Coordinator task queue" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1624,6 +1615,7 @@ test "Coordinator isComplete logic" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1669,6 +1661,7 @@ test "Channel in coordinator context" {
         2,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1700,6 +1693,7 @@ test "Coordinator enqueueParseTask flow" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
@@ -1736,6 +1730,7 @@ test "Coordinator single-threaded loop with mock result" {
         1,
         undefined,
         "test",
+        null, // cache_manager
     );
     defer coord.deinit();
 
