@@ -633,12 +633,11 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator and LlvmEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    // Compare with DevEvaluator and LlvmEvaluator using full decimal string representation
+    const dec_str = try llvm_compile.llvm_execute.formatDec(test_allocator, actual_dec.num);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -676,12 +675,11 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator and LlvmEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
-    try compareWithLlvmEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    // Compare with DevEvaluator and LlvmEvaluator using full decimal string representation
+    const dec_str = try llvm_compile.llvm_execute.formatDec(test_allocator, actual_dec.num);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    try compareWithLlvmEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });

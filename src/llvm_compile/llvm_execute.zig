@@ -259,9 +259,18 @@ fn formatScalarResult(
             jit.callWithResultPtr(&result);
             return std.fmt.allocPrint(allocator, "{d}", .{@as(u128, @bitCast(result))}) catch return Error.OutOfMemory;
         },
-        .f32, .f64 => {
+        .f32 => {
+            var result: f32 = undefined;
+            jit.callWithResultPtr(&result);
+            return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return Error.OutOfMemory;
+        },
+        .f64 => {
             var result: f64 = undefined;
             jit.callWithResultPtr(&result);
+            // Handle negative zero specially
+            if (result == 0.0 and std.math.signbit(result)) {
+                return allocator.dupe(u8, "-0") catch return Error.OutOfMemory;
+            }
             return std.fmt.allocPrint(allocator, "{d}", .{result}) catch return Error.OutOfMemory;
         },
         .dec => {

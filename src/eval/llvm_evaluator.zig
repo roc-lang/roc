@@ -274,7 +274,8 @@ pub const LlvmEvaluator = struct {
             const final_type: LlvmBuilder.Type = switch (output_layout) {
                 .bool, .i8, .i16, .i32, .i64, .u8, .u16, .u32, .u64 => .i64,
                 .i128, .u128, .dec => .i128,
-                .f32, .f64 => .double,
+                .f32 => .float,
+                .f64 => .double,
                 else => return error.UnsupportedLayout,
             };
 
@@ -296,6 +297,7 @@ pub const LlvmEvaluator = struct {
             const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
                 .i64 => 8,
                 .i128 => 16,
+                .float => 4,
                 .double => 8,
                 else => 0,
             });
@@ -556,15 +558,23 @@ pub const LlvmEvaluator = struct {
                     ctx.wip.bin(.sub, lhs, rhs, "") catch return error.CompilationFailed,
                 .mul => if (is_float)
                     ctx.wip.bin(.fmul, lhs, rhs, "") catch return error.CompilationFailed
-                else if (is_dec)
-                    // Dec multiplication needs to divide by scale factor after multiply
-                    // For now, just do regular multiply (will be wrong for Dec)
-                    ctx.wip.bin(.mul, lhs, rhs, "") catch return error.CompilationFailed
-                else
+                else if (is_dec) blk: {
+                    // Dec is i128 scaled by 10^18. Multiply: (a×10^18) × (b×10^18) ÷ 10^18
+                    const dec_scale: i128 = 1_000_000_000_000_000_000;
+                    const raw_result = ctx.wip.bin(.mul, lhs, rhs, "") catch return error.CompilationFailed;
+                    const scale_const = (ctx.builder.intConst(.i128, dec_scale) catch return error.CompilationFailed).toValue();
+                    break :blk ctx.wip.bin(.sdiv, raw_result, scale_const, "") catch return error.CompilationFailed;
+                } else
                     ctx.wip.bin(.mul, lhs, rhs, "") catch return error.CompilationFailed,
                 .div => if (is_float)
                     ctx.wip.bin(.fdiv, lhs, rhs, "") catch return error.CompilationFailed
-                else if (is_signed)
+                else if (is_dec) blk: {
+                    // Dec is i128 scaled by 10^18. Divide: (a×10^18 × 10^18) ÷ (b×10^18)
+                    const dec_scale: i128 = 1_000_000_000_000_000_000;
+                    const scale_const = (ctx.builder.intConst(.i128, dec_scale) catch return error.CompilationFailed).toValue();
+                    const scaled_lhs = ctx.wip.bin(.mul, lhs, scale_const, "") catch return error.CompilationFailed;
+                    break :blk ctx.wip.bin(.sdiv, scaled_lhs, rhs, "") catch return error.CompilationFailed;
+                } else if (is_signed)
                     ctx.wip.bin(.sdiv, lhs, rhs, "") catch return error.CompilationFailed
                 else
                     ctx.wip.bin(.udiv, lhs, rhs, "") catch return error.CompilationFailed,
@@ -1441,7 +1451,10 @@ pub const LlvmEvaluator = struct {
                 .e_num => |num| num.kind == .f32 or num.kind == .f64,
                 .e_binop => |binop| ctx.isFloatExpr(ctx.module_env.store.getExpr(binop.lhs)),
                 .e_unary_minus => |unary| ctx.isFloatExpr(ctx.module_env.store.getExpr(unary.expr)),
-                .e_lookup_local => false, // Would need type info
+                .e_lookup_local => |lookup| {
+                    const local_layout = ctx.local_layouts.get(lookup.pattern_idx) orelse return false;
+                    return local_layout == .f32 or local_layout == .f64;
+                },
                 else => false,
             };
         }
@@ -1454,6 +1467,7 @@ pub const LlvmEvaluator = struct {
                 .e_typed_frac => |typed_frac| typed_frac.type_name == ctx.module_env.idents.dec,
                 .e_binop => |binop| ctx.isDecExpr(ctx.module_env.store.getExpr(binop.lhs)),
                 .e_unary_minus => |unary| ctx.isDecExpr(ctx.module_env.store.getExpr(unary.expr)),
+                .e_lookup_local => |lookup| ctx.local_layouts.get(lookup.pattern_idx) == .dec,
                 else => false,
             };
         }

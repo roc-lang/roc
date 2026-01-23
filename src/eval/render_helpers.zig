@@ -718,11 +718,16 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                 return switch (scalar.data.frac) {
                     .f32 => {
                         const ptr = @as(*const f32, @ptrCast(@alignCast(value.ptr.?)));
-                        return try std.fmt.allocPrint(gpa, "{d}", .{@as(f64, ptr.*)});
+                        return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
                     },
                     .f64 => {
                         const ptr = @as(*const f64, @ptrCast(@alignCast(value.ptr.?)));
-                        return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
+                        const val = ptr.*;
+                        // Handle negative zero specially
+                        if (val == 0.0 and std.math.signbit(val)) {
+                            return try gpa.dupe(u8, "-0");
+                        }
+                        return try std.fmt.allocPrint(gpa, "{d}", .{val});
                     },
                     .dec => {
                         const ptr = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?)));
