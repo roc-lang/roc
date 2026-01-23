@@ -432,16 +432,20 @@ pub const LlvmEvaluator = struct {
                     break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
                 },
                 else => blk: {
-                    const int_value = num.value.toI128();
+                    const u128_value: u128 = @bitCast(num.value.bytes);
                     const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, expr) catch return error.CompilationFailed;
-                    // Check if value exceeds the range of the inferred type - if so, use i128
-                    // This handles unbound numeric literals that are too large for i64
+                    // For i64 type, check if value fits - if not, emit as i128 (will be converted later)
                     if (llvm_type == .i64) {
-                        if (int_value > std.math.maxInt(i64) or int_value < std.math.minInt(i64)) {
-                            const u128_value: u128 = @bitCast(num.value.bytes);
-                            break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
+                        if (u128_value <= std.math.maxInt(u64)) {
+                            break :blk (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue();
                         }
+                        // Value too large for i64 - emit as i128, convertNumericToLayout will handle it
+                        break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
                     }
+                    if (llvm_type == .i128) {
+                        break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
+                    }
+                    const int_value = num.value.toI128();
                     break :blk (ctx.builder.intConst(llvm_type, int_value) catch return error.CompilationFailed).toValue();
                 },
             };
