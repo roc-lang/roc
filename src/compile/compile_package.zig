@@ -124,26 +124,76 @@ const ModuleState = struct {
     cached_ast: ?*parse.AST = null,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: checking cached_ast\n", .{self.name});
+        }
         // Free cached AST if present
         if (self.cached_ast) |ast| {
             ast.deinit(gpa);
             gpa.destroy(ast);
         }
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr\n", .{self.name});
+        }
         // Save source before deinitiating env so we can free it
         const source = if (self.env) |*e| e.common.source else null;
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, if (source) |s| @intFromPtr(s.ptr) else 0 });
+        }
         if (self.env) |*e| e.deinit();
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
+        }
         if (source) |s| gpa.free(s);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing imports (len={})\n", .{ self.name, self.imports.items.len });
+        }
         self.imports.deinit(gpa);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
+        }
         self.external_imports.deinit(gpa);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing dependents (len={})\n", .{ self.name, self.dependents.items.len });
+        }
         self.dependents.deinit(gpa);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing reports (len={}, cap={})\n", .{ self.name, self.reports.items.len, self.reports.capacity });
+        }
         // If reports were emitted, they've been cleared via clearRetainingCapacity() and ownership
         // transferred to OrderedSink. If not emitted (e.g., module failed before .Done), we must
         // deinit them here to avoid leaks.
-        for (self.reports.items) |*report| {
+        for (self.reports.items, 0..) |*report, i| {
+            if (comptime trace_cache) {
+                std.debug.print("[MOD DEINIT DETAIL] {s}: deinit report {} title=\"{s}\" owned_strings.len={} doc_elements={} allocator_ptr={}\n", .{
+                    self.name,
+                    i,
+                    report.title,
+                    report.owned_strings.items.len,
+                    report.document.elements.items.len,
+                    @intFromPtr(report.allocator.ptr),
+                });
+                if (report.owned_strings.items.len > 0) {
+                    std.debug.print("[MOD DEINIT DETAIL] {s}: first owned_string ptr={} len={}\n", .{
+                        self.name,
+                        @intFromPtr(report.owned_strings.items[0].ptr),
+                        report.owned_strings.items[0].len,
+                    });
+                }
+            }
             report.deinit();
         }
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: calling reports.deinit\n", .{self.name});
+        }
         self.reports.deinit(gpa);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing path\n", .{self.name});
+        }
         gpa.free(self.path);
+        if (comptime trace_cache) {
+            std.debug.print("[MOD DEINIT DETAIL] {s}: done\n", .{self.name});
+        }
     }
 
     fn init(name: []const u8, path: []const u8) ModuleState {
@@ -295,9 +345,25 @@ pub const PackageEnv = struct {
     pub fn deinit(self: *PackageEnv) void {
         // NOTE: builtin_modules is not owned by PackageEnv, so we don't deinit it here
 
+        if (comptime trace_cache) {
+            std.debug.print("[SCHED DEINIT] {s}: starting with {} modules\n", .{ self.package_name, self.modules.items.len });
+        }
+
         // Deinit modules
-        for (self.modules.items) |*ms| {
+        for (self.modules.items, 0..) |*ms, idx| {
+            if (comptime trace_cache) {
+                std.debug.print("[SCHED DEINIT] {s}: module {} ({s}) env={} ast={}\n", .{
+                    self.package_name,
+                    idx,
+                    ms.name,
+                    @intFromPtr(if (ms.env) |*e| e else null),
+                    @intFromPtr(ms.cached_ast),
+                });
+            }
             ms.deinit(self.gpa);
+            if (comptime trace_cache) {
+                std.debug.print("[SCHED DEINIT] {s}: module {} done\n", .{ self.package_name, idx });
+            }
         }
         self.modules.deinit(self.gpa);
 
@@ -444,7 +510,7 @@ pub const PackageEnv = struct {
         } else ctx.sched.injector.items.len = 0;
     }
 
-    fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
+    pub fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
         // In multi-threaded mode, lock to prevent race conditions when growing arrays
         const needs_lock = self.mode == .multi_threaded and @import("builtin").target.cpu.arch != .wasm32;
         if (needs_lock) self.lock.lock();
@@ -994,37 +1060,10 @@ pub const PackageEnv = struct {
         return checker;
     }
 
-    /// Shared canonicalization function that can be called from other tools (e.g., snapshot tool)
-    /// This ensures all tools use the exact same canonicalization logic as production builds
-    pub fn canonicalizeModule(
-        gpa: Allocator,
-        env: *ModuleEnv,
-        parse_ast: *AST,
-        builtin_module_env: *const ModuleEnv,
-        builtin_indices: can.CIR.BuiltinIndices,
-    ) !void {
-        // Create module_envs map for auto-importing builtin types
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
-        defer module_envs_map.deinit();
-
-        // Populate module_envs with Bool, Try, Dict, Set using shared function
-        // This ensures production and tests use identical logic
-        try Can.populateModuleEnvs(
-            &module_envs_map,
-            env,
-            builtin_module_env,
-            builtin_indices,
-        );
-
-        var czer = try Can.init(env, parse_ast, &module_envs_map);
-        try czer.canonicalizeFile();
-        czer.deinit();
-    }
-
     /// Canonicalization function that also discovers sibling .roc files in the same directory
     /// and includes additional known modules (e.g., from platform exposes).
     /// This prevents premature MODULE NOT FOUND errors for modules that exist but haven't been loaded yet.
-    fn canonicalizeModuleWithSiblings(
+    pub fn canonicalizeModuleWithSiblings(
         gpa: Allocator,
         env: *ModuleEnv,
         parse_ast: *AST,
@@ -1137,6 +1176,8 @@ pub const PackageEnv = struct {
                 .statement_idx = statement_idx,
                 .qualified_type_ident = base_ident,
                 .is_package_qualified = true,
+                // Mark as placeholder if using builtin env as fallback (actual env not available yet)
+                .is_placeholder = (actual_env == builtin_module_env),
             };
 
             // Add entry for the UNQUALIFIED name (e.g., "Stdout", "Builder")

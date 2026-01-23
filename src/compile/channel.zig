@@ -361,3 +361,90 @@ test "Channel with struct type" {
     try std.testing.expectEqual(@as(u32, 2), item2.id);
     try std.testing.expectEqualStrings("second", item2.name);
 }
+
+test "Channel multi-producer single-consumer" {
+    // Skip on wasm where threads aren't available
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
+    var ch = try Channel(u32).init(std.testing.allocator, 16);
+    defer ch.deinit();
+
+    const num_producers = 4;
+    const items_per_producer = 100;
+
+    // Spawn producer threads
+    var threads: [num_producers]std.Thread = undefined;
+    for (0..num_producers) |i| {
+        threads[i] = try std.Thread.spawn(.{}, struct {
+            fn producer(channel: *Channel(u32), producer_id: u32) void {
+                for (0..items_per_producer) |j| {
+                    const value = producer_id * 1000 + @as(u32, @intCast(j));
+                    channel.send(value) catch return;
+                }
+            }
+        }.producer, .{ &ch, @as(u32, @intCast(i)) });
+    }
+
+    // Consumer: receive all items
+    var received: usize = 0;
+    const expected_total = num_producers * items_per_producer;
+    while (received < expected_total) {
+        if (ch.recv()) |_| {
+            received += 1;
+        }
+    }
+
+    // Wait for all producers to finish
+    for (&threads) |*t| {
+        t.join();
+    }
+
+    try std.testing.expectEqual(expected_total, received);
+    try std.testing.expect(ch.isEmpty());
+}
+
+test "Channel blocking recv with timeout" {
+    // Skip on wasm where threads aren't available
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
+    var ch = try Channel(u32).init(std.testing.allocator, 4);
+    defer ch.deinit();
+
+    // recvTimeout on empty channel should return null after timeout
+    const start = std.time.nanoTimestamp();
+    const result = ch.recvTimeout(10_000_000); // 10ms
+    const elapsed = std.time.nanoTimestamp() - start;
+
+    try std.testing.expect(result == null);
+    try std.testing.expect(elapsed >= 10_000_000); // Should have waited at least 10ms
+}
+
+test "Channel producer-consumer coordination" {
+    // Skip on wasm where threads aren't available
+    if (builtin.target.cpu.arch == .wasm32) return error.SkipZigTest;
+
+    var ch = try Channel(u32).init(std.testing.allocator, 2); // Small buffer to test blocking
+    defer ch.deinit();
+
+    // Producer thread sends values with small delay
+    const producer = try std.Thread.spawn(.{}, struct {
+        fn run(channel: *Channel(u32)) void {
+            for (0..5) |i| {
+                std.Thread.sleep(1_000_000); // 1ms delay
+                channel.send(@as(u32, @intCast(i))) catch return;
+            }
+        }
+    }.run, .{&ch});
+
+    // Consumer receives all values
+    var sum: u32 = 0;
+    for (0..5) |_| {
+        if (ch.recv()) |val| {
+            sum += val;
+        }
+    }
+
+    producer.join();
+
+    try std.testing.expectEqual(@as(u32, 0 + 1 + 2 + 3 + 4), sum);
+}

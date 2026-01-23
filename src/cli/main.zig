@@ -5621,6 +5621,10 @@ fn checkFileWithBuildEnv(
         // Note: BuildEnv.deinit() will clean up the cache manager
     }
 
+    if (comptime build_options.trace_cache) {
+        std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
+    }
+
     // Build the file (works for both app and module files)
     build_env.build(filepath) catch {
         // Even on error, drain reports to show what went wrong
@@ -5658,8 +5662,16 @@ fn checkFileWithBuildEnv(
         };
     };
 
+    if (comptime build_options.trace_cache) {
+        std.debug.print("[CLI] Build complete, draining reports...\n", .{});
+    }
+
     // Drain all reports
     const drained = try build_env.drainReports();
+
+    if (comptime build_options.trace_cache) {
+        std.debug.print("[CLI] Reports drained: {} modules\n", .{drained.len});
+    }
 
     // Count errors and warnings
     var error_count: u32 = 0;
@@ -5693,6 +5705,10 @@ fn checkFileWithBuildEnv(
         CheckTimingInfo{}
     else
         build_env.getTimingInfo();
+
+    if (comptime build_options.trace_cache) {
+        std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
+    }
 
     return CheckResult{
         .reports = reports,
