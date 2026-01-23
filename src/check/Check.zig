@@ -5464,14 +5464,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 } else blk: {
                     // Copy the method from the other module's type store
                     const copied_var = try self.copyVar(def_var, original_env, region);
-                    // For builtin methods, we need to instantiate the copied var to convert
-                    // rigid type variables to flex, so they can unify with the call site
-                    const is_builtin = original_module_ident == self.cir.idents.builtin_module;
-                    if (is_builtin) {
-                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-                    } else {
-                        break :blk copied_var;
-                    }
+                    break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                 };
 
                 // Unwrap the constraint and method types.
