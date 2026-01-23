@@ -239,6 +239,9 @@ const Unifier = struct {
     types_store: *types_mod.Store,
     scratch: *Scratch,
     occurs_scratch: *occurs.Scratch,
+    /// The unresolved "actual" var before resolution, used for deferred constraint origin tracking.
+    /// This allows error messages to point to the original expression rather than the resolved type.
+    unresolved_b: ?Var,
 
     /// Init unifier
     pub fn init(
@@ -252,6 +255,7 @@ const Unifier = struct {
             .types_store = types_store,
             .scratch = scratch,
             .occurs_scratch = occurs_scratch,
+            .unresolved_b = null,
         };
     }
 
@@ -274,6 +278,24 @@ const Unifier = struct {
         });
         _ = try self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
+    }
+
+    /// Record a deferred constraint check for later verification.
+    /// Always uses b's var for error regions (via unresolved_b) because b represents
+    /// the "actual" type from the user's code, while a represents the "expected" type
+    /// (e.g., from a function signature). When constraints aren't satisfied, we want
+    /// to highlight where the user's code is, not the constraint's origin.
+    fn recordDeferredConstraint(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        constraints: StaticDispatchConstraint.SafeList.Range,
+    ) std.mem.Allocator.Error!void {
+        if (constraints.len() > 0) {
+            _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                .var_ = self.unresolved_b orelse vars.b.var_,
+                .constraints = constraints,
+            });
+        }
     }
 
     /// Check if we're already unifying this pair of descriptors (recursion guard).
@@ -344,6 +366,12 @@ const Unifier = struct {
                 _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
                 defer self.scratch.visited_vars.items.items.len -= 2;
 
+                // Save and set unresolved_b for deferred constraint origin tracking.
+                // This is restored after unifyVars to handle nested unifications correctly.
+                const saved_unresolved_b = self.unresolved_b;
+                self.unresolved_b = b_var;
+                defer self.unresolved_b = saved_unresolved_b;
+
                 try self.unifyVars(&vars);
             },
         }
@@ -396,14 +424,7 @@ const Unifier = struct {
                 } });
             },
             .rigid => |b_rigid| {
-                if (a_flex.constraints.len() > 0) {
-                    // Record that we need to check constraints later
-                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                        .constraints = a_flex.constraints,
-                    });
-                }
-
+                try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, .{ .rigid = b_rigid });
             },
             .alias => |b_alias| {
@@ -416,14 +437,7 @@ const Unifier = struct {
                 }
             },
             .structure => {
-                if (a_flex.constraints.len() > 0) {
-                    // Record that we need to check constraints later
-                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                        .constraints = a_flex.constraints,
-                    });
-                }
-
+                try self.recordDeferredConstraint(vars, a_flex.constraints);
                 self.merge(vars, b_content);
             },
             .err => self.merge(vars, .err),
@@ -439,14 +453,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                if (b_flex.constraints.len() > 0) {
-                    // Record that we need to check constraints later
-                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                        .constraints = b_flex.constraints,
-                    });
-                }
-
+                try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, .{ .rigid = a_rigid });
             },
             .rigid => return error.TypeMismatch,
@@ -559,14 +566,7 @@ const Unifier = struct {
 
         switch (b_content) {
             .flex => |b_flex| {
-                if (b_flex.constraints.len() > 0) {
-                    // Record that we need to check constraints later
-                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
-                        .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
-                        .constraints = b_flex.constraints,
-                    });
-                }
-
+                try self.recordDeferredConstraint(vars, b_flex.constraints);
                 self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid => return error.TypeMismatch,

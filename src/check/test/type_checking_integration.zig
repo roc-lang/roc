@@ -1159,11 +1159,11 @@ test "check type - nominal - local - fail" {
         .fail_with,
         \\**TYPE MISMATCH**
         \\`Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
-        \\**test:9:3:9:13:**
+        \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
-        \\  ^^^^^^^^^^
+        \\                   ^^^
         \\
         \\`Utf8Format`.`encode_str` has the type:
         \\

@@ -376,9 +376,21 @@ fn unifyFromAnno(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error
     return self.unifyWithCtx(a, b, env, .anno);
 }
 
+/// Unify two types with a specific constraint origin var for error reporting.
+/// The origin_var's region will be used in error messages instead of the default.
+fn unifyWithOrigin(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var });
+}
+
 /// Unify two types where `a` is the expected type and `b` is the actual type
 /// Accepts a config that indicates if `a` is from an annotation or not
 fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = ctx, .constraint_origin_var = null });
+}
+
+/// Unify two types where `a` is the expected type and `b` is the actual type
+/// Accepts a full unifier config for fine-grained control
+fn unifyWithConf(self: *Self, a: Var, b: Var, env: *Env, conf: unifier.Conf) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -393,7 +405,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.occurs_scratch,
         a,
         b,
-        unifier.Conf{ .ctx = ctx, .constraint_origin_var = null },
+        conf,
     );
 
     // Set regions and add to the current rank all variables created during unification.
@@ -5490,7 +5502,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 //     continue;
                 // };
 
-                const fn_result = try self.unify(method_var, constraint.fn_var, env);
+                const fn_result = try self.unifyWithOrigin(method_var, constraint.fn_var, env, deferred_constraint.var_);
                 self.setDetailIfTypeMismatch(fn_result, problem.TypeMismatchDetail{
                     .incompatible_method_type = .{
                         .dispatcher_var = constraint.fn_var,
