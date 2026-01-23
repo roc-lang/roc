@@ -10,14 +10,16 @@ pub const unifier = @import("unify.zig");
 pub const snapshot = @import("snapshot.zig");
 /// **Recursion Checking**
 pub const occurs = @import("occurs.zig");
-/// **Problem Reporting**
+/// **Problems**
 pub const problem = @import("problem.zig");
+/// **Reporting**
+pub const report = @import("report.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
 
 pub const Check = @import("Check.zig");
 
-pub const ReportBuilder = problem.ReportBuilder;
+pub const ReportBuilder = report.ReportBuilder;
 
 test "check tests" {
     std.testing.refAllDecls(@import("Check.zig"));
@@ -25,6 +27,10 @@ test "check tests" {
     std.testing.refAllDecls(@import("exhaustive.zig"));
     std.testing.refAllDecls(@import("occurs.zig"));
     std.testing.refAllDecls(@import("problem.zig"));
+    std.testing.refAllDecls(@import("problem/context.zig"));
+    std.testing.refAllDecls(@import("problem/store.zig"));
+    std.testing.refAllDecls(@import("problem/types.zig"));
+    std.testing.refAllDecls(@import("report.zig"));
     std.testing.refAllDecls(@import("snapshot.zig"));
     std.testing.refAllDecls(@import("unify.zig"));
 

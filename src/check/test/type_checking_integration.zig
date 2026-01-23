@@ -679,6 +679,39 @@ test "check type - def - nested lambda with wrong annotation" {
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
+test "check type - def - wrong arg" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\func : Str, U8 -> U8
+        \\func = |_str, u8| u8
+        \\
+        \\test = func("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:6:8:**
+        \\```roc
+        \\test = func("hello", "world")
+        \\```
+        \\                     ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `func` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
+}
+
 // calling functions
 
 test "check type - def - monomorphic id" {
@@ -785,6 +818,93 @@ test "check type - polymorphic function function param should be constrained" {
     ;
     // Number literal 42 used where Str is expected (function type unified from both calls)
     try checkTypesModule(source, .fail, "TYPE MISMATCH");
+}
+
+test "check type - def - call with wrong fn arity - too many" {
+    const source =
+        \\idStr : Str -> Str
+        \\idStr = |x| x
+        \\
+        \\test = idStr("hello", 10.U8)
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO MANY ARGS**
+        \\The `idStr` function expects 1 argument, but it got 2 instead:
+        \\**test:4:8:4:29:**
+        \\```roc
+        \\test = idStr("hello", 10.U8)
+        \\```
+        \\       ^^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str -> Str
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with wrong fn arity - too few" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TOO FEW ARGS**
+        \\The `idStr` function expects 2 arguments, but it got 1 instead:
+        \\**test:4:8:4:22:**
+        \\```roc
+        \\test = idStr("hello")
+        \\```
+        \\       ^^^^^^^^^^^^^^
+        \\
+        \\The `idStr` function has the type:
+        \\
+        \\    Str, U8 -> Str
+        \\
+        \\Are there any missing commas?
+        \\
+        \\
+        ,
+    );
+}
+
+test "check type - def - call with mismatch arg" {
+    const source =
+        \\idStr : Str, U8 -> Str
+        \\idStr = |x, _| x
+        \\
+        \\test = idStr("hello", "world")
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:4:8:**
+        \\```roc
+        \\test = idStr("hello", "world")
+        \\```
+        \\                      ^^^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    Str
+        \\
+        \\But `idStr` needs the second argument to be:
+        \\
+        \\    U8
+        \\
+        \\
+        ,
+    );
 }
 
 // value restriction //
@@ -1158,22 +1278,20 @@ test "check type - nominal - local - fail" {
         source,
         .fail_with,
         \\**TYPE MISMATCH**
-        \\`Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
+        \\The `encode_str` method on `Utf8Format` has an incompatible type:
         \\**test:9:20:9:23:**
         \\```roc
         \\  Str.encode("hi", fmt)
         \\```
         \\                   ^^^
         \\
-        \\`Utf8Format`.`encode_str` has the type:
+        \\The method `encode_str` has the type:
         \\
         \\    Utf8Format, Str -> List(U8)
         \\
-        \\But the expected signature is:
+        \\But is needs to have the type:
         \\
         \\    Utf8Format, Str -> Try(encoded, err)
-        \\
-        \\**Hint:** Check that the method signature matches what's expected, including argument and return types.
         \\
         \\
         ,
@@ -1225,10 +1343,29 @@ test "check type - if else - qualified bool" {
 test "check type - if else - invalid condition 1" {
     const source =
         \\x : Str
-        \\x = if 5 "true" else "false"
+        \\x = if 5.I64 "true" else "false"
     ;
     // Number literal 5 used where Bool is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+        \\**test:2:8:2:13:**
+        \\```roc
+        \\x = if 5.I64 "true" else "false"
+        \\```
+        \\       ^^^^^
+        \\
+        \\It is:
+        \\
+        \\    I64
+        \\
+        \\But I need this `if` to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - invalid condition 2" {
@@ -1245,15 +1382,35 @@ test "check type - if else - invalid condition 3" {
         \\x : Str
         \\x = if "True" "true" else "false"
     ;
-    try checkTypesModule(source, .fail, "INVALID IF CONDITION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - if else - different branch types 1" {
     const source =
-        \\x = if True "true" else 10
+        \\x = if True "true" else 10.U8
     ;
-    // Number literal 10 used where Str is expected (first branch type)
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second branch of this `if` does not match the previous branch :
+        \\**test:1:25:1:30:**
+        \\```roc
+        \\x = if True "true" else 10.U8
+        \\```
+        \\                        ^^^^^
+        \\
+        \\The second branch is:
+        \\
+        \\    U8
+        \\
+        \\But the previous branch results in:
+        \\
+        \\    Str
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - if else - different branch types 2" {
@@ -1293,7 +1450,33 @@ test "check type - match - diff cond types 1" {
         \\    False => "false"
         \\  }
     ;
-    try checkTypesModule(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\The first pattern in this `match` is incompatible:
+        \\**test:2:3:**
+        \\```roc
+        \\  match "hello" {
+        \\    True => "true"
+        \\    False => "false"
+        \\  }
+        \\```
+        \\    ^^^^
+        \\
+        \\The first pattern is trying to match:
+        \\
+        \\    [True, .._others]
+        \\
+        \\But the expression between the `match` parenthesis has the type:
+        \\
+        \\    Str
+        \\
+        \\These can never match! Either the pattern or expression has a problem.
+        \\
+        \\
+        ,
+    );
 }
 
 test "check type - match - diff branch types" {
@@ -1407,7 +1590,7 @@ test "check type - binops and mismatch" {
     const source =
         \\x = "Hello" and False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - binops or" {
@@ -1421,7 +1604,7 @@ test "check type - binops or mismatch" {
     const source =
         \\x = "Hello" or False
     ;
-    try checkTypesModule(source, .fail, "INVALID BOOL OPERATION");
+    try checkTypesModule(source, .fail, "TYPE MISMATCH");
 }
 
 // record access
@@ -1516,7 +1699,7 @@ test "check type - patterns - wrong type" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns tag without payload" {
@@ -1558,7 +1741,7 @@ test "check type - patterns tag with payload mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns str" {
@@ -1602,7 +1785,7 @@ test "check type - patterns int mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 test "check type - patterns frac 1" {
@@ -1712,7 +1895,7 @@ test "check type - patterns record field mismatch" {
         \\  }
         \\}
     ;
-    try checkTypesExpr(source, .fail, "INCOMPATIBLE MATCH PATTERNS");
+    try checkTypesExpr(source, .fail, "TYPE MISMATCH");
 }
 
 // vars + reassignment //
@@ -3531,7 +3714,7 @@ test "check type - self recursive function - fibonacci - fail" {
         \\
         \\    Str -> U8
         \\
-        \\But I expected it to be:
+        \\But you are trying to use it as:
         \\
         \\    U8 -> U8
         \\

@@ -400,7 +400,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
+        var report_builder = check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,

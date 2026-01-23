@@ -382,6 +382,24 @@ fn unifyWithOrigin(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var) std.
     return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var });
 }
 
+/// Unify two types with explicit context for better error messages.
+/// The context indicates WHERE the type mismatch occurred (if_condition, list_entry, etc.)
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = null, .context = context });
+}
+
+/// Unify two types from an annotation with explicit context for error messages.
+/// Combines annotation context (for "from annotation" in error messages) with problem context.
+fn unifyFromAnnoInContext(self: *Self, a: Var, b: Var, env: *Env, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = .anno, .constraint_origin_var = null, .context = context });
+}
+
+/// Unify two types with origin var and explicit context for error messages.
+/// Combines constraint origin (for region highlighting) with problem context.
+fn unifyWithOriginInContext(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var, .context = context });
+}
+
 /// Unify two types where `a` is the expected type and `b` is the actual type
 /// Accepts a config that indicates if `a` is from an annotation or not
 fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) std.mem.Allocator.Error!unifier.Result {
@@ -1365,15 +1383,12 @@ pub fn checkPlatformRequirements(
             // This constrains type variables in the export (e.g., closure params)
             // to match the platform's expected types. After this, the fresh vars
             // stored in rigid_vars will redirect to the concrete app types.
-            const unify_result = try self.unifyFromAnno(instantiated_required_var, export_var, &env);
-
-            // If unification failed, report the type mismatch with context about
-            // which platform requirement wasn't satisfied
+            // Context is set for error messages about which platform requirement wasn't satisfied.
             const app_ident = app_required_ident orelse try self.cir.insertIdent(
                 Ident.for_text(platform_env.getIdentText(required_type.ident)),
             );
-            self.setDetailIfTypeMismatch(unify_result, .{
-                .incompatible_platform_requirement = .{ .required_ident = app_ident },
+            _ = try self.unifyFromAnnoInContext(instantiated_required_var, export_var, &env, .{
+                .platform_requirement = .{ .required_ident = app_ident },
             });
         } else {
             // If we got here, it means that the the definition was not found in
@@ -2574,11 +2589,10 @@ fn checkPatternHelp(
                     const cur_elem_var = try self.checkPatternHelp(elem_ptrn_idx, env, out_var);
 
                     // Unify each element's var with the list's elem var
-                    const result = try self.unify(elem_var, cur_elem_var, env);
-                    self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
-                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_ptrn_idx),
-                        .incompatible_elem_index = @intCast(i),
+                    const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
+                        .elem_index = @intCast(i),
                         .list_length = @intCast(elems.len),
+                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_ptrn_idx),
                     } });
 
                     // If we errored, check the rest of the elements without comparing
@@ -3182,11 +3196,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     const cur_elem_var = ModuleEnv.varFrom(elem_expr_idx);
 
                     // Unify each element's var with the list's elem var
-                    const result = try self.unify(elem_var, cur_elem_var, env);
-                    self.setDetailIfTypeMismatch(result, problem.TypeMismatchDetail{ .incompatible_list_elements = .{
-                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
-                        .incompatible_elem_index = @intCast(i),
+                    const result = try self.unifyInContext(elem_var, cur_elem_var, env, .{ .list_entry = .{
+                        .elem_index = @intCast(i),
                         .list_length = @intCast(elems.len),
+                        .last_elem_idx = ModuleEnv.nodeIdxFrom(last_elem_expr_idx),
                     } });
 
                     // If we errored, check the rest of the elements without comparing
@@ -3527,20 +3540,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 const arg_1 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[i]));
                                 const arg_2 = @as(Var, ModuleEnv.varFrom(arg_pattern_idxs[j]));
 
-                                const unify_result = try self.unify(arg_1, arg_2, env);
+                                const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
+                                    .fn_args_bound_var = .{
+                                        .fn_name = self.enclosing_func_name,
+                                        .first_arg_var = arg_1,
+                                        .second_arg_var = arg_2,
+                                        .first_arg_index = @intCast(i),
+                                        .second_arg_index = @intCast(j),
+                                        .num_args = @intCast(arg_pattern_idxs.len),
+                                    },
+                                });
                                 if (unify_result.isProblem()) {
-                                    // Use the new error detail for bound type variable incompatibility
-                                    self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                        .incompatible_fn_args_bound_var = .{
-                                            .fn_name = self.enclosing_func_name,
-                                            .first_arg_var = arg_1,
-                                            .second_arg_var = arg_2,
-                                            .first_arg_index = @intCast(i),
-                                            .second_arg_index = @intCast(j),
-                                            .num_args = @intCast(arg_pattern_idxs.len),
-                                        },
-                                    });
-
+                                    // Context already set by unifyInContext
                                     // Stop execution
                                     _ = try self.unifyWith(expr_var, .err, env);
                                     break :for_blk;
@@ -3709,20 +3720,18 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                             const arg_1 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[i]));
                                             const arg_2 = @as(Var, ModuleEnv.varFrom(call_arg_expr_idxs[j]));
 
-                                            const unify_result = try self.unify(arg_1, arg_2, env);
+                                            const unify_result = try self.unifyInContext(arg_1, arg_2, env, .{
+                                                .fn_args_bound_var = .{
+                                                    .fn_name = func_name,
+                                                    .first_arg_var = arg_1,
+                                                    .second_arg_var = arg_2,
+                                                    .first_arg_index = @intCast(i),
+                                                    .second_arg_index = @intCast(j),
+                                                    .num_args = @intCast(call_arg_expr_idxs.len),
+                                                },
+                                            });
                                             if (unify_result.isProblem()) {
-                                                // Use the new error detail for bound type variable incompatibility
-                                                self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                                    .incompatible_fn_args_bound_var = .{
-                                                        .fn_name = func_name,
-                                                        .first_arg_var = arg_1,
-                                                        .second_arg_var = arg_2,
-                                                        .first_arg_index = @intCast(i),
-                                                        .second_arg_index = @intCast(j),
-                                                        .num_args = @intCast(call_arg_expr_idxs.len),
-                                                    },
-                                                });
-
+                                                // Context already set by unifyInContext
                                                 // Stop execution
                                                 _ = try self.unifyWith(expr_var, .err, env);
                                                 break :blk;
@@ -3734,18 +3743,14 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // Check the function's arguments against the actual
                                 // called arguments, unifying each one
                                 for (func_args, call_arg_expr_idxs, 0..) |expected_arg_var, call_expr_idx, arg_index| {
-                                    const unify_result = try self.unify(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env);
+                                    const unify_result = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(call_expr_idx), env, .{ .fn_call_arg = .{
+                                        .fn_name = func_name,
+                                        .call_expr = expr_idx,
+                                        .arg_index = @intCast(arg_index),
+                                        .num_args = @intCast(call_arg_expr_idxs.len),
+                                        .arg_var = ModuleEnv.varFrom(call_expr_idx),
+                                    } });
                                     if (unify_result.isProblem()) {
-                                        // Use the new error detail for bound type variable incompatibility
-                                        self.setProblemTypeMismatchDetail(unify_result.problem, .{
-                                            .incompatible_fn_call_arg = .{
-                                                .fn_name = func_name,
-                                                .arg_var = ModuleEnv.varFrom(call_expr_idx),
-                                                .incompatible_arg_index = @intCast(arg_index),
-                                                .num_args = @intCast(call_arg_expr_idxs.len),
-                                            },
-                                        });
-
                                         // Stop execution
                                         _ = try self.unifyWith(expr_var, .err, env);
                                         break :blk;
@@ -3755,22 +3760,30 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                                 // Redirect the expr to the function's return type
                                 _ = try self.unify(expr_var, func.ret, env);
                             } else {
-                                // Arity mismatch - the function expects a different
-                                // number of arguments than were provided
-                                const fn_snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, func_var);
-                                _ = try self.problems.appendProblem(self.cir.gpa, .{
-                                    .fn_call_arity_mismatch = .{
-                                        .fn_name = func_name,
-                                        .fn_var = func_var,
-                                        .fn_snapshot = fn_snapshot,
-                                        .call_region = expr_region,
-                                        .expected_args = @intCast(func_args.len),
-                                        .actual_args = @intCast(call_arg_expr_idxs.len),
-                                    },
-                                });
+                                // We get here, then the arity of the function
+                                // being called and the callsite do not match.
+                                // This means it's a  regular type mismatch
 
-                                // Set the expression to error type
-                                try self.unifyWith(expr_var, .err, env);
+                                // In this case, we fall back to a regular
+                                // mismatch to show the actual vs expected, and
+                                // allow the problem reporting  hint mechanism
+                                // to add some context
+
+                                const call_arg_vars: []Var = @ptrCast(call_arg_expr_idxs);
+                                const call_func_ret = try self.fresh(env, expr_region);
+                                const call_func_content = try self.types.mkFuncUnbound(call_arg_vars, call_func_ret);
+                                const call_func_var = try self.freshFromContent(call_func_content, env, expr_region);
+
+                                _ = try self.unifyInContext(func_var, call_func_var, env, .{ .fn_call_arity = .{
+                                    .fn_name = func_name,
+                                    .expected_args = @intCast(func_args.len),
+                                    .actual_args = @intCast(call_arg_expr_idxs.len),
+                                } });
+
+                                // Then, we set the root expr to redirect to the return
+                                // type of that function, since a call expr ultimate
+                                // resolve to the  returned type
+                                _ = try self.unify(expr_var, call_func_ret, env);
                             }
                         } else {
                             // We get here if the type of expr being called
@@ -4294,8 +4307,7 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 // If unification fails, we get a nice type mismatch error explaining that
                 // statement expressions must return {}.
                 const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
-                const unify_result = try self.unify(empty_rec, expr_var, env);
-                self.setDetailIfTypeMismatch(unify_result, .statement_not_unit);
+                _ = try self.unifyInContext(empty_rec, expr_var, env, .statement_value);
 
                 _ = try self.unify(stmt_var, expr_var, env);
             },
@@ -4390,8 +4402,7 @@ fn checkIfElseExpr(
     var does_fx = try self.checkExpr(first_branch.cond, env, .no_expectation);
     const first_cond_var: Var = ModuleEnv.varFrom(first_branch.cond);
     const bool_var = try self.freshBool(env, expr_region);
-    const first_cond_result = try self.unify(bool_var, first_cond_var, env);
-    self.setDetailIfTypeMismatch(first_cond_result, .incompatible_if_cond);
+    _ = try self.unifyInContext(bool_var, first_cond_var, env, .if_condition);
 
     // Then we check the 1st branch's body
     does_fx = try self.checkExpr(first_branch.body, env, .no_expectation) or does_fx;
@@ -4410,18 +4421,17 @@ fn checkIfElseExpr(
         does_fx = try self.checkExpr(branch.cond, env, .no_expectation) or does_fx;
         const cond_var: Var = ModuleEnv.varFrom(branch.cond);
         const branch_bool_var = try self.freshBool(env, expr_region);
-        const cond_result = try self.unify(branch_bool_var, cond_var, env);
-        self.setDetailIfTypeMismatch(cond_result, .incompatible_if_cond);
+        _ = try self.unifyInContext(branch_bool_var, cond_var, env, .if_condition);
 
         // Check the branch body
         does_fx = try self.checkExpr(branch.body, env, .no_expectation) or does_fx;
         const body_var: Var = ModuleEnv.varFrom(branch.body);
-        const body_result = try self.unify(branch_var, body_var, env);
-        self.setDetailIfTypeMismatch(body_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+        const body_result = try self.unifyInContext(branch_var, body_var, env, .{ .if_branch = .{
+            .branch_index = @intCast(cur_index),
+            .num_branches = num_branches,
+            .is_else = false,
             .parent_if_expr = if_expr_idx,
             .last_if_branch = last_if_branch,
-            .num_branches = num_branches,
-            .problem_branch_index = @intCast(cur_index),
         } });
 
         if (!body_result.isOk()) {
@@ -4433,8 +4443,7 @@ fn checkIfElseExpr(
                 const remaining_cond_var: Var = ModuleEnv.varFrom(remaining_branch.cond);
 
                 const fresh_bool = try self.freshBool(env, expr_region);
-                const remaining_cond_result = try self.unify(fresh_bool, remaining_cond_var, env);
-                self.setDetailIfTypeMismatch(remaining_cond_result, .incompatible_if_cond);
+                _ = try self.unifyInContext(fresh_bool, remaining_cond_var, env, .if_condition);
 
                 does_fx = try self.checkExpr(remaining_branch.body, env, .no_expectation) or does_fx;
                 try self.unifyWith(ModuleEnv.varFrom(remaining_branch.body), .err, env);
@@ -4450,12 +4459,12 @@ fn checkIfElseExpr(
     // Check the final else
     does_fx = try self.checkExpr(if_.final_else, env, .no_expectation) or does_fx;
     const final_else_var: Var = ModuleEnv.varFrom(if_.final_else);
-    const final_else_result = try self.unify(branch_var, final_else_var, env);
-    self.setDetailIfTypeMismatch(final_else_result, problem.TypeMismatchDetail{ .incompatible_if_branches = .{
+    _ = try self.unifyInContext(branch_var, final_else_var, env, .{ .if_branch = .{
+        .branch_index = num_branches - 1,
+        .num_branches = num_branches,
+        .is_else = true,
         .parent_if_expr = if_expr_idx,
         .last_if_branch = last_if_branch,
-        .num_branches = num_branches,
-        .problem_branch_index = num_branches - 1,
     } });
 
     // Set the entire expr's type to be the type of the branch
@@ -4499,12 +4508,11 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
         const try_var = try self.instantiateVar(copied_try_var, env, .use_root_instantiated);
 
         // Unify the condition with Try type
-        const try_result = try self.unify(try_var, cond_var, env);
+        const try_result = try self.unifyInContext(try_var, cond_var, env, .{ .try_operator_expr = .{
+            .expr = match.cond,
+        } });
         if (!try_result.isOk()) {
             has_invalid_try = true;
-            self.setDetailIfTypeMismatch(try_result, problem.TypeMismatchDetail{ .invalid_try_operator = .{
-                .expr = match.cond,
-            } });
         }
     }
 
@@ -4517,13 +4525,16 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
     // Skip pattern checking if we already know the condition isn't a Try type
     // This prevents confusing cascading errors about pattern incompatibility
-    for (first_branch_ptrn_idxs) |branch_ptrn_idx| {
+    for (first_branch_ptrn_idxs, 0..) |branch_ptrn_idx, cur_ptrn_index| {
         const branch_ptrn = self.cir.store.getMatchBranchPattern(branch_ptrn_idx);
         try self.checkPattern(branch_ptrn.pattern, env);
         const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
 
-        const ptrn_result = try self.unify(cond_var, branch_ptrn_var, env);
-        self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_cond_pattern = .{
+        const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+            .branch_index = 0,
+            .pattern_index = @intCast(cur_ptrn_index),
+            .num_branches = @intCast(match.branches.span.len),
+            .num_patterns = @intCast(first_branch_ptrn_idxs.len),
             .match_expr = expr_idx,
         } });
         if (!ptrn_result.isOk()) had_type_error = true;
@@ -4546,24 +4557,22 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
             // Check the pattern against the cond
             const branch_ptrn_var = ModuleEnv.varFrom(branch_ptrn.pattern);
-            const ptrn_result = try self.unify(cond_var, branch_ptrn_var, env);
-            self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
-                .match_expr = expr_idx,
+            const ptrn_result = try self.unifyInContext(cond_var, branch_ptrn_var, env, .{ .match_pattern = .{
+                .branch_index = @intCast(branch_cur_index),
+                .pattern_index = @intCast(cur_ptrn_index),
                 .num_branches = @intCast(match.branches.span.len),
-                .problem_branch_index = @intCast(branch_cur_index),
                 .num_patterns = @intCast(branch_ptrn_idxs.len),
-                .problem_pattern_index = @intCast(cur_ptrn_index),
+                .match_expr = expr_idx,
             } });
             if (!ptrn_result.isOk()) had_type_error = true;
         }
 
         // Then, check the body
         does_fx = try self.checkExpr(branch.value, env, .no_expectation) or does_fx;
-        const branch_result = try self.unify(val_var, ModuleEnv.varFrom(branch.value), env);
-        self.setDetailIfTypeMismatch(branch_result, problem.TypeMismatchDetail{ .incompatible_match_branches = .{
-            .match_expr = expr_idx,
+        const branch_result = try self.unifyInContext(val_var, ModuleEnv.varFrom(branch.value), env, .{ .match_branch = .{
+            .branch_index = @intCast(branch_cur_index),
             .num_branches = @intCast(match.branches.span.len),
-            .problem_branch_index = @intCast(branch_cur_index),
+            .match_expr = expr_idx,
         } });
 
         if (!branch_result.isOk()) {
@@ -4581,13 +4590,12 @@ fn checkMatchExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, match: CIR.Exp
 
                     // Check the pattern against the cond
                     const other_branch_ptrn_var = ModuleEnv.varFrom(other_branch_ptrn.pattern);
-                    const ptrn_result = try self.unify(cond_var, other_branch_ptrn_var, env);
-                    self.setDetailIfTypeMismatch(ptrn_result, problem.TypeMismatchDetail{ .incompatible_match_patterns = .{
-                        .match_expr = expr_idx,
+                    _ = try self.unifyInContext(cond_var, other_branch_ptrn_var, env, .{ .match_pattern = .{
+                        .branch_index = @intCast(other_branch_cur_index),
+                        .pattern_index = @intCast(other_cur_ptrn_index),
                         .num_branches = @intCast(match.branches.span.len),
-                        .problem_branch_index = @intCast(other_branch_cur_index),
                         .num_patterns = @intCast(other_branch_ptrn_idxs.len),
-                        .problem_pattern_index = @intCast(other_cur_ptrn_index),
+                        .match_expr = expr_idx,
                     } });
                 }
 
@@ -4889,19 +4897,16 @@ fn checkBinopExpr(
             _ = try self.unify(expr_var, not_ret_var, env);
         },
         .@"and", .@"or" => {
-            const and_or: problem.InvalidBoolBinop.BoolBinop = switch (binop.op) {
+            const lhs_fresh_bool = try self.freshBool(env, expr_region);
+
+            const binop_ctx: problem.Context.BinopContext.Binop = switch (binop.op) {
                 .@"and" => .@"and",
                 .@"or" => .@"or",
                 else => unreachable,
             };
-
-            const lhs_fresh_bool = try self.freshBool(env, expr_region);
-
-            const lhs_result = try self.unify(lhs_fresh_bool, lhs_var, env);
-            self.setDetailIfTypeMismatch(lhs_result, .{ .invalid_bool_binop = .{
+            const lhs_result = try self.unifyInContext(lhs_fresh_bool, lhs_var, env, .{ .binop_lhs = .{
+                .operator = binop_ctx,
                 .binop_expr = expr_idx,
-                .problem_side = .lhs,
-                .binop = and_or,
             } });
 
             // If lhs unified successfully, then reuse that var, otherwise
@@ -4909,11 +4914,9 @@ fn checkBinopExpr(
             // sides of the binop.
             const rhs_fresh_bool = if (lhs_result.isOk()) lhs_fresh_bool else try self.freshBool(env, expr_region);
 
-            const rhs_result = try self.unify(rhs_fresh_bool, rhs_var, env);
-            self.setDetailIfTypeMismatch(rhs_result, .{ .invalid_bool_binop = .{
+            _ = try self.unifyInContext(rhs_fresh_bool, rhs_var, env, .{ .binop_rhs = .{
+                .operator = binop_ctx,
                 .binop_expr = expr_idx,
-                .problem_side = .rhs,
-                .binop = and_or,
             } });
 
             // Unify left and right together to ensure both are bools
@@ -5007,40 +5010,6 @@ fn mkUnaryOp(
 }
 
 // problems //
-
-/// If the provided result is a type mismatch problem, append the detail to the
-/// problem in the store.
-/// This allows us to show the user nice, more specific errors than a generic
-/// type mismatch
-fn setDetailIfTypeMismatch(self: *Self, result: unifier.Result, mismatch_detail: problem.TypeMismatchDetail) void {
-    switch (result) {
-        .ok => {},
-        .problem => |problem_idx| {
-            self.setProblemTypeMismatchDetail(problem_idx, mismatch_detail);
-        },
-    }
-}
-
-/// If the provided problem is a type mismatch, set the mismatch detail.
-/// This allows us to show the user nice, more specific errors than a generic
-/// type mismatch
-fn setProblemTypeMismatchDetail(self: *Self, problem_idx: problem.Problem.Idx, mismatch_detail: problem.TypeMismatchDetail) void {
-    switch (self.problems.problems.items[@intFromEnum(problem_idx)]) {
-        .type_mismatch => |mismatch| {
-            self.problems.problems.items[@intFromEnum(problem_idx)] = .{
-                .type_mismatch = .{
-                    .types = mismatch.types,
-                    .detail = mismatch_detail,
-                },
-            };
-        },
-        else => {
-            // For other problem types (e.g., number_does_not_fit), the
-            // original problem is already more specific than our custom
-            // problem, so we should keep it as-is and not replace it.
-        },
-    }
-}
 
 // copy type from other module //
 
@@ -5202,7 +5171,11 @@ fn checkNominalTypeUsage(
         // Unify what the user wrote with the backing type of the nominal
         // E.g. ConList.Cons(...) <-> [Cons(a, ConsList(a)), Nil]
         //              ^^^^^^^^^     ^^^^^^^^^^^^^^^^^^^^^^^^^
-        const result = try self.unify(nominal_backing_var, actual_backing_var, env);
+        // Convert CIR.Expr.NominalBackingType to Context.NominalConstructorContext.BackingType
+        const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
+        const result = try self.unifyInContext(nominal_backing_var, actual_backing_var, env, .{
+            .nominal_constructor = .{ .backing_type = context_backing_type },
+        });
 
         // Handle the result of unification
         switch (result) {
@@ -5212,28 +5185,9 @@ fn checkNominalTypeUsage(
                 _ = try self.unify(target_var, nominal_var, env);
                 return .ok;
             },
-            .problem => |problem_idx| {
+            .problem => {
                 // Unification failed - the constructor is incompatible with the nominal type
-                // Set a specific error message based on the backing type kind
-                switch (backing_type) {
-                    .tag => {
-                        // Constructor doesn't exist or has wrong arity/types
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tag);
-                    },
-                    .record => {
-                        // Record fields don't match the nominal type's backing record
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_record);
-                    },
-                    .tuple => {
-                        // Tuple elements don't match the nominal type's backing tuple
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_tuple);
-                    },
-                    .value => {
-                        // Value doesn't match the nominal type's backing type
-                        self.setProblemTypeMismatchDetail(problem_idx, .invalid_nominal_value);
-                    },
-                }
-
+                // Context is already set by unifyInContext
                 // Mark the entire expression as having a type error
                 try self.unifyWith(target_var, .err, env);
                 return .err;
@@ -5270,16 +5224,12 @@ fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
         const constraint = self.constraints.get(idx);
         switch (constraint.*) {
             .eql => |eql| {
-                const unify_result = try self.unify(eql.expected, eql.actual, env);
-                switch (eql.ctx) {
-                    .anonymous => {},
-                    .early_return => {
-                        self.setDetailIfTypeMismatch(unify_result, .early_return);
-                    },
-                    .try_suffix_return => {
-                        self.setDetailIfTypeMismatch(unify_result, .try_suffix_return);
-                    },
-                }
+                const context: problem.Context = switch (eql.ctx) {
+                    .anonymous => .none,
+                    .early_return => .early_return,
+                    .try_suffix_return => .try_operator,
+                };
+                _ = try self.unifyInContext(eql.expected, eql.actual, env, context);
             },
         }
     }
@@ -5494,9 +5444,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
 
                 // Unwrap the constraint type
                 const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
-                    const unify_result = try self.unify(method_var, constraint.fn_var, env);
-                    self.setDetailIfTypeMismatch(unify_result, problem.TypeMismatchDetail{
-                        .incompatible_method_type = .{
+                    _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
+                        .method_type = .{
                             .dispatcher_var = constraint.fn_var,
                             .dispatcher_name = nominal_type.ident.ident_idx,
                             .method_name = constraint.fn_name,
@@ -5506,10 +5455,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     continue;
                 };
 
-                // Unify the method from the type with the constraint method
-                const fn_result = try self.unifyWithOrigin(method_var, constraint.fn_var, env, deferred_constraint.var_);
-                self.setDetailIfTypeMismatch(fn_result, problem.TypeMismatchDetail{
-                    .incompatible_method_type = .{
+                const fn_result = try self.unifyWithOriginInContext(method_var, constraint.fn_var, env, deferred_constraint.var_, .{
+                    .method_type = .{
                         .dispatcher_var = constraint.fn_var,
                         .dispatcher_name = nominal_type.ident.ident_idx,
                         .method_name = constraint.fn_name,

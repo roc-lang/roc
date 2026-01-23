@@ -87,6 +87,7 @@ const TagSafeMultiList = Tag.SafeMultiList;
 const TwoTagsSafeList = TwoTags.SafeList;
 
 const Problem = problem_mod.Problem;
+const Context = problem_mod.Context;
 
 /// The result of unification
 pub const Result = union(enum) {
@@ -144,6 +145,8 @@ pub fn unify(
 pub const Conf = struct {
     ctx: Ctx,
     constraint_origin_var: ?Var,
+    /// Where this unification is happening (for contextual error messages)
+    context: Context = .none,
 
     /// If the "expect" var comes fro an annotation, or if it's anonymous
     pub const Ctx = enum { anon, anno };
@@ -198,7 +201,7 @@ pub fn unifyWithConf(
                             .from_annotation = conf.ctx == .anno,
                             .constraint_origin_var = conf.constraint_origin_var,
                         },
-                        .detail = null,
+                        .context = conf.context,
                     } };
                 },
             }

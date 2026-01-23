@@ -3885,8 +3885,8 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
     // Report any compile-time crashes
     const has_comptime_crashes = checker.problems.len() > 0;
     if (has_comptime_crashes) {
-        const problem = @import("check").problem;
-        var report_builder = problem.ReportBuilder.init(
+        const problem = check.problem;
+        var report_builder = ReportBuilder.init(
             ctx.gpa,
             &env,
             &env,
