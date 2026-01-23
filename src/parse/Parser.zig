@@ -1334,25 +1334,33 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                 var nested_import = false;
 
                 // Parse all uppercase segments: first.Second.Third...
+                // We track both the first token (module_name_tok) and second-to-last token
+                // (prev_upper_tok) for proper handling of both regular imports and auto-expose.
                 var prev_upper_tok: ?TokenIdx = null;
+                var last_upper_tok: TokenIdx = self.pos;
                 var module_name_tok = self.pos;
                 self.advance(); // Advance past first UpperIdent
 
                 // Keep consuming additional .UpperIdent segments
                 while (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
-                    prev_upper_tok = module_name_tok;
-                    module_name_tok = self.pos;
+                    prev_upper_tok = last_upper_tok;
+                    last_upper_tok = self.pos;
                     self.advance();
                 }
 
                 // If we have multiple uppercase segments and no explicit 'as' or 'exposing',
                 // auto-expose the final segment
                 const has_explicit_clause = self.peek() == .KwAs or self.peek() == .KwExposing;
-                if (prev_upper_tok != null and !has_explicit_clause) {
+                const has_multiple_segments = last_upper_tok != module_name_tok;
+                if (has_multiple_segments and !has_explicit_clause) {
                     // Auto-expose pattern: import json.Parser.Config
                     // Module is everything before the last segment, last segment is auto-exposed
-                    const final_segment_tok = module_name_tok;
-                    module_name_tok = prev_upper_tok.?;
+                    // For auto-expose, module_name_tok should point to the second-to-last token
+                    // so that the formatter outputs everything up to (but not including) the last segment
+                    if (prev_upper_tok) |prev_tok| {
+                        module_name_tok = prev_tok;
+                    }
+                    const final_segment_tok = last_upper_tok;
                     nested_import = true;
 
                     // Create exposed item for the final segment
@@ -1365,7 +1373,9 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     try self.store.addScratchExposedItem(exposed_item);
                     exposes = try self.store.exposedItemSpanFrom(scratch_top);
                 } else {
-                    // Normal import: handle 'as' and 'exposing' clauses
+                    // Normal import with explicit 'as' or 'exposing' clause
+                    // module_name_tok stays as the first uppercase token; the formatter will
+                    // iterate through consecutive uppercase tokens to output the full path.
 
                     // Handle 'as' clause if present
                     if (self.peek() == .KwAs) {

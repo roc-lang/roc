@@ -36,7 +36,7 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "design.Color")
+		(s-import (raw "design.Styles.Color")
 			(exposing
 				(exposed-upper-ident (text "Encoder") (as "CE"))))
 		(s-type-anno (name "red")
@@ -47,10 +47,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import design.Color exposing [Encoder as CE]
-
-red : CE
-red = ... # not implemented
+NO CHANGE
 ~~~
 # CANONICALIZE
 ~~~clojure
@@ -60,7 +57,7 @@ red = ... # not implemented
 		(e-not-implemented)
 		(annotation
 			(ty-malformed)))
-	(s-import (module "design.Styles.Color")
+	(s-import (module "design.Styles")
 		(exposes
 			(exposed (name "Encoder") (alias "CE") (wildcard false)))))
 ~~~
