@@ -92,20 +92,6 @@ pub fn movRegImm32(self: *Emit, dst: GeneralReg, imm: i32) !void {
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
 }
 
-/// MOVZX r32, r8 - zero-extend byte register to 32-bit (implicitly zero-extends to 64-bit)
-/// This is needed after SETCC to properly zero-extend the byte result to the full register.
-pub fn movzxByte(self: *Emit, dst: GeneralReg, src: GeneralReg) !void {
-    // REX prefix needed if either register is R8-R15
-    // REX.R for dst (reg field), REX.B for src (r/m field)
-    const needs_rex = dst.requiresRex() or src.requiresRex();
-    if (needs_rex) {
-        try self.buf.append(self.allocator, rex(0, dst.rexR(), 0, src.rexB()));
-    }
-    try self.buf.append(self.allocator, 0x0F); // Two-byte opcode prefix
-    try self.buf.append(self.allocator, 0xB6); // MOVZX r32, r/m8
-    try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
-}
-
 // Arithmetic instructions
 
 /// ADD reg, reg
@@ -287,6 +273,17 @@ pub fn andRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.emitRex(width, src, dst);
     try self.buf.append(self.allocator, 0x21); // AND r/m, r
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
+/// AND r64, imm8 - AND register with sign-extended immediate byte
+/// Used after SETCC to mask the result to just the lowest bit.
+pub fn andRegImm8(self: *Emit, dst: GeneralReg, imm: i8) !void {
+    // REX.W prefix (0x48) + REX.B if dst is R8-R15
+    try self.buf.append(self.allocator, rex(1, 0, 0, dst.rexB()));
+    try self.buf.append(self.allocator, 0x83); // AND r/m64, imm8
+    // ModRM: mod=11 (register), reg=4 (/4 for AND), rm=dst
+    try self.buf.append(self.allocator, modRM(0b11, 4, dst.enc()));
+    try self.buf.append(self.allocator, @bitCast(imm));
 }
 
 /// OR reg, reg

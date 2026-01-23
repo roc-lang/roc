@@ -551,9 +551,9 @@ pub const SystemVCodeGen = struct {
     pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
         try self.emit.cmpRegReg(width, a, b);
         try self.emit.setcc(cond, dst);
-        // Zero-extend the byte result to full 64-bit register
-        // SETCC only sets the low byte; we need MOVZX to zero the upper 56 bits
-        try self.emit.movzxByte(dst, dst);
+        // SETCC only sets the low byte; AND with 1 to mask the result
+        // (matches the approach used by the Rust backend)
+        try self.emit.andRegImm8(dst, 1);
     }
 
     // Floating-point operations
