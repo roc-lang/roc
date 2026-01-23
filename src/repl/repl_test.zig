@@ -26,7 +26,7 @@ test "Repl - initialization and cleanup" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     try testing.expect(repl.definitions.count() == 0);
@@ -36,7 +36,7 @@ test "Repl - special commands" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const help_result = try repl.step(":help");
@@ -56,7 +56,7 @@ test "Repl - simple expressions" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const result = try repl.step("42");
@@ -68,7 +68,7 @@ test "Repl - string expressions" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const result = try repl.step("\"Hello, World!\"");
@@ -80,7 +80,7 @@ test "Repl - silent assignments" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Assignment should return descriptive output
@@ -98,7 +98,7 @@ test "Repl - variable redefinition" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // First definition
@@ -131,7 +131,7 @@ test "Repl - build full source with block syntax" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Add definitions manually to test source building
@@ -156,7 +156,7 @@ test "Repl - definition replacement" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Manually add definitions to test replacement behavior
@@ -185,7 +185,7 @@ test "Repl - definition replacement" {
 //     var test_env = TestEnv.init(interpreter_allocator);
 //     defer test_env.deinit();
 //
-//     var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+//     var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
 //     defer repl.deinit();
 //
 //     // Test Bool.not(True) should return False
@@ -207,7 +207,7 @@ test "Repl - Str.is_empty works for empty and non-empty strings" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const empty_result = try repl.step("Str.is_empty(\"\")");
@@ -223,7 +223,7 @@ test "Repl - List.len(Str.to_utf8(\"hello\")) should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // This expression was leaking memory
@@ -236,7 +236,7 @@ test "Repl - Str.to_utf8 returns list that should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Test Str.to_utf8 directly - the resulting list should be decreffed
@@ -249,7 +249,7 @@ test "Repl - multiple Str.to_utf8 calls should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Test multiple calls in same REPL session
@@ -274,7 +274,7 @@ test "Repl - list literals should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Test list literals
@@ -294,7 +294,7 @@ test "Repl - list of strings should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // List of strings - similar to what snapshot tests do
@@ -307,7 +307,7 @@ test "Repl - from_utf8_lossy should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     {
@@ -321,7 +321,7 @@ test "Repl - for loop over list should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Simple list of strings - test that list literals are properly freed
@@ -343,7 +343,7 @@ test "Repl - list_sort_with should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Test list_sort_with - matches the snapshot pattern
@@ -363,7 +363,7 @@ test "Repl - list fold with concat should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // Test List.fold with List.concat - creates list literals in callback
@@ -376,7 +376,7 @@ test "Repl - all list operations should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // All list operation patterns from snapshots
@@ -431,7 +431,7 @@ test "Repl - all for loop snapshots should not leak" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // All the for loop snapshot patterns
@@ -467,7 +467,7 @@ test "Repl - full list_sort_with snapshot pattern" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // All expressions from list_sort_with.md - collected first then freed
@@ -499,7 +499,7 @@ test "Repl - full str_to_utf8 snapshot test" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     // All expressions from str_to_utf8.md
@@ -574,7 +574,7 @@ test "Repl - lambda function renders as <function>" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const result = try repl.step("|x| x + 1");
@@ -586,7 +586,7 @@ test "Repl - multi-arg lambda function renders as <function>" {
     var test_env = TestEnv.init(interpreter_allocator);
     defer test_env.deinit();
 
-    var repl = try Repl.init(interpreter_allocator, test_env.get_ops());
+    var repl = try Repl.init(interpreter_allocator, test_env.get_ops(), null);
     defer repl.deinit();
 
     const result = try repl.step("|x, y| x + y");

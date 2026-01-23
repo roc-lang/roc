@@ -65,13 +65,9 @@ const DevRocEnv = struct {
             4 => self.allocator.alignedAlloc(u8, .@"4", roc_alloc.length),
             8 => self.allocator.alignedAlloc(u8, .@"8", roc_alloc.length),
             16 => self.allocator.alignedAlloc(u8, .@"16", roc_alloc.length),
-            else => {
-                std.debug.print("DevRocEnv: Unsupported alignment {d}\n", .{roc_alloc.alignment});
-                unreachable;
-            },
+            else => @panic("DevRocEnv: Unsupported alignment"),
         } catch {
-            std.debug.print("DevRocEnv: Allocation failed\n", .{});
-            unreachable;
+            @panic("DevRocEnv: Allocation failed");
         };
 
         roc_alloc.answer = @ptrCast(ptr.ptr);
@@ -98,13 +94,9 @@ const DevRocEnv = struct {
             4 => self.allocator.alignedAlloc(u8, .@"4", roc_realloc.new_length),
             8 => self.allocator.alignedAlloc(u8, .@"8", roc_realloc.new_length),
             16 => self.allocator.alignedAlloc(u8, .@"16", roc_realloc.new_length),
-            else => {
-                std.debug.print("DevRocEnv: Unsupported alignment {d}\n", .{roc_realloc.alignment});
-                unreachable;
-            },
+            else => @panic("DevRocEnv: Unsupported alignment"),
         } catch {
-            std.debug.print("DevRocEnv: Reallocation failed\n", .{});
-            unreachable;
+            @panic("DevRocEnv: Reallocation failed");
         };
 
         // Copy old data from the existing allocation
@@ -119,20 +111,31 @@ const DevRocEnv = struct {
 
     /// Debug output function.
     fn rocDbgFn(roc_dbg: *const RocDbg, _: *anyopaque) callconv(.c) void {
-        const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
-        std.debug.print("[dbg] {s}\n", .{msg});
+        // On freestanding (WASM), skip debug output to avoid thread locking
+        if (builtin.os.tag != .freestanding) {
+            const msg = roc_dbg.utf8_bytes[0..roc_dbg.len];
+            std.debug.print("[dbg] {s}\n", .{msg});
+        }
     }
 
     /// Expect failed function.
     fn rocExpectFailedFn(_: *const RocExpectFailed, _: *anyopaque) callconv(.c) void {
-        std.debug.print("[expect failed]\n", .{});
+        // On freestanding (WASM), skip debug output to avoid thread locking
+        if (builtin.os.tag != .freestanding) {
+            std.debug.print("[expect failed]\n", .{});
+        }
     }
 
     /// Crash function.
     fn rocCrashedFn(roc_crashed: *const RocCrashed, _: *anyopaque) callconv(.c) noreturn {
-        const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
-        std.debug.print("Roc crashed: {s}\n", .{msg});
-        unreachable;
+        // On freestanding (WASM), just panic without debug output to avoid thread locking
+        if (builtin.os.tag == .freestanding) {
+            @panic("Roc crashed");
+        } else {
+            const msg = roc_crashed.utf8_bytes[0..roc_crashed.len];
+            std.debug.print("Roc crashed: {s}\n", .{msg});
+            unreachable;
+        }
     }
 };
 

@@ -68,7 +68,9 @@ jobs:
           roc check src/PROFILING/exec_bench.roc
           roc test src/PROFILING/exec_bench.roc
 
-      # NOTE: Playground tests removed along with interpreter/playground
+      - name: Run Playground Tests
+        run: |
+          zig build test-playground -Doptimize=ReleaseSmall -- --verbose
 
       - name: Verify Serialized Type Sizes
         run: |
@@ -136,15 +138,10 @@ jobs:
         run: |
           zig-out\bin\roc.exe fmt --check src/build/roc/Builtin.roc
 
-      # NOTE: test-cli and cross-compile tests are skipped on more-dev-backend branch
-      # because they require the interpreter shim libraries which have been removed.
-      # The dev backend with Mono IR will replace the interpreter for these tests.
-      # See: src/cli/main.zig ShimLibraries (currently returns empty bytes)
-      #
-      # - name: Run Test Platforms (Unix)
-      #   if: runner.os != 'Windows'
-      #   run: |
-      #     zig build test-cli ${{ matrix.target_flag }}
+      - name: Run Test Platforms (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          zig build test-cli ${{ matrix.target_flag }}
 
       - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
@@ -152,15 +149,15 @@ jobs:
         with:
           arch: ${{ matrix.os == 'windows-11-arm' && 'arm64' || 'x64' }}
 
-      # - name: Run Test Platforms (Windows)
-      #   if: runner.os == 'Windows'
-      #   run: |
-      #     zig build test-cli
+      - name: Run Test Platforms (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig build test-cli
 
-      # - name: Build Test Platforms (cross-compile)
-      #   if: runner.os != 'Windows'
-      #   run: |
-      #     ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
+      - name: Build Test Platforms (cross-compile)
+        if: runner.os != 'Windows'
+        run: |
+          ./zig-out/bin/test_runner ./zig-out/bin/roc int --mode=cross
 
       - name: roc executable minimal check (Unix)
         if: runner.os != 'Windows'
@@ -172,12 +169,8 @@ jobs:
         run: |
           zig-out\bin\roc.exe check ./src/PROFILING/bench_repeated_check.roc
 
-      # NOTE: Snapshot tests are skipped on more-dev-backend branch
-      # because they run REPL evaluations that require the dev backend.
-      # The dev backend doesn't support all expressions yet (UnsupportedExpression).
-      #
-      # - name: zig snapshot tests
-      #   run: zig build snapshot ${{ matrix.target_flag }} -- --debug
+      - name: zig snapshot tests
+        run: zig build snapshot ${{ matrix.target_flag }} -- --debug
 
       # 1) in debug mode
       - name: build and execute tests, build repro executables
@@ -195,46 +188,40 @@ jobs:
           error_string_contains: "double roundtrip bundle|connectTcp|downloadToFile|build.zig.zon"
           retry_count: 3
 
-      # NOTE: Skipped on more-dev-backend branch (see snapshot tests comment above)
-      #
-      # - name: Check for snapshot changes
-      #   run: |
-      #     git diff --exit-code test/snapshots || {
-      #       echo ""
-      #       echo ""
-      #       echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
-      #       echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
-      #       echo ""
-      #       echo "NOTE: If snapshots pass locally but fail in CI, you may need to merge origin/main";
-      #       echo "into your branch first, then regenerate snapshots. CI tests your branch merged with";
-      #       echo "main, so new snapshots from main can cause diffs when regenerated with your changes.";
-      #       echo ""
-      #       echo "Here's what changed:";
-      #       echo ""
-      #       git diff test/snapshots;
-      #       exit 1;
-      #     }
+      - name: Check for snapshot changes
+        run: |
+          git diff --exit-code test/snapshots || {
+            echo ""
+            echo ""
+            echo "OOPS! It looks like the snapshots in 'test/snapshots' have changed.";
+            echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+            echo ""
+            echo "NOTE: If snapshots pass locally but fail in CI, you may need to merge origin/main";
+            echo "into your branch first, then regenerate snapshots. CI tests your branch merged with";
+            echo "main, so new snapshots from main can cause diffs when regenerated with your changes.";
+            echo ""
+            echo "Here's what changed:";
+            echo ""
+            git diff test/snapshots;
+            exit 1;
+          }
 
-      # NOTE: Valgrind tests are skipped on more-dev-backend branch
-      # because they run snapshot and roc commands that need the dev backend.
-      # The dev backend doesn't support all expressions yet (UnsupportedExpression).
-      #
-      # - name: test with valgrind (ubuntu)
-      #   # Sadly, with zig 0.14.1, this had to be disabled on arm.
-      #   # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
-      #   # So valgrind only works happily on x86_64 linux.
-      #   # We can re-evaluate as new version of zig/valgrind come out.
-      #   if: ${{ matrix.os == 'ubuntu-22.04' }}
-      #   run: |
-      #     # Install libc6-dbg which is required for Valgrind's function redirections
-      #     sudo apt-get update && sudo apt-get install -y libc6-dbg
-      #     sudo snap install valgrind --classic
-      #     valgrind --version
-      #     ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
-      #     ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
-      #     ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
-      #     # valgrind all app files in test/fx except those that read from stdin
-      #     # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
+      - name: test with valgrind (ubuntu)
+        # Sadly, with zig 0.14.1, this had to be disabled on arm.
+        # Valgrind as of 3.25.1 does not support some arm instructions zig generates.
+        # So valgrind only works happily on x86_64 linux.
+        # We can re-evaluate as new version of zig/valgrind come out.
+        if: ${{ matrix.os == 'ubuntu-22.04' }}
+        run: |
+          # Install libc6-dbg which is required for Valgrind's function redirections
+          sudo apt-get update && sudo apt-get install -y libc6-dbg
+          sudo snap install valgrind --classic
+          valgrind --version
+          ./ci/custom_valgrind.sh ./zig-out/bin/snapshot --debug --verbose
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/str/app.roc
+          ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache test/int/app.roc
+          # valgrind all app files in test/fx except those that read from stdin
+          # find test/fx -maxdepth 1 -name "*.roc" -type f -exec grep -l "app \[main" {} + | xargs -I {} sh -c 'grep -L "Stdin" {} || true' | xargs -I {} ./ci/custom_valgrind.sh ./zig-out/bin/roc --no-cache {}
 
       - name: check if statically linked (ubuntu)
         if: startsWith(matrix.os, 'ubuntu')
@@ -315,12 +302,9 @@ jobs:
           command: zig build -Dtarget=${{ matrix.target }}
           error_string_contains: "error: bad HTTP response code: '500 Internal Server Error'|TemporaryNameServerFailure|503|Timeout"
 
-  # NOTE: roc-cross-compile is skipped on more-dev-backend branch
-  # because it requires the interpreter shim libraries which have been removed.
-  # The dev backend with Mono IR will replace the interpreter for roc build.
-  #
-  # roc-cross-compile:
-  #   uses: ./.github/workflows/ci_cross_compile.yml
+  # Test cross-compilation with Roc's cross-compilation system (musl + glibc)
+  roc-cross-compile:
+    uses: ./.github/workflows/ci_cross_compile.yml
 
   # Check if nix-related files changed
   check-nix-changes:
@@ -339,11 +323,8 @@ jobs:
               - 'flake.lock'
               - '**/*.nix'
 
-  # NOTE: nix-build is skipped on more-dev-backend branch
-  # because the dev backend doesn't support all expression types yet.
-  # The full test suite will fail with UnsupportedExpression errors.
-  #
-  # nix-build:
-  #   needs: [check-once, check-nix-changes]
-  #   if: needs.check-nix-changes.outputs.nix == 'true'
-  #   uses: ./.github/workflows/ci_zig_nix.yml
+  # Test building inside nix environment
+  nix-build:
+    needs: [check-once, check-nix-changes]
+    if: needs.check-nix-changes.outputs.nix == 'true'
+    uses: ./.github/workflows/ci_zig_nix.yml

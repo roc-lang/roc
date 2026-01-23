@@ -1422,7 +1422,7 @@ const MiniCiStep = struct {
         try checkSnapshotChanges(step);
         try checkFxPlatformTestCoverage(step);
         try runSubBuild(step, "test", "zig build test");
-        // NOTE: test-playground was removed along with the interpreter/playground
+        try runSubBuild(step, "test-playground", "zig build test-playground");
         try runSubBuild(step, "test-serialization-sizes", "zig build test-serialization-sizes");
         try runSubBuild(step, "test-cli", "zig build test-cli");
         try runSubBuild(step, "coverage", "zig build coverage");
@@ -2087,8 +2087,8 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
-    // NOTE: test-playground was removed along with the interpreter/playground
-    // See the "Playground WASM has been removed" comment around line 2435
+    const playground_step = b.step("playground", "Build the WASM playground");
+    const playground_test_step = b.step("test-playground", "Build the integration test suite for the WASM playground");
     const serialization_size_step = b.step("test-serialization-sizes", "Verify Serialized types have platform-independent sizes");
     const wasm_static_lib_test_step = b.step("test-wasm-static-lib", "Test WASM static library builds with bytebox");
     const test_cli_step = b.step("test-cli", "Test the roc CLI by running test programs");
@@ -2281,7 +2281,7 @@ pub fn build(b: *std.Build) void {
     // Setup test platform host libraries
     setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
 
-    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd) orelse return;
+    const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
     install_and_run(b, no_bin, roc_exe, roc_step, run_step, run_args);
 
@@ -2309,6 +2309,9 @@ pub fn build(b: *std.Build) void {
             user_llvm_path,
             null, // No tracy for release
             release_zstd,
+            compiled_builtins_module,
+            write_compiled_builtins,
+            null, // No tracy
         );
         if (release_exe) |exe| {
             roc_modules.addAll(exe);
@@ -2433,13 +2436,71 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, roc_modules.build_options, snapshot_exe, target, true, flag_enable_tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step, run_args);
 
-    // NOTE: Playground WASM has been removed (interpreter deleted)
-    // Native code generation via Mono IR is now used instead
+    const playground_exe = b.addExecutable(.{
+        .name = "playground",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/playground_wasm/main.zig"),
+            .target = b.resolveTargetQuery(.{
+                .cpu_arch = .wasm32,
+                .os_tag = .freestanding,
+            }),
+            .optimize = optimize,
+        }),
+    });
+    configureBackend(playground_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }));
+    playground_exe.entry = .disabled;
+    playground_exe.rdynamic = true;
+    playground_exe.link_function_sections = true;
+    playground_exe.import_memory = false;
+    roc_modules.addAll(playground_exe);
+    playground_exe.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    playground_exe.step.dependOn(&write_compiled_builtins.step);
+
+    add_tracy(b, roc_modules.build_options, playground_exe, b.resolveTargetQuery(.{
+        .cpu_arch = .wasm32,
+        .os_tag = .freestanding,
+    }), false, null);
+
+    const playground_install = b.addInstallArtifact(playground_exe, .{});
+    playground_step.dependOn(&playground_install.step);
 
     const bytebox = b.dependency("bytebox", .{
         .target = target,
         .optimize = optimize,
     });
+
+    // Build playground integration tests - now enabled for all optimization modes
+    const playground_test_install = blk: {
+        const playground_integration_test_exe = b.addExecutable(.{
+            .name = "playground_integration_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/playground-integration/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(playground_integration_test_exe, target);
+        playground_integration_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
+        playground_integration_test_exe.root_module.addImport("build_options", build_options.createModule());
+        roc_modules.addAll(playground_integration_test_exe);
+
+        const install = b.addInstallArtifact(playground_integration_test_exe, .{});
+        // Ensure playground WASM is built before running the integration test
+        install.step.dependOn(&playground_install.step);
+        playground_test_step.dependOn(&install.step);
+
+        const run_playground_test = b.addRunArtifact(playground_integration_test_exe);
+        if (run_args.len != 0) {
+            run_playground_test.addArgs(run_args);
+        }
+        run_playground_test.step.dependOn(&install.step);
+        playground_test_step.dependOn(&run_playground_test.step);
+
+        break :blk install;
+    };
 
     // Add serialization size check
     // This verifies that Serialized types have the same size on 32-bit and 64-bit platforms
@@ -2668,7 +2729,11 @@ pub fn build(b: *std.Build) void {
 
     test_step.dependOn(&tests_summary.step);
 
-    // NOTE: Playground has been removed (interpreter deleted)
+    b.default_step.dependOn(playground_step);
+    {
+        const install = playground_test_install;
+        b.default_step.dependOn(&install.step);
+    }
 
     // Fmt zig code.
     const fmt_paths = .{ "src", "build.zig" };
@@ -3028,6 +3093,9 @@ fn addMainExe(
     user_llvm_path: ?[]const u8,
     tracy: ?[]const u8,
     zstd: *Dependency,
+    compiled_builtins_module: *std.Build.Module,
+    write_compiled_builtins: *Step.WriteFile,
+    flag_enable_tracy: ?[]const u8,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -3102,8 +3170,120 @@ fn addMainExe(
     });
     configureBackend(builtins_obj, target);
 
-    // NOTE: Interpreter shim has been removed.
-    // Native code generation via Mono IR is now used instead.
+    // Create shim static library at build time - fully static without libc
+    //
+    // NOTE we do NOT link libC here to avoid dynamic dependency on libC
+    const shim_lib = b.addLibrary(.{
+        .name = "roc_interpreter_shim",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/interpreter_shim/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .strip = strip,
+            .omit_frame_pointer = omit_frame_pointer,
+            .pic = true, // Enable Position Independent Code for PIE compatibility
+        }),
+        .linkage = .static,
+    });
+    configureBackend(shim_lib, target);
+    // Add all modules from roc_modules that the shim needs
+    roc_modules.addAll(shim_lib);
+    // Add compiled builtins module for loading builtin types
+    shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+    shim_lib.step.dependOn(&write_compiled_builtins.step);
+    // Link against the pre-built builtins library
+    shim_lib.addObject(builtins_obj);
+    // Bundle compiler-rt for our math symbols
+    shim_lib.bundle_compiler_rt = true;
+    // Install shim library to the output directory
+    const install_shim = b.addInstallArtifact(shim_lib, .{});
+    b.getInstallStep().dependOn(&install_shim.step);
+    // Copy the shim library to the src/ directory for embedding as binary data
+    // This is because @embedFile happens at compile time and needs the file to exist already
+    // and zig doesn't permit embedding files from directories outside the source tree.
+    const copy_shim = b.addUpdateSourceFiles();
+    const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
+    copy_shim.addCopyFileToSource(shim_lib.getEmittedBin(), b.pathJoin(&.{ "src/cli", interpreter_shim_filename }));
+    exe.step.dependOn(&copy_shim.step);
+
+    // Add tracy support (required by parse/can/check modules)
+    add_tracy(b, roc_modules.build_options, shim_lib, b.graph.host, false, flag_enable_tracy);
+
+    // Cross-compile interpreter shim for all supported targets
+    // This allows `roc build --target=X` to work for cross-compilation
+    const cross_compile_shim_targets = [_]struct { name: []const u8, query: std.Target.Query }{
+        .{ .name = "x64musl", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "arm64musl", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .musl } },
+        .{ .name = "x64glibc", .query = .{ .cpu_arch = .x86_64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "arm64glibc", .query = .{ .cpu_arch = .aarch64, .os_tag = .linux, .abi = .gnu } },
+        .{ .name = "wasm32", .query = .{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none } },
+    };
+
+    for (cross_compile_shim_targets) |cross_target| {
+        const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+
+        // Build builtins object for this target
+        const cross_builtins_obj = b.addObject(.{
+            .name = b.fmt("roc_builtins_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/builtins/static_lib.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+        });
+        configureBackend(cross_builtins_obj, cross_resolved_target);
+
+        // Build interpreter shim library for this target
+        const cross_shim_lib = b.addLibrary(.{
+            .name = b.fmt("roc_interpreter_shim_{s}", .{cross_target.name}),
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/interpreter_shim/main.zig"),
+                .target = cross_resolved_target,
+                .optimize = optimize,
+                .strip = strip,
+                .omit_frame_pointer = omit_frame_pointer,
+                .pic = true,
+            }),
+            .linkage = .static,
+        });
+        configureBackend(cross_shim_lib, cross_resolved_target);
+
+        // For wasm32, only add the modules needed by the interpreter shim
+        // (compile, watch, lsp, repl, ipc use threading/file I/O not available on freestanding)
+        if (cross_target.query.cpu_arch == .wasm32 and cross_target.query.os_tag == .freestanding) {
+            cross_shim_lib.root_module.addImport("base", roc_modules.base);
+            cross_shim_lib.root_module.addImport("collections", roc_modules.collections);
+            cross_shim_lib.root_module.addImport("types", roc_modules.types);
+            cross_shim_lib.root_module.addImport("builtins", roc_modules.builtins);
+            cross_shim_lib.root_module.addImport("can", roc_modules.can);
+            cross_shim_lib.root_module.addImport("check", roc_modules.check);
+            cross_shim_lib.root_module.addImport("parse", roc_modules.parse);
+            cross_shim_lib.root_module.addImport("layout", roc_modules.layout);
+            cross_shim_lib.root_module.addImport("eval", roc_modules.eval);
+            cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
+            cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
+            cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
+            // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
+            // The interpreter shim main.zig has a stub for wasm32
+        } else {
+            roc_modules.addAll(cross_shim_lib);
+        }
+        cross_shim_lib.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        cross_shim_lib.step.dependOn(&write_compiled_builtins.step);
+        cross_shim_lib.addObject(cross_builtins_obj);
+        cross_shim_lib.bundle_compiler_rt = true;
+
+        // Copy to target-specific directory for embedding
+        const copy_cross_shim = b.addUpdateSourceFiles();
+        copy_cross_shim.addCopyFileToSource(
+            cross_shim_lib.getEmittedBin(),
+            b.pathJoin(&.{ "src/cli/targets", cross_target.name, "libroc_interpreter_shim.a" }),
+        );
+        exe.step.dependOn(&copy_cross_shim.step);
+    }
 
     const config = b.addOptions();
     config.addOption(bool, "llvm", true);
