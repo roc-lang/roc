@@ -239,10 +239,8 @@ pub const LlvmEvaluator = struct {
             .wip = &wip,
             .module_env = module_env,
             .locals = std.AutoHashMap(CIR.Pattern.Idx, LlvmBuilder.Value).init(self.allocator),
-            .local_signedness = std.AutoHashMap(CIR.Pattern.Idx, bool).init(self.allocator),
         };
         defer ctx.locals.deinit();
-        defer ctx.local_signedness.deinit();
 
         // Get the output pointer
         const out_ptr = wip.arg(0);
@@ -329,7 +327,6 @@ pub const LlvmEvaluator = struct {
         wip: *LlvmBuilder.WipFunction,
         module_env: *ModuleEnv,
         locals: std.AutoHashMap(CIR.Pattern.Idx, LlvmBuilder.Value),
-        local_signedness: std.AutoHashMap(CIR.Pattern.Idx, bool), // true = signed, false = unsigned
 
         const ExprError = error{
             OutOfMemory,
@@ -749,22 +746,10 @@ pub const LlvmEvaluator = struct {
                         const val = try ctx.emitExpr(decl.expr);
                         // Bind to pattern (for now, only support simple identifier patterns)
                         try ctx.locals.put(decl.pattern, val);
-                        // Track signedness from annotation or expression
-                        const is_signed = if (decl.anno) |anno_idx|
-                            ctx.isSignedFromAnnotation(anno_idx)
-                        else
-                            ctx.isSignedExpr(ctx.module_env.store.getExpr(decl.expr));
-                        ctx.local_signedness.put(decl.pattern, is_signed) catch {};
                     },
                     .s_var => |var_stmt| {
                         const val = try ctx.emitExpr(var_stmt.expr);
                         try ctx.locals.put(var_stmt.pattern_idx, val);
-                        // Track signedness from annotation or expression
-                        const is_signed = if (var_stmt.anno) |anno_idx|
-                            ctx.isSignedFromAnnotation(anno_idx)
-                        else
-                            ctx.isSignedExpr(ctx.module_env.store.getExpr(var_stmt.expr));
-                        ctx.local_signedness.put(var_stmt.pattern_idx, is_signed) catch {};
                     },
                     else => {}, // Ignore other statement types for now
                 }
@@ -1384,50 +1369,11 @@ pub const LlvmEvaluator = struct {
                     .i8, .i16, .i32, .i64, .i128, .num_unbound, .int_unbound => true,
                     else => false,
                 },
-                .e_typed_int => |typed_int| {
-                    const idents = ctx.module_env.idents;
-                    // Signed types
-                    if (typed_int.type_name == idents.i8) return true;
-                    if (typed_int.type_name == idents.i16) return true;
-                    if (typed_int.type_name == idents.i32) return true;
-                    if (typed_int.type_name == idents.i64) return true;
-                    if (typed_int.type_name == idents.i128) return true;
-                    // Unsigned types
-                    if (typed_int.type_name == idents.u8) return false;
-                    if (typed_int.type_name == idents.u16) return false;
-                    if (typed_int.type_name == idents.u32) return false;
-                    if (typed_int.type_name == idents.u64) return false;
-                    if (typed_int.type_name == idents.u128) return false;
-                    return true; // Default to signed
-                },
                 .e_dec, .e_dec_small => true, // Dec is signed
                 .e_binop => |binop| ctx.isSignedExpr(ctx.module_env.store.getExpr(binop.lhs)),
                 .e_unary_minus => |unary| ctx.isSignedExpr(ctx.module_env.store.getExpr(unary.expr)),
-                .e_lookup_local => |lookup| {
-                    // Check the tracked signedness for this local variable
-                    return ctx.local_signedness.get(lookup.pattern_idx) orelse true;
-                },
                 else => true, // Default to signed for safety
             };
-        }
-
-        /// Check if a type annotation indicates a signed type
-        fn isSignedFromAnnotation(ctx: *ExprContext, anno_idx: CIR.Annotation.Idx) bool {
-            const annotation = ctx.module_env.store.getAnnotation(anno_idx);
-            const type_anno = ctx.module_env.store.getTypeAnno(annotation.anno);
-
-            if (type_anno == .lookup) {
-                const lookup = type_anno.lookup;
-                const idents = ctx.module_env.idents;
-                // Unsigned types
-                if (lookup.name == idents.u8) return false;
-                if (lookup.name == idents.u16) return false;
-                if (lookup.name == idents.u32) return false;
-                if (lookup.name == idents.u64) return false;
-                if (lookup.name == idents.u128) return false;
-            }
-
-            return true; // Default to signed
         }
 
         /// Check if an expression is a string type
