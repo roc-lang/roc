@@ -746,27 +746,31 @@ pub const LlvmEvaluator = struct {
                 const stmt = ctx.module_env.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_decl => |decl| {
-                        // Evaluate the expression
-                        const val = try ctx.emitExpr(decl.expr);
-                        // Bind to pattern (for now, only support simple identifier patterns)
-                        try ctx.locals.put(decl.pattern, val);
-                        // Store layout from annotation (for signedness info)
+                        // Get target layout from annotation first (like Rust mono's make_num_literal)
                         const decl_layout = if (decl.anno) |anno_idx|
                             ctx.evaluator.getLayoutFromAnnotation(ctx.module_env, anno_idx) orelse
                                 ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr)
                         else
                             ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr);
+                        // Evaluate the expression
+                        var val = try ctx.emitExpr(decl.expr);
+                        // Convert to target layout if needed (e.g., int literal with float annotation)
+                        val = try ctx.convertNumericToLayout(val, decl_layout);
+                        // Bind to pattern
+                        try ctx.locals.put(decl.pattern, val);
                         ctx.local_layouts.put(decl.pattern, decl_layout) catch {};
                     },
                     .s_var => |var_stmt| {
-                        const val = try ctx.emitExpr(var_stmt.expr);
-                        try ctx.locals.put(var_stmt.pattern_idx, val);
-                        // Store layout from annotation (for signedness info)
+                        // Get target layout from annotation first
                         const var_layout = if (var_stmt.anno) |anno_idx|
                             ctx.evaluator.getLayoutFromAnnotation(ctx.module_env, anno_idx) orelse
                                 ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr)
                         else
                             ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr);
+                        var val = try ctx.emitExpr(var_stmt.expr);
+                        // Convert to target layout if needed
+                        val = try ctx.convertNumericToLayout(val, var_layout);
+                        try ctx.locals.put(var_stmt.pattern_idx, val);
                         ctx.local_layouts.put(var_stmt.pattern_idx, var_layout) catch {};
                     },
                     else => {}, // Ignore other statement types for now
@@ -1365,6 +1369,35 @@ pub const LlvmEvaluator = struct {
                 .e_unary_minus => |unary| ctx.getExprLayout(unary.expr),
                 else => ctx.evaluator.getExprOutputLayout(ctx.module_env, expr_idx),
             };
+        }
+
+        /// Convert a numeric value to match the target layout if needed.
+        /// This mirrors Rust mono's make_num_literal which converts int values to floats
+        /// when the layout says Float (see crates/compiler/mono/src/ir/literal.rs:105-110)
+        fn convertNumericToLayout(ctx: *ExprContext, val: LlvmBuilder.Value, target_layout: layout.Idx) ExprError!LlvmBuilder.Value {
+            const val_type = val.typeOfWip(ctx.wip);
+
+            // Determine target LLVM type from layout
+            const target_type: LlvmBuilder.Type = switch (target_layout) {
+                .f32 => .float,
+                .f64 => .double,
+                else => return val, // No conversion needed for non-float targets
+            };
+
+            // If already the correct type, return as-is
+            if (val_type == target_type) return val;
+
+            // Convert integer to float (like Rust mono's IntValue -> Float conversion)
+            if (val_type == .i8 or val_type == .i16 or val_type == .i32 or val_type == .i64 or val_type == .i128) {
+                return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
+            }
+
+            // Convert float to float (f32 <-> f64)
+            if (val_type == .float or val_type == .double) {
+                return ctx.wip.conv(.unneeded, val, target_type, "") catch return error.CompilationFailed;
+            }
+
+            return val;
         }
 
         /// Check if an expression is a float type
