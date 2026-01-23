@@ -1075,10 +1075,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
 
                 // Compare with zero and branch if equal (condition is false)
+                const before_cmp_offset = self.codegen.currentOffset();
                 const else_patch = try self.emitCmpZeroAndJump(cond_reg);
+                const after_je_offset = self.codegen.currentOffset();
 
-                // DEBUG: Print jump patch location
+                // DEBUG: Print jump patch location and bytes
                 if (comptime builtin.cpu.arch == .x86_64) {
+                    std.debug.print("[DEBUG if-then-else] CMP+JE bytes ({}-{}): ", .{ before_cmp_offset, after_je_offset });
+                    const je_bytes = self.codegen.emit.buf.items[before_cmp_offset..after_je_offset];
+                    for (je_bytes) |b| {
+                        std.debug.print("{x:0>2} ", .{b});
+                    }
+                    std.debug.print("\n", .{});
                     std.debug.print("[DEBUG if-then-else] else_patch location: {}\n", .{else_patch});
                 }
 
@@ -1098,9 +1106,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const current_offset = self.codegen.currentOffset();
                 self.codegen.patchJump(else_patch, current_offset);
 
-                // DEBUG: Print patch info
+                // DEBUG: Print patch info and patched bytes
                 if (comptime builtin.cpu.arch == .x86_64) {
                     std.debug.print("[DEBUG if-then-else] patched else_jump at {} to target {}\n", .{ else_patch, current_offset });
+                    // Print the patched JE instruction (6 bytes starting 2 bytes before patch_loc)
+                    const je_start = else_patch - 2;
+                    const je_bytes = self.codegen.emit.buf.items[je_start..][0..6];
+                    std.debug.print("[DEBUG if-then-else] JE after patch: ", .{});
+                    for (je_bytes) |b| {
+                        std.debug.print("{x:0>2} ", .{b});
+                    }
+                    std.debug.print("\n", .{});
                 }
             }
 
