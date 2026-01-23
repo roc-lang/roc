@@ -182,7 +182,7 @@ pub fn unifyWithConf(
     unifier.unifyGuarded(a, b) catch |err| {
         const problem: Problem = blk: {
             switch (err) {
-                error.AllocatorError => {
+                error.OutOfMemory => {
                     return error.OutOfMemory;
                 },
                 error.TypeMismatch => {
@@ -313,9 +313,8 @@ const Unifier = struct {
 
     // unification
 
-    const Error = error{
+    const Error = std.mem.Allocator.Error || error{
         TypeMismatch,
-        AllocatorError,
     };
 
     const NominalDirection = enum {
@@ -341,8 +340,8 @@ const Unifier = struct {
                 }
 
                 // Track these vars as being unified
-                _ = self.scratch.visited_vars.append(self.scratch.gpa, a_var) catch return Error.AllocatorError;
-                _ = self.scratch.visited_vars.append(self.scratch.gpa, b_var) catch return Error.AllocatorError;
+                _ = try self.scratch.visited_vars.append(self.scratch.gpa, a_var);
+                _ = try self.scratch.visited_vars.append(self.scratch.gpa, b_var);
                 defer self.scratch.visited_vars.items.items.len -= 2;
 
                 try self.unifyVars(&vars);
@@ -399,10 +398,10 @@ const Unifier = struct {
             .rigid => |b_rigid| {
                 if (a_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
-                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                         .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = a_flex.constraints,
-                    }) catch return Error.AllocatorError;
+                    });
                 }
 
                 self.merge(vars, .{ .rigid = b_rigid });
@@ -419,10 +418,10 @@ const Unifier = struct {
             .structure => {
                 if (a_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
-                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                         .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = a_flex.constraints,
-                    }) catch return Error.AllocatorError;
+                    });
                 }
 
                 self.merge(vars, b_content);
@@ -442,10 +441,10 @@ const Unifier = struct {
             .flex => |b_flex| {
                 if (b_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
-                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                         .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = b_flex.constraints,
-                    }) catch return Error.AllocatorError;
+                    });
                 }
 
                 self.merge(vars, .{ .rigid = a_rigid });
@@ -499,13 +498,13 @@ const Unifier = struct {
 
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
-                const fresh_alias_var = self.fresh(vars, .{ .alias = a_alias }) catch return Error.AllocatorError;
+                const fresh_alias_var = try self.fresh(vars, .{ .alias = a_alias });
 
                 // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
                 // Because of this, we do not loose any rank information.
                 // This is essentially a custom `self.merge` strategy
-                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
+                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .err => self.merge(vars, .err),
         }
@@ -562,10 +561,10 @@ const Unifier = struct {
             .flex => |b_flex| {
                 if (b_flex.constraints.len() > 0) {
                     // Record that we need to check constraints later
-                    _ = self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
+                    _ = try self.scratch.deferred_constraints.append(self.scratch.gpa, DeferredConstraintCheck{
                         .var_ = vars.b.var_, // Since the vars are merge, we arbitrary choose b
                         .constraints = b_flex.constraints,
-                    }) catch return Error.AllocatorError;
+                    });
                 }
 
                 self.merge(vars, Content{ .structure = a_flat_type });
@@ -586,13 +585,13 @@ const Unifier = struct {
 
                 // Next, we create a fresh alias (which internally points to `backing_var`),
                 // then we redirect both a & b to the new alias.
-                const fresh_alias_var = self.fresh(vars, .{ .alias = b_alias }) catch return Error.AllocatorError;
+                const fresh_alias_var = try self.fresh(vars, .{ .alias = b_alias });
 
                 // These redirects are safe because fresh_alias_var is created at min(a_rank, b_rank).
                 // Because of this, we do not loose any rank information.
                 // This is essentially a custom `self.merge` strategy
-                self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var) catch return Error.AllocatorError;
-                self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var) catch return Error.AllocatorError;
+                try self.types_store.dangerousSetVarRedirect(vars.a.var_, fresh_alias_var);
+                try self.types_store.dangerousSetVarRedirect(vars.b.var_, fresh_alias_var);
             },
             .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
@@ -1312,12 +1311,12 @@ const Unifier = struct {
         const b_gathered_fields = try self.gatherRecordFields(b_fields, b_ext);
 
         // Then partition the fields
-        const partitioned = Self.partitionFields(
+        const partitioned = try Self.partitionFields(
             self.module_env.getIdentStore(),
             self.scratch,
             a_gathered_fields.range,
             b_gathered_fields.range,
-        ) catch return Error.AllocatorError;
+        );
 
         // Determine how the fields of a & b extend
         const a_has_uniq_fields = partitioned.only_in_a.len() > 0;
@@ -1334,13 +1333,13 @@ const Unifier = struct {
 
         const a_gathered_ext = blk: {
             switch (a_gathered_fields.ext) {
-                .unbound => break :blk self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError,
+                .unbound => break :blk try self.fresh(vars, .{ .flex = Flex.init() }),
                 .ext => |ext_var| break :blk ext_var,
             }
         };
         const b_gathered_ext = blk: {
             switch (b_gathered_fields.ext) {
-                .unbound => break :blk self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError,
+                .unbound => break :blk try self.fresh(vars, .{ .flex = Flex.init() }),
                 .ext => |ext_var| break :blk ext_var,
             }
         };
@@ -1364,13 +1363,13 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.appendRecordFields(
+                const only_in_a_fields_range = try self.types_store.appendRecordFields(
                     self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                ) catch return Error.AllocatorError;
-                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
+                );
+                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
                     .ext = a_gathered_ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Unify the sub record with b's ext
                 try self.unifyGuarded(only_in_a_var, b_gathered_ext);
@@ -1388,13 +1387,13 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.appendRecordFields(
+                const only_in_b_fields_range = try self.types_store.appendRecordFields(
                     self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                ) catch return Error.AllocatorError;
-                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
+                );
+                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
                     .ext = b_gathered_ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Unify the sub record with a's ext
                 try self.unifyGuarded(a_gathered_ext, only_in_b_var);
@@ -1412,26 +1411,26 @@ const Unifier = struct {
             .both_extend => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.appendRecordFields(
+                const only_in_a_fields_range = try self.types_store.appendRecordFields(
                     self.scratch.only_in_a_fields.sliceRange(partitioned.only_in_a),
-                ) catch return Error.AllocatorError;
-                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
+                );
+                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
                     .ext = a_gathered_ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.appendRecordFields(
+                const only_in_b_fields_range = try self.types_store.appendRecordFields(
                     self.scratch.only_in_b_fields.sliceRange(partitioned.only_in_b),
-                ) catch return Error.AllocatorError;
-                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
+                );
+                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
                     .ext = b_gathered_ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Create a new ext var
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
 
                 // Unify the sub records with exts
                 try self.unifyGuarded(a_gathered_ext, only_in_b_var);
@@ -1469,10 +1468,10 @@ const Unifier = struct {
     fn gatherRecordFields(self: *Self, record_fields: RecordField.SafeMultiList.Range, record_ext: RecordExt) Error!GatheredFields {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
-        var range = self.scratch.copyGatherFieldsFromMultiList(
+        var range = try self.scratch.copyGatherFieldsFromMultiList(
             &self.types_store.record_fields,
             record_fields,
-        ) catch return Error.AllocatorError;
+        );
 
         // Note: If a field name appears multiple times (e.g., in both base and extension),
         // we keep the leftmost field (left-bias semantics, like Haskell's Map.union).
@@ -1506,12 +1505,12 @@ const Unifier = struct {
                                     const next_fields = self.types_store.record_fields.sliceRange(ext_record.fields);
 
                                     // Merge extension fields while maintaining sorted order
-                                    self.scratch.mergeSortedExtensionFields(
+                                    try self.scratch.mergeSortedExtensionFields(
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
                                         self.module_env.getIdentStore(),
-                                    ) catch return Error.AllocatorError;
+                                    );
 
                                     ext = .{ .ext = ext_record.ext };
                                 },
@@ -1519,12 +1518,12 @@ const Unifier = struct {
                                     const next_fields = self.types_store.record_fields.sliceRange(fields);
 
                                     // Merge extension fields while maintaining sorted order
-                                    self.scratch.mergeSortedExtensionFields(
+                                    try self.scratch.mergeSortedExtensionFields(
                                         &range,
                                         next_fields.items(.name),
                                         next_fields.items(.var_),
                                         self.module_env.getIdentStore(),
-                                    ) catch return Error.AllocatorError;
+                                    );
 
                                     return .{ .ext = ext, .range = range };
                                 },
@@ -1656,22 +1655,22 @@ const Unifier = struct {
         // Here, it's safe to use a slice since appending fields cannot trigger
         // any reallocation
         for (self.scratch.in_both_fields.sliceRange(shared_fields_range)) |shared| {
-            _ = self.types_store.appendRecordFields(&[_]RecordField{.{
+            _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
-            }}) catch return Error.AllocatorError;
+            }});
         }
 
         // Append combined fields
         if (mb_a_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(
+            _ = try self.types_store.appendRecordFields(
                 self.scratch.only_in_a_fields.sliceRange(extended_fields),
-            ) catch return Error.AllocatorError;
+            );
         }
         if (mb_b_extended_fields) |extended_fields| {
-            _ = self.types_store.appendRecordFields(
+            _ = try self.types_store.appendRecordFields(
                 self.scratch.only_in_b_fields.sliceRange(extended_fields),
-            ) catch return Error.AllocatorError;
+            );
         }
 
         // Merge vars - now the range correctly contains only THIS record's fields
@@ -1772,12 +1771,12 @@ const Unifier = struct {
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
         // Then partition the tags
-        const partitioned = Self.partitionTags(
+        const partitioned = try Self.partitionTags(
             self.module_env.getIdentStore(),
             self.scratch,
             a_gathered_tags.range,
             b_gathered_tags.range,
-        ) catch return Error.AllocatorError;
+        );
 
         // Determine how the tags of a & b extend
         const a_has_uniq_tags = partitioned.only_in_a.len() > 0;
@@ -1836,13 +1835,13 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = self.types_store.appendTags(
+                const only_in_a_tags_range = try self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                ) catch return Error.AllocatorError;
-                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                );
+                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
                     .ext = a_gathered_tags.ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Unify the sub tag_union with b's ext
                 try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
@@ -1860,13 +1859,13 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = self.types_store.appendTags(
+                const only_in_b_tags_range = try self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                ) catch return Error.AllocatorError;
-                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                );
+                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
                     .ext = b_gathered_tags.ext,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Unify the sub tag_union with a's ext
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
@@ -1885,27 +1884,27 @@ const Unifier = struct {
                 // Create a shared extension variable first
                 // This is critical: both only_in_a_var and only_in_b_var must use this
                 // shared extension to avoid creating circular type references
-                const new_ext_var = self.fresh(vars, .{ .flex = Flex.init() }) catch return Error.AllocatorError;
+                const new_ext_var = try self.fresh(vars, .{ .flex = Flex.init() });
 
                 // Create a new variable of a tag_union with only a's uniq tags
                 // Uses new_ext_var (not a_gathered_tags.ext) to prevent cycles
-                const only_in_a_tags_range = self.types_store.appendTags(
+                const only_in_a_tags_range = try self.types_store.appendTags(
                     self.scratch.only_in_a_tags.sliceRange(partitioned.only_in_a),
-                ) catch return Error.AllocatorError;
-                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                );
+                const only_in_a_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_a_tags_range,
                     .ext = new_ext_var,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Create a new variable of a tag_union with only b's uniq tags
                 // Uses new_ext_var (not b_gathered_tags.ext) to prevent cycles
-                const only_in_b_tags_range = self.types_store.appendTags(
+                const only_in_b_tags_range = try self.types_store.appendTags(
                     self.scratch.only_in_b_tags.sliceRange(partitioned.only_in_b),
-                ) catch return Error.AllocatorError;
-                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                );
+                const only_in_b_var = try self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
                     .tags = only_in_b_tags_range,
                     .ext = new_ext_var,
-                } } }) catch return Error.AllocatorError;
+                } } });
 
                 // Unify the sub tag_unions with exts
                 try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
@@ -1944,10 +1943,10 @@ const Unifier = struct {
     fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) Error!GatheredTags {
         // first, copy from the store's MultiList record fields array into scratch's
         // regular list, capturing the insertion range
-        var range = self.scratch.copyGatherTagsFromMultiList(
+        var range = try self.scratch.copyGatherTagsFromMultiList(
             &self.types_store.tags,
             tag_union.tags,
-        ) catch return Error.AllocatorError;
+        );
 
         // then loop gathering extensible tags
         var ext_var = tag_union.ext;
@@ -1970,12 +1969,12 @@ const Unifier = struct {
                             const next_tags = self.types_store.tags.sliceRange(ext_tag_union.tags);
 
                             // Merge extension tags while maintaining sorted order
-                            self.scratch.mergeSortedExtensionTags(
+                            try self.scratch.mergeSortedExtensionTags(
                                 &range,
                                 next_tags.items(.name),
                                 next_tags.items(.args),
                                 self.module_env.getIdentStore(),
-                            ) catch return Error.AllocatorError;
+                            );
 
                             ext_var = ext_tag_union.ext;
                         },
@@ -2112,22 +2111,22 @@ const Unifier = struct {
         // Here, it's safe to use a slice since appending tags cannot trigger
         // any reallocation
         for (self.scratch.in_both_tags.sliceRange(shared_tags_range)) |tags| {
-            _ = self.types_store.appendTags(&[_]Tag{.{
+            _ = try self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
-            }}) catch return Error.AllocatorError;
+            }});
         }
 
         // Append combined tags
         if (mb_a_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(
+            _ = try self.types_store.appendTags(
                 self.scratch.only_in_a_tags.sliceRange(extended_tags),
-            ) catch return Error.AllocatorError;
+            );
         }
         if (mb_b_extended_tags) |extended_tags| {
-            _ = self.types_store.appendTags(
+            _ = try self.types_store.appendTags(
                 self.scratch.only_in_b_tags.sliceRange(extended_tags),
-            ) catch return Error.AllocatorError;
+            );
         }
 
         // Merge vars (sorting happens in merge() for all tag unions)
@@ -2157,7 +2156,7 @@ const Unifier = struct {
         }
 
         // Partition constraints
-        const partitioned = self.partitionStaticDispatchConstraints(a_constraints, b_constraints) catch return Error.AllocatorError;
+        const partitioned = try self.partitionStaticDispatchConstraints(a_constraints, b_constraints);
 
         // Unify shared constraints
         // IMPORTANT: We must use index-based iteration here, not slice-based.
@@ -2178,10 +2177,10 @@ const Unifier = struct {
 
         // Ensure we have enough memory for the new contiguous list
         const capacity = partitioned.in_both.len() + partitioned.only_in_a.len() + partitioned.only_in_b.len();
-        self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
+        try self.types_store.static_dispatch_constraints.items.ensureUnusedCapacity(
             self.types_store.gpa,
             capacity,
-        ) catch return Error.AllocatorError;
+        );
 
         for (self.scratch.in_both_static_dispatch_constraints.sliceRange(partitioned.in_both)) |two_constraints| {
             // Here, we append the constraint's b, but since a & b, it doesn't actually matter
@@ -2220,8 +2219,8 @@ const Unifier = struct {
         }
 
         // Track these vars as being unified (in separate list from general unification to match legacy mark semantics)
-        _ = self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var) catch return Error.AllocatorError;
-        _ = self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var) catch return Error.AllocatorError;
+        _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, a_constraint.fn_var);
+        _ = try self.scratch.constraint_visited_vars.append(self.scratch.gpa, b_constraint.fn_var);
         defer self.scratch.constraint_visited_vars.items.items.len -= 2;
 
         // Unify the constraint function types
