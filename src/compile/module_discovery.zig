@@ -140,6 +140,8 @@ pub fn addImportedModulesToEnvMap(
             try module_envs_map.put(module_ident, .{
                 .env = placeholder_env,
                 .qualified_type_ident = qualified_ident,
+                // Mark as placeholder so canonicalizer skips member validation
+                .is_placeholder = true,
             });
         }
     }

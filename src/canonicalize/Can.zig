@@ -38,6 +38,9 @@ pub const AutoImportedType = struct {
     /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
     /// Used to determine the correct module name for auto-imports
     is_package_qualified: bool = false,
+    /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
+    /// When true, member lookup failures are not errors - they'll be validated during type checking.
+    is_placeholder: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -4506,8 +4509,8 @@ pub fn canonicalizeExpr(
                                 break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
-                            const target_node_idx = target_node_idx_opt orelse {
-                                // The identifier doesn't exist in the module or isn't exposed
+                            // If target_node_idx_opt is null, we need to handle the error case
+                            if (target_node_idx_opt == null) {
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
                                 if (auto_imported_type_info == null) {
@@ -4516,24 +4519,24 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
+                                // If this is a placeholder module (not yet compiled), skip to regular lookup.
+                                // With proper dependency ordering, this case only occurs in fallback paths
+                                // (snapshot tool, tests) where type checking isn't the focus.
+                                if (auto_imported_type_info.?.is_placeholder) {
+                                    break :blk_qualified;
+                                }
+
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                const diagnostic = if (auto_imported_type_info != null)
-                                    Diagnostic{ .nested_value_not_found = .{
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
                                         .parent_name = module_name,
                                         .nested_name = ident,
                                         .region = region,
-                                    } }
-                                else
-                                    Diagnostic{ .qualified_ident_does_not_exist = .{
-                                        .ident = qualified_ident,
-                                        .region = region,
-                                    } };
-
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                    } }),
                                     .free_vars = DataSpan.empty(),
                                 };
-                            };
+                            }
+                            const target_node_idx = target_node_idx_opt.?;
 
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{

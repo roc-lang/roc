@@ -3388,6 +3388,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_lookup_external => |ext| {
+            // With WaitingForDependencies phase, dependencies are guaranteed to be Done
+            // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
                 const ext_instantiated_var = try self.instantiateVar(
                     ext_ref.local_var,

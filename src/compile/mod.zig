@@ -5,6 +5,7 @@ const std = @import("std");
 pub const package = @import("compile_package.zig");
 pub const build = @import("compile_build.zig");
 pub const module_discovery = @import("module_discovery.zig");
+pub const dependency_sort = @import("dependency_sort.zig");
 
 pub const module = @import("cache_module.zig");
 pub const key = @import("cache_key.zig");
@@ -57,6 +58,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
+    std.testing.refAllDecls(@import("dependency_sort.zig"));
 
     std.testing.refAllDecls(@import("test/cache_test.zig"));
     std.testing.refAllDecls(@import("test/module_env_test.zig"));

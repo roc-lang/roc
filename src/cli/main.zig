@@ -2719,7 +2719,7 @@ fn extractModuleImports(
 /// Returns error.CyclicDependency if modules have circular imports.
 ///
 /// Parameters:
-///   allocs: Allocator bundle
+///   ctx: CLI context with allocator
 ///   module_names: List of module names from the platform's exposes list
 ///   platform_dir: Directory containing the platform modules
 ///
@@ -2741,29 +2741,16 @@ fn sortPlatformModulesByDependency(
         return result;
     }
 
-    // Build a name -> index map for O(1) lookups
-    var name_to_idx = std.StringHashMap(usize).init(ctx.gpa);
-    defer name_to_idx.deinit();
-    for (module_names, 0..) |name, i| {
-        try name_to_idx.put(name, i);
-    }
-
-    // Build adjacency list: adj[i] = list of modules that module i depends on (imports)
-    // And compute in-degree: how many modules depend on each module
-    var adjacency = try ctx.gpa.alloc(std.ArrayList(usize), n);
+    // First pass: extract imports for each module
+    var all_imports = try ctx.gpa.alloc([]const []const u8, n);
     defer {
-        for (adjacency) |*list| list.deinit(ctx.gpa);
-        ctx.gpa.free(adjacency);
-    }
-    for (adjacency) |*list| {
-        list.* = std.ArrayList(usize).empty;
+        for (all_imports) |imports| {
+            for (imports) |imp| ctx.gpa.free(imp);
+            ctx.gpa.free(imports);
+        }
+        ctx.gpa.free(all_imports);
     }
 
-    var in_degree = try ctx.gpa.alloc(usize, n);
-    defer ctx.gpa.free(in_degree);
-    @memset(in_degree, 0);
-
-    // For each module, extract its imports and build the graph
     for (module_names, 0..) |name, i| {
         const module_filename = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{name});
         defer ctx.gpa.free(module_filename);
@@ -2771,85 +2758,26 @@ fn sortPlatformModulesByDependency(
         const module_path = try std.fs.path.join(ctx.gpa, &[_][]const u8{ platform_dir, module_filename });
         defer ctx.gpa.free(module_path);
 
-        const imports = try extractModuleImports(ctx, module_path, module_names);
-        defer {
-            for (imports) |imp| ctx.gpa.free(imp);
-            ctx.gpa.free(imports);
-        }
+        all_imports[i] = try extractModuleImports(ctx, module_path, module_names);
 
-        // For each import, add an edge: this module depends on the imported module
-        for (imports) |imp| {
-            if (name_to_idx.get(imp)) |dep_idx| {
-                // Module i imports module dep_idx, so dep_idx must come before i
-                // Edge: dep_idx -> i (dep_idx is depended upon by i)
-                try adjacency[dep_idx].append(ctx.gpa, i);
-                in_degree[i] += 1;
-
-                if (comptime trace_modules) {
-                    std.debug.print("[TRACE-MODULES] Dependency: {s} imports {s}\n", .{ name, imp });
-                }
+        if (comptime trace_modules) {
+            for (all_imports[i]) |imp| {
+                std.debug.print("[TRACE-MODULES] Dependency: {s} imports {s}\n", .{ name, imp });
             }
         }
     }
 
-    // Kahn's algorithm: start with modules that have no dependencies (in_degree == 0)
-    var queue = std.ArrayList(usize).empty;
-    defer queue.deinit(ctx.gpa);
-
-    for (0..n) |i| {
-        if (in_degree[i] == 0) {
-            try queue.append(ctx.gpa, i);
-        }
-    }
-
-    var result = try ctx.gpa.alloc([]const u8, n);
-    errdefer ctx.gpa.free(result);
-    var result_count: usize = 0;
-
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
-        result[result_count] = module_names[current];
-        result_count += 1;
-
-        // For each module that depends on current, decrement its in-degree
-        for (adjacency[current].items) |dependent| {
-            in_degree[dependent] -= 1;
-            if (in_degree[dependent] == 0) {
-                try queue.append(ctx.gpa, dependent);
-            }
-        }
-    }
+    // Use shared topological sort
+    const result = try compile.dependency_sort.sortByPrecomputedDependency(ctx.gpa, module_names, all_imports);
 
     // Log the sorted order
     if (comptime trace_modules) {
         std.debug.print("[TRACE-MODULES] Sorted compilation order: ", .{});
-        for (result[0..result_count], 0..) |mod, idx| {
+        for (result, 0..) |mod, idx| {
             if (idx > 0) std.debug.print(", ", .{});
             std.debug.print("{s}", .{mod});
         }
         std.debug.print("\n", .{});
-    }
-
-    // If we didn't process all modules, there's a cycle
-    if (result_count != n) {
-        // Find modules in the cycle (those with in_degree > 0)
-        var cycle_modules = std.ArrayList([]const u8).empty;
-        defer cycle_modules.deinit(ctx.gpa);
-
-        for (0..n) |i| {
-            if (in_degree[i] > 0) {
-                try cycle_modules.append(ctx.gpa, module_names[i]);
-            }
-        }
-
-        // Log the cycle for debugging
-        std.log.err("Circular dependency detected in platform modules:", .{});
-        for (cycle_modules.items) |mod| {
-            std.log.err("  - {s}", .{mod});
-        }
-
-        ctx.gpa.free(result);
-        return error.CyclicDependency;
     }
 
     return result;
@@ -3447,6 +3375,139 @@ fn compileAndSerializeModulesForEmbedding(
         try compiled_modules.append(compiled);
     }
 
+    // Compile app sibling modules BEFORE the app itself.
+    // This mirrors the behavior of setupSharedMemoryWithModuleEnv (used by `roc run`).
+    // We need to parse the app first to extract its imports, then compile any
+    // sibling modules that exist, so the app can reference them.
+    var app_sibling_env_ptrs = std.ArrayList(*ModuleEnv).empty;
+    defer app_sibling_env_ptrs.deinit(ctx.gpa);
+    var app_sibling_names = std.ArrayList([]const u8).empty;
+    defer app_sibling_names.deinit(ctx.gpa);
+
+    {
+        // Parse app file to extract imports (without full compilation)
+        const app_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return ctx.fail(.{ .file_not_found = .{ .path = roc_file_path } }),
+            else => return ctx.fail(.{ .file_read_failed = .{ .path = roc_file_path, .err = err } }),
+        };
+        defer app_file.close();
+
+        const app_file_size = app_file.getEndPos() catch |err| {
+            return ctx.fail(.{ .file_read_failed = .{ .path = roc_file_path, .err = err } });
+        };
+        var app_source = try ctx.gpa.alloc(u8, @intCast(app_file_size));
+        defer ctx.gpa.free(app_source);
+        _ = app_file.read(app_source) catch |err| {
+            return ctx.fail(.{ .file_read_failed = .{ .path = roc_file_path, .err = err } });
+        };
+        app_source = base.source_utils.normalizeLineEndings(app_source);
+
+        // Create a temporary ModuleEnv for parsing
+        var temp_env = try ModuleEnv.init(ctx.gpa, app_source);
+        defer temp_env.deinit();
+        temp_env.common.source = app_source;
+
+        // Parse the app to extract imports
+        var app_parse_ast = try parse.parse(&temp_env.common, ctx.gpa);
+        defer app_parse_ast.deinit(ctx.gpa);
+
+        // Extract sibling imports from the parsed AST
+        const sibling_imports = try compile.module_discovery.extractImportsFromAST(&app_parse_ast, ctx.gpa);
+        defer {
+            for (sibling_imports) |imp| ctx.gpa.free(imp);
+            ctx.gpa.free(sibling_imports);
+        }
+
+        // Get app basename without .roc extension
+        const app_basename = std.fs.path.basename(roc_file_path);
+        const app_name_no_ext = if (std.mem.endsWith(u8, app_basename, ".roc"))
+            app_basename[0 .. app_basename.len - 4]
+        else
+            app_basename;
+
+        // Filter to only imports that have corresponding files and aren't the app itself
+        for (sibling_imports) |import_name| {
+            // Skip self-import and "main"
+            if (std.mem.eql(u8, import_name, app_name_no_ext)) continue;
+            if (std.mem.eql(u8, import_name, "main")) continue;
+
+            // Check if file exists
+            if (try moduleNameToFilePath(import_name, app_dir, ctx.gpa)) |path| {
+                ctx.gpa.free(path); // Just checking existence
+                try app_sibling_names.append(ctx.gpa, try ctx.gpa.dupe(u8, import_name));
+            }
+        }
+    }
+
+    // Sort and compile app sibling modules if any exist
+    if (app_sibling_names.items.len > 0) {
+        if (comptime trace_modules) {
+            std.debug.print("[TRACE-MODULES] === Build Mode: Compiling App Sibling Modules ===\n", .{});
+        }
+
+        // Sort sibling modules by dependency order
+        const sorted_app_siblings = try sortPlatformModulesByDependency(ctx, app_sibling_names.items, app_dir);
+        defer ctx.gpa.free(sorted_app_siblings);
+
+        // Ensure capacity for sibling modules
+        try compiled_modules.ensureTotalCapacity(compiled_modules.items.len + sorted_app_siblings.len + 1); // +1 for app
+
+        // Compile each sibling module in dependency order
+        for (sorted_app_siblings, 0..) |sibling_name, i| {
+            const sibling_path = try moduleNameToFilePath(sibling_name, app_dir, ctx.gpa) orelse {
+                std.log.warn("Sibling module file not found: {s}", .{sibling_name});
+                continue;
+            };
+            defer ctx.gpa.free(sibling_path);
+
+            if (comptime trace_modules) {
+                std.debug.print("[TRACE-MODULES] Compiling app sibling module {d}: \"{s}\" at {s}\n", .{ i, sibling_name, sibling_path });
+            }
+
+            // Build list of all previously compiled modules (platform + earlier siblings)
+            var prev_env_ptrs = try ctx.gpa.alloc(*ModuleEnv, compiled_modules.items.len + i);
+            defer ctx.gpa.free(prev_env_ptrs);
+
+            // Add platform modules
+            for (compiled_modules.items, 0..) |*m, j| {
+                prev_env_ptrs[j] = &m.env;
+            }
+            // Add previously compiled app siblings
+            for (app_sibling_env_ptrs.items, 0..) |sib_env, j| {
+                prev_env_ptrs[compiled_modules.items.len + j] = sib_env;
+            }
+
+            // Build type module names list (platform modules + placeholder for platform main + earlier siblings)
+            // The indices must match compiled_modules: [plat_sibs..., plat_main, app_sibs...]
+            const plat_main_offset: usize = if (has_platform) 1 else 0;
+            var type_module_names = try ctx.gpa.alloc([]const u8, sorted_modules.len + plat_main_offset + i);
+            defer ctx.gpa.free(type_module_names);
+            for (sorted_modules, 0..) |name, j| {
+                type_module_names[j] = name;
+            }
+            if (has_platform) {
+                type_module_names[sorted_modules.len] = ""; // placeholder for platform main (won't match any module name)
+            }
+            for (sorted_app_siblings[0..i], 0..) |name, j| {
+                type_module_names[sorted_modules.len + plat_main_offset + j] = name;
+            }
+
+            const compiled = try compileModuleForSerialization(
+                ctx,
+                sibling_path,
+                sibling_name,
+                &builtin_modules,
+                prev_env_ptrs,
+                type_module_names,
+            );
+            total_error_count += compiled.error_count;
+            total_warning_count += compiled.warning_count;
+            compiled_modules.appendAssumeCapacity(compiled);
+            // Store pointer to the env we just appended
+            try app_sibling_env_ptrs.append(ctx.gpa, &compiled_modules.items[compiled_modules.items.len - 1].env);
+        }
+    }
+
     // Compile app module
     {
         if (comptime trace_modules) {
@@ -3459,13 +3520,28 @@ fn compileAndSerializeModulesForEmbedding(
             all_env_ptrs[i] = &m.env;
         }
 
+        // Build type module names list (platform modules + placeholder for platform main + app siblings)
+        // The indices must match all_env_ptrs: [plat_sibs..., plat_main, app_sibs...]
+        const plat_main_offset: usize = if (has_platform) 1 else 0;
+        var all_type_module_names = try ctx.gpa.alloc([]const u8, sorted_modules.len + plat_main_offset + app_sibling_env_ptrs.items.len);
+        defer ctx.gpa.free(all_type_module_names);
+        for (sorted_modules, 0..) |name, i| {
+            all_type_module_names[i] = name;
+        }
+        if (has_platform) {
+            all_type_module_names[sorted_modules.len] = ""; // placeholder for platform main (won't match any module name)
+        }
+        for (app_sibling_names.items, 0..) |name, i| {
+            all_type_module_names[sorted_modules.len + plat_main_offset + i] = name;
+        }
+
         var compiled = try compileModuleForSerialization(
             ctx,
             roc_file_path,
             "app",
             &builtin_modules,
             all_env_ptrs,
-            sorted_modules, // Pass type module names in same order as all_env_ptrs
+            all_type_module_names,
         );
         compiled.is_app = true;
         total_error_count += compiled.error_count;
@@ -3475,6 +3551,11 @@ fn compileAndSerializeModulesForEmbedding(
             primary_env_index = app_env_index;
         }
         try compiled_modules.append(compiled);
+    }
+
+    // Free app sibling names (we duped them earlier)
+    for (app_sibling_names.items) |name| {
+        ctx.gpa.free(name);
     }
 
     // Collect and sort all hosted functions globally, then assign indices

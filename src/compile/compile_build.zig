@@ -855,6 +855,14 @@ pub const BuildEnv = struct {
         const qual = parts.qual;
         const rest = parts.rest;
 
+        // Check if this is a local module (no qualifier - rest is empty)
+        if (rest.len == 0) {
+            // Local module - look it up in the current package's scheduler
+            const cur_sched = self.ws.schedulers.get(current_package) orelse return null;
+            return cur_sched.*.getEnvIfDone(import_name);
+        }
+
+        // External module - look it up via shorthands
         const ref = cur_pkg.shorthands.get(qual) orelse {
             return null;
         };
