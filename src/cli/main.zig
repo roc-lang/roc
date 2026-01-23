@@ -5491,13 +5491,19 @@ fn checkFileWithBuildEnvPreserved(
     filepath: []const u8,
     collect_timing: bool,
     cache_config: CacheConfig,
+    max_threads: ?usize,
 ) BuildAppError!CheckResultWithBuildEnv {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1);
+    // Determine threading mode and thread count
+    // TODO: Multi-threaded mode causes race conditions with duplicate module processing
+    // For now, force single-threaded until the race condition is fixed
+    const thread_count: usize = if (max_threads) |t| t else 1; // Default to 1 until race condition is fixed
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .single_threaded; // Force single-threaded for now
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -5593,13 +5599,19 @@ fn checkFileWithBuildEnv(
     filepath: []const u8,
     collect_timing: bool,
     cache_config: CacheConfig,
+    max_threads: ?usize,
 ) BuildAppError!CheckResult {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1);
+    // Determine threading mode and thread count
+    // TODO: Multi-threaded mode causes race conditions with duplicate module processing
+    // For now, force single-threaded until the race condition is fixed
+    const thread_count: usize = if (max_threads) |t| t else 1; // Default to 1 until race condition is fixed
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .single_threaded; // Force single-threaded for now
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -5714,6 +5726,7 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         args.path,
         args.time,
         cache_config,
+        args.max_threads,
     ) catch |err| {
         try handleProcessFileError(err, stderr, args.path);
         return;
@@ -5976,6 +5989,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
         args.path,
         args.time,
         cache_config,
+        null, // max_threads: use default (single-threaded for now)
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

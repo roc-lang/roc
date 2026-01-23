@@ -838,3 +838,56 @@ test "roc build returns exit code 2 for warnings" {
     // 4. Success message was printed
     try testing.expect(std.mem.indexOf(u8, result.stdout, "Successfully built") != null);
 }
+
+// Tests for --jobs flag
+test "roc check with -j1 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "-j1" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with --jobs=1 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=1" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with --jobs=2 succeeds on valid file" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache", "--jobs=2" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command succeeded
+    try testing.expect(result.term == .Exited and result.term.Exited == 0);
+}
+
+test "roc check with invalid --jobs value returns error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    const result = try util.runRoc(gpa, &.{ "check", "--jobs=abc" }, "test/cli/simple_success.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that command failed with error
+    try testing.expect(result.term == .Exited and result.term.Exited == 1);
+
+    // Verify error message mentions invalid value
+    const has_error = std.mem.indexOf(u8, result.stderr, "not a valid value") != null;
+    try testing.expect(has_error);
+}

@@ -35,6 +35,9 @@ const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const FileProvider = compile_package.FileProvider;
 
+// Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
+const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
+
 /// Cache version string that includes the build mode to prevent debug/release cache incompatibility.
 /// A cache created by a debug build should not be loaded by a release build (and vice versa)
 /// because the struct layouts may differ between build modes.
@@ -226,6 +229,13 @@ const GlobalQueue = struct {
                                 const cache_result = cm.loadFromCache(cache_compiler_version, source, task.module_name);
                                 switch (cache_result) {
                                     .hit => |hit| {
+                                        if (comptime trace_cache) {
+                                            std.debug.print("[TRACE-CACHE] HIT: {s} (errors={d}, warnings={d})\n", .{
+                                                task.module_name,
+                                                hit.error_count,
+                                                hit.warning_count,
+                                            });
+                                        }
                                         // Cache hit! Update the module state with cached data
                                         module_state.*.phase = .Done;
                                         module_state.*.env = hit.module_env.*;
@@ -235,7 +245,14 @@ const GlobalQueue = struct {
                                         freeSlice(self.gpa, task.module_name);
                                         continue;
                                     },
-                                    .miss => {
+                                    .miss => |miss| {
+                                        if (comptime trace_cache) {
+                                            const key_hex = std.fmt.bytesToHex(miss.key, .lower);
+                                            std.debug.print("[TRACE-CACHE] MISS: {s} (key={s})\n", .{
+                                                task.module_name,
+                                                &key_hex,
+                                            });
+                                        }
                                         // Continue with normal processing
                                     },
                                     .not_enabled => {
@@ -272,9 +289,22 @@ const GlobalQueue = struct {
                                         &module_state.env.?,
                                         error_count,
                                         warning_count,
-                                    ) catch {
+                                    ) catch |err| {
+                                        if (comptime trace_cache) {
+                                            std.debug.print("[TRACE-CACHE] STORE FAILED: {s} (error={any})\n", .{
+                                                task.module_name,
+                                                err,
+                                            });
+                                        }
                                         // Cache store failed, but continue
                                     };
+                                    if (comptime trace_cache) {
+                                        const key_hex = std.fmt.bytesToHex(cache_key, .lower);
+                                        std.debug.print("[TRACE-CACHE] STORED: {s} (key={s})\n", .{
+                                            task.module_name,
+                                            &key_hex,
+                                        });
+                                    }
                                 }
                             }
                         }

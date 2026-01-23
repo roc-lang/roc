@@ -79,6 +79,7 @@ pub const CheckArgs = struct {
     time: bool = false, // whether to print timing information
     no_cache: bool = false, // disable cache
     verbose: bool = false, // enable verbose output
+    max_threads: ?usize = null, // max worker threads (null = auto, 1 = single-threaded)
 };
 
 /// Arguments for `roc build`
@@ -225,11 +226,12 @@ fn parseCheck(args: []const []const u8) CliArgs {
     var time: bool = false;
     var no_cache: bool = false;
     var verbose: bool = false;
+    var max_threads: ?usize = null;
 
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
-            \\Check the code for problems, but don’t build or run it
+            return CliArgs{ .help =
+            \\Check the code for problems, but don't build or run it
             \\
             \\Usage: roc check [OPTIONS] [ROC_FILE]
             \\
@@ -241,6 +243,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
             \\      --no-cache     Disable caching
             \\      --verbose      Enable verbose output including cache statistics
+            \\  -j, --jobs=<N>     Max worker threads for parallel compilation (default: auto-detect CPU count)
             \\  -h, --help         Print help
             \\
         };
@@ -256,6 +259,23 @@ fn parseCheck(args: []const []const u8) CliArgs {
             no_cache = true;
         } else if (mem.eql(u8, arg, "--verbose")) {
             verbose = true;
+        } else if (mem.startsWith(u8, arg, "--jobs")) {
+            if (getFlagValue(arg)) |value| {
+                max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                    return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "--jobs", .value = value, .valid_options = "positive integer" } } };
+                };
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--jobs" } } };
+            }
+        } else if (mem.startsWith(u8, arg, "-j")) {
+            // Handle -jN format (e.g., -j4)
+            const value = arg[2..];
+            if (value.len == 0) {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "-j" } } };
+            }
+            max_threads = std.fmt.parseInt(usize, value, 10) catch {
+                return CliArgs{ .problem = ArgProblem{ .invalid_flag_value = .{ .flag = "-j", .value = value, .valid_options = "positive integer" } } };
+            };
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "check", .arg = arg } } };
@@ -264,7 +284,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
         }
     }
 
-    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose } };
+    return CliArgs{ .check = CheckArgs{ .path = path orelse "main.roc", .main = main, .time = time, .no_cache = no_cache, .verbose = verbose, .max_threads = max_threads } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
@@ -1187,6 +1207,55 @@ test "roc check" {
         try testing.expectEqualStrings("foo.roc", result.check.path);
         try testing.expectEqualStrings("bar.roc", result.check.main.?);
         try testing.expectEqual(true, result.check.time);
+    }
+    // --jobs flag tests
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j1" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 1), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j4" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 4), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=2" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 2), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=8" });
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, 8), result.check.max_threads);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs=abc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--jobs", result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings("abc", result.problem.invalid_flag_value.value);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-jabc" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("-j", result.problem.invalid_flag_value.flag);
+        try testing.expectEqualStrings("abc", result.problem.invalid_flag_value.value);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "--jobs" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("--jobs", result.problem.missing_flag_value.flag);
+    }
+    {
+        const result = try parse(gpa, &[_][]const u8{ "check", "-j" });
+        defer result.deinit(gpa);
+        try testing.expectEqualStrings("-j", result.problem.missing_flag_value.flag);
+    }
+    {
+        // default is null (auto-detect)
+        const result = try parse(gpa, &[_][]const u8{"check"});
+        defer result.deinit(gpa);
+        try testing.expectEqual(@as(?usize, null), result.check.max_threads);
     }
 }
 

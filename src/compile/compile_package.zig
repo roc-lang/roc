@@ -22,6 +22,10 @@ const reporting = @import("reporting");
 const eval = @import("eval");
 const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
+const build_options = @import("build_options");
+
+// Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
+const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
 const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
@@ -652,6 +656,9 @@ pub const PackageEnv = struct {
         // to CommonEnv remains valid after this function returns.
         var parse_ast = parse.parse(&st.env.?.common, self.gpa) catch {
             // If parsing fails, proceed to canonicalization to report errors
+            if (comptime trace_cache) {
+                std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
+            }
             st.phase = .Canonicalize;
             try self.enqueue(module_id);
             return;
@@ -665,6 +672,9 @@ pub const PackageEnv = struct {
 
         // Go directly to Canonicalize - sibling discovery happens after canonicalization
         // based on ModuleEnv.imports
+        if (comptime trace_cache) {
+            std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize\n", .{st.name});
+        }
         st.phase = .Canonicalize;
         try self.enqueue(module_id);
     }
@@ -831,10 +841,16 @@ pub const PackageEnv = struct {
 
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
+                    if (comptime trace_cache) {
+                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ st.name, mod_name });
+                    }
                     st.phase = .Done;
                     self.remaining_modules -= 1;
                 }
                 if (child.phase != .Done) {
+                    if (comptime trace_cache) {
+                        std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ mod_name, st.name });
+                    }
                     child.phase = .Done;
                     if (self.remaining_modules > 0) self.remaining_modules -= 1;
                 }
@@ -852,6 +868,13 @@ pub const PackageEnv = struct {
             }
         }
 
+        if (comptime trace_cache) {
+            std.debug.print("[TRACE-CACHE] PHASE: {s} Canonicalize->WaitingOnImports (imports={d}, external={d})\n", .{
+                st.name,
+                st.imports.items.len,
+                st.external_imports.items.len,
+            });
+        }
         st.phase = .WaitingOnImports;
         // Kick off imports if any (locals only)
         if (any_new) {
@@ -892,6 +915,9 @@ pub const PackageEnv = struct {
         }
 
         if (ready) {
+            if (comptime trace_cache) {
+                std.debug.print("[TRACE-CACHE] PHASE: {s} WaitingOnImports->TypeCheck\n", .{st.name});
+            }
             st.phase = .TypeCheck;
             // Mark as finished (black) when all children done
             st.visit_color = 2;
@@ -1258,6 +1284,12 @@ pub const PackageEnv = struct {
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
+        if (comptime trace_cache) {
+            std.debug.print("[TRACE-CACHE] PHASE: {s} TypeCheck->Done (dependents={d})\n", .{
+                st.name,
+                st.dependents.items.len,
+            });
+        }
         st.phase = .Done;
         self.remaining_modules -= 1;
 
