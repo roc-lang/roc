@@ -549,11 +549,11 @@ pub const SystemVCodeGen = struct {
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
     pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
-        std.debug.print("[DEBUG emitCmp x86_64] cmp {s},{s} then setcc {} to {s}\n", .{ @tagName(a), @tagName(b), @intFromEnum(cond), @tagName(dst) });
         try self.emit.cmpRegReg(width, a, b);
         try self.emit.setcc(cond, dst);
-        // Zero-extend the byte result to full register width
-        try self.emit.movRegReg(.w32, dst, dst); // movzx is implied for 32-bit moves
+        // Zero-extend the byte result to full 64-bit register
+        // SETCC only sets the low byte; we need MOVZX to zero the upper 56 bits
+        try self.emit.movzxByte(dst, dst);
     }
 
     // Floating-point operations

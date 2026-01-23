@@ -92,6 +92,20 @@ pub fn movRegImm32(self: *Emit, dst: GeneralReg, imm: i32) !void {
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(imm)));
 }
 
+/// MOVZX r32, r8 - zero-extend byte register to 32-bit (implicitly zero-extends to 64-bit)
+/// This is needed after SETCC to properly zero-extend the byte result to the full register.
+pub fn movzxByte(self: *Emit, dst: GeneralReg, src: GeneralReg) !void {
+    // REX prefix needed if either register is R8-R15
+    // REX.R for dst (reg field), REX.B for src (r/m field)
+    const needs_rex = dst.requiresRex() or src.requiresRex();
+    if (needs_rex) {
+        try self.buf.append(self.allocator, rex(0, dst.rexR(), 0, src.rexB()));
+    }
+    try self.buf.append(self.allocator, 0x0F); // Two-byte opcode prefix
+    try self.buf.append(self.allocator, 0xB6); // MOVZX r32, r/m8
+    try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+}
+
 // Arithmetic instructions
 
 /// ADD reg, reg
