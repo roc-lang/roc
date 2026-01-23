@@ -984,6 +984,13 @@ This number is being used where a non-number type is needed:
 ```
 	         ^^^
 
+The type was determined to be non-numeric here:
+**fuzz_crash_019.md:93:22:93:24:**
+```roc
+	line!("Ag ${n} to ${er}")
+```
+	                    ^^
+
 Other code expects this to have the type:
 
     Str

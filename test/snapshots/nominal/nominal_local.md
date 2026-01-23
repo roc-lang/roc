@@ -17,15 +17,15 @@ test = |{}| {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - nominal_local.md:9:5:9:15
+TYPE MISMATCH - nominal_local.md:9:22:9:25
 # PROBLEMS
 **TYPE MISMATCH**
 `Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
-**nominal_local.md:9:5:9:15:**
+**nominal_local.md:9:22:9:25:**
 ```roc
     Str.encode("hi", fmt)
 ```
-    ^^^^^^^^^^
+                     ^^^
 
 `Utf8Format`.`encode_str` has the type:
 
