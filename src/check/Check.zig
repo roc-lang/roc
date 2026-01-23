@@ -5510,6 +5510,83 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     continue;
                 }
 
+                // For explicit method calls via static dispatch syntax (e.g., `lst.repeat(3)`),
+                // the method's ORIGINAL first parameter must be compatible with the nominal type.
+                // We check the ORIGINAL type (before instantiation) because instantiation converts
+                // rigids to flexes, which would mask explicitly generic annotations.
+                //
+                // This check only applies to .method_call origins - other origins like
+                // .from_numeral, .where_clause, .desugared_binop have different semantics.
+                //
+                // Valid cases for method_call:
+                // 1. First param is the nominal type itself (e.g., `len : List(_) -> U64`)
+                // 2. First param is an alias to the nominal type
+                // 3. First param is a constrained type variable (e.g., `a where [a.method : ...]`)
+                //
+                // Invalid case: first param is an UNCONSTRAINED rigid type variable.
+                // A method like `repeat : a, U64 -> List(a)` should NOT be callable via
+                // `lst.repeat(3)` where lst : List(b), because the first parameter `a`
+                // is explicitly generic and doesn't specifically accept List values.
+                // Only check builtins for now - cross-module ident comparison is complex
+                const is_builtin = original_module_ident == self.cir.idents.builtin_module;
+                if (constraint.origin == .method_call and real_args.len > 0 and is_builtin) {
+                    // Check the ORIGINAL type before instantiation to detect explicitly generic params
+                    const original_types = &original_env.types;
+                    const original_def_resolved = original_types.resolveVar(def_var);
+                    const original_func_opt = original_def_resolved.desc.content.unwrapFunc();
+
+                    const first_param_is_compatible = if (original_func_opt) |original_func| blk: {
+                        const original_args = original_types.sliceVars(original_func.args);
+                        if (original_args.len == 0) break :blk true; // No first param to check
+
+                        const first_param_var = original_args[0];
+                        const first_param_resolved = original_types.resolveVar(first_param_var);
+                        const first_param_content = first_param_resolved.desc.content;
+
+                        break :blk switch (first_param_content) {
+                            // A flex (inferred) type variable is OK - it will unify with the actual receiver type.
+                            .flex => true,
+                            // A rigid (from annotation) type variable is OK only if it has constraints.
+                            // An unconstrained rigid means the annotation explicitly declared the function
+                            // as generic, which shouldn't be callable via static dispatch on a specific type.
+                            .rigid => |rigid| rigid.constraints.len() > 0,
+                            // Check if the first param is the same nominal type.
+                            // Compare both origin_module and ident_idx since both come from original_env.
+                            .structure => |flat| switch (flat) {
+                                .nominal_type => |first_nominal| first_nominal.origin_module == nominal_type.origin_module and
+                                    first_nominal.ident.ident_idx == nominal_type.ident.ident_idx,
+                                else => false,
+                            },
+                            // An alias needs to be checked against its backing type
+                            .alias => |alias| inner: {
+                                const backing_var = original_types.getAliasBackingVar(alias);
+                                const backing_resolved = original_types.resolveVar(backing_var);
+                                if (backing_resolved.desc.content == .structure) {
+                                    if (backing_resolved.desc.content.structure == .nominal_type) {
+                                        const backing_nominal = backing_resolved.desc.content.structure.nominal_type;
+                                        break :inner backing_nominal.origin_module == nominal_type.origin_module and
+                                            backing_nominal.ident.ident_idx == nominal_type.ident.ident_idx;
+                                    }
+                                }
+                                break :inner false;
+                            },
+                            .err => true, // Don't add more errors if already errored
+                        };
+                    } else true; // If not a function, let later checks handle it
+
+                    if (!first_param_is_compatible) {
+                        // The method exists but its first parameter doesn't match the nominal type,
+                        // so it can't be used for static dispatch on this type
+                        try self.reportConstraintError(
+                            deferred_constraint.var_,
+                            constraint,
+                            .{ .missing_method = .nominal },
+                            env,
+                        );
+                        continue;
+                    }
+                }
+
                 // Unify each argument pair
                 var any_arg_failed = false;
                 for (constraint_args, real_args) |constraint_arg, real_arg| {
