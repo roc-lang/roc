@@ -239,8 +239,10 @@ pub const LlvmEvaluator = struct {
             .wip = &wip,
             .module_env = module_env,
             .locals = std.AutoHashMap(CIR.Pattern.Idx, LlvmBuilder.Value).init(self.allocator),
+            .local_layouts = std.AutoHashMap(CIR.Pattern.Idx, layout.Idx).init(self.allocator),
         };
         defer ctx.locals.deinit();
+        defer ctx.local_layouts.deinit();
 
         // Get the output pointer
         const out_ptr = wip.arg(0);
@@ -327,6 +329,7 @@ pub const LlvmEvaluator = struct {
         wip: *LlvmBuilder.WipFunction,
         module_env: *ModuleEnv,
         locals: std.AutoHashMap(CIR.Pattern.Idx, LlvmBuilder.Value),
+        local_layouts: std.AutoHashMap(CIR.Pattern.Idx, layout.Idx),
 
         const ExprError = error{
             OutOfMemory,
@@ -503,10 +506,11 @@ pub const LlvmEvaluator = struct {
             const lhs = try ctx.emitExpr(binop.lhs);
             const rhs = try ctx.emitExpr(binop.rhs);
 
-            // Determine if this is an integer or float operation based on LHS expression
+            // Get layout to determine signedness (like Rust backend's IntWidth.is_signed())
+            const lhs_layout = ctx.getExprLayout(binop.lhs);
             const is_float = ctx.isFloatExpr(lhs_expr);
             const is_dec = ctx.isDecExpr(lhs_expr);
-            const is_signed = ctx.isSignedExpr(lhs_expr);
+            const is_signed = lhs_layout.isSigned();
 
             // Check if types match - if not, we can't do the operation
             // This can happen with polymorphic expressions like lookups
@@ -746,10 +750,24 @@ pub const LlvmEvaluator = struct {
                         const val = try ctx.emitExpr(decl.expr);
                         // Bind to pattern (for now, only support simple identifier patterns)
                         try ctx.locals.put(decl.pattern, val);
+                        // Store layout from annotation (for signedness info)
+                        const decl_layout = if (decl.anno) |anno_idx|
+                            ctx.evaluator.getLayoutFromAnnotation(ctx.module_env, anno_idx) orelse
+                                ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr)
+                        else
+                            ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr);
+                        ctx.local_layouts.put(decl.pattern, decl_layout) catch {};
                     },
                     .s_var => |var_stmt| {
                         const val = try ctx.emitExpr(var_stmt.expr);
                         try ctx.locals.put(var_stmt.pattern_idx, val);
+                        // Store layout from annotation (for signedness info)
+                        const var_layout = if (var_stmt.anno) |anno_idx|
+                            ctx.evaluator.getLayoutFromAnnotation(ctx.module_env, anno_idx) orelse
+                                ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr)
+                        else
+                            ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr);
+                        ctx.local_layouts.put(var_stmt.pattern_idx, var_layout) catch {};
                     },
                     else => {}, // Ignore other statement types for now
                 }
@@ -1336,6 +1354,17 @@ pub const LlvmEvaluator = struct {
             }
 
             return error.UnsupportedType;
+        }
+
+        /// Get the layout for an expression, checking local_layouts for lookups
+        fn getExprLayout(ctx: *ExprContext, expr_idx: CIR.Expr.Idx) layout.Idx {
+            const expr = ctx.module_env.store.getExpr(expr_idx);
+            return switch (expr) {
+                .e_lookup_local => |lookup| ctx.local_layouts.get(lookup.pattern_idx) orelse .i64,
+                .e_binop => |binop| ctx.getExprLayout(binop.lhs),
+                .e_unary_minus => |unary| ctx.getExprLayout(unary.expr),
+                else => ctx.evaluator.getExprOutputLayout(ctx.module_env, expr_idx),
+            };
         }
 
         /// Check if an expression is a float type

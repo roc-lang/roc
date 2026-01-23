@@ -110,6 +110,17 @@ pub const Idx = enum(@Type(.{
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+
+    /// Returns true if this layout represents a signed integer type.
+    /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
+    pub fn isSigned(self: Idx) bool {
+        return switch (self) {
+            .i8, .i16, .i32, .i64, .i128, .dec => true,
+            .u8, .u16, .u32, .u64, .u128 => false,
+            // Default to signed for other types (floats don't use this, bools are unsigned)
+            else => true,
+        };
+    }
 };
 
 /// Represents a closure with its captured environment
