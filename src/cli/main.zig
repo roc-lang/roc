@@ -5223,6 +5223,10 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 }
 
 fn rocRepl(ctx: *CliContext, _: cli_args.ReplArgs) !void {
+    if (builtin.os.tag == .windows) {
+        try ctx.io.stdout().print("REPL is not supported on Windows yet.\n", .{});
+        return;
+    }
     return cli_repl.run(ctx);
 }
 
