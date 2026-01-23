@@ -10,6 +10,14 @@
 //!
 //! Special care is taken to keep memory layouts small and efficient. When modifying
 //! these types, please consider their size impact and unification performance.
+//!
+//! Note: In other HM compilers (Elm, Roc Rust), marks are used to track intermediate
+//! metadata around type variables. Here, we intentionally do _not_ use them. The
+//! idea being that because marks are not used after type checking, if we store them
+//! on the type descriptor, then that memory has to stay allocated until the end
+//! of the program, even though they're not used! Instead, we allocate intermediate
+//! data structures during type checking to do the job that marks do, then deallocate
+//! after the phase, freeing that memory.
 
 const std = @import("std");
 const base = @import("base");
@@ -22,7 +30,7 @@ const MkSafeMultiList = collections.SafeMultiList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(36, @sizeOf(Descriptor));
+    try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(28, @sizeOf(Content));
     try std.testing.expectEqual(12, @sizeOf(Alias));
     try std.testing.expectEqual(24, @sizeOf(FlatType));
@@ -82,7 +90,6 @@ pub const TypeScope = struct {
 pub const Descriptor = struct {
     content: Content,
     rank: Rank,
-    mark: Mark,
 };
 
 /// In general, the rank tracks the number of let-bindings a variable is "under".
@@ -129,27 +136,6 @@ pub const Rank = enum(u8) {
     /// Get the prev rank
     pub fn prev(a: Rank) Rank {
         return @enumFromInt(@intFromEnum(a) - 1);
-    }
-};
-
-/// A type variable mark
-///
-/// Marks are temporary annotations used during various phases of type inference
-/// and type checking to track state.
-///
-/// Some places `Mark` is used:
-/// * Marking variables as visited in occurs checks to avoid redundant work
-/// * Marking variables for generalizing during solving
-pub const Mark = enum(u32) {
-    const Self = @This();
-
-    visited = 0,
-    none = 1,
-    _,
-
-    /// Get the next mark
-    pub fn next(self: Self) Self {
-        return @enumFromInt(@intFromEnum(self) + 1);
     }
 };
 
