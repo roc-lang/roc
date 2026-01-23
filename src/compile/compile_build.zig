@@ -35,6 +35,12 @@ const ScheduleHook = compile_package.ScheduleHook;
 const CacheManager = @import("cache_manager.zig").CacheManager;
 const FileProvider = compile_package.FileProvider;
 
+// Actor model components
+const messages = @import("messages.zig");
+const channel = @import("channel.zig");
+const coordinator_mod = @import("coordinator.zig");
+const Coordinator = coordinator_mod.Coordinator;
+
 // Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
 const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
 
@@ -95,12 +101,15 @@ const GlobalQueue = struct {
     build_env: ?*BuildEnv = null,
     // Inflight counter for idle detection (no-op on wasm)
     inflight: InflightCounter = .{},
+    // Track modules that are queued or being processed to prevent duplicates
+    in_progress: std.StringHashMap(void) = undefined,
 
     pub fn init(gpa: Allocator) GlobalQueue {
         return .{
             .gpa = gpa,
             .tasks = std.array_list.Managed(Task).init(gpa),
             .workers = std.array_list.Managed(std.Thread).init(gpa),
+            .in_progress = std.StringHashMap(void).init(gpa),
         };
     }
 
@@ -122,6 +131,13 @@ const GlobalQueue = struct {
             freeSlice(gpa, t.module_name);
         }
         self.tasks.deinit();
+
+        // Free in_progress tracking keys
+        var iter = self.in_progress.keyIterator();
+        while (iter.next()) |key| {
+            gpa.free(key.*);
+        }
+        self.in_progress.deinit();
 
         self.sink_ptr = null;
         self.build_env = null;
@@ -171,8 +187,36 @@ const GlobalQueue = struct {
     }
 
     pub fn enqueue(self: *GlobalQueue, pkg: []const u8, module_name: []const u8) !void {
+        // For backwards compatibility, use pkg:module_name as key
+        return self.enqueueWithPath(pkg, module_name, "");
+    }
+
+    pub fn enqueueWithPath(self: *GlobalQueue, pkg: []const u8, module_name: []const u8, path: []const u8) !void {
         self.lock.lock();
         defer self.lock.unlock();
+
+        // Use file path as deduplication key if available (same file may exist in multiple packages)
+        // Fall back to pkg:module_name if path is empty
+        const key = if (path.len > 0)
+            try self.gpa.dupe(u8, path)
+        else
+            try std.fmt.allocPrint(self.gpa, "{s}:{s}", .{ pkg, module_name });
+
+        // Check if already queued or in progress
+        if (self.in_progress.contains(key)) {
+            if (comptime trace_cache) {
+                std.debug.print("[TRACE-QUEUE] SKIP duplicate: pkg={s} module={s} path={s}\n", .{ pkg, module_name, path });
+            }
+            self.gpa.free(key);
+            return; // Already being processed, skip duplicate
+        }
+
+        if (comptime trace_cache) {
+            std.debug.print("[TRACE-QUEUE] ENQUEUE: pkg={s} module={s} path={s}\n", .{ pkg, module_name, path });
+        }
+
+        // Mark as in progress
+        try self.in_progress.put(key, {});
 
         try self.tasks.append(.{
             .pkg = try self.gpa.dupe(u8, pkg),
@@ -190,12 +234,36 @@ const GlobalQueue = struct {
         const idx = self.tasks.items.len - 1;
         const t = self.tasks.items[idx];
         self.tasks.items.len = idx;
+
+        // Note: We don't remove from in_progress here. The module stays tracked
+        // until it's fully done. The worker will loop until Done or blocked.
+
         return t;
+    }
+
+    /// Remove a module from in_progress tracking (called when module is Done)
+    fn markComplete(self: *GlobalQueue, path: []const u8) void {
+        if (threads_available) {
+            self.lock.lock();
+            defer self.lock.unlock();
+        }
+        // Use path as key (must match what was used in enqueueWithPath)
+        if (self.in_progress.fetchRemove(path)) |kv| {
+            if (comptime trace_cache) {
+                std.debug.print("[TRACE-QUEUE] COMPLETE: path={s}\n", .{path});
+            }
+            self.gpa.free(kv.key);
+        } else if (comptime trace_cache) {
+            std.debug.print("[TRACE-QUEUE] COMPLETE (not found): path={s}\n", .{path});
+        }
     }
 
     fn worker(self: *GlobalQueue) void {
         while (true) {
             if (self.take()) |task| {
+                if (comptime trace_cache) {
+                    std.debug.print("[TRACE-QUEUE] WORKER processing: pkg={s} module={s}\n", .{ task.pkg, task.module_name });
+                }
                 // Dispatch to the corresponding ModuleBuild
                 if (self.build_env) |be| {
                     if (be.schedulers.get(task.pkg)) |sched| {
@@ -208,13 +276,14 @@ const GlobalQueue = struct {
                                 defer self.inflight.dec();
                             }
 
+                            // Get module state (for path and cache checking)
+                            const module_state = sched.getModuleState(task.module_name).?;
+                            const module_path = module_state.path;
+
                             // Check cache before processing
                             if (be.cache_manager) |cm| {
-                                // Get module state to check path
-                                const module_state = sched.getModuleState(task.module_name).?;
-
                                 // Read the source file (normalize line endings for consistent behavior on Windows).
-                                const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
+                                const source = be.readFile(module_path, 10 * 1024 * 1024) catch {
                                     // If we can't read the file, continue with normal processing
                                     sched.processModuleByName(task.module_name) catch {
                                         // Continue processing other modules despite this error
@@ -261,16 +330,40 @@ const GlobalQueue = struct {
                                 }
                             }
 
-                            sched.processModuleByName(task.module_name) catch {
-                                // Continue processing other modules despite this error
-                            };
+                            // Process module through all phases until Done or blocked
+                            var max_iterations: u32 = 100; // Safety limit
+                            var reached_done = false;
+                            while (max_iterations > 0) : (max_iterations -= 1) {
+                                const current_state = sched.getModuleState(task.module_name) orelse break;
+                                const current_phase = current_state.phase;
 
-                            // After successful processing, store in cache
+                                // Stop if Done or waiting on dependencies
+                                if (current_phase == .Done) {
+                                    reached_done = true;
+                                    break;
+                                }
+                                if (current_phase == .WaitingOnImports) break;
+
+                                sched.processModuleByName(task.module_name) catch break;
+
+                                // Check if phase changed - if not, we're stuck
+                                const new_state = sched.getModuleState(task.module_name) orelse break;
+                                if (new_state.phase == current_phase) break;
+                            }
+
+                            // Only mark complete when module is truly Done
+                            // If WaitingOnImports, keep in in_progress to prevent re-enqueue
+                            // until explicitly notified by dependencies
+                            if (reached_done) {
+                                self.markComplete(module_path);
+                            }
+
+                            // After processing, store in cache
                             if (be.cache_manager) |cm| {
-                                const module_state = sched.getModuleState(task.module_name).?;
-                                if (module_state.phase == .Done and module_state.env != null) {
+                                const final_state = sched.getModuleState(task.module_name).?;
+                                if (final_state.phase == .Done and final_state.env != null) {
                                     // Read the source file again to generate the cache key
-                                    const source = be.readFile(module_state.path, 10 * 1024 * 1024) catch {
+                                    const source = be.readFile(final_state.path, 10 * 1024 * 1024) catch {
                                         // If we can't read the file, skip caching
                                         freeSlice(self.gpa, task.pkg);
                                         freeSlice(self.gpa, task.module_name);
@@ -286,7 +379,7 @@ const GlobalQueue = struct {
 
                                     cm.store(
                                         cache_key,
-                                        &module_state.env.?,
+                                        &final_state.env.?,
                                         error_count,
                                         warning_count,
                                     ) catch |err| {
@@ -330,10 +423,10 @@ const GlobalQueue = struct {
     }
 
     // Hook from ModuleBuild to enqueue newly discovered/scheduled modules
-    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, _: []const u8, _: u32) void {
+    pub fn hookOnSchedule(ctx: ?*anyopaque, package_name: []const u8, module_name: []const u8, path: []const u8, _: u32) void {
         var self: *GlobalQueue = @ptrCast(@alignCast(ctx.?));
-        // Enqueue to global queue - log but don't fail on error
-        self.enqueue(package_name, module_name) catch {
+        // Enqueue to global queue using path for deduplication (same module may exist in multiple packages)
+        self.enqueueWithPath(package_name, module_name, path) catch {
             // Continue anyway - the module will still be processed by local scheduler
         };
     }
@@ -395,8 +488,11 @@ pub const BuildEnv = struct {
     // Ordered sink over all packages (thread-safe, deterministic emission)
     sink: OrderedSink,
 
-    // Unified global work-stealing queue (WSQ)
+    // Unified global work-stealing queue (WSQ) - legacy, kept for compatibility
     global_queue: GlobalQueue,
+
+    // Actor model coordinator (owns all mutable compilation state)
+    coordinator: ?*Coordinator = null,
 
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
@@ -449,6 +545,12 @@ pub const BuildEnv = struct {
         // Deinit and free builtin modules
         self.builtin_modules.deinit();
         self.gpa.destroy(self.builtin_modules);
+
+        // Deinit coordinator if present
+        if (self.coordinator) |coord| {
+            coord.deinit();
+            self.gpa.destroy(coord);
+        }
 
         // Stop global queue workers
         self.global_queue.deinit(self.gpa);
@@ -622,6 +724,157 @@ pub const BuildEnv = struct {
 
         // Deterministic emission: globally order reports by (min dependency depth from app, then module name)
         try self.emitDeterministic();
+    }
+
+    /// Initialize the actor model coordinator.
+    /// This must be called before buildWithCoordinator().
+    pub fn initCoordinator(self: *BuildEnv) !void {
+        if (self.coordinator != null) return; // Already initialized
+
+        const coord = try self.gpa.create(Coordinator);
+        coord.* = try Coordinator.init(
+            self.gpa,
+            self.mode,
+            self.max_threads,
+            self.builtin_modules,
+            self.compiler_version,
+        );
+        coord.setFileProvider(self.file_provider);
+        self.coordinator = coord;
+    }
+
+    /// Build using the actor model coordinator.
+    /// This is an alternative to build() that uses message passing instead of shared mutable state.
+    pub fn buildWithCoordinator(self: *BuildEnv, root_file: []const u8) !void {
+        // Initialize coordinator if not already done
+        try self.initCoordinator();
+        const coord = self.coordinator.?;
+
+        // Parse root file header
+        const root_abs = try self.makeAbsolute(root_file);
+        defer self.gpa.free(root_abs);
+        const root_dir = if (std.fs.path.dirname(root_abs)) |d| try std.fs.path.resolve(self.gpa, &.{d}) else try self.gpa.dupe(u8, ".");
+        defer self.gpa.free(root_dir);
+
+        try self.workspace_roots.append(try self.gpa.dupe(u8, root_dir));
+
+        var header_info = try self.parseHeaderDeps(root_abs);
+        defer header_info.deinit(self.gpa);
+
+        const is_executable = header_info.kind == .app or header_info.kind == .default_app;
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
+            return error.UnsupportedHeader;
+        }
+
+        // Create package entry
+        const pkg_name = if (is_executable) "app" else "module";
+        const key_pkg = try self.gpa.dupe(u8, pkg_name);
+        const pkg_root_file = try self.gpa.dupe(u8, root_abs);
+        const pkg_root_dir = try self.gpa.dupe(u8, root_dir);
+
+        try self.packages.put(self.gpa, key_pkg, .{
+            .name = try self.gpa.dupe(u8, pkg_name),
+            .kind = header_info.kind,
+            .root_file = pkg_root_file,
+            .root_dir = pkg_root_dir,
+        });
+
+        // Populate package graph (for apps)
+        if (header_info.kind == .app) {
+            try self.populatePackageShorthands(pkg_name, &header_info);
+        }
+
+        // Create coordinator packages mirroring BuildEnv packages
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            const pkg = entry.value_ptr.*;
+            const coord_pkg = try coord.ensurePackage(entry.key_ptr.*, pkg.root_dir);
+
+            // Copy shorthands to coordinator package
+            var sh_it = pkg.shorthands.iterator();
+            while (sh_it.next()) |sh_entry| {
+                try coord_pkg.shorthands.put(
+                    try self.gpa.dupe(u8, sh_entry.key_ptr.*),
+                    try self.gpa.dupe(u8, sh_entry.value_ptr.name),
+                );
+            }
+        }
+
+        // Create schedulers for compatibility with existing code paths
+        try self.createSchedulers();
+        try self.processPendingKnownModules();
+
+        // Set back-pointer for dispatch (for legacy code paths)
+        self.global_queue.build_env = self;
+
+        // Queue root module in coordinator
+        const coord_pkg = coord.getPackage(pkg_name).?;
+        const module_name = PackageEnv.moduleNameFromPath(pkg_root_file);
+        const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
+        coord_pkg.modules.items[root_id].depth = 0;
+        coord_pkg.root_module_id = root_id;
+        coord_pkg.remaining_modules += 1;
+        coord.total_remaining += 1;
+
+        // Start workers (for multi-threaded mode)
+        try coord.start();
+
+        // Queue initial parse task
+        try coord.enqueueParseTask(pkg_name, root_id);
+
+        // Run coordinator loop
+        try coord.coordinatorLoop();
+
+        // Transfer results back to PackageEnv for compatibility
+        try self.transferCoordinatorResults();
+
+        // Check platform requirements
+        try self.checkPlatformRequirements();
+
+        // Deterministic emission
+        try self.emitDeterministic();
+    }
+
+    /// Transfer compilation results from Coordinator to PackageEnv (for compatibility)
+    fn transferCoordinatorResults(self: *BuildEnv) !void {
+        const coord = self.coordinator orelse return;
+
+        var coord_pkg_it = coord.packages.iterator();
+        while (coord_pkg_it.next()) |coord_entry| {
+            const coord_pkg = coord_entry.value_ptr.*;
+            const sched = self.schedulers.get(coord_entry.key_ptr.*) orelse continue;
+
+            // Transfer each module's results
+            for (coord_pkg.modules.items, 0..) |*coord_mod, idx| {
+                const module_id: messages.ModuleId = @intCast(idx);
+                _ = module_id;
+
+                // Ensure module exists in scheduler
+                const sched_mod = sched.getModuleState(coord_mod.name) orelse continue;
+
+                // Transfer env ownership
+                if (coord_mod.env) |env| {
+                    if (sched_mod.env == null) {
+                        sched_mod.env = env.*;
+                    }
+                }
+
+                // Transfer reports
+                for (coord_mod.reports.items) |rep| {
+                    try sched_mod.reports.append(self.gpa, rep);
+                }
+                coord_mod.reports.clearRetainingCapacity();
+
+                // Update phase
+                sched_mod.phase = switch (coord_mod.phase) {
+                    .Parse => .Parse,
+                    .Canonicalize => .Canonicalize,
+                    .WaitingOnImports => .WaitingOnImports,
+                    .TypeCheck => .TypeCheck,
+                    .Done => .Done,
+                };
+            }
+        }
     }
 
     /// Check that app exports match platform requirements.

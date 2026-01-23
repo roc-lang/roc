@@ -218,6 +218,11 @@ pub const PackageEnv = struct {
     };
 
     pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
+        // Pre-allocate module storage to avoid reallocation during multi-threaded processing
+        var modules = std.ArrayList(ModuleState).empty;
+        if (mode == .multi_threaded) {
+            modules.ensureTotalCapacity(gpa, 256) catch {};
+        }
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -230,7 +235,7 @@ pub const PackageEnv = struct {
             .builtin_modules = builtin_modules,
             .file_provider = file_provider,
             .injector = std.ArrayList(Task).empty,
-            .modules = std.ArrayList(ModuleState).empty,
+            .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
             .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
@@ -249,6 +254,11 @@ pub const PackageEnv = struct {
         builtin_modules: *const BuiltinModules,
         file_provider: ?FileProvider,
     ) PackageEnv {
+        // Pre-allocate module storage to avoid reallocation during multi-threaded processing
+        var modules = std.ArrayList(ModuleState).empty;
+        if (mode == .multi_threaded) {
+            modules.ensureTotalCapacity(gpa, 256) catch {};
+        }
         return .{
             .gpa = gpa,
             .package_name = package_name,
@@ -262,7 +272,7 @@ pub const PackageEnv = struct {
             .builtin_modules = builtin_modules,
             .file_provider = file_provider,
             .injector = std.ArrayList(Task).empty,
-            .modules = std.ArrayList(ModuleState).empty,
+            .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
             .additional_known_modules = std.ArrayList(KnownModule).empty,
         };
@@ -351,8 +361,8 @@ pub const PackageEnv = struct {
         }
         try self.enqueue(module_id);
 
-        // Notify schedule hook so a global queue can pick this up
-        self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, root_file_path, 0);
+        // Note: enqueue() already calls schedule_hook in multi-threaded mode,
+        // so we don't call it again here to avoid duplicate enqueues
 
         // If a global schedule_hook is installed AND we're in multi-threaded mode,
         // the unified global queue will drive processing via process().
@@ -435,6 +445,11 @@ pub const PackageEnv = struct {
     }
 
     fn ensureModule(self: *PackageEnv, name: []const u8, path: []const u8) !ModuleId {
+        // In multi-threaded mode, lock to prevent race conditions when growing arrays
+        const needs_lock = self.mode == .multi_threaded and @import("builtin").target.cpu.arch != .wasm32;
+        if (needs_lock) self.lock.lock();
+        defer if (needs_lock) self.lock.unlock();
+
         const module_id = try self.internModuleName(name);
 
         // Check if we need to create a new module
@@ -445,8 +460,8 @@ pub const PackageEnv = struct {
             try self.modules.append(self.gpa, ModuleState.init(owned_name, owned_path));
             try self.discovered.append(self.gpa, module_id);
 
-            // Invoke scheduling hook for new module discovery/scheduling
-            self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, owned_name, owned_path, 0);
+            // Note: Don't call schedule_hook here - let scheduleModule/enqueue handle it
+            // to avoid duplicate enqueues in multi-threaded mode
         }
 
         return module_id;
@@ -460,8 +475,8 @@ pub const PackageEnv = struct {
         try self.setDepthIfSmaller(module_id, depth);
         if (is_new) {
             self.remaining_modules += 1;
-            // Invoke scheduling hook for external scheduling
-            self.schedule_hook.onSchedule(self.schedule_hook.ctx, self.package_name, name, path, depth);
+            // Note: schedule_hook is called by enqueue() in multi-threaded mode,
+            // so we don't call it here to avoid duplicate enqueues
         }
         try self.enqueue(module_id);
     }

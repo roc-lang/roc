@@ -5498,10 +5498,9 @@ fn checkFileWithBuildEnvPreserved(
     defer trace.end();
 
     // Determine threading mode and thread count
-    // TODO: Multi-threaded mode causes race conditions with duplicate module processing
-    // For now, force single-threaded until the race condition is fixed
-    const thread_count: usize = if (max_threads) |t| t else 1; // Default to 1 until race condition is fixed
-    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .single_threaded; // Force single-threaded for now
+    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
+    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
@@ -5606,10 +5605,9 @@ fn checkFileWithBuildEnv(
     defer trace.end();
 
     // Determine threading mode and thread count
-    // TODO: Multi-threaded mode causes race conditions with duplicate module processing
-    // For now, force single-threaded until the race condition is fixed
-    const thread_count: usize = if (max_threads) |t| t else 1; // Default to 1 until race condition is fixed
-    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .single_threaded; // Force single-threaded for now
+    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
+    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
     var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
