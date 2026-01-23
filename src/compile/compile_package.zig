@@ -1110,7 +1110,9 @@ pub const PackageEnv = struct {
             defer gpa.free(file_name);
             const file_path = try std.fs.path.join(gpa, &.{ root_dir, file_name });
             defer gpa.free(file_path);
-            std.fs.cwd().access(file_path, .{}) catch continue; // Skip non-existent files
+            std.fs.cwd().access(file_path, .{}) catch {
+                continue; // Skip non-existent files
+            };
 
             // Try to get actual env from resolver if available
             if (resolver) |res| {

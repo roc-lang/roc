@@ -3601,6 +3601,22 @@ fn introduceItemsAliased(
             }
             return;
         };
+
+        // If module is a placeholder (not yet compiled), skip validation and introduce items directly
+        // This matches the behavior in type annotation canonicalization where placeholders create pending lookups
+        if (module_entry.is_placeholder) {
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const item_name = exposed_item.alias orelse exposed_item.name;
+                const item_info = Scope.ExposedItemInfo{
+                    .module_name = module_name,
+                    .original_name = exposed_item.name,
+                };
+                try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+            }
+            return;
+        }
+
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -9145,6 +9161,21 @@ fn canonicalizeTypeAnnoBasicType(
             // Check if this is an auto-imported type from module_envs
             if (self.module_envs) |envs_map| {
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
+                    // If this is a placeholder module (not yet compiled), create a pending lookup
+                    // that will be resolved after all modules are canonicalized.
+                    if (auto_imported_type.is_placeholder) {
+                        // Get or create import for the placeholder module
+                        const module_name_text = self.env.getIdent(type_name_ident);
+                        const import_idx = try self.getOrCreateAutoImport(module_name_text);
+                        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .pending = .{
+                                .module_idx = import_idx,
+                                .type_name = type_name_ident,
+                            } },
+                        } }, region);
+                    }
+
                     // This is an auto-imported type like Bool or Try
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;

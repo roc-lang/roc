@@ -138,15 +138,16 @@ pub const ModuleState = struct {
         };
     }
 
-    pub fn deinit(self: *ModuleState, gpa: Allocator) void {
+    pub fn deinit(self: *ModuleState, gpa: Allocator, owns_module_data: bool) void {
         if (comptime trace_cache) {
-            std.debug.print("[MOD DEINIT] {s}: starting, env={}, ast={}\n", .{
+            std.debug.print("[MOD DEINIT] {s}: starting, env={}, ast={}, owns={}\n", .{
                 self.name,
                 if (self.env != null) @as(u8, 1) else @as(u8, 0),
                 if (self.cached_ast != null) @as(u8, 1) else @as(u8, 0),
+                if (owns_module_data) @as(u8, 1) else @as(u8, 0),
             });
         }
-        // Free cached AST if present
+        // Free cached AST if present (always in gpa, not module_allocator)
         if (self.cached_ast) |ast| {
             if (comptime trace_cache) {
                 std.debug.print("[MOD DEINIT] {s}: freeing ast\n", .{self.name});
@@ -155,15 +156,17 @@ pub const ModuleState = struct {
             gpa.destroy(ast);
         }
 
-        // Free module env if present
-        if (self.env) |env| {
-            if (comptime trace_cache) {
-                std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+        // Free module env if present (only if we own module data)
+        if (owns_module_data) {
+            if (self.env) |env| {
+                if (comptime trace_cache) {
+                    std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+                }
+                const source = env.common.source;
+                env.deinit();
+                gpa.destroy(env);
+                if (source.len > 0) gpa.free(source);
             }
-            const source = env.common.source;
-            env.deinit();
-            gpa.destroy(env);
-            if (source.len > 0) gpa.free(source);
         }
 
         if (comptime trace_cache) {
@@ -217,7 +220,7 @@ pub const PackageState = struct {
         };
     }
 
-    pub fn deinit(self: *PackageState, gpa: Allocator) void {
+    pub fn deinit(self: *PackageState, gpa: Allocator, owns_module_data: bool) void {
         if (comptime trace_cache) {
             std.debug.print("[PKG DEINIT] {s}: deiniting {} modules\n", .{ self.name, self.modules.items.len });
         }
@@ -225,7 +228,7 @@ pub const PackageState = struct {
             if (comptime trace_cache) {
                 std.debug.print("[PKG DEINIT] {s}: deinit module {} ({s})\n", .{ self.name, i, mod.name });
             }
-            mod.deinit(gpa);
+            mod.deinit(gpa, owns_module_data);
         }
         self.modules.deinit(gpa);
         if (comptime trace_cache) {
@@ -249,7 +252,7 @@ pub const PackageState = struct {
         gpa.free(self.name);
         gpa.free(self.root_dir);
         if (comptime trace_cache) {
-            std.debug.print("[PKG DEINIT] {s}: done\n", .{self.name});
+            std.debug.print("[PKG DEINIT] done\n", .{});
         }
     }
 
@@ -339,6 +342,19 @@ pub const Coordinator = struct {
     /// Key is "pkg_name:module_id", value is list of dependent ModuleRefs
     cross_package_dependents: std.StringHashMap(std.ArrayList(ModuleRef)),
 
+    /// Optional allocator for module data (ModuleEnv, source).
+    /// When set, used instead of gpa for module data only.
+    /// This supports IPC mode where module data must be in shared memory.
+    module_allocator: ?std.mem.Allocator,
+
+    /// Whether this coordinator owns module data (should free on deinit).
+    /// Set to false for IPC mode where shared memory will be unmapped.
+    owns_module_data: bool,
+
+    /// Whether to run hosted compiler transformation after canonicalization.
+    /// Set to true for IPC mode where platform modules need hosted lambdas.
+    enable_hosted_transform: bool,
+
     /// Timing accumulators
     total_parse_ns: u64,
     total_canonicalize_ns: u64,
@@ -371,6 +387,9 @@ pub const Coordinator = struct {
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
+            .module_allocator = null,
+            .owns_module_data = true,
+            .enable_hosted_transform = false,
             .total_parse_ns = 0,
             .total_canonicalize_ns = 0,
             .total_canonicalize_diag_ns = 0,
@@ -396,8 +415,17 @@ pub const Coordinator = struct {
             if (comptime trace_cache) {
                 std.debug.print("[COORD DEINIT] deinit package {s}\n", .{entry.key_ptr.*});
             }
-            entry.value_ptr.*.deinit(self.gpa);
+            entry.value_ptr.*.deinit(self.gpa, self.owns_module_data);
+            if (comptime trace_cache) {
+                std.debug.print("[COORD DEINIT] package deinit done, now destroying\n", .{});
+            }
             self.gpa.destroy(entry.value_ptr.*);
+            if (comptime trace_cache) {
+                std.debug.print("[COORD DEINIT] package destroyed\n", .{});
+            }
+        }
+        if (comptime trace_cache) {
+            std.debug.print("[COORD DEINIT] all packages done, calling packages.deinit()\n", .{});
         }
         self.packages.deinit();
 
@@ -426,6 +454,18 @@ pub const Coordinator = struct {
     /// Set a virtual file provider
     pub fn setFileProvider(self: *Coordinator, provider: ?FileProvider) void {
         self.file_provider = provider;
+    }
+
+    /// Set a custom allocator for module data (ModuleEnv, source).
+    /// Used for IPC mode where module data must be in shared memory.
+    pub fn setModuleAllocator(self: *Coordinator, allocator: std.mem.Allocator) void {
+        self.module_allocator = allocator;
+    }
+
+    /// Get the allocator to use for module data.
+    /// Returns module_allocator if set, otherwise gpa.
+    pub fn getModuleAllocator(self: *Coordinator) std.mem.Allocator {
+        return self.module_allocator orelse self.gpa;
     }
 
     /// Create or get a package
@@ -511,7 +551,7 @@ pub const Coordinator = struct {
 
         try self.enqueueTask(.{
             .parse = .{
-                .package_name = pkg_name,
+                .package_name = pkg.name, // Use pkg's owned name, not the passed-in reference
                 .module_id = module_id,
                 .module_name = mod.name,
                 .path = mod.path,
@@ -704,6 +744,19 @@ pub const Coordinator = struct {
         // Take ownership of module env
         mod.env = result.module_env;
         mod.cached_ast = null; // AST was consumed during canonicalization
+
+        // Run hosted compiler transformation if enabled (for IPC mode)
+        // This converts e_anno_only expressions to e_hosted_lambda in platform modules
+        // Must be done AFTER canonicalization but BEFORE type checking
+        if (self.enable_hosted_transform) {
+            if (mod.env) |env| {
+                // Only run for platform modules (packages other than "app")
+                // The app package doesn't need hosted lambdas
+                if (!std.mem.eql(u8, result.package_name, "app")) {
+                    _ = can.HostedCompiler.replaceAnnoOnlyWithHosted(env) catch {};
+                }
+            }
+        }
 
         // Append reports - we take ownership, so clear result.reports after copying
         // to prevent WorkerResult.deinit from freeing the shared memory
@@ -1165,7 +1218,10 @@ pub const Coordinator = struct {
         const src = self.readModuleSource(task.path) catch |err| {
             var reports = std.ArrayList(Report).empty;
             var rep = Report.init(self.gpa, "FILE NOT FOUND", .fatal);
-            rep.addErrorMessage(@errorName(err)) catch {};
+            // Include the path in the error message for debugging
+            const path_msg = std.fmt.allocPrint(self.gpa, "{s}: {s}", .{ task.path, @errorName(err) }) catch @errorName(err);
+            defer if (path_msg.ptr != @errorName(err).ptr) self.gpa.free(path_msg);
+            rep.addErrorMessage(path_msg) catch {};
             reports.append(self.gpa, rep) catch {};
 
             return .{
@@ -1180,9 +1236,11 @@ pub const Coordinator = struct {
             };
         };
 
-        // Create ModuleEnv
-        const env = self.gpa.create(ModuleEnv) catch {
-            self.gpa.free(src);
+        // Create ModuleEnv using module allocator (for IPC, this is shared memory)
+        const module_alloc = self.getModuleAllocator();
+        const env = module_alloc.create(ModuleEnv) catch {
+            // Note: In IPC mode (SharedMemoryAllocator), free is a no-op
+            if (self.owns_module_data) module_alloc.free(src);
             return .{
                 .parse_failed = .{
                     .package_name = task.package_name,
@@ -1195,9 +1253,11 @@ pub const Coordinator = struct {
             };
         };
 
-        env.* = ModuleEnv.init(self.gpa, src) catch {
-            self.gpa.destroy(env);
-            self.gpa.free(src);
+        env.* = ModuleEnv.init(module_alloc, src) catch {
+            if (self.owns_module_data) {
+                module_alloc.destroy(env);
+                module_alloc.free(src);
+            }
             return .{
                 .parse_failed = .{
                     .package_name = task.package_name,
@@ -1211,8 +1271,13 @@ pub const Coordinator = struct {
         };
 
         // Initialize CIR fields
-        env.initCIRFields(task.module_name) catch {};
-        env.common.calcLineStarts(self.gpa) catch {};
+        // For IPC mode, module_name must be in shared memory (it will be accessed after coordinator deinit)
+        const module_name_for_env = if (self.module_allocator != null)
+            module_alloc.dupe(u8, task.module_name) catch task.module_name
+        else
+            task.module_name;
+        env.initCIRFields(module_name_for_env) catch {};
+        env.common.calcLineStarts(module_alloc) catch {};
 
         // Parse
         var reports = std.ArrayList(Report).empty;
@@ -1320,7 +1385,9 @@ pub const Coordinator = struct {
         const diag_start = if (threads_available) std.time.nanoTimestamp() else 0;
         var reports = std.ArrayList(Report).empty;
         const diags = env.getDiagnostics() catch &[_]CIR.Diagnostic{};
-        defer self.gpa.free(diags);
+        // Free with env.gpa since that's what getDiagnostics uses for allocation
+        // (In IPC mode, this is a no-op since SharedMemoryAllocator.free does nothing)
+        defer env.gpa.free(diags);
         for (diags) |d| {
             const rep = env.diagnosticToReport(d, self.gpa, task.path) catch continue;
             reports.append(self.gpa, rep) catch {};
@@ -1343,7 +1410,24 @@ pub const Coordinator = struct {
                     .import_name = self.gpa.dupe(u8, mod_name) catch continue,
                 }) catch {};
             } else {
-                // Local import
+                // Local import - but first check if this is a shorthand alias for an external module
+                // Type annotations can use unqualified names (like "Builder" instead of "pf.Builder")
+                // which adds both the qualified and unqualified import to the list.
+                // Skip the unqualified one if we already have the qualified version.
+                var is_external_alias = false;
+                for (external_imports.items) |ext| {
+                    // Check if any external import ends with .mod_name
+                    // e.g., "pf.Builder" ends with ".Builder"
+                    if (std.mem.endsWith(u8, ext.import_name, mod_name)) {
+                        const dot_idx = ext.import_name.len - mod_name.len - 1;
+                        if (dot_idx < ext.import_name.len and ext.import_name[dot_idx] == '.') {
+                            is_external_alias = true;
+                            break;
+                        }
+                    }
+                }
+                if (is_external_alias) continue;
+
                 const path = self.resolveModulePath(task.root_dir, mod_name) catch continue;
                 local_imports.append(self.gpa, .{
                     .module_name = self.gpa.dupe(u8, mod_name) catch {
@@ -1454,15 +1538,16 @@ pub const Coordinator = struct {
 
     /// Read module source from filesystem or file provider
     fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
+        const module_alloc = self.getModuleAllocator();
         const raw_data = if (self.file_provider) |fp|
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
+            if (try fp.read(fp.ctx, path, module_alloc)) |data| data else null
         else
             null;
 
-        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, std.math.maxInt(usize));
+        const data = raw_data orelse try std.fs.cwd().readFileAlloc(module_alloc, path, std.math.maxInt(usize));
 
         // Normalize line endings
-        return base.source_utils.normalizeLineEndingsRealloc(self.gpa, data);
+        return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);
     }
 
     /// Worker thread main function
