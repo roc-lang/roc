@@ -4487,7 +4487,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     self.codegen.freeGeneral(reg);
                 },
-                .stack_i128 => |offset| {
+                .stack_i128, .stack, .stack_str => |offset| {
                     // Copy 16 bytes from stack to destination
                     const reg = try self.codegen.allocGeneralFor(0);
 
@@ -4509,21 +4509,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     self.codegen.freeGeneral(reg);
                 },
-                else => {
-                    // Fallback: store low 64 bits and zero high 64 bits
-                    const reg = try self.ensureInGeneralReg(loc);
-
-                    // Store low 64 bits
+                .general_reg => |reg| {
+                    // Only have low 64 bits in register - this is a bug indicator,
+                    // but handle gracefully by storing low and zeroing high
                     if (comptime builtin.cpu.arch == .aarch64) {
                         try self.codegen.emit.strRegMemUoff(.w64, reg, ptr_reg, 0);
-                        // Store zero for high 64 bits
                         try self.codegen.emit.strRegMemUoff(.w64, .ZRSP, ptr_reg, 1);
                     } else {
                         try self.codegen.emit.movMemReg(.w64, ptr_reg, 0, reg);
-                        // Store zero for high 64 bits
-                        try self.codegen.emitLoadImm(reg, 0);
-                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, reg);
+                        const zero_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitLoadImm(zero_reg, 0);
+                        try self.codegen.emit.movMemReg(.w64, ptr_reg, 8, zero_reg);
+                        self.codegen.freeGeneral(zero_reg);
                     }
+                },
+                else => {
+                    // Unknown location type - shouldn't happen for i128
+                    unreachable;
                 },
             }
         }
