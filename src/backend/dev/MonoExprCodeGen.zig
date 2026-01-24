@@ -45,6 +45,9 @@ const JoinPointId = mono.JoinPointId;
 const LambdaSetMember = mono.LambdaSetMember;
 const LambdaSetMemberSpan = mono.LambdaSetMemberSpan;
 
+// Layout store for accessing record/tuple/tag field offsets
+const LayoutStore = layout.Store;
+
 // Control flow statement types (for two-pass compilation)
 const CFStmtId = mono.CFStmtId;
 const LayoutIdxSpan = mono.LayoutIdxSpan;
@@ -65,6 +68,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// The Mono IR store containing expressions to compile
         store: *const MonoExprStore,
+
+        /// Layout store for accessing record/tuple/tag field offsets
+        layout_store: ?*const LayoutStore,
 
         /// Static data interner for string literals
         static_interner: ?*StaticDataInterner,
@@ -168,12 +174,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         pub fn init(
             allocator: Allocator,
             store: *const MonoExprStore,
+            layout_store_opt: ?*const LayoutStore,
             static_interner: ?*StaticDataInterner,
         ) Self {
             return .{
                 .allocator = allocator,
                 .codegen = CodeGen.init(allocator),
                 .store = store,
+                .layout_store = layout_store_opt,
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u48, ValueLocation).init(allocator),
                 .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
@@ -356,7 +364,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .lambda => |lambda| try self.generateLambda(lambda),
                 .closure => |closure| try self.generateClosure(closure),
 
-                // Tags
+                // Records
+                .empty_record => .{ .immediate_i64 = 0 },
+                .record => |record| try self.generateRecord(record),
+                .field_access => |fa| try self.generateFieldAccess(fa),
+
+                // Tuples
+                .tuple => |tuple| try self.generateTuple(tuple),
+                .tuple_access => |ta| try self.generateTupleAccess(ta),
+
+                // Tags (tagged unions)
                 .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
                 .tag => |tag| try self.generateTag(tag),
 
@@ -364,19 +381,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .list => |list| try self.generateList(list),
                 .empty_list => try self.generateEmptyList(),
 
-                // Records
-                .record => |record| try self.generateRecord(record),
-                .empty_record => .{ .immediate_i64 = 0 },
-                .field_access => |fa| try self.generateFieldAccess(fa),
-
-                // Tuples
-                .tuple => |tuple| try self.generateTuple(tuple),
-                .tuple_access => |ta| try self.generateTupleAccess(ta),
-
                 // Low-level operations
                 .low_level => |ll| try self.generateLowLevel(ll),
 
-                // TODO: Implement remaining expression types
+                // Nominal types (transparent wrappers)
+                .nominal => |nom| try self.generateExpr(nom.backing_expr),
+
+                // String literals
+                .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
+
+                // Not yet implemented
                 else => return Error.UnsupportedExpression,
             };
         }
@@ -2469,6 +2483,395 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
+        /// Generate code for a record literal
+        fn generateRecord(self: *Self, rec: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Get the record layout
+            const record_layout = ls.getLayout(rec.record_layout);
+            if (record_layout.tag != .record) {
+                return Error.UnsupportedExpression;
+            }
+
+            const record_data = ls.getRecordData(record_layout.data.record.idx);
+            const stack_size = record_data.size;
+
+            // Zero-sized records don't need storage
+            if (stack_size == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // Allocate stack space for the record
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+
+            // Get field expressions
+            const field_exprs = self.store.getExprSpan(rec.fields);
+
+            // Copy each field to its offset within the record
+            for (field_exprs, 0..) |field_expr_id, i| {
+                const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
+                const field_loc = try self.generateExpr(field_expr_id);
+                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc);
+            }
+
+            return .{ .stack = base_offset };
+        }
+
+        /// Generate code for field access
+        fn generateFieldAccess(self: *Self, access: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Generate code for the record expression
+            const record_loc = try self.generateExpr(access.record_expr);
+
+            // Get the record layout to find field offset
+            const record_layout = ls.getLayout(access.record_layout);
+            if (record_layout.tag != .record) {
+                return Error.UnsupportedExpression;
+            }
+
+            const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, access.field_idx);
+
+            // Return location pointing to the field within the record
+            return switch (record_loc) {
+                .stack => |s| .{ .stack = s + @as(i32, @intCast(field_offset)) },
+                .general_reg => |reg| {
+                    // Record in register - need to extract field
+                    // For small records, this works; for larger ones we'd need to spill
+                    if (field_offset == 0) {
+                        return .{ .general_reg = reg };
+                    } else {
+                        // Shift or mask to get the field - simplified version
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            // LSR to shift right by field_offset * 8 bits
+                            try self.codegen.emit.lsrRegRegImm(.w64, result_reg, reg, @intCast(field_offset * 8));
+                        } else {
+                            try self.codegen.emit.movRegReg(.w64, result_reg, reg);
+                            try self.codegen.emit.shrRegImm8(.w64, result_reg, @intCast(field_offset * 8));
+                        }
+                        self.codegen.freeGeneral(reg);
+                        return .{ .general_reg = result_reg };
+                    }
+                },
+                .immediate_i64 => |val| {
+                    // Immediate value - shift to get field
+                    const shifted = val >> @intCast(field_offset * 8);
+                    return .{ .immediate_i64 = shifted };
+                },
+                else => return Error.UnsupportedExpression,
+            };
+        }
+
+        /// Generate code for a tuple literal
+        fn generateTuple(self: *Self, tup: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Get the tuple layout
+            const tuple_layout = ls.getLayout(tup.tuple_layout);
+            if (tuple_layout.tag != .tuple) {
+                return Error.UnsupportedExpression;
+            }
+
+            const tuple_data = ls.getTupleData(tuple_layout.data.tuple.idx);
+            const stack_size = tuple_data.size;
+
+            // Zero-sized tuples don't need storage
+            if (stack_size == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // Allocate stack space for the tuple
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+
+            // Get element expressions
+            const elem_exprs = self.store.getExprSpan(tup.elems);
+
+            // Copy each element to its offset within the tuple
+            for (elem_exprs, 0..) |elem_expr_id, i| {
+                const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
+                const elem_loc = try self.generateExpr(elem_expr_id);
+                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc);
+            }
+
+            return .{ .stack = base_offset };
+        }
+
+        /// Generate code for tuple element access
+        fn generateTupleAccess(self: *Self, access: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Generate code for the tuple expression
+            const tuple_loc = try self.generateExpr(access.tuple_expr);
+
+            // Get the tuple layout to find element offset
+            const tuple_layout = ls.getLayout(access.tuple_layout);
+            if (tuple_layout.tag != .tuple) {
+                return Error.UnsupportedExpression;
+            }
+
+            const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, access.elem_idx);
+
+            // Return location pointing to the element within the tuple
+            return switch (tuple_loc) {
+                .stack => |s| .{ .stack = s + @as(i32, @intCast(elem_offset)) },
+                .general_reg => |reg| {
+                    if (elem_offset == 0) {
+                        return .{ .general_reg = reg };
+                    } else {
+                        const result_reg = try self.codegen.allocGeneralFor(0);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.lsrRegRegImm(.w64, result_reg, reg, @intCast(elem_offset * 8));
+                        } else {
+                            try self.codegen.emit.movRegReg(.w64, result_reg, reg);
+                            try self.codegen.emit.shrRegImm8(.w64, result_reg, @intCast(elem_offset * 8));
+                        }
+                        self.codegen.freeGeneral(reg);
+                        return .{ .general_reg = result_reg };
+                    }
+                },
+                .immediate_i64 => |val| {
+                    const shifted = val >> @intCast(elem_offset * 8);
+                    return .{ .immediate_i64 = shifted };
+                },
+                else => return Error.UnsupportedExpression,
+            };
+        }
+
+        /// Generate code for a zero-argument tag (just discriminant)
+        fn generateZeroArgTag(self: *Self, tag: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Get the union layout
+            const union_layout = ls.getLayout(tag.union_layout);
+
+            // For simple tags that fit in a register, just return the discriminant
+            if (union_layout.tag == .scalar or union_layout.tag == .zst) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            if (union_layout.tag != .tag_union) {
+                // Might be a simple enum represented as a scalar
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+
+            // For small unions (single discriminant byte), just return the value
+            if (stack_size <= 8) {
+                return .{ .immediate_i64 = tag.discriminant };
+            }
+
+            // For larger unions, allocate space and store discriminant
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+
+            // Zero out the union space first
+            try self.zeroStackArea(base_offset, stack_size);
+
+            // Store discriminant at its offset
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return .{ .stack = base_offset };
+        }
+
+        /// Generate code for a tag with payload arguments
+        fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+
+            // Get the union layout
+            const union_layout = ls.getLayout(tag.union_layout);
+            if (union_layout.tag != .tag_union) {
+                return Error.UnsupportedExpression;
+            }
+
+            const tu_data = ls.getTagUnionData(union_layout.data.tag_union.idx);
+            const stack_size = tu_data.size;
+
+            // Allocate stack space for the tag union
+            const base_offset = self.codegen.allocStackSlot(stack_size);
+
+            // Zero out the union space first
+            try self.zeroStackArea(base_offset, stack_size);
+
+            // Get argument expressions and store them as payload
+            const arg_exprs = self.store.getExprSpan(tag.args);
+            var payload_offset: u32 = 0;
+            for (arg_exprs) |arg_expr_id| {
+                const arg_loc = try self.generateExpr(arg_expr_id);
+                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(payload_offset)), arg_loc);
+                // Advance by 8 bytes per field (simplified - should use actual field sizes)
+                payload_offset += 8;
+            }
+
+            // Store discriminant at its offset
+            const disc_offset = tu_data.discriminant_offset;
+            const disc_size = tu_data.discriminant_size;
+            try self.storeDiscriminant(base_offset + @as(i32, @intCast(disc_offset)), tag.discriminant, disc_size);
+
+            return .{ .stack = base_offset };
+        }
+
+        /// Copy a value to a stack offset
+        fn copyValueToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Error!void {
+            switch (loc) {
+                .immediate_i64 => |val| {
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, val);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .general_reg => |reg| {
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                },
+                .stack => |src_offset| {
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .stack_i128 => |src_offset| {
+                    // Copy 16 bytes
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .float_reg => |reg| {
+                    try self.codegen.emitStoreStackF64(offset, reg);
+                },
+                .immediate_f64 => |val| {
+                    const bits: u64 = @bitCast(val);
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, @bitCast(bits));
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+            }
+        }
+
+        /// Zero out a stack area
+        fn zeroStackArea(self: *Self, offset: i32, size: u32) Error!void {
+            const reg = try self.codegen.allocGeneralFor(0);
+            try self.codegen.emitLoadImm(reg, 0);
+
+            var remaining = size;
+            var current_offset = offset;
+            while (remaining >= 8) {
+                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+                current_offset += 8;
+                remaining -= 8;
+            }
+            // Handle remaining bytes (simplified - stores full 8 bytes even for partial)
+            if (remaining > 0) {
+                try self.codegen.emitStoreStack(.w64, current_offset, reg);
+            }
+
+            self.codegen.freeGeneral(reg);
+        }
+
+        /// Generate code for a string literal
+        fn generateStrLiteral(self: *Self, str_idx: base.StringLiteral.Idx) Error!ValueLocation {
+            const str_bytes = self.store.getString(str_idx);
+
+            // Allocate 24 bytes on stack for Roc string representation
+            const base_offset = self.codegen.allocStackSlot(24);
+
+            if (str_bytes.len < 24) {
+                // Small string optimization: store inline with length in high bit of last byte
+                // Format: [data..., length | 0x80] where 0x80 marks it as small string
+                var bytes: [24]u8 = .{0} ** 24;
+                @memcpy(bytes[0..str_bytes.len], str_bytes);
+                bytes[23] = @intCast(str_bytes.len | 0x80); // Set high bit to indicate small string
+
+                // Store as 3 x 8-byte chunks
+                const reg = try self.codegen.allocGeneralFor(0);
+
+                const chunk0: u64 = @bitCast(bytes[0..8].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk0));
+                try self.codegen.emitStoreStack(.w64, base_offset, reg);
+
+                const chunk1: u64 = @bitCast(bytes[8..16].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk1));
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, reg);
+
+                const chunk2: u64 = @bitCast(bytes[16..24].*);
+                try self.codegen.emitLoadImm(reg, @bitCast(chunk2));
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, reg);
+
+                self.codegen.freeGeneral(reg);
+            } else {
+                // Large string: needs heap allocation (not yet implemented)
+                // For now, return error
+                return Error.UnsupportedExpression;
+            }
+
+            return .{ .stack = base_offset };
+        }
+
+        /// Store a discriminant value at the given offset
+        fn storeDiscriminant(self: *Self, offset: i32, value: u16, disc_size: u8) Error!void {
+            const reg = try self.codegen.allocGeneralFor(0);
+            try self.codegen.emitLoadImm(reg, value);
+
+            // Store appropriate size - architecture specific
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64 only has .w32 and .w64 for emitStoreStack, use direct emit for smaller sizes
+                switch (disc_size) {
+                    1 => {
+                        // Use strb for 1-byte store
+                        if (offset >= 0 and offset <= 4095) {
+                            try self.codegen.emit.strbRegMem(reg, .FP, @intCast(offset));
+                        } else {
+                            // For negative/large offsets, compute address first
+                            try self.codegen.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                            try self.codegen.emit.strbRegMem(reg, .IP0, 0);
+                        }
+                    },
+                    2 => {
+                        // Use strh for 2-byte store
+                        if (offset >= 0 and offset <= 8190) {
+                            try self.codegen.emit.strhRegMem(reg, .FP, @intCast(@as(u32, @intCast(offset)) >> 1));
+                        } else {
+                            try self.codegen.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+                            try self.codegen.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+                            try self.codegen.emit.strhRegMem(reg, .IP0, 0);
+                        }
+                    },
+                    else => {
+                        // 4 or 8 bytes - use standard store
+                        try self.codegen.emitStoreStack(.w64, offset, reg);
+                    },
+                }
+            } else {
+                // x86_64 supports all widths
+                const width: x86_64.RegisterWidth = switch (disc_size) {
+                    1 => .w8,
+                    2 => .w16,
+                    4 => .w32,
+                    else => .w64,
+                };
+                try self.codegen.emitStoreStack(width, offset, reg);
+            }
+
+            self.codegen.freeGeneral(reg);
+        }
+
         /// Generate code for a block
         fn generateBlock(self: *Self, block: anytype) Error!ValueLocation {
             const stmts = self.store.getStmts(block.stmts);
@@ -4199,6 +4602,7 @@ pub const UnsupportedArchCodeGen = struct {
     pub fn init(
         allocator: Allocator,
         _: *const MonoExprStore,
+        _: ?*const LayoutStore,
         _: ?*StaticDataInterner,
     ) Self {
         return .{ .allocator = allocator };
@@ -4242,7 +4646,7 @@ test "code generator initialization" {
     var store = MonoExprStore.init(allocator);
     defer store.deinit();
 
-    var codegen = MonoExprCodeGen.init(allocator, &store, null);
+    var codegen = MonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 }
 
@@ -4258,7 +4662,7 @@ test "generate i64 literal" {
     // Add an i64 literal
     const expr_id = try store.addExpr(.{ .i64_literal = 42 }, base.Region.zero());
 
-    var codegen = MonoExprCodeGen.init(allocator, &store, null);
+    var codegen = MonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .i64, 1);
@@ -4279,7 +4683,7 @@ test "generate bool literal" {
 
     const expr_id = try store.addExpr(.{ .bool_literal = true }, base.Region.zero());
 
-    var codegen = MonoExprCodeGen.init(allocator, &store, null);
+    var codegen = MonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(expr_id, .bool, 1);
@@ -4307,7 +4711,7 @@ test "generate addition" {
         .result_layout = .i64,
     } }, base.Region.zero());
 
-    var codegen = MonoExprCodeGen.init(allocator, &store, null);
+    var codegen = MonoExprCodeGen.init(allocator, &store, null, null);
     defer codegen.deinit();
 
     const result = try codegen.generateCode(add_id, .i64, 1);

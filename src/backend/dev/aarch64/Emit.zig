@@ -529,6 +529,14 @@ pub fn ret(self: *Emit) !void {
     try self.emit32(inst);
 }
 
+/// UDF (permanently undefined instruction - generates exception)
+pub fn udf(self: *Emit, imm16: u16) !void {
+    // UDF #imm16
+    // 0000 0000 0000 0000 imm16
+    const inst: u32 = @as(u32, imm16);
+    try self.emit32(inst);
+}
+
 /// BLR Xn (branch with link to register - call to address in register)
 pub fn blrReg(self: *Emit, reg: GeneralReg) !void {
     // BLR <Xn>
@@ -808,6 +816,20 @@ pub fn strbRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, uoffset: u12) 
     // STRB <Wt>, [<Xn|SP>, #<pimm>]
     // 00 111 0 01 00 imm12 Rn Rt
     const inst: u32 = (0b00 << 30) |
+        (0b111001 << 24) |
+        (0b00 << 22) |
+        (@as(u32, uoffset) << 10) |
+        (@as(u32, base.enc()) << 5) |
+        src.enc();
+    try self.emit32(inst);
+}
+
+/// STRH (store register halfword)
+pub fn strhRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, uoffset: u12) !void {
+    // STRH <Wt>, [<Xn|SP>, #<pimm>]
+    // 01 111 0 01 00 imm12 Rn Rt
+    // Note: uoffset is scaled by 2 (halfword), caller must divide offset by 2
+    const inst: u32 = (0b01 << 30) |
         (0b111001 << 24) |
         (0b00 << 22) |
         (@as(u32, uoffset) << 10) |

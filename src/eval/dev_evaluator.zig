@@ -345,8 +345,14 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Create the lowerer
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, null);
+        // Create a layout store for resolving layouts of composite types
+        var layout_store = layout.Store.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
+            return error.OutOfMemory;
+        };
+        defer layout_store.deinit();
+
+        // Create the lowerer with the layout store
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, &layout_store);
         defer lowerer.deinit();
 
         // Lower the CIR expression to Mono IR
@@ -366,10 +372,11 @@ pub const DevEvaluator = struct {
         else
             1;
 
-        // Create the code generator
+        // Create the code generator with the layout store
         var codegen = backend.MonoExprCodeGen.init(
             self.allocator,
             &mono_store,
+            &layout_store,
             &self.static_interner,
         );
         defer codegen.deinit();

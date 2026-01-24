@@ -59,6 +59,7 @@ const TailRecursion = @import("TailRecursion.zig");
 const MonoExprStore = store_mod;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
+const TypeScope = types.TypeScope;
 
 const Self = @This();
 
@@ -76,6 +77,9 @@ lambda_inference: ?*LambdaSetInference,
 
 /// Layout store (for computing layouts from types)
 layout_store: ?*LayoutStore,
+
+/// Type scope for layout computation (for polymorphic type variable resolution)
+type_scope: TypeScope,
 
 /// Track which (module_idx, pattern_idx) pairs have been lowered to avoid duplicates
 /// Maps to the MonoSymbol that was created
@@ -127,6 +131,7 @@ pub fn init(
         .all_module_envs = all_module_envs,
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
+        .type_scope = TypeScope.init(allocator),
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
@@ -140,6 +145,7 @@ pub fn deinit(self: *Self) void {
     self.lowered_symbols.deinit();
     self.type_env.deinit();
     self.pending_type_annos.deinit();
+    self.type_scope.deinit();
 }
 
 /// Get the module environment at the given index
@@ -192,15 +198,25 @@ fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Id
     return MonoSymbol.none;
 }
 
+/// Compute layout from an expression index using the layout store
+fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
+    const ls = self.layout_store orelse return null;
+
+    // Get the type variable from the expression index
+    const type_var = ModuleEnv.varFrom(expr_idx);
+
+    // Try to compute the layout
+    const layout_idx = ls.addTypeVar(type_var, &self.type_scope) catch {
+        // Layout computation can fail for various reasons (recursive types, etc.)
+        // Fall back to default handling
+        return null;
+    };
+
+    return layout_idx;
+}
+
 /// Get layout for an expression (placeholder - needs type info)
 fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx {
-    // For now, use a default layout. In full implementation, this would:
-    // 1. Get the type variable from the expression
-    // 2. Resolve it via the layout store
-    if (self.layout_store) |_| {
-        // TODO: Proper layout resolution from type variable
-    }
-
     // Default fallback based on expression type
     return switch (expr) {
         .e_num => |num| switch (num.kind) {
@@ -351,11 +367,12 @@ pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!Mon
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
 
-    return self.lowerExprInner(module_env, expr, region);
+    return self.lowerExprInner(module_env, expr, region, expr_idx);
 }
 
 /// Lower an expression with its CIR representation
-fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region) Error!MonoExprId {
+/// expr_idx is optional - when available, used to compute layouts from type info
+fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: ?CIR.Expr.Idx) Error!MonoExprId {
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
@@ -527,9 +544,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_tuple => |tuple| blk: {
             const elems = try self.lowerExprSpan(module_env, tuple.elems);
+            // Compute layout from type variable if available
+            const tuple_layout = if (expr_idx) |idx|
+                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
+            else
+                .i64;
             break :blk .{
                 .tuple = .{
-                    .tuple_layout = .i64, // TODO
+                    .tuple_layout = tuple_layout,
                     .elems = elems,
                 },
             };
@@ -537,9 +559,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_record => |rec| blk: {
             const result = try self.lowerRecordFields(module_env, rec.fields);
+            // Compute layout from type variable if available
+            const record_layout = if (expr_idx) |idx|
+                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
+            else
+                .i64;
             break :blk .{
                 .record = .{
-                    .record_layout = .i64, // TODO
+                    .record_layout = record_layout,
                     .fields = result.fields,
                     .field_names = result.field_names,
                 },
@@ -576,12 +603,36 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
+            // Compute receiver's layout to get field info
+            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse .i64;
+
+            // Try to compute field index and layout from the record layout
+            var field_idx: u16 = 0;
+            var field_layout: LayoutIdx = .i64;
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(receiver_layout);
+                if (layout_val.tag == .record) {
+                    const record_data = ls.getRecordData(layout_val.data.record.idx);
+                    const fields = ls.record_fields.sliceRange(record_data.getFields());
+                    const field_name_text = module_env.getIdent(dot.field_name);
+                    // Find field by name
+                    var i: u16 = 0;
+                    while (i < fields.len) : (i += 1) {
+                        const field = fields.get(i);
+                        if (std.mem.eql(u8, module_env.getIdent(field.name), field_name_text)) {
+                            field_idx = i;
+                            field_layout = field.layout;
+                            break;
+                        }
+                    }
+                }
+            }
             break :blk .{
                 .field_access = .{
                     .record_expr = receiver,
-                    .record_layout = .i64, // TODO
-                    .field_layout = .i64, // TODO
-                    .field_idx = 0, // TODO: resolve field index from layout
+                    .record_layout = receiver_layout,
+                    .field_layout = field_layout,
+                    .field_idx = field_idx,
                     .field_name = dot.field_name,
                 },
             };
@@ -875,7 +926,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 fn lowerExprFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
-    return self.lowerExprInner(module_env, expr, region);
+    return self.lowerExprInner(module_env, expr, region, expr_idx);
 }
 
 /// Lower a span of expressions
@@ -2062,7 +2113,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
         .e_if => |ite| try self.lowerIfToSwitchStmt(module_env, ite, ret_layout),
         else => {
             // For other expressions, wrap in a return statement
-            const expr_id = try self.lowerExprInner(module_env, expr, region);
+            const expr_id = try self.lowerExprInner(module_env, expr, region, expr_idx);
             return try self.store.addCFStmt(.{
                 .ret = .{ .value = expr_id },
             });
