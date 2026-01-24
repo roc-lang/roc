@@ -27,5 +27,5 @@ pub fn init() Error!Unix {
 pub fn deinit(unix: Unix) void {
     const stdin_handle = std.fs.File.stdin().handle;
 
-    std.posix.tcsetattr(stdin_handle, .NOW, unix.old_termios) catch unreachable;
+    std.posix.tcsetattr(stdin_handle, .NOW, unix.old_termios) catch {};
 }

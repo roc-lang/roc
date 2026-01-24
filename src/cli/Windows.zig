@@ -25,16 +25,16 @@ pub fn init() Error!Windows {
     }
 
     const ConsoleOutputMode = packed struct(windows.DWORD) {
-        ENABLE_PROCCESSED_OUTPUT: bool, // 0x0001
+        ENABLE_PROCESSED_OUTPUT: bool, // 0x0001
         ENABLE_WRAP_AT_EOL_OUTPUT: bool, // 0x0002
-        ENABLE_VIRUTAL_TERMINAL_PROCESSING: bool, // 0x0004
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING: bool, // 0x0004
         DISABLE_NEWLINE_AUTO_RETURN: bool, // 0x0008
         ENABLE_LVB_GRID_WORLDWIDE: bool, // 0x0010
         _: u27,
     };
 
     var requested_out_mode: ConsoleOutputMode = @bitCast(output_mode);
-    requested_out_mode.ENABLE_VIRUTAL_TERMINAL_PROCESSING = true;
+    requested_out_mode.ENABLE_VIRTUAL_TERMINAL_PROCESSING = true;
     requested_out_mode.DISABLE_NEWLINE_AUTO_RETURN = true;
 
     if (0 == windows.SetConsoleMode(h_out, @bitCast(requested_out_mode))) {
