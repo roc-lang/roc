@@ -2714,17 +2714,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Copy a specific number of bytes from a value location to a stack offset
         /// This uses the layout-determined size rather than inferring from ValueLocation type
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
-            // Handle non-stack locations specially.
-            // The layout store uses Dec (16 bytes) as the default numeric type, but Lower.zig
-            // optimizes small integer literals to i64_literal (8 bytes). When storing an 8-byte
-            // value into a 16-byte slot, we must zero-fill the remaining bytes to ensure
-            // consistent comparison results.
             switch (loc) {
                 .immediate_i64 => |val| {
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadImm(reg, val);
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    // Zero-fill remaining bytes if layout is larger (e.g., Dec slot for i64 value)
+                    // Zero-fill remaining bytes if layout is larger than 8 bytes
                     if (size > 8) {
                         try self.codegen.emitLoadImm(reg, 0);
                         var filled: u32 = 8;
@@ -2749,7 +2744,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .general_reg => |reg| {
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    // Zero-fill remaining bytes if layout is larger
+                    // Zero-fill remaining bytes if layout is larger than 8 bytes
                     if (size > 8) {
                         const zero_reg = try self.codegen.allocGeneralFor(0);
                         try self.codegen.emitLoadImm(zero_reg, 0);
