@@ -1,4 +1,5 @@
-// implementation taken from https://codeberg.org/TheShinx317/anyline
+//! Windows console mode handling for the REPL line editor.
+//! Taken from the anyline library: https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
 const windows = @cImport(@cInclude("windows.h"));

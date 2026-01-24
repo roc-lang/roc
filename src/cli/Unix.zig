@@ -1,4 +1,5 @@
-// implementation taken/modified from https://codeberg.org/TheShinx317/anyline
+//! Unix terminal raw mode handling for the REPL line editor.
+//! Modified from the anyline library: https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
 const Unix = @This();

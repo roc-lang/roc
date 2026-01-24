@@ -1,3 +1,4 @@
+//! ANSI terminal escape sequence utilities for cursor control and screen manipulation.
 const std = @import("std");
 
 const CSI = "\x1B[";

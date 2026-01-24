@@ -1,4 +1,5 @@
-// This code is modified from the implementation in https://codeberg.org/TheShinx317/anyline
+//! REPL line editor with history support and cross-platform terminal handling.
+//! Modified from the anyline library: https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
@@ -241,12 +242,50 @@ pub const ReadLineError =
     };
 
 /// Reads a line of input from stdin with line editing and history support.
+/// Falls back to simple line reading when stdin is not a TTY (e.g., piped input).
 pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
 
     const stdin_file = std.fs.File.stdin();
+
+    // Use simple line reading for non-TTY input (pipes, redirects, tests)
+    if (!stdin_file.isTty()) {
+        return readLineSimple(outlive, prompt, &stdout_writer.interface, stdin_file);
+    }
+
     return helper(self, outlive, prompt, &stdout_writer.interface, stdin_file);
+}
+
+/// Simple line reading for non-TTY input (no raw mode, no escape sequences).
+fn readLineSimple(outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ReadLineError![]u8 {
+    // Print the prompt
+    try out.writeAll(prompt);
+    try out.flush();
+
+    // Read until newline or EOF
+    var line_buffer = std.ArrayList(u8).empty;
+    var read_buffer: [1]u8 = undefined;
+
+    while (true) {
+        const bytes_read = try in.read(&read_buffer);
+        if (bytes_read == 0) {
+            // EOF - return "exit" to signal REPL should exit
+            line_buffer.deinit(outlive);
+            return try outlive.dupe(u8, "exit");
+        }
+
+        const char = read_buffer[0];
+        if (char == '\n' or char == '\r') {
+            break;
+        }
+        try line_buffer.append(outlive, char);
+    }
+
+    try out.writeAll(NEW_LINE);
+    try out.flush();
+
+    return try line_buffer.toOwnedSlice(outlive);
 }
 
 fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.Writer, in: std.fs.File) ![]u8 {
