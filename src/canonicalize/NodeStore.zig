@@ -2785,14 +2785,6 @@ pub fn getIfBranch(store: *const NodeStore, if_branch_idx: CIR.Expr.IfBranch.Idx
     };
 }
 
-/// Check if a raw node index refers to a definition node.
-/// This is useful when exposed items might be either definitions or type declarations.
-pub fn isDefNode(store: *const NodeStore, node_idx: u16) bool {
-    const nid: Node.Idx = @enumFromInt(node_idx);
-    const node = store.nodes.get(nid);
-    return node.tag == .def;
-}
-
 /// Generic function to get the top of any scratch buffer
 pub fn scratchTop(store: *NodeStore, comptime field_name: []const u8) u32 {
     return @field(store.scratch.?, field_name).top();
@@ -2903,11 +2895,6 @@ pub fn clearScratchTypeAnnosFrom(store: *NodeStore, from: u32) void {
     store.clearScratchFrom("type_annos", from);
 }
 
-/// Clears scratch where clauses from the given index.
-pub fn clearScratchWhereClausesFrom(store: *NodeStore, from: u32) void {
-    store.clearScratchFrom("where_clauses", from);
-}
-
 /// Creates a span from the scratch type annotations starting at the given index.
 pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.TypeAnno.Span {
     return try store.spanFrom("type_annos", CIR.TypeAnno.Span, start);
@@ -3004,11 +2991,6 @@ pub fn patternSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Patter
     return try store.spanFrom("patterns", CIR.Pattern.Span, start);
 }
 
-/// Clears scratch definitions starting from a specified index.
-pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("defs", start);
-}
-
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     return @ptrCast(store.index_data.items.items[span.start..][0..span.len]);
@@ -3067,16 +3049,6 @@ pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataS
 /// Creates a slice corresponding to a span.
 pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
     return @as(T, @enumFromInt(store.index_data.items.items[span.start + span.len - 1]));
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
-    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
-    return store.lastFromSpan(CIR.Statement.Idx, span.span);
 }
 
 /// Returns a slice of if branches from the store.
@@ -3896,15 +3868,6 @@ pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Dia
     return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
 }
 
-/// Ensure the node store has capacity for at least the requested number of
-/// slots. Then return the *final* index.
-pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx {
-    const start_idx = store.nodes.len();
-    try store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
-    // Return where the LAST node will actually be placed
-    return @enumFromInt(start_idx + count - 1);
-}
-
 /// Adds an type variable slot to the store.
 ///
 /// IMPORTANT: You should not use this function directly! Instead, use it's
@@ -3917,23 +3880,6 @@ pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base
     const nid = try store.nodes.append(store.gpa, node);
     _ = try store.regions.append(store.gpa, region);
     return @enumFromInt(@intFromEnum(nid));
-}
-
-/// Given a target node idx, check that the it is in bounds
-/// If it is, do nothing
-/// If it's not, then fill in the store with type_var_slots for all missing
-/// intervening nodes, *up to and including* the provided node
-pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
-    const idx = @intFromEnum(target_idx);
-    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
-    while (store.nodes.items.len <= idx) {
-        var node = Node.init(.type_var_slot);
-        node.setPayload(.{ .type_var_slot = .{
-            .parent_node_idx = @intFromEnum(parent_node_idx),
-        } });
-        store.nodes.items.appendAssumeCapacity(node);
-        _ = try store.regions.append(store.gpa, region);
-    }
 }
 
 /// Return the current top index for scratch match branches.

@@ -365,28 +365,6 @@ pub fn introduceTypeAlias(
     });
 }
 
-/// Update an existing type declaration in the scope
-/// This is used for recursive type declarations where we need to update
-/// the statement index after canonicalizing the type annotation
-pub fn updateTypeDecl(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    new_type_decl: CIR.Statement.Idx,
-) std.mem.Allocator.Error!void {
-    if (scope.type_bindings.getPtr(name)) |binding_ptr| {
-        const current = binding_ptr.*;
-        binding_ptr.* = switch (current) {
-            .local_nominal => TypeBinding{ .local_nominal = new_type_decl },
-            .local_alias => TypeBinding{ .local_alias = new_type_decl },
-            .associated_nominal => TypeBinding{ .associated_nominal = new_type_decl },
-            .external_nominal => current,
-        };
-    } else {
-        try scope.type_bindings.put(gpa, name, TypeBinding{ .local_nominal = new_type_decl });
-    }
-}
-
 /// Introduce a type variable into the scope
 pub fn introduceTypeVar(
     scope: *Scope,

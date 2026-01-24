@@ -1036,24 +1036,6 @@ pub const ExternalDecl = struct {
         const attrs = tree.beginNode();
         try tree.endNode(node, attrs);
     }
-
-    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) !void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-        // Add fully qualified name
-        try tree.pushStringPair("ident", cir.getIdent(self.qualified_name));
-
-        // Add kind
-        switch (self.kind) {
-            .value => try tree.pushStringPair("kind", "value"),
-            .type => try tree.pushStringPair("kind", "type"),
-        }
-
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
-    }
 };
 
 // Real Report type from the reporting module
