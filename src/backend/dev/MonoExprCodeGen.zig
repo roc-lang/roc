@@ -4025,9 +4025,82 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .i128, .u128, .dec => {
                     try self.storeI128ToMem(saved_ptr_reg, loc);
                 },
+                .str => {
+                    // String is 24 bytes - copy from stack to destination
+                    try self.copyStackToPtr(loc, saved_ptr_reg, 24);
+                },
                 else => {
+                    // Check if this is a composite type (record/tuple) via layout store
+                    if (self.layout_store) |ls| {
+                        const layout_val = ls.getLayout(result_layout);
+                        switch (layout_val.tag) {
+                            .record => {
+                                const record_data = ls.getRecordData(layout_val.data.record.idx);
+                                try self.copyStackToPtr(loc, saved_ptr_reg, record_data.size);
+                                return;
+                            },
+                            .tuple => {
+                                const tuple_data = ls.getTupleData(layout_val.data.tuple.idx);
+                                try self.copyStackToPtr(loc, saved_ptr_reg, tuple_data.size);
+                                return;
+                            },
+                            .tag_union => {
+                                const tu_data = ls.getTagUnionData(layout_val.data.tag_union.idx);
+                                try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
+                                return;
+                            },
+                            else => {},
+                        }
+                    }
+                    // Default: store single 8-byte value
                     const reg = try self.ensureInGeneralReg(loc);
                     try self.emitStoreToMem(saved_ptr_reg, reg);
+                },
+            }
+        }
+
+        /// Copy bytes from stack location to memory pointed to by ptr_reg
+        fn copyStackToPtr(self: *Self, loc: ValueLocation, ptr_reg: GeneralReg, size: u32) Error!void {
+            switch (loc) {
+                .stack => |stack_offset| {
+                    // Copy size bytes from stack to destination
+                    const temp_reg = try self.codegen.allocGeneralFor(0);
+                    var remaining = size;
+                    var src_offset: i32 = stack_offset;
+                    var dst_offset: i32 = 0;
+
+                    // Copy 8 bytes at a time
+                    while (remaining >= 8) {
+                        try self.codegen.emitLoadStack(.w64, temp_reg, src_offset);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemUoff(.w64, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 3));
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, ptr_reg, dst_offset, temp_reg);
+                        }
+                        src_offset += 8;
+                        dst_offset += 8;
+                        remaining -= 8;
+                    }
+
+                    // Handle remaining bytes (4, 2, 1)
+                    if (remaining >= 4) {
+                        try self.codegen.emitLoadStack(.w32, temp_reg, src_offset);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemUoff(.w32, temp_reg, ptr_reg, @intCast(@as(u32, @intCast(dst_offset)) >> 2));
+                        } else {
+                            try self.codegen.emit.movMemReg(.w32, ptr_reg, dst_offset, temp_reg);
+                        }
+                        src_offset += 4;
+                        dst_offset += 4;
+                        remaining -= 4;
+                    }
+
+                    self.codegen.freeGeneral(temp_reg);
+                },
+                else => {
+                    // Not a stack location - try to store as single value
+                    const reg = try self.ensureInGeneralReg(loc);
+                    try self.emitStoreToMem(ptr_reg, reg);
                 },
             }
         }

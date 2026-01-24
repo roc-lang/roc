@@ -16,6 +16,7 @@ const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
 const layout = @import("layout");
+const types = @import("types");
 const backend = @import("backend");
 const mono = @import("mono");
 const builtin_loading = @import("builtin_loading.zig");
@@ -364,7 +365,22 @@ pub const DevEvaluator = struct {
         var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
         defer type_env.deinit();
         const cir_expr = module_env.store.getExpr(expr_idx);
-        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+        var result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+
+        // For composite types (tuples, records), try to compute proper layout from type var
+        if (result_layout == .i64) {
+            switch (cir_expr) {
+                .e_tuple, .e_record => {
+                    const type_var = can.ModuleEnv.varFrom(expr_idx);
+                    var type_scope = types.TypeScope.init(self.allocator);
+                    defer type_scope.deinit();
+                    if (layout_store.addTypeVar(type_var, &type_scope)) |computed_layout| {
+                        result_layout = computed_layout;
+                    } else |_| {}
+                },
+                else => {},
+            }
+        }
 
         // Detect tuple expressions to set tuple_len
         const tuple_len: usize = if (cir_expr == .e_tuple)
