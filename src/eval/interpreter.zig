@@ -20,8 +20,6 @@ const TypeScope = types.TypeScope;
 const Content = types.Content;
 const HashMap = std.hash_map.HashMap;
 const unify = @import("check").unifier;
-const problem_mod = @import("check").problem;
-const snapshot_mod = @import("check").snapshot;
 const stack = @import("stack.zig");
 const StackValue = @import("StackValue.zig");
 const render_helpers = @import("render_helpers.zig");
@@ -358,11 +356,8 @@ pub const Interpreter = struct {
     import_envs: std.AutoHashMapUnmanaged(can.CIR.Import.Idx, *const can.ModuleEnv),
     current_module_id: u32,
     next_module_id: u32,
-    problems: problem_mod.Store,
-    snapshots: snapshot_mod.Store,
     import_mapping: *const import_mapping_mod.ImportMapping,
     unify_scratch: unify.Scratch,
-    type_writer: types.TypeWriter,
 
     // Minimal eval support
     stack_memory: stack.Stack,
@@ -529,11 +524,8 @@ pub const Interpreter = struct {
             .import_envs = import_envs,
             .current_module_id = 0, // Current module always gets ID 0
             .next_module_id = next_module_id,
-            .problems = try problem_mod.Store.initCapacity(allocator, 64),
-            .snapshots = try snapshot_mod.Store.initCapacity(allocator, 256),
             .import_mapping = import_mapping,
             .unify_scratch = try unify.Scratch.init(allocator),
-            .type_writer = try types.TypeWriter.initFromParts(allocator, rt_types_ptr, env.common.getIdentStore(), null),
             .stack_memory = try stack.Stack.initCapacity(allocator, stack_size),
             .bindings = try std.array_list.Managed(Binding).initCapacity(allocator, 8),
             .active_closures = try std.array_list.Managed(StackValue).initCapacity(allocator, 4),
@@ -8245,11 +8237,8 @@ pub const Interpreter = struct {
         self.runtime_layout_store.deinit();
         self.runtime_types.deinit();
         self.allocator.destroy(self.runtime_types);
-        self.snapshots.deinit();
-        self.problems.deinit(self.allocator);
         // Note: import_mapping is borrowed, not owned - don't deinit it
         self.unify_scratch.deinit();
-        self.type_writer.deinit();
         self.stack_memory.deinit();
         self.bindings.deinit();
         self.active_closures.deinit();
@@ -10159,17 +10148,13 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithConf(
+            unify.unifyForInterpreter(
                 self.runtime_layout_store.env,
                 self.runtime_types,
-                &self.problems,
-                &self.snapshots,
-                &self.type_writer,
                 &self.unify_scratch,
                 &self.unify_scratch.occurs_scratch,
                 params[i],
                 args[i],
-                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
             );
         }
         // ret_var may now be constrained
@@ -11714,23 +11699,17 @@ pub const Interpreter = struct {
                                 break :blk try self.runtime_types.freshFromContent(dec_content);
                             };
                             const dec_var = target_var;
-                            _ = try unify.unify(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 lhs_rt_var,
                                 dec_var,
                             );
-                            _ = try unify.unify(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 rhs_rt_var,
@@ -11738,12 +11717,9 @@ pub const Interpreter = struct {
                             );
                         } else if (lhs_is_flex and !rhs_is_flex) {
                             // LHS is flex, RHS is concrete - unify LHS with RHS
-                            _ = try unify.unify(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 lhs_rt_var,
@@ -11751,12 +11727,9 @@ pub const Interpreter = struct {
                             );
                         } else if (!lhs_is_flex and rhs_is_flex) {
                             // RHS is flex, LHS is concrete - unify RHS with LHS
-                            _ = try unify.unify(
+                            unify.unifyForInterpreter(
                                 self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 rhs_rt_var,
@@ -12702,17 +12675,13 @@ pub const Interpreter = struct {
                 // call_ret_rt_var (fresh translation) because the function's return var
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
-                    _ = try unify.unifyWithConf(
+                    unify.unifyForInterpreter(
                         self.runtime_layout_store.env,
                         self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.type_writer,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         call_ret_rt_var,
                         entry.return_var,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                     );
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
@@ -17988,17 +17957,13 @@ pub const Interpreter = struct {
                         // Unify the method's first parameter with the receiver type
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
-                            _ = try unify.unifyWithConf(
-                                self.env,
+                            unify.unifyForInterpreter(
+                                self.runtime_layout_store.env,
                                 self.runtime_types,
-                                &self.problems,
-                                &self.snapshots,
-                                &self.type_writer,
                                 &self.unify_scratch,
                                 &self.unify_scratch.occurs_scratch,
                                 method_params[0],
                                 da.receiver_rt_var,
-                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
                             );
                         }
 
@@ -18289,20 +18254,16 @@ pub const Interpreter = struct {
                             const arg_count_to_unify = @min(param_vars.len, all_args.len);
                             for (0..arg_count_to_unify) |unify_idx| {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
-                                const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
+                                const arg_resolved = self.runtime_types.resolveVarAndCompressPath(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
-                                _ = unify.unifyWithConf(
+                                unify.unifyForInterpreter(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
-                                    &self.problems,
-                                    &self.snapshots,
-                                    &self.type_writer,
                                     &self.unify_scratch,
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
                                     arg_copy,
-                                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                                ) catch {};
+                                );
                             }
                             // Return type is now properly instantiated through unification
                             break :blk info.ret;
@@ -18368,28 +18329,22 @@ pub const Interpreter = struct {
                 // This is the same approach used for no-args method dispatch.
                 // IMPORTANT: Create a copy of the receiver type before unification because
                 // unification modifies BOTH sides, which would corrupt the receiver's type.
-                const fn_args = switch (lambda_resolved.desc.content.structure) {
-                    .fn_pure => |f| self.runtime_types.sliceVars(f.args),
-                    .fn_effectful => |f| self.runtime_types.sliceVars(f.args),
-                    .fn_unbound => |f| self.runtime_types.sliceVars(f.args),
-                    else => &[_]types.Var{},
-                };
+
+                const func = lambda_resolved.desc.content.unwrapFunc();
+                const fn_args = if (func) |f| self.runtime_types.sliceVars(f.args) else &[_]types.Var{};
+
                 if (fn_args.len >= 1) {
                     // Create a copy of the receiver's type to avoid corrupting the original
-                    const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
+                    const recv_resolved = self.runtime_types.resolveVarAndCompressPath(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
-                    _ = unify.unifyWithConf(
-                        self.env,
+                    unify.unifyForInterpreter(
+                        self.runtime_layout_store.env,
                         self.runtime_types,
-                        &self.problems,
-                        &self.snapshots,
-                        &self.type_writer,
                         &self.unify_scratch,
                         &self.unify_scratch.occurs_scratch,
                         fn_args[0],
                         recv_copy,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
-                    ) catch {};
+                    );
                 }
 
                 if (should_instantiate_method) {
