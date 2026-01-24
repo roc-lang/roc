@@ -1489,7 +1489,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => 8,
                     };
 
-
                     // Compare each inner element
                     // temp_lhs = inner lhs ptr, temp_rhs = inner rhs ptr
                     const inner_temp_lhs = try self.codegen.allocGeneralFor(0);
@@ -4311,7 +4310,7 @@ pub const UnsupportedArchCodeGen = struct {
         return error.UnsupportedArchitecture;
     }
 
-    pub fn generateCode(_: *Self, _: anytype, _: anytype) Error!CodeResult {
+    pub fn generateCode(_: *Self, _: anytype, _: anytype, _: anytype) Error!CodeResult {
         return error.UnsupportedArchitecture;
     }
 
