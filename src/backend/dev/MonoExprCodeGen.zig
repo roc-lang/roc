@@ -373,9 +373,87 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .tuple => |tuple| try self.generateTuple(tuple),
                 .tuple_access => |ta| try self.generateTupleAccess(ta),
 
+                // Low-level operations
+                .low_level => |ll| try self.generateLowLevel(ll),
+
                 // TODO: Implement remaining expression types
                 else => return Error.UnsupportedExpression,
             };
+        }
+
+        /// Generate code for low-level operations
+        fn generateLowLevel(self: *Self, ll: anytype) Error!ValueLocation {
+            const args = self.store.getExprSpan(ll.args);
+
+            switch (ll.op) {
+                .list_len => {
+                    // List is a (ptr, len) pair - length is at offset 8
+                    if (args.len < 1) return Error.UnsupportedExpression;
+                    const list_loc = try self.generateExpr(args[0]);
+
+                    switch (list_loc) {
+                        .stack => |base_offset| {
+                            // Length is at offset 8 in the list struct
+                            const result_reg = try self.codegen.allocGeneralFor(0);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, base_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, base_offset + 8);
+                            }
+                            return .{ .general_reg = result_reg };
+                        },
+                        .immediate_i64 => |val| {
+                            // Empty list - length is 0
+                            if (val == 0) {
+                                return .{ .immediate_i64 = 0 };
+                            }
+                            return Error.UnsupportedExpression;
+                        },
+                        else => return Error.UnsupportedExpression,
+                    }
+                },
+                .list_is_empty => {
+                    // List is empty if length is 0
+                    if (args.len < 1) return Error.UnsupportedExpression;
+                    const list_loc = try self.generateExpr(args[0]);
+
+                    switch (list_loc) {
+                        .stack => |base_offset| {
+                            // Length is at offset 8 - check if zero
+                            const len_reg = try self.codegen.allocGeneralFor(0);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
+                            }
+                            // Compare with 0
+                            try self.emitCmpImm(len_reg, 0);
+                            // Set result to 1 if equal (empty), 0 otherwise
+                            const result_reg = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(result_reg, 0);
+                            const one_reg = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(one_reg, 1);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.csel(.w64, result_reg, one_reg, result_reg, .eq);
+                            } else {
+                                try self.codegen.emit.cmovcc(.equal, .w64, result_reg, one_reg);
+                            }
+                            self.codegen.freeGeneral(one_reg);
+                            self.codegen.freeGeneral(len_reg);
+                            return .{ .general_reg = result_reg };
+                        },
+                        .immediate_i64 => |val| {
+                            // Empty list - is_empty returns true (1)
+                            if (val == 0) {
+                                return .{ .immediate_i64 = 1 };
+                            }
+                            return Error.UnsupportedExpression;
+                        },
+                        else => return Error.UnsupportedExpression,
+                    }
+                },
+                else => return Error.UnsupportedExpression,
+            }
         }
 
         /// Generate code for an i128 literal
@@ -1961,14 +2039,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // First pass: calculate total size needed (including nested structures)
             var total_size: u32 = 0;
             var elem_offsets: [16]u32 = undefined; // Max 16 elements
+            var elem_sizes: [16]u32 = undefined; // Size of each element
             for (elems, 0..) |elem_id, i| {
                 elem_offsets[i] = total_size;
                 const elem_expr = self.store.getExpr(elem_id);
-                // Check if element is a nested tuple - needs more space
+                // Calculate element size based on type
                 const elem_size: u32 = switch (elem_expr) {
                     .tuple => |t| @as(u32, @intCast(self.store.getExprSpan(t.elems).len)) * 8,
+                    .tag => 16, // Tag unions with payloads need 16 bytes (discriminant + payload)
+                    .list => 16, // Lists are (ptr, len) pairs = 16 bytes
                     else => 8,
                 };
+                elem_sizes[i] = elem_size;
                 total_size += elem_size;
             }
 
@@ -1979,8 +2061,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const elem_loc = try self.generateExpr(elem_id);
                 const dest_offset = tuple_offset + @as(i32, @intCast(elem_offsets[i]));
                 const elem_expr = self.store.getExpr(elem_id);
+                const this_elem_size = elem_sizes[i];
 
-                // Handle nested tuples specially - copy all elements
+                // Handle multi-word values specially - copy all bytes
                 switch (elem_expr) {
                     .tuple => |t| {
                         const nested_elems = self.store.getExprSpan(t.elems);
@@ -2013,8 +2096,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             },
                         }
                     },
+                    .tag, .list => {
+                        // Tags and lists are 16-byte structures on the stack
+                        switch (elem_loc) {
+                            .stack => |src_offset| {
+                                // Copy 16 bytes (2 x 8-byte words)
+                                const temp_reg = try self.codegen.allocGeneralFor(0);
+                                // First 8 bytes
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp_reg);
+                                }
+                                // Second 8 bytes
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 8);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp_reg);
+                                }
+                                self.codegen.freeGeneral(temp_reg);
+                            },
+                            .general_reg => |reg| {
+                                // Zero-arg tag in register - just store 8 bytes
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, dest_offset);
+                                } else {
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, reg);
+                                }
+                            },
+                            else => {
+                                // Immediate or other - store what we can
+                                const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
+                                } else {
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
+                                }
+                                self.codegen.freeGeneral(elem_reg);
+                            },
+                        }
+                    },
                     else => {
                         // Simple value - store 8 bytes
+                        _ = this_elem_size; // May be used for larger types in the future
                         const elem_reg = try self.ensureInGeneralReg(elem_loc);
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
