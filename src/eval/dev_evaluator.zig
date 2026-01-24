@@ -44,8 +44,8 @@ const MonoLower = mono.Lower;
 const StaticDataInterner = backend.StaticDataInterner;
 const JitStaticBackend = StaticDataInterner.JitStaticBackend;
 
-// Special layout indices for lists (beyond the 16 scalar types)
-// These are used by the dev evaluator to track list types for proper result formatting
+/// Special layout index for List I64 type (beyond the 16 scalar types).
+/// Used by the dev evaluator to track list types for proper result formatting.
 pub const list_i64_layout: LayoutIdx = @enumFromInt(100);
 
 /// Environment for RocOps in the DevEvaluator.

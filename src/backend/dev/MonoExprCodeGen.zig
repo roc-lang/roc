@@ -55,8 +55,8 @@ const LayoutStore = layout.Store;
 const CFStmtId = mono.CFStmtId;
 const LayoutIdxSpan = mono.LayoutIdxSpan;
 
-// Special layout indices for list types (must match dev_evaluator.zig)
-// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results
+/// Special layout index for List I64 type (must match dev_evaluator.zig).
+/// Lists are (ptr, len, capacity) = 24 bytes and need special handling when returning results.
 pub const list_i64_layout: layout.Idx = @enumFromInt(100);
 const MonoProc = mono.MonoProc;
 
@@ -2330,11 +2330,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Return the list location
             // Note: data_offset is no longer meaningful for heap-allocated lists,
             // but we keep it for compatibility with existing code
-            return .{ .list_stack = .{
-                .struct_offset = list_struct_offset,
-                .data_offset = heap_ptr_slot, // Now points to heap ptr storage on stack
-                .num_elements = num_elems,
-            } };
+            return .{
+                .list_stack = .{
+                    .struct_offset = list_struct_offset,
+                    .data_offset = heap_ptr_slot, // Now points to heap ptr storage on stack
+                    .num_elements = num_elems,
+                },
+            };
         }
 
         /// Generate code for a record literal
@@ -2645,63 +2647,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
             }
         }
-
-        /// Copy a 24-byte composite value (string, list, etc.) to a stack offset
-        /// This handles all ValueLocation types and always copies exactly 24 bytes
-        fn copyCompositeToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Error!void {
-            switch (loc) {
-                .stack => |src_offset| {
-                    // Copy all 24 bytes from source stack location
-                    const reg = try self.codegen.allocGeneralFor(0);
-                    // Word 0
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    // Word 1
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    // Word 2
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .stack_str => |src_offset| {
-                    // Copy 24-byte RocStr struct
-                    const reg = try self.codegen.allocGeneralFor(0);
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                .list_stack => |list_info| {
-                    // Copy 24-byte list struct
-                    const reg = try self.codegen.allocGeneralFor(0);
-                    // Copy ptr (first 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
-                    try self.codegen.emitStoreStack(.w64, offset, reg);
-                    // Copy len (second 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 8);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    // Copy capacity (third 8 bytes)
-                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 16);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-                else => {
-                    // For other types, use the regular copy and zero the rest
-                    try self.copyValueToStackOffset(offset, loc);
-                    // Zero the remaining 16 bytes
-                    const reg = try self.codegen.allocGeneralFor(0);
-                    try self.codegen.emitLoadImm(reg, 0);
-                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
-                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
-                    self.codegen.freeGeneral(reg);
-                },
-            }
-        }
-
         /// Copy a specific number of bytes from a value location to a stack offset
         /// This uses the layout-determined size rather than inferring from ValueLocation type
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
