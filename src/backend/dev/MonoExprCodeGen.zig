@@ -1251,34 +1251,96 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Start with equality result = 1 (true for eq, will be inverted for neq)
             try self.codegen.emitLoadImm(result_reg, 1);
 
-            // Calculate comparison byte offsets
-            // Records: 16 bytes per field, but only compare first 8 bytes of each slot
-            // Tuples: 8 bytes per element, nested tuples are flattened
+            // Calculate comparison byte offsets using the layout store
+            // This must match how generateTuple/generateRecord place elements
             var offsets: [32]i32 = undefined; // Max 32 comparison points
             var offset_count: usize = 0;
-            const is_record = lhs_expr == .record;
 
-            if (is_record) {
-                // Records: compare first 8 bytes of each 16-byte slot
-                for (0..elem_exprs.len) |i| {
-                    offsets[offset_count] = @as(i32, @intCast(i)) * 16;
-                    offset_count += 1;
-                }
-            } else {
-                // Tuples: compare all 8-byte slots including nested tuples
-                var current_offset: i32 = 0;
-                for (elem_exprs) |elem_id| {
-                    const elem_expr = self.store.getExpr(elem_id);
-                    const elem_slots: usize = switch (elem_expr) {
-                        .tuple => |t| self.store.getExprSpan(t.elems).len,
-                        else => 1,
-                    };
-                    for (0..elem_slots) |_| {
-                        offsets[offset_count] = current_offset;
-                        offset_count += 1;
-                        current_offset += 8;
+            const ls = self.layout_store;
+
+            switch (lhs_expr) {
+                .record => |r| {
+                    if (ls) |layout_store| {
+                        const record_layout = layout_store.getLayout(r.record_layout);
+                        if (record_layout.tag == .record) {
+                            // Use layout store offsets and sizes to match generateRecord
+                            for (0..elem_exprs.len) |i| {
+                                const field_offset = layout_store.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
+                                const field_size = layout_store.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
+                                const field_slots: usize = @max(1, (field_size + 7) / 8);
+                                for (0..field_slots) |j| {
+                                    offsets[offset_count] = @as(i32, @intCast(field_offset)) + @as(i32, @intCast(j)) * 8;
+                                    offset_count += 1;
+                                }
+                            }
+                        } else {
+                            // Fallback: 16-byte slots
+                            for (0..elem_exprs.len) |i| {
+                                offsets[offset_count] = @as(i32, @intCast(i)) * 16;
+                                offset_count += 1;
+                            }
+                        }
+                    } else {
+                        // No layout store: 16-byte slots
+                        for (0..elem_exprs.len) |i| {
+                            offsets[offset_count] = @as(i32, @intCast(i)) * 16;
+                            offset_count += 1;
+                        }
                     }
-                }
+                },
+                .tuple => |t| {
+                    if (ls) |layout_store| {
+                        const tuple_layout = layout_store.getLayout(t.tuple_layout);
+                        if (tuple_layout.tag == .tuple) {
+                            // Use layout store offsets to match generateTuple
+                            // For nested tuples, we need to compare all 8-byte slots within each element
+                                            for (0..elem_exprs.len) |i| {
+                                const elem_offset = layout_store.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
+                                const elem_size = layout_store.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
+
+                                // Use the element size to determine how many 8-byte slots to compare
+                                const elem_slots: usize = @max(1, (elem_size + 7) / 8);
+
+                                // Add comparison points for each 8-byte slot within this element
+                                for (0..elem_slots) |j| {
+                                    offsets[offset_count] = @as(i32, @intCast(elem_offset)) + @as(i32, @intCast(j)) * 8;
+                                    offset_count += 1;
+                                }
+                            }
+                        } else {
+                            // Fallback: 8-byte slots with nested tuple flattening
+                            var current_offset: i32 = 0;
+                            for (elem_exprs) |elem_id| {
+                                const elem_expr = self.store.getExpr(elem_id);
+                                const elem_slots: usize = switch (elem_expr) {
+                                    .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
+                                    else => 1,
+                                };
+                                for (0..elem_slots) |_| {
+                                    offsets[offset_count] = current_offset;
+                                    offset_count += 1;
+                                    current_offset += 8;
+                                }
+                            }
+                        }
+                    } else {
+                        // No layout store: 8-byte slots with nested tuple flattening
+                        var current_offset: i32 = 0;
+                        for (elem_exprs) |elem_id| {
+                            const elem_expr = self.store.getExpr(elem_id);
+                            const elem_slots: usize = switch (elem_expr) {
+                                .tuple => |inner_t| self.store.getExprSpan(inner_t.elems).len,
+                                else => 1,
+                            };
+                            for (0..elem_slots) |_| {
+                                offsets[offset_count] = current_offset;
+                                offset_count += 1;
+                                current_offset += 8;
+                            }
+                        }
+                    }
+                },
+                else => unreachable,
             }
 
             const temp_lhs = try self.codegen.allocGeneralFor(0);
@@ -2366,8 +2428,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Copy each field to its offset within the record
             for (field_exprs, 0..) |field_expr_id, i| {
                 const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(i));
+                const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, @intCast(i));
                 const field_loc = try self.generateExpr(field_expr_id);
-                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc);
+                try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(field_offset)), field_loc, field_size);
             }
 
             return .{ .stack = base_offset };
@@ -2446,8 +2509,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Copy each element to its offset within the tuple
             for (elem_exprs, 0..) |elem_expr_id, i| {
                 const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
+                const elem_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
                 const elem_loc = try self.generateExpr(elem_expr_id);
-                try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc);
+                try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc, elem_size);
             }
 
             return .{ .stack = base_offset };
@@ -2650,17 +2714,71 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Copy a specific number of bytes from a value location to a stack offset
         /// This uses the layout-determined size rather than inferring from ValueLocation type
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
-            // Get the source offset
+            // Handle non-stack locations specially.
+            // The layout store uses Dec (16 bytes) as the default numeric type, but Lower.zig
+            // optimizes small integer literals to i64_literal (8 bytes). When storing an 8-byte
+            // value into a 16-byte slot, we must zero-fill the remaining bytes to ensure
+            // consistent comparison results.
+            switch (loc) {
+                .immediate_i64 => |val| {
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, val);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    // Zero-fill remaining bytes if layout is larger (e.g., Dec slot for i64 value)
+                    if (size > 8) {
+                        try self.codegen.emitLoadImm(reg, 0);
+                        var filled: u32 = 8;
+                        while (filled < size) {
+                            try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(filled)), reg);
+                            filled += 8;
+                        }
+                    }
+                    self.codegen.freeGeneral(reg);
+                    return;
+                },
+                .immediate_i128 => |val| {
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, @bitCast(low));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    try self.codegen.emitLoadImm(reg, @bitCast(high));
+                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                    self.codegen.freeGeneral(reg);
+                    return;
+                },
+                .general_reg => |reg| {
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    // Zero-fill remaining bytes if layout is larger
+                    if (size > 8) {
+                        const zero_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitLoadImm(zero_reg, 0);
+                        var filled: u32 = 8;
+                        while (filled < size) {
+                            try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(filled)), zero_reg);
+                            filled += 8;
+                        }
+                        self.codegen.freeGeneral(zero_reg);
+                    }
+                    return;
+                },
+                .stack, .stack_str, .stack_i128, .list_stack => {
+                    // Handle stack locations below
+                },
+                else => {
+                    // For other locations, fall through to copyValueToStackOffset
+                    try self.copyValueToStackOffset(dest_offset, loc);
+                    return;
+                },
+            }
+
+            // Get the source offset for stack locations
             const src_offset: i32 = switch (loc) {
                 .stack => |off| off,
                 .stack_str => |off| off,
                 .stack_i128 => |off| off,
                 .list_stack => |info| info.struct_offset,
-                else => {
-                    // For non-stack locations, use the simple 8-byte copy
-                    try self.copyValueToStackOffset(dest_offset, loc);
-                    return;
-                },
+                else => unreachable,
             };
 
             // Copy in 8-byte chunks
