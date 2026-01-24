@@ -2440,13 +2440,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Saves callee-saved registers that will be used (X19/RBX for result pointer).
         fn emitMainPrologue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Save X19 (callee-saved) which we use for the result pointer.
-                // Use stp to save X19 and LR together (need LR for calls)
-                // stp x19, x30, [sp, #-16]!
-                try self.codegen.emit.stpPreIndex(.w64, .X19, .LR, .ZRSP, -2);
+                // Save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr.
+                // Also save LR (X30) for calls.
+                // stp x19, x20, [sp, #-16]!
+                try self.codegen.emit.stpPreIndex(.w64, .X19, .X20, .ZRSP, -2);
+                // stp x30, xzr, [sp, #-16]!  (save LR, pad with zero register)
+                try self.codegen.emit.stpPreIndex(.w64, .LR, .ZRSP, .ZRSP, -2);
             } else {
-                // Save RBX (callee-saved) which we use for the result pointer
+                // Save RBX and R12 (callee-saved) which we use for result ptr and RocOps ptr
                 try self.codegen.emit.push(.RBX);
+                try self.codegen.emit.push(.R12);
             }
         }
 
@@ -2454,12 +2457,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Restores callee-saved registers and returns.
         fn emitMainEpilogue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Restore X19 and LR
-                // ldp x19, x30, [sp], #16
-                try self.codegen.emit.ldpPostIndex(.w64, .X19, .LR, .ZRSP, 2);
+                // Restore LR (and skip the zero register padding)
+                // ldp x30, xzr, [sp], #16
+                try self.codegen.emit.ldpPostIndex(.w64, .LR, .ZRSP, .ZRSP, 2);
+                // Restore X19 and X20
+                // ldp x19, x20, [sp], #16
+                try self.codegen.emit.ldpPostIndex(.w64, .X19, .X20, .ZRSP, 2);
                 try self.codegen.emit.ret();
             } else {
-                // Restore RBX
+                // Restore R12 and RBX (in reverse order of push)
+                try self.codegen.emit.pop(.R12);
                 try self.codegen.emit.pop(.RBX);
                 try self.codegen.emit.ret();
             }
