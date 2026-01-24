@@ -889,23 +889,73 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // arg2: RDX (low), RCX (high)
                 // arg3: R8
                 // return: RAX (low), RDX (high)
+                //
+                // IMPORTANT: Must handle register conflicts when moving to arg registers.
+                // The source registers (from allocGeneralFor) could be any caller-saved
+                // register including the argument registers themselves. If a source is
+                // an arg register that gets written before the source is read, we'd get
+                // wrong values. We save conflicting sources to R9/R10 first.
 
-                // Move arguments to correct registers
-                try self.codegen.emit.movRegReg(.w64, .RDI, lhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .RSI, lhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .RDX, rhs_parts.low);
-                try self.codegen.emit.movRegReg(.w64, .RCX, rhs_parts.high);
-                try self.codegen.emit.movRegReg(.w64, .R8, roc_ops_reg);
+                // Load function address into R11 (caller-saved, not an arg register)
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
 
-                // Load function address into a register and call
-                const addr_reg = try self.codegen.allocGeneralFor(0);
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.callReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
+                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8 };
+                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+
+                // For each source, check if it would be clobbered before use.
+                // Source i is clobbered if it equals any of arg_regs[0..i].
+                // We save such sources to R9 or R10.
+                var saved: [5]?GeneralReg = .{ null, null, null, null, null };
+                var next_temp: GeneralReg = .R9;
+
+                for (0..5) |i| {
+                    const src = sources[i];
+                    for (0..i) |j| {
+                        if (src == arg_regs[j]) {
+                            // Check if we already saved this one
+                            var found_saved: ?GeneralReg = null;
+                            for (0..i) |k| {
+                                if (sources[k] == src and saved[k] != null) {
+                                    found_saved = saved[k];
+                                    break;
+                                }
+                            }
+                            if (found_saved) |s| {
+                                saved[i] = s;
+                            } else {
+                                // Save to temp
+                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                saved[i] = next_temp;
+                                next_temp = if (next_temp == .R9) .R10 else .RAX;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Now move to argument registers
+                for (0..5) |i| {
+                    const src = saved[i] orelse sources[i];
+                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                }
+
+                // Call through R11
+                try self.codegen.emit.callReg(.R11);
 
                 // Get result from RAX, RDX
-                try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
-                try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                // Handle conflict: if result_low is RDX, we'd clobber return high
+                if (result_low == .RDX) {
+                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                } else if (result_high == .RAX) {
+                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                }
             }
         }
 
