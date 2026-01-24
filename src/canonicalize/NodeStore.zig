@@ -4110,6 +4110,51 @@ pub const Serialized = extern struct {
 
         return store;
     }
+
+    /// Deserialize with fresh memory allocation for SafeLists that may need to grow.
+    /// Use this for cache modules where regions may need to be extended during type checking.
+    pub fn deserializeWithCopy(self: *Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!*NodeStore {
+        // Deserialize in reverse order (last serialized to first serialized)
+        // Fields that need to grow use deserializeWithCopy, others use regular deserialize
+        const deserialized_index_data = self.index_data.deserialize(base_addr).*;
+        const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
+        const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
+        const deserialized_import_data = self.import_data.deserialize(base_addr).*;
+        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
+        const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
+        const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
+        const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
+        const deserialized_match_data = self.match_data.deserialize(base_addr).*;
+        const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
+        const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
+        // Regions needs to be mutable (grown during type checking)
+        const deserialized_regions = (try self.regions.deserializeWithCopy(base_addr, gpa)).*;
+        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
+        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
+
+        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
+
+        store.* = NodeStore{
+            .gpa = gpa,
+            .nodes = deserialized_nodes,
+            .regions = deserialized_regions,
+            .int128_values = deserialized_int128_values,
+            .span2_data = deserialized_span2_data,
+            .span_with_node_data = deserialized_span_with_node_data,
+            .match_data = deserialized_match_data,
+            .match_branch_data = deserialized_match_branch_data,
+            .closure_data = deserialized_closure_data,
+            .zero_arg_tag_data = deserialized_zero_arg_tag_data,
+            .def_data = deserialized_def_data,
+            .import_data = deserialized_import_data,
+            .type_apply_data = deserialized_type_apply_data,
+            .pattern_list_data = deserialized_pattern_list_data,
+            .index_data = deserialized_index_data,
+            .scratch = null,
+        };
+
+        return store;
+    }
 };
 
 /// Resolve all pending lookups in this store.

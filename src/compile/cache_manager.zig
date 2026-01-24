@@ -57,6 +57,9 @@ pub const ImportInfo = struct {
     package: []const u8,
     /// Module name (e.g., "Stdout" or "Helper")
     module: []const u8,
+    /// Source hash of the dependency at the time of caching
+    /// Used to verify the dependency hasn't changed
+    source_hash: [32]u8,
 
     pub fn deinit(self: *ImportInfo, allocator: Allocator) void {
         if (self.package.len > 0) allocator.free(self.package);
@@ -463,9 +466,22 @@ pub const CacheManager = struct {
                 "";
             offset += mod_len;
 
+            // Read source hash
+            if (offset + 32 > data.len) {
+                if (mod.len > 0) self.allocator.free(mod);
+                if (pkg.len > 0) self.allocator.free(pkg);
+                for (imports[0..i]) |*imp| imp.deinit(self.allocator);
+                self.allocator.free(imports);
+                return error.InvalidMetadata;
+            }
+            var source_hash: [32]u8 = undefined;
+            @memcpy(&source_hash, data[offset..][0..32]);
+            offset += 32;
+
             imports[i] = .{
                 .package = pkg,
                 .module = mod,
+                .source_hash = source_hash,
             };
         }
 
@@ -499,9 +515,11 @@ pub const CacheManager = struct {
         };
 
         // Calculate total size needed
-        var total_size: usize = 44; // header: 4+4+4+32 bytes
+        // Header: 4 (import_count) + 4 (error_count) + 4 (warning_count) + 32 (full_cache_key) = 44
+        // Per import: 4 (pkg_len) + pkg_len + 4 (mod_len) + mod_len + 32 (source_hash)
+        var total_size: usize = 44;
         for (imports) |imp| {
-            total_size += 8 + imp.package.len + imp.module.len; // 4+pkg_len+4+mod_len
+            total_size += 8 + imp.package.len + imp.module.len + 32;
         }
 
         // Allocate buffer
@@ -541,6 +559,10 @@ pub const CacheManager = struct {
                 @memcpy(buffer[offset..][0..imp.module.len], imp.module);
                 offset += imp.module.len;
             }
+
+            // Write source hash of the dependency
+            @memcpy(buffer[offset..][0..32], &imp.source_hash);
+            offset += 32;
         }
 
         // Get metadata file path

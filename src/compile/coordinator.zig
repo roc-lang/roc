@@ -45,6 +45,7 @@ const CIR = can.CIR;
 const messages = @import("messages.zig");
 const channel = @import("channel.zig");
 const compile_package = @import("compile_package.zig");
+const compile_build = @import("compile_build.zig");
 const module_discovery = @import("module_discovery.zig");
 const cache_manager_mod = @import("cache_manager.zig");
 const CacheManager = cache_manager_mod.CacheManager;
@@ -128,6 +129,8 @@ pub const ModuleState = struct {
     /// True if this module was loaded from cache in this build.
     /// Used by parent modules to determine if fast path is valid.
     was_cache_hit: bool,
+    /// Accumulated compile time for this module (parse + canonicalize + type-check)
+    compile_time_ns: u64,
 
     pub fn init(name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -143,6 +146,7 @@ pub const ModuleState = struct {
             .depth = std.math.maxInt(u32),
             .visit_color = 0,
             .was_cache_hit = false,
+            .compile_time_ns = 0,
         };
     }
 
@@ -348,8 +352,8 @@ pub const Coordinator = struct {
     /// Shared read-only builtin modules
     builtin_modules: *const BuiltinModules,
 
-    /// Optional file provider for virtual files
-    file_provider: ?FileProvider,
+    /// File provider for reading sources (defaults to filesystem)
+    file_provider: FileProvider,
 
     /// Compiler version for cache keys
     compiler_version: []const u8,
@@ -381,10 +385,14 @@ pub const Coordinator = struct {
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
 
-    /// Cache statistics for this build
+    /// Build statistics
     cache_hits: u32,
     cache_misses: u32,
     modules_compiled: u32,
+    /// Module compile time tracking (min/max/sum for computing avg)
+    module_time_min_ns: u64,
+    module_time_max_ns: u64,
+    module_time_sum_ns: u64,
 
     /// Cache buffers that need to be kept alive for cached modules.
     /// These are freed when the coordinator is deinitialized.
@@ -411,7 +419,7 @@ pub const Coordinator = struct {
             .inflight = 0,
             .total_remaining = 0,
             .builtin_modules = builtin_modules,
-            .file_provider = null,
+            .file_provider = FileProvider.filesystem,
             .compiler_version = compiler_version,
             .cache_manager = cache_manager,
             .cross_package_dependents = std.StringHashMap(std.ArrayList(ModuleRef)).init(gpa),
@@ -426,6 +434,9 @@ pub const Coordinator = struct {
             .cache_hits = 0,
             .cache_misses = 0,
             .modules_compiled = 0,
+            .module_time_min_ns = std.math.maxInt(u64),
+            .module_time_max_ns = 0,
+            .module_time_sum_ns = 0,
             .cache_buffers = std.ArrayList(CacheModule.CacheData).empty,
         };
     }
@@ -492,9 +503,9 @@ pub const Coordinator = struct {
         self.cache_buffers.deinit(self.gpa);
     }
 
-    /// Set a virtual file provider
+    /// Set a file provider (or reset to default filesystem provider)
     pub fn setFileProvider(self: *Coordinator, provider: ?FileProvider) void {
-        self.file_provider = provider;
+        self.file_provider = provider orelse FileProvider.filesystem;
     }
 
     /// Set a custom allocator for module data (ModuleEnv, source).
@@ -746,6 +757,7 @@ pub const Coordinator = struct {
 
         // Update timing
         self.total_parse_ns += result.parse_ns;
+        mod.compile_time_ns += result.parse_ns;
 
         // Transition to Canonicalize phase
         mod.phase = .Canonicalize;
@@ -828,6 +840,7 @@ pub const Coordinator = struct {
         // Update timing
         self.total_canonicalize_ns += result.canonicalize_ns;
         self.total_canonicalize_diag_ns += result.canonicalize_diagnostics_ns;
+        mod.compile_time_ns += result.canonicalize_ns + result.canonicalize_diagnostics_ns;
 
         // Mark as gray (visiting) for cycle detection
         mod.visit_color = 1;
@@ -927,6 +940,13 @@ pub const Coordinator = struct {
         // Update timing
         self.total_typecheck_ns += result.type_check_ns;
         self.total_typecheck_diag_ns += result.check_diagnostics_ns;
+        mod.compile_time_ns += result.type_check_ns + result.check_diagnostics_ns;
+
+        // Record per-module compile time for min/max/avg stats
+        const module_time = mod.compile_time_ns;
+        if (module_time < self.module_time_min_ns) self.module_time_min_ns = module_time;
+        if (module_time > self.module_time_max_ns) self.module_time_max_ns = module_time;
+        self.module_time_sum_ns += module_time;
 
         // Mark as done
         mod.phase = .Done;
@@ -957,12 +977,25 @@ pub const Coordinator = struct {
                 }
 
                 // Add local imports (dupe strings since we'll free them)
+                // Read source files directly to compute hashes (more reliable than env)
                 for (mod.imports.items) |imp_id| {
                     if (pkg.getModule(imp_id)) |imp_mod| {
+                        // Compute source hash by reading the file
+                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
+                        const imp_path = self.resolveModulePath(pkg.root_dir, imp_mod.name) catch null;
+                        if (imp_path) |path| {
+                            defer self.gpa.free(path);
+                            if (self.file_provider.read(self.file_provider.ctx, path, self.gpa) catch null) |source| {
+                                defer self.gpa.free(source);
+                                imp_source_hash = CacheManager.computeSourceHash(source);
+                            }
+                        }
+
                         const mod_name = self.gpa.dupe(u8, imp_mod.name) catch continue;
                         imports.append(self.gpa, .{
                             .package = "", // Local import - empty string, not owned
                             .module = mod_name,
+                            .source_hash = imp_source_hash,
                         }) catch {
                             self.gpa.free(mod_name);
                             continue;
@@ -973,14 +1006,33 @@ pub const Coordinator = struct {
                 // Add external imports (these have format "pkg.Module")
                 for (mod.external_imports.items) |ext_name| {
                     if (std.mem.indexOfScalar(u8, ext_name, '.')) |dot_idx| {
-                        const pkg_part = self.gpa.dupe(u8, ext_name[0..dot_idx]) catch continue;
-                        const mod_part = self.gpa.dupe(u8, ext_name[dot_idx + 1 ..]) catch {
+                        const pkg_shorthand = ext_name[0..dot_idx];
+                        const mod_name_part = ext_name[dot_idx + 1 ..];
+
+                        // Resolve the external package and compute source hash by reading file
+                        var imp_source_hash: [32]u8 = std.mem.zeroes([32]u8);
+                        if (pkg.shorthands.get(pkg_shorthand)) |ext_pkg_name| {
+                            if (self.packages.get(ext_pkg_name)) |ext_pkg| {
+                                const imp_path = self.resolveModulePath(ext_pkg.root_dir, mod_name_part) catch null;
+                                if (imp_path) |path| {
+                                    defer self.gpa.free(path);
+                                    if (self.file_provider.read(self.file_provider.ctx, path, self.gpa) catch null) |source| {
+                                        defer self.gpa.free(source);
+                                        imp_source_hash = CacheManager.computeSourceHash(source);
+                                    }
+                                }
+                            }
+                        }
+
+                        const pkg_part = self.gpa.dupe(u8, pkg_shorthand) catch continue;
+                        const mod_part = self.gpa.dupe(u8, mod_name_part) catch {
                             self.gpa.free(pkg_part);
                             continue;
                         };
                         imports.append(self.gpa, .{
                             .package = pkg_part,
                             .module = mod_part,
+                            .source_hash = imp_source_hash,
                         }) catch {
                             self.gpa.free(pkg_part);
                             self.gpa.free(mod_part);
@@ -1150,32 +1202,49 @@ pub const Coordinator = struct {
                 };
             };
 
-            // Look up the module in the target package
+            // Look up the package to get its root directory
             const pkg = self.packages.get(pkg_name) orelse {
                 if (comptime trace_cache) {
                     std.debug.print("[COORD] checkAllImportsCached: pkg {s} not found\n", .{pkg_name});
                 }
                 return false;
             };
-            const mod_id = pkg.module_names.get(imp.module) orelse {
-                if (comptime trace_cache) {
-                    std.debug.print("[COORD] checkAllImportsCached: module {s} not found in {s}\n", .{ imp.module, pkg_name });
-                }
-                return false;
-            };
-            const mod = pkg.getModule(mod_id) orelse {
-                if (comptime trace_cache) {
-                    std.debug.print("[COORD] checkAllImportsCached: module id {} not found in {s}\n", .{ mod_id, pkg_name });
-                }
-                return false;
-            };
 
-            // Check if this dependency was a cache hit
-            if (!mod.was_cache_hit) {
+            // Resolve the import's file path
+            const module_path = self.resolveModulePath(pkg.root_dir, imp.module) catch {
                 if (comptime trace_cache) {
-                    std.debug.print("[COORD] checkAllImportsCached: {s}.{s} was not a cache hit\n", .{ pkg_name, imp.module });
+                    std.debug.print("[COORD] checkAllImportsCached: failed to resolve path for {s}.{s}\n", .{ pkg_name, imp.module });
                 }
                 return false;
+            };
+            defer self.gpa.free(module_path);
+
+            // Read the source file and compute its current hash
+            const source = self.file_provider.read(self.file_provider.ctx, module_path, self.gpa) catch {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path});
+                }
+                return false;
+            } orelse {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path});
+                }
+                return false;
+            };
+            defer self.gpa.free(source);
+
+            // Compute current source hash and compare with stored hash
+            const current_hash = CacheManager.computeSourceHash(source);
+            if (!std.mem.eql(u8, &current_hash, &imp.source_hash)) {
+                // Dependency has changed since we cached
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash mismatch (file changed)\n", .{ pkg_name, imp.module });
+                }
+                return false;
+            }
+
+            if (comptime trace_cache) {
+                std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash matches\n", .{ pkg_name, imp.module });
             }
         }
 
@@ -1411,6 +1480,19 @@ pub const Coordinator = struct {
         const target_pkg = self.packages.get(target_pkg_name) orelse return null;
 
         return target_pkg.getEnvIfDone(rest);
+    }
+
+    /// Get build statistics for this compilation
+    pub fn getBuildStats(self: *Coordinator) compile_build.BuildEnv.BuildStats {
+        return .{
+            .modules_total = self.cache_hits + self.modules_compiled,
+            .cache_hits = self.cache_hits,
+            .cache_misses = self.cache_misses,
+            .modules_compiled = self.modules_compiled,
+            .module_time_min_ns = self.module_time_min_ns,
+            .module_time_max_ns = self.module_time_max_ns,
+            .module_time_sum_ns = self.module_time_sum_ns,
+        };
     }
 
     /// Resolve a module name to a path
@@ -1823,15 +1905,11 @@ pub const Coordinator = struct {
         };
     }
 
-    /// Read module source from filesystem or file provider
+    /// Read module source using the file provider
     fn readModuleSource(self: *Coordinator, path: []const u8) ![]u8 {
         const module_alloc = self.getModuleAllocator();
-        const raw_data = if (self.file_provider) |fp|
-            if (try fp.read(fp.ctx, path, module_alloc)) |data| data else null
-        else
-            null;
-
-        const data = raw_data orelse try std.fs.cwd().readFileAlloc(module_alloc, path, std.math.maxInt(usize));
+        const data = try self.file_provider.read(self.file_provider.ctx, path, module_alloc) orelse
+            return error.FileNotFound;
 
         // Normalize line endings
         return base.source_utils.normalizeLineEndingsRealloc(module_alloc, data);

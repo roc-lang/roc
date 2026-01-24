@@ -594,15 +594,24 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Deinitialize a cached module environment.
-/// This only frees heap-allocated data from deserialization (hash maps),
-/// not the cache buffer data (SafeLists, arrays, strings).
+/// This frees heap-allocated data from deserialization:
+/// - Hash maps (imports, import_mapping)
+/// - Type store arrays (when using deserializeWithMutableTypes)
+/// - NodeStore regions (when using deserializeWithMutableTypes)
 ///
-/// After deserialization, the memory ownership is mixed:
-/// - Hash map storage (map.entries, map.metadata) -> heap allocated, needs freeing
-/// - SafeLists, arrays, strings -> point into cache buffer, must NOT be freed
+/// After deserialization with deserializeWithMutableTypes, the type store
+/// arrays and NodeStore regions are heap-allocated and can be mutated.
+/// Other data (common env, nodes, etc.) still points into the cache buffer
+/// and must NOT be freed.
 ///
 /// Call this instead of deinit() for modules loaded from cache.
 pub fn deinitCachedModule(self: *Self) void {
+    // Free the type store arrays (allocated by deserializeWithMutableTypes)
+    self.types.deinit();
+
+    // Free the NodeStore regions (allocated by deserializeWithMutableTypes)
+    self.store.regions.deinit(self.gpa);
+
     // Only free the hash map that was allocated during deserialization
     // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
     self.imports.deinitMapOnly(self.gpa);
@@ -2312,6 +2321,56 @@ pub const Serialized = extern struct {
             .diagnostics = self.diagnostics,
             .store = self.store.deserialize(base_addr, gpa).*,
             .evaluation_order = null, // Not serialized, will be recomputed if needed
+            .idents = self.idents,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
+            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
+            .method_idents = self.method_idents.deserialize(base_addr).*,
+            .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
+        };
+
+        return env;
+    }
+
+    /// Deserialize with mutable type store for cache modules.
+    /// Unlike deserialize(), this allocates fresh memory for the type store arrays,
+    /// allowing the type store to be mutated (e.g., during type checking).
+    /// Use this for disk cache modules that may need to add new types.
+    pub fn deserializeWithMutableTypes(
+        self: *Serialized,
+        base_addr: usize,
+        gpa: std.mem.Allocator,
+        source: []const u8,
+        module_name: []const u8,
+    ) std.mem.Allocator.Error!*Self {
+        comptime {
+            if (builtin.mode != .Debug) {
+                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
+            }
+        }
+
+        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
+        const common = self.common.deserialize(base_addr, source).*;
+
+        env.* = Self{
+            .gpa = gpa,
+            .common = common,
+            // Use deserializeWithCopy to get mutable type store
+            .types = (try self.types.deserializeWithCopy(base_addr, gpa)).*,
+            .module_kind = self.module_kind.decode(),
+            .all_defs = self.all_defs,
+            .all_statements = self.all_statements,
+            .exports = self.exports,
+            .requires_types = self.requires_types.deserialize(base_addr).*,
+            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
+            .builtin_statements = self.builtin_statements,
+            .external_decls = self.external_decls.deserialize(base_addr).*,
+            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
+            .module_name = module_name,
+            .module_name_idx = Ident.Idx.NONE,
+            .diagnostics = self.diagnostics,
+            // Use deserializeWithCopy for NodeStore so regions can be extended
+            .store = (try self.store.deserializeWithCopy(base_addr, gpa)).*,
+            .evaluation_order = null,
             .idents = self.idents,
             .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),

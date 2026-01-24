@@ -119,8 +119,8 @@ pub const BuildEnv = struct {
 
     // Cache manager for compiled modules
     cache_manager: ?*CacheManager = null,
-    // Optional virtual file provider
-    file_provider: ?FileProvider = null,
+    // File provider for reading sources (defaults to filesystem)
+    file_provider: FileProvider = FileProvider.filesystem,
 
     // Builtin modules (Bool, Try, Str) shared across all packages (heap-allocated to prevent moves)
     builtin_modules: *BuiltinModules,
@@ -263,9 +263,9 @@ pub const BuildEnv = struct {
         self.cache_manager = cache_manager;
     }
 
-    /// Set a virtual file provider for this BuildEnv.
+    /// Set a file provider (or reset to default filesystem provider).
     pub fn setFileProvider(self: *BuildEnv, provider: ?FileProvider) void {
-        self.file_provider = provider;
+        self.file_provider = provider orelse FileProvider.filesystem;
     }
 
     /// Build an app file specifically (validates it's an app)
@@ -1298,12 +1298,9 @@ pub const BuildEnv = struct {
     }
 
     fn readFile(self: *BuildEnv, path: []const u8, max_bytes: usize) ![]u8 {
-        const raw_data = if (self.file_provider) |fp|
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
-        else
-            null;
-
-        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, max_bytes);
+        _ = max_bytes; // FileProvider doesn't support max_bytes limit
+        const data = try self.file_provider.read(self.file_provider.ctx, path, self.gpa) orelse
+            return error.FileNotFound;
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring
@@ -1793,23 +1790,76 @@ pub const BuildEnv = struct {
         return total;
     }
 
-    /// Cache statistics for the build
-    pub const BuildCacheStats = struct {
+    /// Build statistics collected during compilation
+    pub const BuildStats = struct {
+        /// Total modules processed (cached + compiled)
+        modules_total: u32 = 0,
+        /// Modules loaded from cache
         cache_hits: u32 = 0,
+        /// Modules that needed compilation (cache misses)
         cache_misses: u32 = 0,
+
+        /// Number of modules that were compiled (not cached)
         modules_compiled: u32 = 0,
+
+        /// Module compile time tracking (for non-cached modules)
+        /// Time is for full module compilation: parse -> canonicalize -> type-check
+        module_time_min_ns: u64 = std.math.maxInt(u64),
+        module_time_max_ns: u64 = 0,
+        module_time_sum_ns: u64 = 0,
+
+        /// Record a module's compilation time
+        pub fn recordModuleTime(self: *BuildStats, time_ns: u64) void {
+            self.modules_compiled += 1;
+            self.module_time_sum_ns += time_ns;
+            if (time_ns < self.module_time_min_ns) self.module_time_min_ns = time_ns;
+            if (time_ns > self.module_time_max_ns) self.module_time_max_ns = time_ns;
+        }
+
+        /// Get average module compile time in nanoseconds
+        pub fn moduleTimeAvgNs(self: BuildStats) u64 {
+            if (self.modules_compiled == 0) return 0;
+            return self.module_time_sum_ns / self.modules_compiled;
+        }
+
+        /// Get module time min in milliseconds (rounded)
+        pub fn moduleTimeMinMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.module_time_min_ns + 500_000) / 1_000_000);
+        }
+
+        /// Get module time max in milliseconds (rounded)
+        pub fn moduleTimeMaxMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.module_time_max_ns + 500_000) / 1_000_000);
+        }
+
+        /// Get module time average in milliseconds (rounded)
+        pub fn moduleTimeAvgMs(self: BuildStats) u32 {
+            if (self.modules_compiled == 0) return 0;
+            return @intCast((self.moduleTimeAvgNs() + 500_000) / 1_000_000);
+        }
+
+        /// Get cache hit rate as percentage (0-100)
+        pub fn cacheHitPercent(self: BuildStats) u32 {
+            const total = self.cache_hits + self.cache_misses;
+            if (total == 0) return 0;
+            return @intCast((@as(u64, self.cache_hits) * 100 + total / 2) / total);
+        }
     };
 
-    /// Get cache statistics from the coordinator
-    pub fn getCacheStats(self: *BuildEnv) BuildCacheStats {
+    /// Get build statistics from the coordinator
+    pub fn getBuildStats(self: *BuildEnv) BuildStats {
         if (self.coordinator) |coord| {
-            return .{
-                .cache_hits = coord.cache_hits,
-                .cache_misses = coord.cache_misses,
-                .modules_compiled = coord.modules_compiled,
-            };
+            return coord.getBuildStats();
         }
         return .{};
+    }
+
+    // Keep old name for backwards compatibility during transition
+    pub const BuildCacheStats = BuildStats;
+    pub fn getCacheStats(self: *BuildEnv) BuildStats {
+        return self.getBuildStats();
     }
 };
 

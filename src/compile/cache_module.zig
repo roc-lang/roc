@@ -206,8 +206,8 @@ pub const CacheModule = struct {
         // Calculate the base address of the serialized data
         const base_addr = @intFromPtr(serialized_data.ptr);
 
-        // Deserialize the ModuleEnv
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserialize(base_addr, allocator, source, module_name);
+        // Deserialize the ModuleEnv with mutable types so it can be type-checked further
+        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_name);
 
         return module_env_ptr;
     }

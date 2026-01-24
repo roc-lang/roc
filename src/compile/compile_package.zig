@@ -53,10 +53,26 @@ const AtomicUsize = std.atomic.Value(usize);
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
 
-/// Optional virtual file provider for overriding module sources.
+/// File provider for reading module sources.
+/// Implementations must be thread-safe (stateless reads) as they may be called
+/// concurrently from multiple worker threads.
 pub const FileProvider = struct {
     ctx: ?*anyopaque,
     read: *const fn (ctx: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8,
+
+    /// Default filesystem provider - reads files directly from the filesystem.
+    /// Thread-safe as std.fs operations are independent per call.
+    pub const filesystem = FileProvider{
+        .ctx = null,
+        .read = filesystemRead,
+    };
+
+    fn filesystemRead(_: ?*anyopaque, path: []const u8, gpa: Allocator) Allocator.Error!?[]u8 {
+        return std.fs.cwd().readFileAlloc(gpa, path, std.math.maxInt(usize)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null, // File not found or other IO error
+        };
+    }
 };
 
 /// Build execution mode
@@ -254,8 +270,8 @@ pub const PackageEnv = struct {
     compiler_version: []const u8,
     /// Builtin modules (Bool, Try, Str) for auto-importing in canonicalization (not owned)
     builtin_modules: *const BuiltinModules,
-    /// Optional virtual file provider (owned by caller)
-    file_provider: ?FileProvider = null,
+    /// File provider for reading sources (defaults to filesystem)
+    file_provider: FileProvider = FileProvider.filesystem,
 
     lock: Mutex = .{},
     cond: Condition = .{},
@@ -312,7 +328,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider,
+            .file_provider = file_provider orelse FileProvider.filesystem,
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -349,7 +365,7 @@ pub const PackageEnv = struct {
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
             .builtin_modules = builtin_modules,
-            .file_provider = file_provider,
+            .file_provider = file_provider orelse FileProvider.filesystem,
             .injector = std.ArrayList(Task).empty,
             .modules = modules,
             .discovered = std.ArrayList(ModuleId).empty,
@@ -790,12 +806,8 @@ pub const PackageEnv = struct {
     }
 
     fn readModuleSource(self: *PackageEnv, path: []const u8) ![]u8 {
-        const raw_data = if (self.file_provider) |fp|
-            if (try fp.read(fp.ctx, path, self.gpa)) |data| data else null
-        else
-            null;
-
-        const data = raw_data orelse try std.fs.cwd().readFileAlloc(self.gpa, path, std.math.maxInt(usize));
+        const data = try self.file_provider.read(self.file_provider.ctx, path, self.gpa) orelse
+            return error.FileNotFound;
 
         // Normalize line endings (CRLF -> LF) for consistent cross-platform behavior.
         // This reallocates to the correct size if normalization occurs, ensuring

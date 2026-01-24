@@ -163,6 +163,8 @@ pub fn SafeList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeList
             /// The base parameter is the base address of the serialized buffer in memory.
+            /// WARNING: The returned SafeList points into the cache buffer and CANNOT be grown.
+            /// Use deserializeWithCopy() if the list needs to be mutable.
             pub fn deserialize(self: *Serialized, base: usize) *SafeList(T) {
                 // Note: Serialized may be smaller than the runtime struct.
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
@@ -181,6 +183,40 @@ pub fn SafeList(comptime T: type) type {
                         .items = .{
                             .items = items_ptr[0..@intCast(self.len)],
                             .capacity = @intCast(self.capacity),
+                        },
+                    };
+                }
+
+                return safe_list;
+            }
+
+            /// Deserialize this Serialized struct into a SafeList with fresh memory allocation.
+            /// The returned SafeList owns its memory and can be safely grown/mutated.
+            pub fn deserializeWithCopy(self: *Serialized, base: usize, gpa: Allocator) Allocator.Error!*SafeList(T) {
+                const safe_list = @as(*SafeList(T), @ptrFromInt(@intFromPtr(self)));
+
+                // Handle empty list case
+                if (self.len == 0) {
+                    safe_list.* = SafeList(T){
+                        .items = .{},
+                    };
+                } else {
+                    // Get pointer to source data in cache buffer
+                    const src_ptr: [*]const T = @ptrFromInt(base +% @as(usize, @intCast(self.offset)));
+                    const item_len: usize = @intCast(self.len);
+                    const item_capacity: usize = @intCast(self.capacity);
+                    const src_slice = src_ptr[0..item_len];
+
+                    // Allocate fresh memory with full capacity
+                    const fresh_items = try gpa.alloc(T, item_capacity);
+                    @memcpy(fresh_items[0..item_len], src_slice);
+
+                    // ArrayList.items is the slice of *valid* items (length = len, not capacity)
+                    // The capacity is stored separately
+                    safe_list.* = SafeList(T){
+                        .items = .{
+                            .items = fresh_items[0..item_len],
+                            .capacity = item_capacity,
                         },
                     };
                 }
@@ -697,6 +733,8 @@ pub fn SafeMultiList(comptime T: type) type {
 
             /// Deserialize this Serialized struct into a SafeMultiList
             /// The base parameter is the base address of the serialized buffer in memory.
+            /// WARNING: The returned SafeMultiList points into the cache buffer and CANNOT be grown.
+            /// Use deserializeWithCopy() if the list needs to be mutable.
             pub fn deserialize(self: *Serialized, base: usize) *SafeMultiList(T) {
                 // Note: Serialized may be smaller than the runtime struct.
                 // We deserialize by overwriting the Serialized memory with the runtime struct.
@@ -720,6 +758,46 @@ pub fn SafeMultiList(comptime T: type) type {
                             .bytes = bytes_ptr,
                             .len = @as(usize, @intCast(self.len)),
                             .capacity = @as(usize, @intCast(self.capacity)),
+                        },
+                    };
+                }
+
+                return multi_list;
+            }
+
+            /// Deserialize this Serialized struct into a SafeMultiList with fresh memory allocation.
+            /// The returned SafeMultiList owns its memory and can be safely grown/mutated.
+            pub fn deserializeWithCopy(self: *Serialized, base: usize, gpa: Allocator) Allocator.Error!*SafeMultiList(T) {
+                const multi_list = @as(*SafeMultiList(T), @ptrFromInt(@intFromPtr(self)));
+
+                // Handle empty list case
+                if (self.len == 0) {
+                    multi_list.* = SafeMultiList(T){
+                        .items = .{},
+                    };
+                } else {
+                    // Get source bytes from cache buffer
+                    const src_ptr = @as([*]const u8, @ptrFromInt(base +% @as(usize, @intCast(self.offset))));
+                    const item_capacity: usize = @intCast(self.capacity);
+                    const item_len: usize = @intCast(self.len);
+
+                    // Calculate total bytes using MultiArrayList's SoA layout
+                    // (sum of field sizes * capacity, not @sizeOf(T) * capacity)
+                    // IMPORTANT: We must copy the full capacity bytes because SoA layout
+                    // stores each field array contiguously. capacityInBytes(len) would
+                    // copy the wrong bytes due to the field array offsets.
+                    const MultiArrayListType = std.MultiArrayList(T);
+                    const total_bytes = MultiArrayListType.capacityInBytes(item_capacity);
+
+                    // Allocate fresh memory and copy full capacity to preserve SoA layout
+                    const fresh_bytes = try gpa.alignedAlloc(u8, .of(T), total_bytes);
+                    @memcpy(fresh_bytes[0..total_bytes], src_ptr[0..total_bytes]);
+
+                    multi_list.* = SafeMultiList(T){
+                        .items = .{
+                            .bytes = @ptrCast(fresh_bytes.ptr),
+                            .len = item_len,
+                            .capacity = item_capacity,
                         },
                     };
                 }

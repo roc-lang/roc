@@ -4967,6 +4967,30 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
 }
 
+/// Helper function to format elapsed time as rounded integer milliseconds (no decimals)
+fn formatElapsedTimeMs(writer: anytype, elapsed_ns: u64) !void {
+    const elapsed_ms: u64 = (elapsed_ns + 500_000) / 1_000_000; // Round to nearest ms
+    try writer.print("{}ms", .{elapsed_ms});
+}
+
+/// Compute cache hit percentage as an integer (0-100), rounded to nearest
+fn cacheHitPercent(cache_hits: u32, cache_misses: u32) u32 {
+    const total = cache_hits + cache_misses;
+    if (total == 0) return 0;
+    return @intCast((@as(u64, cache_hits) * 100 + total / 2) / total);
+}
+
+/// Compute average module time in nanoseconds
+fn moduleTimeAvgNs(sum_ns: u64, count: u32) u64 {
+    if (count == 0) return 0;
+    return sum_ns / count;
+}
+
+/// Convert nanoseconds to rounded milliseconds
+fn nsToMs(ns: u64) u32 {
+    return @intCast((ns + 500_000) / 1_000_000);
+}
+
 fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) !void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
@@ -5001,9 +5025,15 @@ const CheckResult = struct {
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
+    /// Build statistics
+    modules_total: u32 = 0,
     cache_hits: u32 = 0,
     cache_misses: u32 = 0,
     modules_compiled: u32 = 0,
+    /// Module compile time tracking (in nanoseconds)
+    module_time_min_ns: u64 = 0,
+    module_time_max_ns: u64 = 0,
+    module_time_sum_ns: u64 = 0,
 
     /// Free allocated memory
     pub fn deinit(self: *CheckResult, gpa: Allocator) void {
@@ -5272,9 +5302,13 @@ fn checkFileWithBuildEnv(
             .reports = reports,
             .error_count = error_count,
             .warning_count = warning_count,
+            .modules_total = cache_stats.modules_total,
             .cache_hits = cache_stats.cache_hits,
             .cache_misses = cache_stats.cache_misses,
             .modules_compiled = cache_stats.modules_compiled,
+            .module_time_min_ns = cache_stats.module_time_min_ns,
+            .module_time_max_ns = cache_stats.module_time_max_ns,
+            .module_time_sum_ns = cache_stats.module_time_sum_ns,
         };
     };
 
@@ -5335,9 +5369,13 @@ fn checkFileWithBuildEnv(
         .was_cached = false, // TODO: Set based on cache stats
         .error_count = error_count,
         .warning_count = warning_count,
+        .modules_total = cache_stats.modules_total,
         .cache_hits = cache_stats.cache_hits,
         .cache_misses = cache_stats.cache_misses,
         .modules_compiled = cache_stats.modules_compiled,
+        .module_time_min_ns = cache_stats.module_time_min_ns,
+        .module_time_max_ns = cache_stats.module_time_max_ns,
+        .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
 }
 
@@ -5382,13 +5420,14 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
                 total_errors,
                 total_warnings,
             }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
+            formatElapsedTimeMs(stderr, elapsed) catch {};
+            stderr.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
+            stderr.print("(note: module loaded from cache, use --no-cache to display errors and warnings)\n", .{}) catch {};
             return error.CheckFailed;
         } else {
             stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)", .{args.path}) catch {};
+            formatElapsedTimeMs(stdout, elapsed) catch {};
+            stdout.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
         }
     } else {
         // For fresh compilation, process and display reports normally
@@ -5410,19 +5449,26 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         // Flush stderr to ensure all error output is visible
         ctx.io.flush();
 
+        // Compute cache hit percentage
+        const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
+
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
                 check_result.error_count,
                 check_result.warning_count,
             }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
+            formatElapsedTimeMs(stderr, elapsed) catch {};
             // Include inline cache stats summary
-            const total_modules = check_result.cache_hits + check_result.cache_misses;
-            if (total_modules > 0 and check_result.cache_hits > 0) {
-                stderr.print(" ({}/{} cached)", .{ check_result.cache_hits, total_modules }) catch {};
+            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+                stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
             }
             stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+            // Print verbose stats if requested
+            if (args.verbose) {
+                printVerboseStats(stderr, &check_result);
+            }
 
             // Flush before exit
             ctx.io.flush();
@@ -5435,13 +5481,18 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
             }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
+            formatElapsedTimeMs(stdout, elapsed) catch {};
             // Include inline cache stats summary
-            const total_modules = check_result.cache_hits + check_result.cache_misses;
-            if (total_modules > 0 and check_result.cache_hits > 0) {
-                stdout.print(" ({}/{} cached)", .{ check_result.cache_hits, total_modules }) catch {};
+            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+                stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
             }
             stdout.print(" for {s}\n", .{args.path}) catch {};
+
+            // Print verbose stats if requested
+            if (args.verbose) {
+                printVerboseStats(stdout, &check_result);
+            }
+
             ctx.io.flush();
         }
     }
@@ -5449,11 +5500,6 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     // Print timing breakdown if requested
     if (args.time) {
         printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
-    }
-
-    // Print detailed cache stats if verbose
-    if (args.verbose) {
-        printCacheStats(stdout, check_result.cache_hits, check_result.cache_misses, check_result.modules_compiled);
     }
 }
 
@@ -5478,17 +5524,36 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
     }
 }
 
-/// Print cache statistics when --verbose flag is passed
-fn printCacheStats(writer: anytype, cache_hits: u32, cache_misses: u32, modules_compiled: u32) void {
-    const total = cache_hits + cache_misses;
-    if (total > 0) {
-        const hit_rate: f64 = @as(f64, @floatFromInt(cache_hits)) /
-            @as(f64, @floatFromInt(total)) * 100.0;
-        writer.print("\nCache: {}/{} modules cached ({d:.1}% hit rate), {} compiled\n", .{
-            cache_hits,
-            total,
-            hit_rate,
-            modules_compiled,
+/// Print verbose build statistics when --verbose flag is passed
+/// Format:
+///     Modules: 6 total, 4 cached, 2 built
+///     Cache Hit: 67%
+///     Build: 8ms / 14ms / 25ms (min / avg / max)
+fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
+    const total = result.modules_total;
+    if (total == 0) return;
+
+    const cache_percent = cacheHitPercent(result.cache_hits, result.cache_misses);
+
+    // Print modules breakdown
+    writer.print("\n    Modules: {} total, {} cached, {} built\n", .{
+        total,
+        result.cache_hits,
+        result.modules_compiled,
+    }) catch {};
+
+    // Print cache hit percentage
+    writer.print("    Cache Hit: {}%\n", .{cache_percent}) catch {};
+
+    // Print build time breakdown (only if we have compiled modules)
+    if (result.modules_compiled > 0) {
+        const min_ms = nsToMs(result.module_time_min_ns);
+        const avg_ms = nsToMs(moduleTimeAvgNs(result.module_time_sum_ns, result.modules_compiled));
+        const max_ms = nsToMs(result.module_time_max_ns);
+        writer.print("    Build: {}ms / {}ms / {}ms (min / avg / max)\n", .{
+            min_ms,
+            avg_ms,
+            max_ms,
         }) catch {};
     }
 }
