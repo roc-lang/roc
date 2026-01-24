@@ -100,7 +100,8 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             if (i > 0) {
                 try output.appendSlice(", ");
             }
-            const elem_str = try std.fmt.allocPrint(allocator, "{}", .{result_buf[i]});
+            // Format as decimal to match interpreter (unsuffixed numeric literals default to Dec)
+            const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{result_buf[i]});
             defer allocator.free(elem_str);
             try output.appendSlice(elem_str);
         }

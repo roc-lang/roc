@@ -228,10 +228,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// - First arg (RDI/X0) contains the pointer to the result buffer
         /// - Second arg (RSI/X1) contains the pointer to RocOps
         /// - The function writes the result to the result buffer and returns
+        ///
+        /// For tuples, pass tuple_len > 1 to copy all elements to the result buffer.
         pub fn generateCode(
             self: *Self,
             expr_id: MonoExprId,
             result_layout: layout.Idx,
+            tuple_len: usize,
         ) Error!CodeResult {
             // Track where the main expression code starts
             // (procedures may have been compiled before this, at the start of the buffer)
@@ -275,7 +278,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const result_loc = try self.generateExpr(expr_id);
 
             // Store result to the saved result pointer
-            try self.storeResultToSavedPtr(result_loc, result_layout, result_ptr_save_reg);
+            try self.storeResultToSavedPtr(result_loc, result_layout, result_ptr_save_reg, tuple_len);
 
             // Emit epilogue to restore callee-saved registers and return
             try self.emitMainEpilogue();
@@ -353,6 +356,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .lambda => |lambda| try self.generateLambda(lambda),
                 .closure => |closure| try self.generateClosure(closure),
 
+                // Tags
+                .zero_arg_tag => |tag| try self.generateZeroArgTag(tag),
+                .tag => |tag| try self.generateTag(tag),
+
+                // Lists (not fully implemented - returns placeholder for now)
+                .list => |list| try self.generateList(list),
+                .empty_list => try self.generateEmptyList(),
+
+                // Records
+                .record => |record| try self.generateRecord(record),
+                .empty_record => .{ .immediate_i64 = 0 },
+                .field_access => |fa| try self.generateFieldAccess(fa),
+
+                // Tuples
+                .tuple => |tuple| try self.generateTuple(tuple),
+                .tuple_access => |ta| try self.generateTupleAccess(ta),
+
                 // TODO: Implement remaining expression types
                 else => return Error.UnsupportedExpression,
             };
@@ -414,6 +434,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Now evaluate RHS (safe even if it involves calls)
             const rhs_loc = try self.generateExpr(binop.rhs);
+
+            // Check if this is a structural comparison (records/tuples)
+            if (binop.op == .eq or binop.op == .neq) {
+                const lhs_expr = self.store.getExpr(binop.lhs);
+                if (lhs_expr == .record or lhs_expr == .tuple) {
+                    return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
+                }
+            }
 
             // Determine if this is an integer or float operation
             const is_float = switch (binop.result_layout) {
@@ -1084,6 +1112,103 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .low = low_reg, .high = high_reg };
         }
 
+        /// Generate structural comparison for records/tuples
+        fn generateStructuralComparison(
+            self: *Self,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            lhs_expr: MonoExpr,
+            op: MonoExpr.BinOp,
+        ) Error!ValueLocation {
+            const elem_count: usize = switch (lhs_expr) {
+                .record => |r| self.store.getExprSpan(r.fields).len,
+                .tuple => |t| self.store.getExprSpan(t.elems).len,
+                else => unreachable,
+            };
+
+            if (elem_count == 0) {
+                // Empty records/tuples are always equal
+                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+            }
+
+            const result_reg = try self.codegen.allocGeneralFor(0);
+
+            // Start with equality result = 1 (true for eq, will be inverted for neq)
+            try self.codegen.emitLoadImm(result_reg, 1);
+
+            const elem_size: i32 = 8;
+            const temp_lhs = try self.codegen.allocGeneralFor(0);
+            const temp_rhs = try self.codegen.allocGeneralFor(0);
+
+            for (0..elem_count) |i| {
+                const offset: i32 = @as(i32, @intCast(i)) * elem_size;
+
+                // Load LHS element
+                switch (lhs_loc) {
+                    .stack => |base_offset| {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, base_offset + offset);
+                        }
+                    },
+                    else => {
+                        // For single-element, the value IS the element
+                        if (i == 0) {
+                            const reg = try self.ensureInGeneralReg(lhs_loc);
+                            try self.emitMovRegReg(temp_lhs, reg);
+                        }
+                    },
+                }
+
+                // Load RHS element
+                switch (rhs_loc) {
+                    .stack => |base_offset| {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, base_offset + offset);
+                        }
+                    },
+                    else => {
+                        // For single-element, the value IS the element
+                        if (i == 0) {
+                            const reg = try self.ensureInGeneralReg(rhs_loc);
+                            try self.emitMovRegReg(temp_rhs, reg);
+                        }
+                    },
+                }
+
+                // Compare elements: if not equal, set result to 0
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                    // If not equal, clear result register
+                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                } else {
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    // Use CMOV to set result to 0 if not equal
+                    const zero_reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                    self.codegen.freeGeneral(zero_reg);
+                }
+            }
+
+            self.codegen.freeGeneral(temp_lhs);
+            self.codegen.freeGeneral(temp_rhs);
+
+            // If neq, invert the result
+            if (op == .neq) {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.eorRegRegImm(.w64, result_reg, result_reg, 1);
+                } else {
+                    try self.codegen.emit.xorRegImm8(.w64, result_reg, 1);
+                }
+            }
+
+            return .{ .general_reg = result_reg };
+        }
+
         /// Generate floating-point binary operation
         fn generateFloatBinop(
             self: *Self,
@@ -1285,20 +1410,493 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Generate code for when/match expression
-        fn generateWhen(_: *Self, _: anytype) Error!ValueLocation {
-            // TODO: NOT IMPLEMENTED - Pattern matching (when/match expressions)
-            // WHY: Pattern matching requires:
-            //   1. Tag extraction: Load the tag byte from the scrutinee
-            //   2. Tag comparison: Generate switch on tag values
-            //   3. Payload extraction: Load bound variables from union payload
-            //   4. Guard evaluation: If patterns have guards, evaluate them
-            //   5. Branch generation: Like if-then-else but with multiple arms
-            // RELATED CODE:
-            //   - generateIfThenElse shows similar branch/patch logic
-            //   - generateU8DispatchCall shows switch-like code generation
-            //   - Lower.zig pattern handling shows what patterns look like
-            // IMPACT: Any code using `when expr is ...` fails with UnsupportedExpression
-            return Error.UnsupportedExpression;
+        fn generateWhen(self: *Self, when_expr: anytype) Error!ValueLocation {
+            // Evaluate the scrutinee (the value being matched)
+            const value_loc = try self.generateExpr(when_expr.value);
+
+            // Get the branches
+            const branches = self.store.getWhenBranches(when_expr.branches);
+            if (branches.len == 0) {
+                return Error.UnsupportedExpression;
+            }
+
+            // Allocate result register
+            const result_reg = try self.codegen.allocGeneralFor(0);
+
+            // Collect jump targets for patching to end
+            var end_patches = std.ArrayList(usize).empty;
+            defer end_patches.deinit(self.allocator);
+
+            // Generate each branch
+            for (branches, 0..) |branch, i| {
+                const pattern = self.store.getPattern(branch.pattern);
+
+                // Try to match the pattern
+                switch (pattern) {
+                    .wildcard => {
+                        // Wildcard always matches - generate the body directly
+                        // No need to jump around, just evaluate the body
+                        const body_loc = try self.generateExpr(branch.body);
+                        const body_reg = try self.ensureInGeneralReg(body_loc);
+                        try self.emitMovRegReg(result_reg, body_reg);
+                        self.codegen.freeGeneral(body_reg);
+                        // No more branches needed after wildcard
+                        break;
+                    },
+                    .bind => |bind| {
+                        // Bind always matches - bind the value and generate body
+                        const symbol_key: u48 = @bitCast(bind.symbol);
+                        try self.symbol_locations.put(symbol_key, value_loc);
+
+                        const body_loc = try self.generateExpr(branch.body);
+                        const body_reg = try self.ensureInGeneralReg(body_loc);
+                        try self.emitMovRegReg(result_reg, body_reg);
+                        self.codegen.freeGeneral(body_reg);
+                        // No more branches needed after unconditional bind
+                        break;
+                    },
+                    .int_literal => |int_lit| {
+                        // Compare value with literal
+                        const value_reg = try self.ensureInGeneralReg(value_loc);
+
+                        // Compare with the literal value
+                        if (int_lit.value >= std.math.minInt(i32) and int_lit.value <= std.math.maxInt(i32)) {
+                            try self.emitCmpImm(value_reg, @intCast(int_lit.value));
+                        } else {
+                            // Large literal - load to temp register and compare
+                            const tmp_reg = try self.codegen.allocGeneralFor(1);
+                            try self.loadImm64(tmp_reg, @intCast(int_lit.value));
+                            try self.emitCmpRegReg(value_reg, tmp_reg);
+                            self.codegen.freeGeneral(tmp_reg);
+                        }
+
+                        // Jump to next branch if not equal
+                        const is_last_branch = (i == branches.len - 1);
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfNotEqual();
+                        }
+
+                        // Pattern matched - generate body
+                        const body_loc = try self.generateExpr(branch.body);
+                        const body_reg = try self.ensureInGeneralReg(body_loc);
+                        try self.emitMovRegReg(result_reg, body_reg);
+                        self.codegen.freeGeneral(body_reg);
+
+                        // Jump to end (unless this is the last branch)
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            // Patch the next branch jump to here
+                            if (next_patch) |patch| {
+                                const current_offset = self.codegen.currentOffset();
+                                self.codegen.patchJump(patch, current_offset);
+                            }
+                        }
+                    },
+                    .tag => |tag_pattern| {
+                        // Match on tag discriminant
+                        // For now, just check the discriminant byte
+                        // TODO: Handle payload extraction (args)
+                        const value_reg = try self.ensureInGeneralReg(value_loc);
+
+                        // For tag unions, the discriminant is typically at the end
+                        // For simple cases (like Result), discriminant is first byte
+                        // Compare discriminant with pattern's expected value
+                        try self.emitCmpImm(value_reg, @intCast(tag_pattern.discriminant));
+
+                        // Jump to next branch if not equal
+                        const is_last_branch = (i == branches.len - 1);
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            next_patch = try self.emitJumpIfNotEqual();
+                        }
+
+                        // Pattern matched - bind any args if present
+                        const args = self.store.getPatternSpan(tag_pattern.args);
+                        if (args.len > 0) {
+                            // TODO: Proper payload extraction
+                            // For now, if there's a single arg and it's a bind pattern,
+                            // we assume the payload is in the same register (shifted/masked)
+                            // This is a simplification that works for simple cases
+                            for (args) |arg_pattern_id| {
+                                const arg_pattern = self.store.getPattern(arg_pattern_id);
+                                switch (arg_pattern) {
+                                    .bind => |arg_bind| {
+                                        // Bind the payload - for simple cases, payload is often
+                                        // stored after the discriminant or in the same value
+                                        // This is a placeholder - proper implementation needs layout info
+                                        const symbol_key: u48 = @bitCast(arg_bind.symbol);
+                                        try self.symbol_locations.put(symbol_key, value_loc);
+                                    },
+                                    .wildcard => {
+                                        // Ignore this payload field
+                                    },
+                                    else => {
+                                        // Nested pattern in payload not yet supported
+                                    },
+                                }
+                            }
+                        }
+
+                        // Generate body
+                        const body_loc = try self.generateExpr(branch.body);
+                        const body_reg = try self.ensureInGeneralReg(body_loc);
+                        try self.emitMovRegReg(result_reg, body_reg);
+                        self.codegen.freeGeneral(body_reg);
+
+                        // Jump to end (unless this is the last branch)
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            // Patch the next branch jump to here
+                            if (next_patch) |patch| {
+                                const current_offset = self.codegen.currentOffset();
+                                self.codegen.patchJump(patch, current_offset);
+                            }
+                        }
+                    },
+                    else => {
+                        // Unsupported pattern type (record, tuple, list destructuring)
+                        return Error.UnsupportedExpression;
+                    },
+                }
+            }
+
+            // Patch all end jumps to here
+            const end_offset = self.codegen.currentOffset();
+            for (end_patches.items) |patch| {
+                self.codegen.patchJump(patch, end_offset);
+            }
+
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Compare two registers
+        fn emitCmpRegReg(self: *Self, lhs: GeneralReg, rhs: GeneralReg) !void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.cmpRegReg(.w64, lhs, rhs);
+            } else {
+                try self.codegen.emit.cmpRegReg(.w64, lhs, rhs);
+            }
+        }
+
+        /// Load 64-bit immediate into register
+        fn loadImm64(self: *Self, dst: GeneralReg, value: i64) !void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegImm64(dst, value);
+            } else {
+                try self.codegen.emit.movRegImm64(dst, value);
+            }
+        }
+
+        /// Generate code for a zero-argument tag (just the discriminant)
+        fn generateZeroArgTag(self: *Self, tag: anytype) Error!ValueLocation {
+            // A zero-argument tag is just its discriminant value
+            const result_reg = try self.codegen.allocGeneralFor(0);
+            try self.codegen.emitLoadImm(result_reg, @intCast(tag.discriminant));
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Generate code for a tag with arguments
+        fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
+            // For now, tags with arguments are stored as:
+            // - discriminant in the low byte
+            // - payload in the remaining bytes (if it fits in a register)
+            // This is a simplified representation - proper implementation
+            // needs layout information for complex payloads
+            const args = self.store.getExprSpan(tag.args);
+
+            if (args.len == 0) {
+                // No arguments - same as zero_arg_tag
+                const result_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(result_reg, @intCast(tag.discriminant));
+                return .{ .general_reg = result_reg };
+            } else if (args.len == 1) {
+                // Single argument - put payload in register
+                // For simple types, the value is the payload
+                const payload_loc = try self.generateExpr(args[0]);
+                const payload_reg = try self.ensureInGeneralReg(payload_loc);
+
+                // For Result types, we store discriminant in high byte
+                // This is a simplification - proper layout depends on payload size
+                const result_reg = try self.codegen.allocGeneralFor(0);
+
+                // Copy payload to result
+                try self.emitMovRegReg(result_reg, payload_reg);
+                self.codegen.freeGeneral(payload_reg);
+
+                // For now, just return the payload - the discriminant is implicit
+                // in the fact that we matched this pattern
+                return .{ .general_reg = result_reg };
+            } else {
+                // Multiple arguments - need struct/tuple handling
+                return Error.UnsupportedExpression;
+            }
+        }
+
+        /// Generate code for an empty list
+        fn generateEmptyList(_: *Self) Error!ValueLocation {
+            // Empty list: pointer = null (or 0), length = 0
+            // Roc lists are (ptr, len) pairs
+            // For empty list, we return 0 which represents null/empty
+            return .{ .immediate_i64 = 0 };
+        }
+
+        /// Generate code for a list with elements
+        fn generateList(self: *Self, list: anytype) Error!ValueLocation {
+            const elems = self.store.getExprSpan(list.elems);
+            if (elems.len == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            // For JIT evaluation, we can allocate list data on the stack
+            // Roc lists are (ptr, len) pairs where ptr points to element data
+            // Stack layout: [elem0, elem1, ..., elemN]
+            // We'll store elements starting at a negative offset from RBP
+
+            // Determine element size based on layout
+            const elem_size: i32 = switch (list.elem_layout) {
+                .i8, .u8 => 1,
+                .i16, .u16 => 2,
+                .i32, .u32, .f32 => 4,
+                .i64, .u64, .f64, .str => 8,
+                .i128, .u128, .dec => 16,
+                else => 8, // Default to 8 bytes for unknown types
+            };
+
+            const num_elems: i32 = @intCast(elems.len);
+            const total_size = elem_size * num_elems;
+
+            // Allocate stack space for elements
+            // Use a fixed offset below current stack variables
+            const list_data_offset: i32 = -256 - total_size; // Below other stack variables
+
+            // Store each element
+            for (elems, 0..) |elem_id, i| {
+                const elem_loc = try self.generateExpr(elem_id);
+                const elem_reg = try self.ensureInGeneralReg(elem_loc);
+
+                const elem_offset = list_data_offset + @as(i32, @intCast(i)) * elem_size;
+
+                // Store element to stack
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, elem_offset);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset, elem_reg);
+                }
+
+                self.codegen.freeGeneral(elem_reg);
+            }
+
+            // Create the list struct: (ptr, len)
+            // For stack-allocated lists, ptr = RBP + list_data_offset
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            const len_reg = try self.codegen.allocGeneralFor(1);
+
+            // Calculate pointer to list data
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // For negative offsets, load offset and add
+                try self.codegen.emit.movRegImm64(.IP0, @bitCast(@as(i64, list_data_offset)));
+                try self.codegen.emit.addRegRegReg(.w64, ptr_reg, .FP, .IP0);
+            } else {
+                // LEA ptr_reg, [RBP + list_data_offset]
+                try self.codegen.emit.lea(ptr_reg, .RBP, list_data_offset);
+            }
+
+            // Load length
+            try self.codegen.emitLoadImm(len_reg, num_elems);
+
+            // Store as a struct on the stack: (ptr at offset, len at offset+8)
+            const list_struct_offset: i32 = -128; // Fixed location for list struct
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.strRegMemSoff(.w64, ptr_reg, .FP, list_struct_offset);
+                try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, list_struct_offset + 8);
+            } else {
+                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset, ptr_reg);
+                try self.codegen.emit.movMemReg(.w64, .RBP, list_struct_offset + 8, len_reg);
+            }
+
+            self.codegen.freeGeneral(ptr_reg);
+            self.codegen.freeGeneral(len_reg);
+
+            // Return the stack location of the list struct
+            return .{ .stack = list_struct_offset };
+        }
+
+        /// Generate code for a record with fields
+        fn generateRecord(self: *Self, record: anytype) Error!ValueLocation {
+            const fields = self.store.getExprSpan(record.fields);
+
+            if (fields.len == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            if (fields.len == 1) {
+                // Single-field record - just return the field value
+                return try self.generateExpr(fields[0]);
+            }
+
+            // Multi-field record - store on stack
+            // Each field is 8 bytes (simplified - proper implementation needs layout info)
+            const field_size: i32 = 8;
+            const num_fields: i32 = @intCast(fields.len);
+            // Allocate stack space for all fields (use dynamic allocation to avoid conflicts)
+            const record_offset: i32 = self.codegen.allocStackSlot(@as(u32, @intCast(num_fields * field_size)));
+
+            for (fields, 0..) |field_id, i| {
+                const field_loc = try self.generateExpr(field_id);
+                const field_reg = try self.ensureInGeneralReg(field_loc);
+
+                const offset = record_offset + @as(i32, @intCast(i)) * field_size;
+
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, field_reg, .FP, offset);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, offset, field_reg);
+                }
+
+                self.codegen.freeGeneral(field_reg);
+            }
+
+            return .{ .stack = record_offset };
+        }
+
+        /// Generate code for field access on a record
+        fn generateFieldAccess(self: *Self, fa: anytype) Error!ValueLocation {
+            // First, determine the actual field index by looking at the record
+            // expression's field_names (if it's a record literal)
+            const record_expr = self.store.getExpr(fa.record_expr);
+            var actual_field_idx: u16 = fa.field_idx;
+
+            // If the receiver is a record literal, look up the field index
+            if (record_expr == .record) {
+                const field_names = self.store.getFieldNameSpan(record_expr.record.field_names);
+                for (field_names, 0..) |name, i| {
+                    if (@as(u32, @bitCast(name)) == @as(u32, @bitCast(fa.field_name))) {
+                        actual_field_idx = @intCast(i);
+                        break;
+                    }
+                }
+            }
+
+            // Generate the record expression
+            const record_loc = try self.generateExpr(fa.record_expr);
+
+            // For single-field records, the record IS the field
+            // For multi-field records, we need to load from the correct offset
+            const field_size: i32 = 8;
+            const field_offset = @as(i32, actual_field_idx) * field_size;
+
+            switch (record_loc) {
+                .stack => |base_offset| {
+                    // Load field from stack
+                    const result_reg = try self.codegen.allocGeneralFor(0);
+                    const offset = base_offset + field_offset;
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, offset);
+                    }
+
+                    return .{ .general_reg = result_reg };
+                },
+                .general_reg => |reg| {
+                    // Single-field record - the register IS the field value
+                    if (actual_field_idx == 0) {
+                        return .{ .general_reg = reg };
+                    }
+                    // Multi-field in register not supported
+                    return Error.UnsupportedExpression;
+                },
+                .immediate_i64 => |val| {
+                    // Single-field immediate record
+                    if (actual_field_idx == 0) {
+                        return .{ .immediate_i64 = val };
+                    }
+                    return Error.UnsupportedExpression;
+                },
+                else => return Error.UnsupportedExpression,
+            }
+        }
+
+        /// Generate code for a tuple
+        fn generateTuple(self: *Self, tuple: anytype) Error!ValueLocation {
+            const elems = self.store.getExprSpan(tuple.elems);
+
+            if (elems.len == 0) {
+                return .{ .immediate_i64 = 0 };
+            }
+
+            if (elems.len == 1) {
+                // Single-element tuple - just return the element
+                return try self.generateExpr(elems[0]);
+            }
+
+            // Multi-element tuple - store on stack
+            const elem_size: i32 = 8;
+            const num_elems: i32 = @intCast(elems.len);
+            // Allocate stack space for all elements (use dynamic allocation to avoid conflicts)
+            const tuple_offset: i32 = self.codegen.allocStackSlot(@as(u32, @intCast(num_elems * elem_size)));
+
+            for (elems, 0..) |elem_id, i| {
+                const elem_loc = try self.generateExpr(elem_id);
+                const elem_reg = try self.ensureInGeneralReg(elem_loc);
+
+                const offset = tuple_offset + @as(i32, @intCast(i)) * elem_size;
+
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, offset);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, offset, elem_reg);
+                }
+
+                self.codegen.freeGeneral(elem_reg);
+            }
+
+            return .{ .stack = tuple_offset };
+        }
+
+        /// Generate code for tuple element access
+        fn generateTupleAccess(self: *Self, ta: anytype) Error!ValueLocation {
+            // Generate the tuple expression
+            const tuple_loc = try self.generateExpr(ta.tuple_expr);
+
+            const elem_size: i32 = 8;
+            const elem_offset = @as(i32, ta.elem_idx) * elem_size;
+
+            switch (tuple_loc) {
+                .stack => |base_offset| {
+                    // Load element from stack
+                    const result_reg = try self.codegen.allocGeneralFor(0);
+                    const offset = base_offset + elem_offset;
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, offset);
+                    }
+
+                    return .{ .general_reg = result_reg };
+                },
+                .general_reg => |reg| {
+                    if (ta.elem_idx == 0) {
+                        return .{ .general_reg = reg };
+                    }
+                    return Error.UnsupportedExpression;
+                },
+                .immediate_i64 => |val| {
+                    if (ta.elem_idx == 0) {
+                        return .{ .immediate_i64 = val };
+                    }
+                    return Error.UnsupportedExpression;
+                },
+                else => return Error.UnsupportedExpression,
+            }
         }
 
         /// Generate code for a block
@@ -2354,7 +2952,43 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Store the result to the output buffer pointed to by a saved register
         /// This is used when the original result pointer (X0/RDI) may have been clobbered
-        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg) Error!void {
+        fn storeResultToSavedPtr(self: *Self, loc: ValueLocation, result_layout: layout.Idx, saved_ptr_reg: GeneralReg, tuple_len: usize) Error!void {
+            // Handle tuples specially - copy all elements from stack to result buffer
+            if (tuple_len > 1) {
+                switch (loc) {
+                    .stack => |base_offset| {
+                        // Copy each tuple element from stack to result buffer
+                        const elem_size: i32 = 8;
+                        const temp_reg = try self.codegen.allocGeneralFor(0);
+
+                        for (0..tuple_len) |i| {
+                            const stack_offset = base_offset + @as(i32, @intCast(i)) * elem_size;
+                            const buf_offset: i32 = @as(i32, @intCast(i)) * elem_size;
+
+                            // Load from stack
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
+                            }
+
+                            // Store to result buffer
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, @intCast(i));
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
+                            }
+                        }
+
+                        self.codegen.freeGeneral(temp_reg);
+                        return;
+                    },
+                    else => {
+                        // Fallback - just store the single value
+                    },
+                }
+            }
+
             switch (result_layout) {
                 .i64, .i32, .i16, .i8, .u64, .u32, .u16, .u8, .bool => {
                     const reg = try self.ensureInGeneralReg(loc);
@@ -3057,7 +3691,7 @@ test "generate i64 literal" {
     var codegen = MonoExprCodeGen.init(allocator, &store, null);
     defer codegen.deinit();
 
-    const result = try codegen.generateCode(expr_id, .i64);
+    const result = try codegen.generateCode(expr_id, .i64, 1);
     defer allocator.free(result.code);
 
     // Should have generated some code
@@ -3078,7 +3712,7 @@ test "generate bool literal" {
     var codegen = MonoExprCodeGen.init(allocator, &store, null);
     defer codegen.deinit();
 
-    const result = try codegen.generateCode(expr_id, .bool);
+    const result = try codegen.generateCode(expr_id, .bool, 1);
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);
@@ -3106,7 +3740,7 @@ test "generate addition" {
     var codegen = MonoExprCodeGen.init(allocator, &store, null);
     defer codegen.deinit();
 
-    const result = try codegen.generateCode(add_id, .i64);
+    const result = try codegen.generateCode(add_id, .i64, 1);
     defer allocator.free(result.code);
 
     try std.testing.expect(result.code.len > 0);

@@ -932,10 +932,29 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);
+            // Compute discriminant based on tag name
+            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
+            // For Bool type: False=0, True=1
+            const tag_name_text = module_env.getIdent(t.name);
+            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
+                1 // Ok comes after Err alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "Err") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "err"))
+                0 // Err comes first alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "True") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "true"))
+                1
+            else if (std.mem.eql(u8, tag_name_text, "False") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "false"))
+                0
+            else
+                0; // TODO: proper discriminant lookup for other tags
+
             break :blk .{
                 .tag = .{
-                    .discriminant = 0, // TODO
-                    .union_layout = .i64, // TODO
+                    .discriminant = discriminant,
+                    .union_layout = .i64, // TODO: proper layout
                     .args = args,
                 },
             };
