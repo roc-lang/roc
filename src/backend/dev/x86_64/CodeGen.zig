@@ -696,6 +696,16 @@ pub const SystemVCodeGen = struct {
         @memcpy(self.emit.buf.items[patch_loc..][0..4], &bytes);
     }
 
+    /// Patch a CALL rel32 instruction's target offset.
+    /// The call_site is the offset where the CALL instruction starts (E8 opcode).
+    /// The rel_offset is the already-adjusted relative offset to patch in.
+    pub fn patchCall(self: *Self, call_site: usize, rel_offset: i32) void {
+        // CALL rel32 is: E8 xx xx xx xx
+        // The rel32 starts at call_site + 1
+        const bytes: [4]u8 = @bitCast(rel_offset);
+        @memcpy(self.emit.buf.items[call_site + 1 ..][0..4], &bytes);
+    }
+
     /// Emit function call with relocation
     pub fn emitCall(self: *Self, name: []const u8) !void {
         const offset = self.currentOffset();

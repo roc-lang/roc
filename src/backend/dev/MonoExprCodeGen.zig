@@ -1758,17 +1758,22 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// somehow fail to patch. But in normal operation, codegen.patchJump()
         /// overwrites the placeholder before execution.
         ///
-        /// RETURNS: The offset of the branch instruction, for later patching.
+        /// RETURNS: The patch location (where the displacement bytes are) for later patching.
         fn emitJumpIfNotEqual(self: *Self) !usize {
-            const patch_loc = self.codegen.currentOffset();
             if (comptime builtin.cpu.arch == .aarch64) {
                 // B.NE (branch if not equal) with placeholder offset
+                // On aarch64, the entire 4-byte instruction encodes the offset
+                const patch_loc = self.codegen.currentOffset();
                 try self.codegen.emit.bcond(.ne, 0);
+                return patch_loc;
             } else {
                 // JNE (jump if not equal) with placeholder offset
+                // x86_64: JNE rel32 is 0F 85 xx xx xx xx (6 bytes)
+                // The displacement starts at offset +2, so patch_loc = currentOffset + 2
+                const patch_loc = self.codegen.currentOffset() + 2;
                 try self.codegen.emit.jne(@bitCast(@as(i32, 0)));
+                return patch_loc;
             }
-            return patch_loc;
         }
 
         /// Generate code for calling a lambda, handling recursive closures with join points
