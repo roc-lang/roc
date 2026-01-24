@@ -27,15 +27,21 @@ const Closure = layout_mod.Closure;
 
 const StackValue = @This();
 
-/// Read an aligned integer from memory.
+/// Read an integer from memory safely, handling potential misalignment.
+/// Uses memcpy to avoid undefined behavior on misaligned access in Release modes.
 inline fn readAligned(comptime T: type, raw_ptr: [*]u8) T {
-    return builtins.utils.alignedPtrCast(*const T, raw_ptr, @src()).*;
+    // Use @memcpy for safe misaligned access - this is critical for Release modes
+    // where @alignCast is UB for misaligned pointers
+    var result: T = undefined;
+    @memcpy(std.mem.asBytes(&result), raw_ptr[0..@sizeOf(T)]);
+    return result;
 }
 
-/// Write an i128 value to memory with alignment handling and overflow checking.
+/// Write an i128 value to memory safely, handling potential misalignment.
 inline fn writeChecked(comptime T: type, raw_ptr: [*]u8, value: i128) error{IntegerOverflow}!void {
-    const ptr = builtins.utils.alignedPtrCast(*T, raw_ptr, @src());
-    ptr.* = std.math.cast(T, value) orelse return error.IntegerOverflow;
+    const typed_value: T = std.math.cast(T, value) orelse return error.IntegerOverflow;
+    // Use @memcpy for safe misaligned write
+    @memcpy(raw_ptr[0..@sizeOf(T)], std.mem.asBytes(&typed_value));
 }
 
 // Internal helper functions for memory operations that don't need rt_var
@@ -729,8 +735,11 @@ pub fn asF32(self: StackValue) f32 {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .f32);
 
-    const typed_ptr = @as(*const f32, @ptrCast(@alignCast(self.ptr.?)));
-    return typed_ptr.*;
+    // Use memcpy for safe misaligned access in Release modes
+    var result: f32 = undefined;
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    @memcpy(std.mem.asBytes(&result), raw_ptr[0..@sizeOf(f32)]);
+    return result;
 }
 
 /// Read this StackValue's f64 value
@@ -740,8 +749,11 @@ pub fn asF64(self: StackValue) f64 {
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .f64);
 
-    const typed_ptr = @as(*const f64, @ptrCast(@alignCast(self.ptr.?)));
-    return typed_ptr.*;
+    // Use memcpy for safe misaligned access in Release modes
+    var result: f64 = undefined;
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    @memcpy(std.mem.asBytes(&result), raw_ptr[0..@sizeOf(f64)]);
+    return result;
 }
 
 /// Read this StackValue's Dec value
@@ -750,18 +762,13 @@ pub fn asDec(self: StackValue, roc_ops: *RocOps) RocDec {
     std.debug.assert(self.ptr != null);
     std.debug.assert(self.layout.tag == .scalar and self.layout.data.scalar.tag == .frac);
     std.debug.assert(self.layout.data.scalar.data.frac == .dec);
+    _ = roc_ops; // Unused after removing debug-only alignment check
 
-    // RocDec contains i128 which requires 16-byte alignment (debug builds only for performance)
-    if (comptime builtin.mode == .Debug) {
-        const ptr_val = @intFromPtr(self.ptr.?);
-        if (ptr_val % @alignOf(i128) != 0) {
-            var buf: [64]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "[asDec] alignment error: ptr=0x{x}", .{ptr_val}) catch "[asDec] alignment error";
-            roc_ops.crash(msg);
-        }
-    }
-    const typed_ptr = @as(*const RocDec, @ptrCast(@alignCast(self.ptr.?)));
-    return typed_ptr.*;
+    // Use memcpy for safe misaligned access in Release modes
+    var result: RocDec = undefined;
+    const raw_ptr: [*]u8 = @ptrCast(self.ptr.?);
+    @memcpy(std.mem.asBytes(&result), raw_ptr[0..@sizeOf(RocDec)]);
+    return result;
 }
 
 /// Initialise the StackValue f32 value

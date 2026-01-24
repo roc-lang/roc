@@ -215,6 +215,12 @@ pub const DevEvaluator = struct {
         roc_env.* = DevRocEnv.init(allocator);
 
         // Create RocOps with function pointers to the DevRocEnv handlers
+        // Use a static dummy array for hosted_fns since count=0 means no hosted functions
+        // This avoids undefined behavior from using `undefined` for the pointer
+        const empty_hosted_fns = struct {
+            fn dummyHostedFn(_: *RocOps, _: *anyopaque, _: *anyopaque) callconv(.c) void {}
+            var empty: [1]builtins.host_abi.HostedFn = .{&dummyHostedFn};
+        };
         const roc_ops = RocOps{
             .env = @ptrCast(roc_env),
             .roc_alloc = &DevRocEnv.rocAllocFn,
@@ -223,7 +229,7 @@ pub const DevEvaluator = struct {
             .roc_dbg = &DevRocEnv.rocDbgFn,
             .roc_expect_failed = &DevRocEnv.rocExpectFailedFn,
             .roc_crashed = &DevRocEnv.rocCrashedFn,
-            .hosted_fns = .{ .count = 0, .fns = undefined },
+            .hosted_fns = .{ .count = 0, .fns = &empty_hosted_fns.empty },
         };
 
         return DevEvaluator{

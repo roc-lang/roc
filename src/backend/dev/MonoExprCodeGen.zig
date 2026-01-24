@@ -2437,30 +2437,59 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Emit prologue for main expression code.
-        /// Saves callee-saved registers that will be used (X19/RBX for result pointer).
+        /// Sets up frame pointer and saves callee-saved registers.
+        /// The frame pointer is REQUIRED because emitStoreStack/emitLoadStack use FP-relative addressing.
         fn emitMainPrologue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Save X19 (callee-saved) which we use for the result pointer.
-                // Use stp to save X19 and LR together (need LR for calls)
-                // stp x19, x30, [sp, #-16]!
-                try self.codegen.emit.stpPreIndex(.w64, .X19, .LR, .ZRSP, -2);
+                // First, save FP and LR and establish frame pointer.
+                // This is REQUIRED because stack slot accesses use FP-relative addressing.
+                // stp x29, x30, [sp, #-16]!  (push FP and LR)
+                try self.codegen.emit.stpPreIndex(.w64, .FP, .LR, .ZRSP, -2);
+                // mov x29, sp  (establish frame pointer)
+                try self.codegen.emit.movRegReg(.w64, .FP, .ZRSP);
+
+                // Now save X19 and X20 (callee-saved) which we use for result ptr and RocOps ptr.
+                // stp x19, x20, [sp, #-16]!
+                try self.codegen.emit.stpPreIndex(.w64, .X19, .X20, .ZRSP, -2);
+
+                // CRITICAL: Initialize stack_offset to account for saved X19/X20 at [FP-16].
+                // allocStackSlot decrements stack_offset and returns the new value.
+                // With stack_offset = -16, first allocation of 16 bytes returns -32,
+                // which is below the saved registers and won't corrupt them.
+                self.codegen.stack_offset = -16;
             } else {
-                // Save RBX (callee-saved) which we use for the result pointer
+                // First, set up frame pointer.
+                // This is REQUIRED because stack slot accesses use RBP-relative addressing.
+                try self.codegen.emit.push(.RBP);
+                try self.codegen.emit.movRegReg(.w64, .RBP, .RSP);
+
+                // Save RBX and R12 (callee-saved) which we use for result ptr and RocOps ptr
                 try self.codegen.emit.push(.RBX);
+                try self.codegen.emit.push(.R12);
+
+                // CRITICAL: Initialize stack_offset to account for saved RBX at [RBP-8]
+                // and R12 at [RBP-16]. With stack_offset = -16, first allocation returns -32.
+                self.codegen.stack_offset = -16;
             }
         }
 
         /// Emit epilogue for main expression code.
-        /// Restores callee-saved registers and returns.
+        /// Restores callee-saved registers and frame pointer, then returns.
         fn emitMainEpilogue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
-                // Restore X19 and LR
-                // ldp x19, x30, [sp], #16
-                try self.codegen.emit.ldpPostIndex(.w64, .X19, .LR, .ZRSP, 2);
+                // Restore X19 and X20
+                // ldp x19, x20, [sp], #16
+                try self.codegen.emit.ldpPostIndex(.w64, .X19, .X20, .ZRSP, 2);
+                // Restore FP and LR
+                // ldp x29, x30, [sp], #16
+                try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
                 try self.codegen.emit.ret();
             } else {
-                // Restore RBX
+                // Restore R12 and RBX (in reverse order of push)
+                try self.codegen.emit.pop(.R12);
                 try self.codegen.emit.pop(.RBX);
+                // Restore frame pointer
+                try self.codegen.emit.pop(.RBP);
                 try self.codegen.emit.ret();
             }
         }
