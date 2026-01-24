@@ -14,7 +14,6 @@ const Desc = types.Descriptor;
 const Var = types.Var;
 const Content = types.Content;
 const Rank = types.Rank;
-const Mark = types.Mark;
 const Flex = types.Flex;
 const Rigid = types.Rigid;
 const RecordField = types.RecordField;
@@ -233,14 +232,14 @@ pub const Store = struct {
     pub fn freshFromContent(self: *Self, content: Content) std.mem.Allocator.Error!Var {
         const trace = tracy.traceNamed(@src(), "typesStore.freshFromContent");
         defer trace.end();
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = Rank.outermost });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the given content and rank
     pub fn freshFromContentWithRank(self: *Self, content: Content, rank: Rank) std.mem.Allocator.Error!Var {
-        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank, .mark = Mark.none });
+        const desc_idx = try self.descs.insert(self.gpa, .{ .content = content, .rank = rank });
         const slot_idx = try self.slots.insert(self.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -261,7 +260,7 @@ pub const Store = struct {
 
     /// Create a new variable with the provided content assuming there is capacity
     pub fn appendFromContentAssumeCapacity(self: *Self, content: Content, rank: Rank) Var {
-        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank, .mark = Mark.none });
+        const desc_idx = self.descs.appendAssumeCapacity(.{ .content = content, .rank = rank });
         const slot_idx = self.slots.appendAssumeCapacity(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -664,14 +663,7 @@ pub const Store = struct {
         return self.vars.iterRange(span);
     }
 
-    // mark & rank //
-
-    /// Set the mark for a descriptor
-    pub fn setDescMark(self: *Self, desc_idx: DescStore.Idx, mark: Mark) void {
-        var desc = self.descs.get(desc_idx);
-        desc.mark = mark;
-        self.descs.set(desc_idx, desc);
-    }
+    // rank //
 
     /// Set the rank for a descriptor
     pub fn setDescRank(self: *Self, desc_idx: DescStore.Idx, rank: Rank) void {
@@ -1577,12 +1569,10 @@ test "DescStore.Serialized roundtrip" {
     const desc1 = Descriptor{
         .content = Content{ .flex = Flex.init() },
         .rank = Rank.generalized,
-        .mark = Mark.none,
     };
     const desc2 = Descriptor{
         .content = Content{ .structure = .empty_record },
         .rank = Rank.outermost,
-        .mark = Mark.visited,
     };
 
     const desc_idx_1 = try desc_store.insert(gpa, desc1);

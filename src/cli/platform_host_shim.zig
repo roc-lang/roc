@@ -213,14 +213,14 @@ fn addRocSerializedModule(builder: *Builder, target: RocTarget, serialized_modul
         const str_const = try builder.stringConst(str);
 
         // Create an internal constant variable to hold the array
-        // IMPORTANT: Set 8-byte alignment to ensure ModuleEnv.Serialized can be accessed properly
-        // (ModuleEnv.Serialized contains u64/i64 fields that require 8-byte alignment)
+        // IMPORTANT: Set 16-byte alignment to ensure i128 values can be accessed properly
+        // (int128_values contains i128 which requires 16-byte alignment)
         const internal_name = try builder.strtabString(".roc_serialized_data");
         const array_var = try builder.addVariable(internal_name, str_const.typeOf(builder), .default);
         try array_var.setInitializer(str_const, builder);
         array_var.setLinkage(.internal, builder);
         array_var.setMutability(.global, builder);
-        array_var.setAlignment(Builder.Alignment.fromByteUnits(8), builder);
+        array_var.setAlignment(Builder.Alignment.fromByteUnits(16), builder);
 
         // Create the external base_ptr variable pointing to the internal array
         const base_ptr_var = try builder.addVariable(base_ptr_name, ptr_type, .default);

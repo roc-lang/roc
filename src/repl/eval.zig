@@ -19,6 +19,9 @@ const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const RocOps = builtins.host_abi.RocOps;
 const LoadedModule = builtin_loading.LoadedModule;
+const DevEvaluator = eval_mod.DevEvaluator;
+
+pub const Backend = @import("backend").EvalBackend;
 
 /// REPL state that tracks past definitions and evaluates expressions
 pub const Repl = struct {
@@ -29,8 +32,10 @@ pub const Repl = struct {
     roc_ops: *RocOps,
     /// Shared crash context managed by the host (optional)
     crash_ctx: ?*CrashContext,
-    /// Optional trace writer for debugging evaluation
-    //trace_writer: ?std.io.AnyWriter,
+    /// Backend for code evaluation
+    backend: Backend,
+    /// DevEvaluator instance (only initialized when backend is .dev)
+    dev_evaluator: ?DevEvaluator,
     /// ModuleEnv from last successful evaluation (for snapshot generation)
     last_module_env: ?*ModuleEnv,
     /// Debug flag to store rendered HTML for snapshot generation
@@ -45,6 +50,10 @@ pub const Repl = struct {
     builtin_module: LoadedModule,
 
     pub fn init(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext) !Repl {
+        return initWithBackend(allocator, roc_ops, crash_ctx, .interpreter);
+    }
+
+    pub fn initWithBackend(allocator: Allocator, roc_ops: *RocOps, crash_ctx: ?*CrashContext, backend: Backend) !Repl {
         const compiled_builtins = @import("compiled_builtins");
 
         // Load builtin indices once at startup (generated at build time)
@@ -55,12 +64,19 @@ pub const Repl = struct {
         var builtin_module = try builtin_loading.loadCompiledModule(allocator, compiled_builtins.builtin_bin, "Builtin", builtin_source);
         errdefer builtin_module.deinit();
 
+        // Initialize DevEvaluator if using dev backend
+        var dev_evaluator: ?DevEvaluator = null;
+        if (backend == .dev) {
+            dev_evaluator = DevEvaluator.init(allocator) catch null;
+        }
+
         return Repl{
             .allocator = allocator,
             .definitions = std.StringHashMap([]const u8).init(allocator),
             .roc_ops = roc_ops,
             .crash_ctx = crash_ctx,
-            //.trace_writer = null,
+            .backend = backend,
+            .dev_evaluator = dev_evaluator,
             .last_module_env = null,
             .debug_store_snapshots = false,
             .debug_can_html = std.array_list.Managed([]const u8).init(allocator),
@@ -168,6 +184,11 @@ pub const Repl = struct {
             self.allocator.free(kv.value_ptr.*); // Free the source string
         }
         self.definitions.deinit();
+
+        // Clean up DevEvaluator if it exists
+        if (self.dev_evaluator) |*dev_eval| {
+            dev_eval.deinit();
+        }
 
         // Clean up debug HTML storage
         for (self.debug_can_html.items) |html| {
@@ -587,8 +608,47 @@ pub const Repl = struct {
             return .{ .type_error = try self.allocator.dupe(u8, "TYPE MISMATCH") };
         }
 
+        // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
+        if (self.backend == .dev) {
+            if (self.dev_evaluator) |*dev_eval| {
+                // Get the expression from the index
+                const expr = module_env.store.getExpr(final_expr_idx);
+
+                // Generate and execute native code
+                var code_result = dev_eval.generateCode(module_env, expr) catch {
+                    // Fall back to interpreter on unsupported expressions
+                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                };
+                defer code_result.deinit();
+
+                // JIT execute
+                const backend = eval_mod;
+                var jit = backend.JitCode.init(code_result.code) catch {
+                    return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+                };
+                defer jit.deinit();
+
+                // Format result based on layout
+                const LayoutIdx = eval_mod.layout.Idx;
+                const output = switch (code_result.result_layout) {
+                    LayoutIdx.i64, LayoutIdx.i8, LayoutIdx.i16, LayoutIdx.i32 => try std.fmt.allocPrint(self.allocator, "{} : I64", .{jit.callReturnI64()}),
+                    LayoutIdx.u64, LayoutIdx.u8, LayoutIdx.u16, LayoutIdx.u32 => try std.fmt.allocPrint(self.allocator, "{} : U64", .{jit.callReturnU64()}),
+                    LayoutIdx.bool => if (jit.callReturnU64() != 0) try self.allocator.dupe(u8, "Bool.true : Bool") else try self.allocator.dupe(u8, "Bool.false : Bool"),
+                    LayoutIdx.f64, LayoutIdx.f32 => try std.fmt.allocPrint(self.allocator, "{d} : F64", .{jit.callReturnF64()}),
+                    LayoutIdx.dec => try std.fmt.allocPrint(self.allocator, "{} : Dec", .{jit.callReturnI64()}), // TODO: proper Dec formatting
+                    else => return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker),
+                };
+                return .{ .expression = output };
+            }
+        }
+
+        return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
+    }
+
+    /// Evaluate using the interpreter (fallback path)
+    fn evaluateWithInterpreter(self: *Repl, module_env: *ModuleEnv, final_expr_idx: can.CIR.Expr.Idx, imported_modules: *const [1]*const ModuleEnv, checker: *Check) !StepResult {
         const builtin_types_for_eval = BuiltinTypes.init(self.builtin_indices, self.builtin_module.env, self.builtin_module.env, self.builtin_module.env);
-        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, &imported_modules, &checker.import_mapping, null, null) catch |err| {
+        var interpreter = eval_mod.Interpreter.init(self.allocator, module_env, builtin_types_for_eval, self.builtin_module.env, imported_modules, &checker.import_mapping, null, null) catch |err| {
             return .{ .eval_error = try std.fmt.allocPrint(self.allocator, "Interpreter init error: {}", .{err}) };
         };
         defer interpreter.deinitAndFreeOtherEnvs();

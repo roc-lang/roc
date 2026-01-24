@@ -8,9 +8,18 @@ type=statement
 return Bool.True
 ~~~
 # EXPECTED
-NIL
+RETURN OUTSIDE FUNCTION - return_stmt.md:1:1:1:17
 # PROBLEMS
-NIL
+**RETURN OUTSIDE FUNCTION**
+The `return` keyword can only be used inside function bodies.
+
+**return_stmt.md:1:1:1:17:**
+```roc
+return Bool.True
+```
+^^^^^^^^^^^^^^^^
+
+
 # TOKENS
 ~~~zig
 KwReturn,UpperIdent,NoSpaceDotUpperIdent,
@@ -28,10 +37,7 @@ NO CHANGE
 # CANONICALIZE
 ~~~clojure
 (can-ir
-	(s-return
-		(e-nominal-external
-			(builtin)
-			(e-tag (name "True")))))
+	(s-runtime-error (tag "return_outside_fn")))
 ~~~
 # TYPES
 ~~~clojure

@@ -10,6 +10,7 @@ const Repl = repl_mod.Repl;
 
 const cli_context = @import("CliContext.zig");
 const CliContext = cli_context.CliContext;
+const Backend = @import("backend").EvalBackend;
 
 const ReplLine = @import("ReplLine.zig");
 
@@ -162,7 +163,7 @@ const ReplOps = struct {
 };
 
 /// Run the interactive REPL
-pub fn run(ctx: *CliContext) !void {
+pub fn run(ctx: *CliContext, backend: Backend) !void {
     const stdout = ctx.io.stdout();
 
     // Print welcome banner
@@ -173,7 +174,7 @@ pub fn run(ctx: *CliContext) !void {
     var repl_ops = ReplOps.init(ctx.gpa);
     defer repl_ops.deinit();
 
-    var repl_instance = Repl.init(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr()) catch |err| {
+    var repl_instance = Repl.initWithBackend(ctx.gpa, repl_ops.get_ops(), repl_ops.crashContextPtr(), backend) catch |err| {
         ctx.io.stderr().print("Failed to initialize REPL: {}\n", .{err}) catch {};
         return error.NotImplemented;
     };
