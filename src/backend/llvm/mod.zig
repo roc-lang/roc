@@ -21,6 +21,9 @@ pub const cir_emit = @import("cir_emit.zig");
 pub const layout_types = @import("layout_types.zig");
 pub const refcount = @import("refcount.zig");
 
+/// Mono IR to LLVM code generator (parallel to dev backend's MonoExprCodeGen)
+pub const MonoLlvmCodeGen = @import("MonoLlvmCodeGen.zig").MonoLlvmCodeGen;
+
 test "backend llvm tests" {
     const std = @import("std");
     std.testing.refAllDecls(Builder);
@@ -34,4 +37,5 @@ test "backend llvm tests" {
     std.testing.refAllDecls(cir_emit);
     std.testing.refAllDecls(layout_types);
     std.testing.refAllDecls(refcount);
+    std.testing.refAllDecls(@import("MonoLlvmCodeGen.zig"));
 }

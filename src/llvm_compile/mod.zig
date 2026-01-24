@@ -10,8 +10,6 @@
 
 pub const bindings = @import("bindings.zig");
 pub const compile = @import("compile.zig");
-/// LLVM object file execution and result formatting
-pub const llvm_execute = @import("llvm_execute.zig");
 
 // Re-export commonly used functions for linking
 pub const compileBitcodeToObject = bindings.compileBitcodeToObject;
