@@ -86,8 +86,9 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
 
     // Check if this is a tuple
     if (code_result.tuple_len > 1) {
-        // Allocate buffer for tuple elements (each element is 8 bytes / i64)
-        var result_buf: [32]i64 = @splat(0);
+        // Allocate buffer for tuple elements
+        // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
+        var result_buf: [32]i128 align(16) = @splat(0);
         jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
 
         // Format as "(elem1, elem2, ...)"
@@ -100,9 +101,10 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             if (i > 0) {
                 try output.appendSlice(", ");
             }
-            // Format as decimal to match interpreter (unsuffixed numeric literals default to Dec)
-            const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{result_buf[i]});
-            defer allocator.free(elem_str);
+            // Format as Dec - the i128 value is already Dec-scaled from the interpreter
+            const dec_val = builtins.dec.RocDec{ .num = result_buf[i] };
+            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const elem_str = dec_val.format_to_buf(&dec_buf);
             try output.appendSlice(elem_str);
         }
 

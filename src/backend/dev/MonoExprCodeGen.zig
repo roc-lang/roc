@@ -1721,12 +1721,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateIfThenElse(self: *Self, ite: anytype) Error!ValueLocation {
             const branches = self.store.getIfBranches(ite.branches);
 
-            // Allocate result register
-            const result_reg = try self.codegen.allocGeneralFor(0);
-
             // Collect jump targets for patching
             var end_patches = std.ArrayList(usize).empty;
             defer end_patches.deinit(self.allocator);
+
+            // Check if result might be a composite type (stack-based)
+            // We'll detect this from the first branch and allocate accordingly
+            var result_slot: ?i32 = null;
+            var result_reg: ?GeneralReg = null;
+            var first_branch = true;
 
             // Generate each branch
             for (branches) |branch| {
@@ -1741,9 +1744,32 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Generate body (true case)
                 const body_loc = try self.generateExpr(branch.body);
-                const body_reg = try self.ensureInGeneralReg(body_loc);
-                try self.emitMovRegReg(result_reg, body_reg);
-                self.codegen.freeGeneral(body_reg);
+
+                // On first branch, determine result storage strategy
+                if (first_branch) {
+                    first_branch = false;
+                    switch (body_loc) {
+                        .stack => {
+                            // Composite type - allocate a result slot on stack
+                            // Use 24 bytes which covers strings, lists, and small records/tuples
+                            result_slot = self.codegen.allocStackSlot(24);
+                        },
+                        else => {
+                            // Simple type - use register
+                            result_reg = try self.codegen.allocGeneralFor(0);
+                        },
+                    }
+                }
+
+                // Copy result to the appropriate location
+                if (result_slot) |slot| {
+                    // Copy from body_loc to result slot
+                    try self.copyValueToStackOffset(slot, body_loc);
+                } else if (result_reg) |reg| {
+                    const body_reg = try self.ensureInGeneralReg(body_loc);
+                    try self.emitMovRegReg(reg, body_reg);
+                    self.codegen.freeGeneral(body_reg);
+                }
 
                 // Jump to end (skip the else branch)
                 const end_patch = try self.codegen.emitJump();
@@ -1756,9 +1782,26 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Generate final else
             const else_loc = try self.generateExpr(ite.final_else);
-            const else_reg = try self.ensureInGeneralReg(else_loc);
-            try self.emitMovRegReg(result_reg, else_reg);
-            self.codegen.freeGeneral(else_reg);
+
+            // Handle case where all branches were composite but else is the first evaluation
+            if (result_slot == null and result_reg == null) {
+                switch (else_loc) {
+                    .stack => {
+                        result_slot = self.codegen.allocStackSlot(24);
+                    },
+                    else => {
+                        result_reg = try self.codegen.allocGeneralFor(0);
+                    },
+                }
+            }
+
+            if (result_slot) |slot| {
+                try self.copyValueToStackOffset(slot, else_loc);
+            } else if (result_reg) |reg| {
+                const else_reg = try self.ensureInGeneralReg(else_loc);
+                try self.emitMovRegReg(reg, else_reg);
+                self.codegen.freeGeneral(else_reg);
+            }
 
             // Patch all end jumps to here
             const end_offset = self.codegen.currentOffset();
@@ -1766,7 +1809,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.patchJump(patch, end_offset);
             }
 
-            return .{ .general_reg = result_reg };
+            if (result_slot) |slot| {
+                return .{ .stack = slot };
+            } else if (result_reg) |reg| {
+                return .{ .general_reg = reg };
+            } else {
+                // Edge case: no branches at all (shouldn't happen)
+                return .{ .immediate_i64 = 0 };
+            }
         }
 
         /// Compare register with zero and jump if equal (condition is false)
@@ -2594,9 +2644,117 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 self.codegen.freeGeneral(reg);
             } else {
-                // Large string: needs heap allocation (not yet implemented)
-                // For now, return error
-                return Error.UnsupportedExpression;
+                // Large string: needs heap allocation
+                const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+                const fn_addr: usize = @intFromPtr(&allocateWithRefcountC);
+
+                // Allocate stack slot to save the heap pointer
+                const heap_ptr_slot: i32 = self.codegen.allocStackSlot(8);
+
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    // aarch64 calling convention:
+                    // X0 = data_bytes, X1 = element_alignment, X2 = elements_refcounted, X3 = roc_ops
+                    // Return: X0 = heap pointer
+
+                    try self.codegen.emit.movRegImm64(.X0, @intCast(str_bytes.len));
+                    try self.codegen.emit.movRegImm64(.X1, 1); // byte alignment
+                    try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
+                    try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                    // Load function address and call
+                    const addr_reg = try self.codegen.allocGeneralFor(4);
+                    try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                    try self.codegen.emit.blrReg(addr_reg);
+                    self.codegen.freeGeneral(addr_reg);
+
+                    // Save heap pointer from X0 to stack slot
+                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, heap_ptr_slot);
+                } else {
+                    // x86_64 calling convention:
+                    // RDI = data_bytes, RSI = element_alignment, RDX = elements_refcounted, RCX = roc_ops
+                    // Return: RAX = heap pointer
+
+                    // Load function address into R11 first (caller-saved, not an arg register)
+                    try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                    // Set up arguments
+                    try self.codegen.emit.movRegImm64(.RDI, @intCast(str_bytes.len));
+                    try self.codegen.emit.movRegImm64(.RSI, 1); // byte alignment
+                    try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted = false
+                    try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+
+                    // Call the function
+                    try self.codegen.emit.callReg(.R11);
+
+                    // Save heap pointer from RAX to stack slot
+                    try self.codegen.emit.movMemReg(.w64, .RBP, heap_ptr_slot, .RAX);
+                }
+
+                // Copy string bytes to heap memory
+                // Load heap pointer, then copy bytes
+                const heap_ptr = try self.codegen.allocGeneralFor(0);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, heap_ptr, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
+                }
+
+                // Copy string data in 8-byte chunks, then remaining bytes
+                var remaining: usize = str_bytes.len;
+                var str_offset: usize = 0;
+                const temp_reg = try self.codegen.allocGeneralFor(1);
+
+                while (remaining >= 8) {
+                    const chunk: u64 = @bitCast(str_bytes[str_offset..][0..8].*);
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(chunk));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(str_offset));
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    }
+                    str_offset += 8;
+                    remaining -= 8;
+                }
+
+                // Handle remaining bytes (1-7 bytes)
+                if (remaining > 0) {
+                    var last_chunk: u64 = 0;
+                    for (0..remaining) |j| {
+                        last_chunk |= @as(u64, str_bytes[str_offset + j]) << @intCast(j * 8);
+                    }
+                    try self.codegen.emitLoadImm(temp_reg, @bitCast(last_chunk));
+                    // Store partial - for simplicity, store as full 8 bytes (heap has space)
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, @intCast(str_offset));
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, heap_ptr, @intCast(str_offset), temp_reg);
+                    }
+                }
+
+                self.codegen.freeGeneral(temp_reg);
+                self.codegen.freeGeneral(heap_ptr);
+
+                // Construct RocStr struct on stack: {pointer, length, capacity}
+                // Reload heap pointer for struct construction
+                const ptr_reg = try self.codegen.allocGeneralFor(0);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, heap_ptr_slot);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, heap_ptr_slot);
+                }
+
+                // Store pointer (first 8 bytes)
+                try self.codegen.emitStoreStack(.w64, base_offset, ptr_reg);
+
+                // Store length (second 8 bytes)
+                try self.codegen.emitLoadImm(ptr_reg, @intCast(str_bytes.len));
+                try self.codegen.emitStoreStack(.w64, base_offset + 8, ptr_reg);
+
+                // Store capacity (third 8 bytes) - same as length for immutable strings
+                // No need to reload, length is still in ptr_reg
+                try self.codegen.emitStoreStack(.w64, base_offset + 16, ptr_reg);
+
+                self.codegen.freeGeneral(ptr_reg);
             }
 
             return .{ .stack = base_offset };
@@ -3472,6 +3630,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                         .closure => |level3_closure| {
                                             return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
                                         },
+                                        .block => |level3_block| {
+                                            return try self.generateBlockCall(level3_block, outer_args, ret_layout);
+                                        },
                                         else => return Error.UnsupportedExpression,
                                     }
                                 },
@@ -3502,8 +3663,56 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                                 .closure => |level3_closure| {
                                                     return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
                                                 },
+                                                .block => |level3_block| {
+                                                    return try self.generateBlockCall(level3_block, outer_args, ret_layout);
+                                                },
                                                 else => return Error.UnsupportedExpression,
                                             }
+                                        },
+                                        else => return Error.UnsupportedExpression,
+                                    }
+                                },
+                                .block => |level2_block| {
+                                    // Execute block and call resulting lambda with remaining args
+                                    // First execute block statements
+                                    const stmts = self.store.getStmts(level2_block.stmts);
+                                    for (stmts) |stmt| {
+                                        const expr_loc = try self.generateExpr(stmt.expr);
+                                        try self.bindPattern(stmt.pattern, expr_loc);
+                                    }
+
+                                    // Get final expression - should be a lambda/closure
+                                    const block_final = self.store.getExpr(level2_block.final_expr);
+
+                                    switch (block_final) {
+                                        .lambda => |level2_lambda| {
+                                            // Bind inner_call.args to this lambda's params
+                                            const level2_args = self.store.getExprSpan(inner_call.args);
+                                            const level2_params = self.store.getPatternSpan(level2_lambda.params);
+
+                                            for (level2_params, level2_args) |param_id, arg_id| {
+                                                const arg_loc = try self.generateExpr(arg_id);
+                                                try self.bindPattern(param_id, arg_loc);
+                                            }
+
+                                            // Evaluate body - should return lambda for outer_args
+                                            const level2_body_expr = self.store.getExpr(level2_lambda.body);
+
+                                            switch (level2_body_expr) {
+                                                .lambda => |level3_lambda| {
+                                                    return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
+                                                },
+                                                .closure => |level3_closure| {
+                                                    return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
+                                                },
+                                                .block => |level3_block| {
+                                                    return try self.generateBlockCall(level3_block, outer_args, ret_layout);
+                                                },
+                                                else => return Error.UnsupportedExpression,
+                                            }
+                                        },
+                                        .closure => |level2_closure| {
+                                            return try self.generateClosureCall(level2_closure, inner_call.args, ret_layout);
                                         },
                                         else => return Error.UnsupportedExpression,
                                     }
@@ -3557,6 +3766,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 return switch (lambda_expr) {
                     .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
                     .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
+                    .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
             }
@@ -3568,6 +3778,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 return switch (def_expr) {
                     .lambda => |lambda| try self.generateLambdaCall(lambda, args_span, ret_layout),
                     .closure => |closure| try self.generateClosureCallWithSymbol(closure, args_span, ret_layout, lookup.symbol),
+                    .block => |block| try self.generateBlockCall(block, args_span, ret_layout),
                     else => return Error.UnsupportedExpression,
                 };
             }
@@ -3719,29 +3930,57 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (tuple_len > 1) {
                 switch (loc) {
                     .stack => |base_offset| {
-                        // Copy each tuple element from stack to result buffer
-                        const elem_size: i32 = 8;
-                        const temp_reg = try self.codegen.allocGeneralFor(0);
+                        // Use layout store for accurate element offsets and sizes
+                        if (self.layout_store) |ls| {
+                            const tuple_layout = ls.getLayout(result_layout);
+                            if (tuple_layout.tag == .tuple) {
+                                const tuple_data = ls.getTupleData(tuple_layout.data.tuple.idx);
+                                const total_size = tuple_data.size;
 
-                        for (0..tuple_len) |i| {
-                            const stack_offset = base_offset + @as(i32, @intCast(i)) * elem_size;
-                            const buf_offset: i32 = @as(i32, @intCast(i)) * elem_size;
+                                // Copy entire tuple as 8-byte chunks
+                                const temp_reg = try self.codegen.allocGeneralFor(0);
+                                var copied: u32 = 0;
 
-                            // Load from stack
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
-                            }
+                                while (copied < total_size) {
+                                    const stack_offset = base_offset + @as(i32, @intCast(copied));
+                                    const buf_offset: i32 = @as(i32, @intCast(copied));
 
-                            // Store to result buffer
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.strRegMemUoff(.w64, temp_reg, saved_ptr_reg, @intCast(i));
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
+                                    // Load from stack
+                                    if (comptime builtin.cpu.arch == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
+                                    }
+
+                                    // Store to result buffer
+                                    if (comptime builtin.cpu.arch == .aarch64) {
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, buf_offset);
+                                    } else {
+                                        try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
+                                    }
+
+                                    copied += 8;
+                                }
+
+                                self.codegen.freeGeneral(temp_reg);
+                                return;
                             }
                         }
 
+                        // Fallback: copy tuple_len * 8 bytes
+                        const temp_reg = try self.codegen.allocGeneralFor(0);
+                        for (0..tuple_len) |i| {
+                            const stack_offset = base_offset + @as(i32, @intCast(i)) * 8;
+                            const buf_offset: i32 = @as(i32, @intCast(i)) * 8;
+
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, buf_offset);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
+                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, buf_offset, temp_reg);
+                            }
+                        }
                         self.codegen.freeGeneral(temp_reg);
                         return;
                     },
@@ -3813,6 +4052,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .i128, .u128, .dec => {
                     try self.storeI128ToMem(saved_ptr_reg, loc);
+                },
+                .str => {
+                    // Strings are 24 bytes (ptr, len, capacity) - same as lists
+                    switch (loc) {
+                        .stack => |stack_offset| {
+                            // Copy 24-byte RocStr struct from stack to result buffer
+                            const temp_reg = try self.codegen.allocGeneralFor(0);
+
+                            // Copy all 24 bytes (3 x 8-byte words)
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 0);
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 8);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 8);
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, stack_offset + 16);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, saved_ptr_reg, 16);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset);
+                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 0, temp_reg);
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 8);
+                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 8, temp_reg);
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, stack_offset + 16);
+                                try self.codegen.emit.movMemReg(.w64, saved_ptr_reg, 16, temp_reg);
+                            }
+
+                            self.codegen.freeGeneral(temp_reg);
+                        },
+                        else => {
+                            // Fallback for non-stack string location
+                            const reg = try self.ensureInGeneralReg(loc);
+                            try self.emitStoreToMem(saved_ptr_reg, reg);
+                        },
+                    }
                 },
                 list_i64_layout => {
                     // Lists are (ptr, len, capacity) = 24 bytes
