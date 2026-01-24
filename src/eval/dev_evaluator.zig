@@ -360,6 +360,12 @@ pub const DevEvaluator = struct {
         const cir_expr = module_env.store.getExpr(expr_idx);
         const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
 
+        // Detect tuple expressions to set tuple_len
+        const tuple_len: usize = if (cir_expr == .e_tuple)
+            module_env.store.exprSlice(cir_expr.e_tuple.elems).len
+        else
+            1;
+
         // Create the code generator
         var codegen = backend.MonoExprCodeGen.init(
             self.allocator,
@@ -379,7 +385,7 @@ pub const DevEvaluator = struct {
         }
 
         // Generate code for the expression
-        const gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
+        const gen_result = codegen.generateCode(mono_expr_id, result_layout, tuple_len) catch {
             return error.UnsupportedExpression;
         };
 
@@ -387,6 +393,7 @@ pub const DevEvaluator = struct {
             .code = gen_result.code,
             .allocator = self.allocator,
             .result_layout = result_layout,
+            .tuple_len = tuple_len,
             .entry_offset = gen_result.entry_offset,
         };
     }

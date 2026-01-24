@@ -8437,8 +8437,28 @@ pub const Interpreter = struct {
                 return error.MethodLookupFailed;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse
+            const node_idx = node_idx_blk: {
+                // First try the exposed items lookup
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Verify it's actually a def node (not a type declaration)
+                    if (origin_env.store.isDefNode(exposed_idx)) {
+                        break :node_idx_blk exposed_idx;
+                    }
+                }
+                // Fallback: search all definitions for the method
+                // Skip entries that don't point to valid def nodes (defensive check)
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                    if (!origin_env.store.isDefNode(def_idx_u16)) continue;
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :node_idx_blk def_idx_u16;
+                    }
+                }
                 return error.MethodLookupFailed;
+            };
 
             const result = MethodResolutionResult{
                 .origin_env = origin_env,
@@ -8544,8 +8564,27 @@ pub const Interpreter = struct {
                 return null;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse
+            const node_idx = node_idx_blk2: {
+                // First try the exposed items lookup
+                if (origin_env.getExposedNodeIndexById(method_ident)) |exposed_idx| {
+                    // Verify it's actually a def node (not a type declaration)
+                    if (origin_env.store.isDefNode(exposed_idx)) {
+                        break :node_idx_blk2 exposed_idx;
+                    }
+                }
+                // Fallback: search all definitions for the method
+                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def_idx_u16: u16 = @intCast(@intFromEnum(def_idx));
+                    if (!origin_env.store.isDefNode(def_idx_u16)) continue;
+                    const def = origin_env.store.getDef(def_idx);
+                    const pat = origin_env.store.getPattern(def.pattern);
+                    if (pat == .assign and pat.assign.ident == method_ident) {
+                        break :node_idx_blk2 def_idx_u16;
+                    }
+                }
                 return null;
+            };
 
             const result = MethodResolutionResult{
                 .origin_env = origin_env,

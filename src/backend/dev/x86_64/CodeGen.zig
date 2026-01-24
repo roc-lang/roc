@@ -546,6 +546,14 @@ pub const SystemVCodeGen = struct {
         try self.emit.orRegReg(width, dst, b);
     }
 
+    /// Emit bitwise XOR with immediate: dst = src ^ imm
+    pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
+        if (dst != src) {
+            try self.emit.movRegReg(width, dst, src);
+        }
+        try self.emit.xorRegImm8(width, dst, imm);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
@@ -592,12 +600,16 @@ pub const SystemVCodeGen = struct {
     }
 
     /// Emit float64 negation: dst = -src
-    /// Uses the approach: load 0.0, then subtract src from 0
+    /// Uses XOR with sign bit mask to properly handle -0.0
     pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
-        // Zero the destination register
-        try self.emit.xorpdRegReg(dst, dst);
-        // dst = 0 - src = -src
-        try self.emit.subsdRegReg(dst, src);
+        // Load sign bit mask (0x8000_0000_0000_0000) into dst
+        // Then XOR with src to flip the sign bit
+        const sign_bit_mask: i64 = @bitCast(@as(u64, 0x8000_0000_0000_0000));
+        const stack_offset: i32 = -16; // Temporary stack location
+        try self.emit.movRegImm64(.R11, sign_bit_mask);
+        try self.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
+        try self.emit.movsdRegMem(dst, .RBP, stack_offset);
+        try self.emit.xorpdRegReg(dst, src);
     }
 
     /// Emit float32 addition: dst = a + b
@@ -633,11 +645,16 @@ pub const SystemVCodeGen = struct {
     }
 
     /// Emit float32 negation: dst = -src
+    /// Uses XOR with sign bit mask to properly handle -0.0
     pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
-        // Zero the destination register
-        try self.emit.xorpsRegReg(dst, dst);
-        // dst = 0 - src = -src
-        try self.emit.subssRegReg(dst, src);
+        // Load sign bit mask (0x80000000) into dst
+        // Then XOR with src to flip the sign bit
+        const sign_bit_mask: i32 = @bitCast(@as(u32, 0x80000000));
+        const stack_offset: i32 = -16; // Temporary stack location
+        try self.emit.movRegImm32(.w32, .R11, sign_bit_mask);
+        try self.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
+        try self.emit.movssRegMem(dst, .RBP, stack_offset);
+        try self.emit.xorpsRegReg(dst, src);
     }
 
     // Memory operations
@@ -694,6 +711,16 @@ pub const SystemVCodeGen = struct {
         const offset: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(patch_loc + 4)));
         const bytes: [4]u8 = @bitCast(offset);
         @memcpy(self.emit.buf.items[patch_loc..][0..4], &bytes);
+    }
+
+    /// Patch a CALL rel32 instruction's target offset.
+    /// The call_site is the offset where the CALL instruction starts (E8 opcode).
+    /// The rel_offset is the already-adjusted relative offset to patch in.
+    pub fn patchCall(self: *Self, call_site: usize, rel_offset: i32) void {
+        // CALL rel32 is: E8 xx xx xx xx
+        // The rel32 starts at call_site + 1
+        const bytes: [4]u8 = @bitCast(rel_offset);
+        @memcpy(self.emit.buf.items[call_site + 1 ..][0..4], &bytes);
     }
 
     /// Emit function call with relocation

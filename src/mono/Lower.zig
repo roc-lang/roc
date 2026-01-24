@@ -430,10 +430,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
                     }
                 }
-                // For other low-level ops, we would need to convert the op enum
-                // For now, return a placeholder - full low-level op support would
-                // require converting between CIR.Expr.LowLevel and MonoExpr.LowLevel
-                break :blk .{ .runtime_error = {} };
+                // Convert CIR LowLevel ops to MonoExpr LowLevel ops
+                const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
+                    .list_len => .list_len,
+                    .list_is_empty => .list_is_empty,
+                    else => break :blk .{ .runtime_error = {} }, // Not yet implemented
+                };
+                const args = try self.lowerExprSpan(module_env, call.args);
+                break :blk .{
+                    .low_level = .{
+                        .op = mono_op,
+                        .args = args,
+                        .ret_layout = self.getExprLayout(module_env, expr),
+                    },
+                };
             }
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
@@ -538,6 +548,34 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_dot_access => |dot| blk: {
             const receiver = try self.lowerExprFromIdx(module_env, dot.receiver);
+            const field_name = module_env.getIdent(dot.field_name);
+
+            // Check if this is a list.len or list.is_empty access
+            const receiver_expr = module_env.store.getExpr(dot.receiver);
+            if (receiver_expr == .e_list) {
+                if (std.mem.eql(u8, field_name, "len")) {
+                    // Convert list.len to low_level list_len operation
+                    const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
+                    break :blk .{
+                        .low_level = .{
+                            .op = .list_len,
+                            .args = args,
+                            .ret_layout = .u64,
+                        },
+                    };
+                } else if (std.mem.eql(u8, field_name, "is_empty") or std.mem.eql(u8, field_name, "isEmpty")) {
+                    // Convert list.is_empty to low_level list_is_empty operation
+                    const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
+                    break :blk .{
+                        .low_level = .{
+                            .op = .list_is_empty,
+                            .args = args,
+                            .ret_layout = .bool,
+                        },
+                    };
+                }
+            }
+
             break :blk .{
                 .field_access = .{
                     .record_expr = receiver,
@@ -576,9 +614,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const args = try self.lowerExprSpan(module_env, tag.args);
             const args_slice = module_env.store.sliceExpr(tag.args);
 
-            // Get discriminant from tag name - handle True/False specially
+            // Get discriminant from tag name
+            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
+            // For Bool type: False=0, True=1
             const tag_name_text = module_env.getIdent(tag.name);
-            const discriminant: u16 = if (args_slice.len == 0) disc_blk: {
+            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
+                1 // Ok comes after Err alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "Err") or std.ascii.eqlIgnoreCase(tag_name_text, "err"))
+                0 // Err comes first alphabetically
+            else if (args_slice.len == 0) disc_blk: {
                 // Zero-argument tag - check for True/False
                 if (std.mem.eql(u8, tag_name_text, "True") or std.ascii.eqlIgnoreCase(tag_name_text, "true")) {
                     break :disc_blk 1;
@@ -587,7 +631,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 } else {
                     break :disc_blk 0; // TODO: proper discriminant lookup
                 }
-            } else 0; // TODO: proper discriminant lookup for tags with args
+            } else 0; // TODO: proper discriminant lookup for other tags with args
 
             // For zero-argument tags like True/False, use zero_arg_tag
             if (args_slice.len == 0 and (std.mem.eql(u8, tag_name_text, "True") or
@@ -932,10 +976,29 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .applied_tag => |t| blk: {
             const args = try self.lowerPatternSpan(module_env, t.args);
+            // Compute discriminant based on tag name
+            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
+            // For Bool type: False=0, True=1
+            const tag_name_text = module_env.getIdent(t.name);
+            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
+                1 // Ok comes after Err alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "Err") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "err"))
+                0 // Err comes first alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "True") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "true"))
+                1
+            else if (std.mem.eql(u8, tag_name_text, "False") or
+                std.ascii.eqlIgnoreCase(tag_name_text, "false"))
+                0
+            else
+                0; // TODO: proper discriminant lookup for other tags
+
             break :blk .{
                 .tag = .{
-                    .discriminant = 0, // TODO
-                    .union_layout = .i64, // TODO
+                    .discriminant = discriminant,
+                    .union_layout = .i64, // TODO: proper layout
                     .args = args,
                 },
             };

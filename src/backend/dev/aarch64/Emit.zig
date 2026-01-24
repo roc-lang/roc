@@ -111,6 +111,22 @@ pub fn movk(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: u16, shift:
     try self.emit32(inst);
 }
 
+/// MOVN - Move with NOT (load inverted immediate)
+/// Sets dst = ~(imm16 << shift), useful for loading negative values
+pub fn movn(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) !void {
+    // MOVN <Xd>, #<imm16>, LSL #<shift>
+    // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
+    // sf  0  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
+    const sf = width.sf();
+    const hw: u2 = @truncate(shift >> 4);
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b00100101 << 23) |
+        (@as(u32, hw) << 21) |
+        (@as(u32, imm) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// Load a 64-bit immediate into a register
 /// Uses MOVZ + MOVK sequence as needed
 pub fn movRegImm64(self: *Emit, dst: GeneralReg, imm: u64) !void {
@@ -136,6 +152,18 @@ pub fn movRegImm64(self: *Emit, dst: GeneralReg, imm: u64) !void {
     } else {
         try self.movz(.w64, dst, imm16_3, 48);
     }
+}
+
+/// Load a 32-bit (or smaller) signed immediate into a register
+/// Uses MOVZ + MOVK sequence, treating the value as a bit pattern
+pub fn movRegImm32(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
+    // Treat as unsigned bit pattern (matches Rust implementation style)
+    const val: u32 = @bitCast(imm);
+    const low16: u16 = @truncate(val);
+    const high16: u16 = @truncate(val >> 16);
+
+    try self.movz(width, dst, low16, 0);
+    if (high16 != 0) try self.movk(width, dst, high16, 16);
 }
 
 // Arithmetic instructions
@@ -213,6 +241,12 @@ pub fn subsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: G
         (@as(u32, src1.enc()) << 5) |
         dst.enc();
     try self.emit32(inst);
+}
+
+/// CMP reg, reg (compare two registers by subtracting and setting flags)
+/// This is an alias for SUBS with destination XZR (discard result)
+pub fn cmp(self: *Emit, width: RegisterWidth, src1: GeneralReg, src2: GeneralReg) !void {
+    try self.subsRegRegReg(width, .ZRSP, src1, src2);
 }
 
 /// SBC reg, reg, reg (subtract with carry/borrow)
@@ -416,6 +450,14 @@ pub fn eorRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
         (@as(u32, src1.enc()) << 5) |
         dst.enc();
     try self.emit32(inst);
+}
+
+/// EOR reg, reg, imm (exclusive OR with immediate)
+/// Uses IP0 as scratch register for the immediate
+pub fn eorRegRegImm(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u64) !void {
+    // Load immediate into IP0, then EOR
+    try self.movRegImm64(.IP0, imm);
+    try self.eorRegRegReg(width, dst, src, .IP0);
 }
 
 /// LSL reg, reg, imm (logical shift left by immediate)
@@ -687,6 +729,65 @@ pub fn sturRegMem(self: *Emit, width: RegisterWidth, src: GeneralReg, base: Gene
         (@as(u32, base.enc()) << 5) |
         src.enc();
     try self.emit32(inst);
+}
+
+/// LDR with signed offset (i32)
+/// Handles arbitrary signed offsets by choosing appropriate encoding:
+/// - Small offsets (-256 to 255): use LDUR (unscaled)
+/// - Positive aligned offsets (0 to 32760 for 64-bit): use LDR with unsigned offset
+/// - Other offsets: compute address in IP0 then load with zero offset
+pub fn ldrRegMemSoff(self: *Emit, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i32) !void {
+    // Try LDUR for small signed offsets
+    if (offset >= -256 and offset <= 255) {
+        try self.ldurRegMem(width, dst, base, @intCast(offset));
+        return;
+    }
+
+    // Try unsigned offset for positive, aligned offsets
+    if (offset >= 0) {
+        const scale: u5 = if (width == .w64) 3 else 2; // 8 or 4 bytes
+        const uoff: u32 = @intCast(offset);
+        if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) { // Check alignment
+            const scaled = uoff >> scale;
+            if (scaled <= 4095) {
+                try self.ldrRegMemUoff(width, dst, base, @intCast(scaled));
+                return;
+            }
+        }
+    }
+
+    // Fallback: compute effective address in IP0, then load
+    try self.movRegImm32(.w64, .IP0, offset);
+    try self.addRegRegReg(.w64, .IP0, base, .IP0);
+    try self.ldurRegMem(width, dst, .IP0, 0);
+}
+
+/// STR with signed offset (i32)
+/// Handles arbitrary signed offsets by choosing appropriate encoding
+pub fn strRegMemSoff(self: *Emit, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i32) !void {
+    // Try STUR for small signed offsets
+    if (offset >= -256 and offset <= 255) {
+        try self.sturRegMem(width, src, base, @intCast(offset));
+        return;
+    }
+
+    // Try unsigned offset for positive, aligned offsets
+    if (offset >= 0) {
+        const scale: u5 = if (width == .w64) 3 else 2; // 8 or 4 bytes
+        const uoff: u32 = @intCast(offset);
+        if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) { // Check alignment
+            const scaled = uoff >> scale;
+            if (scaled <= 4095) {
+                try self.strRegMemUoff(width, src, base, @intCast(scaled));
+                return;
+            }
+        }
+    }
+
+    // Fallback: compute effective address in IP0, then store
+    try self.movRegImm32(.w64, .IP0, offset);
+    try self.addRegRegReg(.w64, .IP0, base, .IP0);
+    try self.sturRegMem(width, src, .IP0, 0);
 }
 
 /// LDRB (load register byte, zero-extend)
