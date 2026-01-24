@@ -143,6 +143,9 @@ pub const LlvmEvaluator = struct {
         f64,
         dec,
 
+        /// Default numeric type for unbound/polymorphic numbers.
+        pub const default_num: ResultType = .dec;
+
         /// Compile-time validation that this enum matches the expected structure.
         /// This helps catch accidental divergence from llvm_compile.ResultType.
         /// Using ordinal comparison instead of string comparison to comply with lint rules.
@@ -296,27 +299,56 @@ pub const LlvmEvaluator = struct {
         return self.generateBitcode(&module_env, expr);
     }
 
-    /// Get the ResultType for JIT execution from a CIR expression
-    /// This captures signedness which LLVM types don't distinguish
+    /// Get the ResultType for JIT execution from a CIR expression.
+    /// This captures signedness which LLVM types don't distinguish.
+    /// NOTE: Only called for expressions that pass emitExprValue, which only supports numeric types.
     fn getExprResultType(_: *LlvmEvaluator, expr: CIR.Expr) ResultType {
         return switch (expr) {
+            // Numeric literals - the only types emitExprValue actually supports
             .e_num => |num| switch (num.kind) {
-                // Signed types that fit in i64
-                .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-                // Unsigned types that fit in u64
+                .i8, .i16, .i32, .i64 => .i64,
                 .u8, .u16, .u32, .u64 => .u64,
-                // 128-bit signed
                 .i128 => .i128,
-                // 128-bit unsigned
                 .u128 => .u128,
-                // Float types
                 .f32, .f64 => .f64,
-                // Dec type (fixed-point decimal stored as i128)
-                .dec => .dec,
+                .dec, .num_unbound, .int_unbound => ResultType.default_num,
             },
             .e_frac_f32, .e_frac_f64 => .f64,
             .e_dec, .e_dec_small => .dec,
-            else => .i64, // Default for other expression types
+            // All other expression types fail in emitExprValue with UnsupportedType,
+            // so this code is unreachable for them
+            .e_typed_int,
+            .e_typed_frac,
+            .e_str_segment,
+            .e_str,
+            .e_lookup_local,
+            .e_lookup_external,
+            .e_lookup_required,
+            .e_list,
+            .e_empty_list,
+            .e_tuple,
+            .e_match,
+            .e_if,
+            .e_call,
+            .e_record,
+            .e_empty_record,
+            .e_block,
+            .e_tag,
+            .e_nominal,
+            .e_nominal_external,
+            .e_zero_argument_tag,
+            .e_closure,
+            .e_lambda,
+            .e_binop,
+            .e_unary_minus,
+            .e_unary_not,
+            .e_dot_access,
+            .e_runtime_error,
+            .e_crash,
+            .e_dbg,
+            .e_expect,
+            .e_ellipsis,
+            => unreachable,
         };
     }
 
@@ -327,8 +359,10 @@ pub const LlvmEvaluator = struct {
                 .u8, .i8 => .i8,
                 .u16, .i16 => .i16,
                 .u32, .i32 => .i32,
-                .u64, .i64, .num_unbound, .int_unbound => .i64,
-                .u128, .i128, .dec => .i128, // Dec is stored as i128 (scaled by 10^18)
+                .u64, .i64 => .i64,
+                // Dec is stored as i128 (scaled by 10^18)
+                // Unbound numeric types default to Dec
+                .u128, .i128, .dec, .num_unbound, .int_unbound => .i128,
                 .f32 => .float,
                 .f64 => .double,
             },

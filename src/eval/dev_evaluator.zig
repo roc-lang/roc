@@ -553,13 +553,19 @@ pub const DevEvaluator = struct {
 fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
     return switch (expr) {
         .e_num => |num| switch (num.kind) {
-            .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-            .u8, .u16, .u32, .u64 => .u64,
+            .i8 => .i8,
+            .i16 => .i16,
+            .i32 => .i32,
+            .i64 => .i64,
+            .u8 => .u8,
+            .u16 => .u16,
+            .u32 => .u32,
+            .u64 => .u64,
             .i128 => .i128,
             .u128 => .u128,
             .f32 => .f32,
             .f64 => .f64,
-            .dec => .dec,
+            .dec, .num_unbound, .int_unbound => LayoutIdx.default_num,
         },
         .e_frac_f32 => .f32,
         .e_frac_f64 => .f64,
@@ -585,7 +591,7 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
         .e_block => |block| getBlockLayout(allocator, module_env, block, type_env),
         .e_lookup_local => |lookup| blk: {
             const pattern_key = @intFromEnum(lookup.pattern_idx);
-            break :blk type_env.get(pattern_key) orelse .i64;
+            break :blk type_env.get(pattern_key) orelse LayoutIdx.default_num;
         },
         .e_str, .e_str_segment => .str,
         .e_call => |call| blk: {
@@ -624,7 +630,7 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                         },
                         else => {},
                     }
-                    break :blk .i64;
+                    break :blk LayoutIdx.default_num;
                 },
                 .e_lookup_local => {
                     const args = module_env.store.sliceExpr(call.args);
@@ -635,11 +641,11 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                             break :blk .str;
                         }
                     }
-                    break :blk .i64;
+                    break :blk LayoutIdx.default_num;
                 },
                 else => {},
             }
-            break :blk .i64;
+            break :blk LayoutIdx.default_num;
         },
         .e_dot_access => |dot| blk: {
             // Get the receiver expression and check if it's a record
@@ -658,69 +664,26 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                 },
                 else => {},
             }
-            break :blk .i64;
+            break :blk LayoutIdx.default_num;
         },
         .e_list => list_i64_layout, // List of i64 (most common case for tests)
-        else => .i64,
+        else => LayoutIdx.default_num,
     };
 }
 
-/// Get the result type for a block
+/// Get the result type for a block by inferring from expressions
 fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
-    var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(allocator);
-    defer type_annos.deinit();
-
     const stmts = module_env.store.sliceStatements(block.stmts);
 
-    // First pass: collect type annotations
-    for (stmts) |stmt_idx| {
-        const stmt = module_env.store.getStatement(stmt_idx);
-        switch (stmt) {
-            .s_type_anno => |ta| {
-                const type_anno = module_env.store.getTypeAnno(ta.anno);
-                switch (type_anno) {
-                    .apply => |apply| {
-                        const result_layout = layoutFromLocalOrExternal(apply.base);
-                        type_annos.put(ta.name, result_layout) catch {};
-                    },
-                    .lookup => |lookup| {
-                        const result_layout = layoutFromLocalOrExternal(lookup.base);
-                        type_annos.put(ta.name, result_layout) catch {};
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-    }
-
-    // Second pass: process declarations
+    // Process declarations to populate type_env for lookups
     for (stmts) |stmt_idx| {
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
             .s_decl => |decl| {
                 const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    const result_layout = getAnnotationLayout(module_env, anno_idx);
-                    type_env.put(pattern_key, result_layout) catch {};
-                } else {
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    var found_annotation = false;
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (type_annos.get(assign.ident)) |anno_layout| {
-                                type_env.put(pattern_key, anno_layout) catch {};
-                                found_annotation = true;
-                            }
-                        },
-                        else => {},
-                    }
-                    if (!found_annotation) {
-                        const decl_expr = module_env.store.getExpr(decl.expr);
-                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
-                        type_env.put(pattern_key, inferred_layout) catch {};
-                    }
-                }
+                const decl_expr = module_env.store.getExpr(decl.expr);
+                const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
+                type_env.put(pattern_key, inferred_layout) catch {};
             },
             else => {},
         }
@@ -730,70 +693,38 @@ fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, 
     return getExprLayoutWithTypeEnv(allocator, module_env, final_expr, type_env);
 }
 
-/// Get the result type from an annotation
-fn getAnnotationLayout(module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
-    const anno = module_env.store.getAnnotation(anno_idx);
-    const type_anno = module_env.store.getTypeAnno(anno.anno);
-    switch (type_anno) {
-        .apply => |apply| return layoutFromLocalOrExternal(apply.base),
-        .lookup => |lookup| return layoutFromLocalOrExternal(lookup.base),
-        else => return .i64,
-    }
-}
-
 /// Get the result type for a typed integer
 fn getTypedIntLayout(module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
     const idents = &module_env.idents;
-    if (type_name == idents.u8_type or
-        type_name == idents.u16_type or
-        type_name == idents.u32_type or
-        type_name == idents.u64_type)
-    {
-        return .u64;
-    } else if (type_name == idents.u128_type) {
-        return .u128;
-    } else if (type_name == idents.i128_type) {
-        return .i128;
-    } else if (type_name == idents.f32_type) {
-        return .f32;
-    } else if (type_name == idents.f64_type) {
-        return .f64;
-    } else if (type_name == idents.dec_type) {
-        return .dec;
-    }
-    return .i64;
+    if (type_name == idents.u8_type) return .u8;
+    if (type_name == idents.i8_type) return .i8;
+    if (type_name == idents.u16_type) return .u16;
+    if (type_name == idents.i16_type) return .i16;
+    if (type_name == idents.u32_type) return .u32;
+    if (type_name == idents.i32_type) return .i32;
+    if (type_name == idents.u64_type) return .u64;
+    if (type_name == idents.i64_type) return .i64;
+    if (type_name == idents.u128_type) return .u128;
+    if (type_name == idents.i128_type) return .i128;
+    if (type_name == idents.f32_type) return .f32;
+    if (type_name == idents.f64_type) return .f64;
+    if (type_name == idents.dec_type) return .dec;
+    return LayoutIdx.default_num;
 }
 
 /// Get the result type for a binary operation
 fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
-    switch (binop.op) {
-        .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
-        else => {},
-    }
-    const lhs_expr = module_env.store.getExpr(binop.lhs);
-    return getExprLayoutWithTypeEnv(allocator, module_env, lhs_expr, type_env);
-}
-
-/// Convert a LocalOrExternal to LayoutIdx
-fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
-    switch (loe) {
-        .builtin => |b| return layoutFromBuiltin(b),
-        .local, .external => return .i64,
-    }
-}
-
-/// Convert a Builtin type enum to LayoutIdx
-fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
-    return switch (b) {
-        .u8, .u16, .u32, .u64 => .u64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        else => .i64,
+    return switch (binop.op) {
+        // Comparison and logical ops return bool
+        .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => .bool,
+        // Arithmetic ops return the operand type
+        .add, .sub, .mul, .div, .rem, .div_trunc => blk: {
+            const lhs_expr = module_env.store.getExpr(binop.lhs);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, lhs_expr, type_env);
+        },
     };
 }
+
 
 // Tests
 

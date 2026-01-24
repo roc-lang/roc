@@ -88,11 +88,8 @@ lowered_patterns: std.AutoHashMap(u64, MonoSymbol),
 /// Track which top-level symbols have been lowered
 lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
-/// Type environment: maps pattern_idx to layout (from type annotations)
+/// Type environment: maps pattern_idx to layout (inferred from expressions)
 type_env: std.AutoHashMap(u32, LayoutIdx),
-
-/// Pending type annotations: maps ident to layout (waiting to be matched with declarations)
-pending_type_annos: std.AutoHashMap(Ident.Idx, LayoutIdx),
 
 /// Current module index during lowering
 current_module_idx: u16 = 0,
@@ -135,7 +132,6 @@ pub fn init(
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
-        .pending_type_annos = std.AutoHashMap(Ident.Idx, LayoutIdx).init(allocator),
     };
 }
 
@@ -144,7 +140,6 @@ pub fn deinit(self: *Self) void {
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
     self.type_env.deinit();
-    self.pending_type_annos.deinit();
     self.type_scope.deinit();
 }
 
@@ -227,80 +222,57 @@ fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx 
             .u32 => .u32,
             .i32 => .i32,
             .u64 => .u64,
-            .i64, .int_unbound, .num_unbound => .i64,
+            .i64 => .i64,
             .u128 => .u128,
             .i128 => .i128,
             .f32 => .f32,
             .f64 => .f64,
             .dec => .dec,
+            .int_unbound, .num_unbound => LayoutIdx.default_num,
         },
         .e_frac_f32 => .f32,
         .e_frac_f64 => .f64,
         .e_dec, .e_dec_small => .dec,
         .e_str, .e_str_segment => .str,
         .e_zero_argument_tag => .bool, // Common case for Bool tags
-        // For binary operations, propagate the type from the left operand
-        // (for arithmetic ops, result type = operand type)
-        .e_binop => |binop| self.getExprLayoutFromIdx(module_env, binop.lhs),
+        // For binary operations, result type depends on the operation
+        .e_binop => |binop| switch (binop.op) {
+            // Comparison ops return bool
+            .eq, .ne, .lt, .le, .gt, .ge => .bool,
+            // Logical ops return bool
+            .@"and", .@"or" => .bool,
+            // Arithmetic ops return the operand type
+            .add, .sub, .mul, .div, .rem, .div_trunc => self.getExprLayoutFromIdx(module_env, binop.lhs),
+        },
         // For unary minus, propagate the type from the operand
         .e_unary_minus => |unary| self.getExprLayoutFromIdx(module_env, unary.expr),
         // For lookups, check if we have a type annotation in type_env
         .e_lookup_local => |lookup| blk: {
             const pattern_key = @intFromEnum(lookup.pattern_idx);
-            break :blk self.type_env.get(pattern_key) orelse .i64;
+            break :blk self.type_env.get(pattern_key) orelse LayoutIdx.default_num;
         },
         // For blocks, we need to process type annotations first
         .e_block => |block| self.getBlockLayout(module_env, block),
         // For if-then-else, layout is determined from type info in lowerExprInner
         // This fallback should rarely be used
-        .e_if => .i64,
-        else => .i64, // Default
+        .e_if => LayoutIdx.default_num,
+        else => LayoutIdx.default_num,
     };
 }
 
-/// Get layout for a block expression, processing type annotations
+/// Get layout for a block expression by inferring from the final expression
 fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx {
-    // First pass: collect type annotations
+    // Process declarations to populate type_env for lookups
     const stmts = module_env.store.sliceStatements(block.stmts);
     for (stmts) |stmt_idx| {
         const stmt = module_env.store.getStatement(stmt_idx);
         switch (stmt) {
-            .s_type_anno => |ta| {
-                // Get the type annotation and convert to layout
-                const type_anno = module_env.store.getTypeAnno(ta.anno);
-                const anno_layout = self.getTypeAnnoLayout(type_anno);
-                // We need to find the pattern that matches this annotation name
-                // by looking at subsequent declarations
-                self.pending_type_annos.put(ta.name, anno_layout) catch {};
-            },
             .s_decl => |decl| {
+                // Infer layout from the expression
                 const pattern_key = @intFromEnum(decl.pattern);
-                if (decl.anno) |anno_idx| {
-                    // Declaration has an inline annotation
-                    const anno_layout = self.getAnnotationLayout(module_env, anno_idx);
-                    self.type_env.put(pattern_key, anno_layout) catch {};
-                } else {
-                    // Check if there's a pending type annotation for this pattern
-                    const pattern = module_env.store.getPattern(decl.pattern);
-                    switch (pattern) {
-                        .assign => |assign| {
-                            if (self.pending_type_annos.get(assign.ident)) |anno_layout| {
-                                self.type_env.put(pattern_key, anno_layout) catch {};
-                            } else {
-                                // Infer from the expression
-                                const decl_expr = module_env.store.getExpr(decl.expr);
-                                const inferred = self.getExprLayout(module_env, decl_expr);
-                                self.type_env.put(pattern_key, inferred) catch {};
-                            }
-                        },
-                        else => {
-                            // Infer from the expression
-                            const decl_expr = module_env.store.getExpr(decl.expr);
-                            const inferred = self.getExprLayout(module_env, decl_expr);
-                            self.type_env.put(pattern_key, inferred) catch {};
-                        },
-                    }
-                }
+                const decl_expr = module_env.store.getExpr(decl.expr);
+                const inferred = self.getExprLayout(module_env, decl_expr);
+                self.type_env.put(pattern_key, inferred) catch {};
             },
             else => {},
         }
@@ -309,49 +281,6 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
     // Return the layout of the final expression
     const final_expr = module_env.store.getExpr(block.final_expr);
     return self.getExprLayout(module_env, final_expr);
-}
-
-/// Get layout from a type annotation
-fn getTypeAnnoLayout(_: *Self, type_anno: CIR.TypeAnno) LayoutIdx {
-    return switch (type_anno) {
-        .apply => |apply| layoutFromLocalOrExternal(apply.base),
-        .lookup => |lookup| layoutFromLocalOrExternal(lookup.base),
-        else => .i64,
-    };
-}
-
-/// Get layout from an annotation index
-fn getAnnotationLayout(self: *Self, module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
-    const anno = module_env.store.getAnnotation(anno_idx);
-    const type_anno = module_env.store.getTypeAnno(anno.anno);
-    return self.getTypeAnnoLayout(type_anno);
-}
-
-/// Convert a LocalOrExternal to LayoutIdx
-fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
-    return switch (loe) {
-        .builtin => |b| layoutFromBuiltin(b),
-        .local, .external => .i64,
-    };
-}
-
-/// Convert a Builtin type enum to LayoutIdx
-fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
-    return switch (b) {
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .f32 => .f32,
-        .f64 => .f64,
-        .dec => .dec,
-        else => .i64,
-    };
 }
 
 /// Get layout for an expression from its index
@@ -374,13 +303,13 @@ pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!Mon
 }
 
 /// Lower an expression with its CIR representation
-/// expr_idx is optional - when available, used to compute layouts from type info
-fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: ?CIR.Expr.Idx) Error!MonoExprId {
+fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
-            // Check if this is explicitly a Dec type
-            if (num.kind == .dec) {
+            // Check if this is a Dec type (explicit or default via unbound)
+            // Dec is the default numeric type, so num_unbound and int_unbound become Dec
+            if (num.kind == .dec or num.kind == .num_unbound or num.kind == .int_unbound) {
                 // Dec values are scaled by 10^18 (one_point_zero = 10^18)
                 const one_point_zero: i128 = 1_000_000_000_000_000_000;
                 const scaled_val = val * one_point_zero;
@@ -546,7 +475,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const elems = try self.lowerExprSpan(module_env, list.elems);
             break :blk .{
                 .list = .{
-                    .elem_layout = .i64, // TODO: get from type
+                    .elem_layout = LayoutIdx.default_num, // TODO: get from type
                     .elems = elems,
                 },
             };
@@ -554,11 +483,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_tuple => |tuple| blk: {
             const elems = try self.lowerExprSpan(module_env, tuple.elems);
-            // Compute layout from type variable if available
-            const tuple_layout = if (expr_idx) |idx|
-                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
-            else
-                .i64;
+            const tuple_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
             break :blk .{
                 .tuple = .{
                     .tuple_layout = tuple_layout,
@@ -569,11 +494,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_record => |rec| blk: {
             const result = try self.lowerRecordFields(module_env, rec.fields);
-            // Compute layout from type variable if available
-            const record_layout = if (expr_idx) |idx|
-                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
-            else
-                .i64;
+            const record_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
             break :blk .{
                 .record = .{
                     .record_layout = record_layout,
@@ -614,11 +535,11 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             }
 
             // Compute receiver's layout to get field info
-            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse .i64;
+            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse LayoutIdx.default_num;
 
             // Try to compute field index and layout from the record layout
             var field_idx: u16 = 0;
-            var field_layout: LayoutIdx = .i64;
+            var field_layout: LayoutIdx = LayoutIdx.default_num;
             if (self.layout_store) |ls| {
                 const layout_val = ls.getLayout(receiver_layout);
                 if (layout_val.tag == .record) {
@@ -720,10 +641,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
 
             // Get result layout from the type system via the expression's type variable
-            const result_layout = if (expr_idx) |idx|
-                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
-            else
-                .i64;
+            const result_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
 
             if (lambda_set_result.has_closure_branches) {
                 // Branches are closures - lower with lambda set info

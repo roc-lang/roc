@@ -1789,39 +1789,30 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var end_patches = std.ArrayList(usize).empty;
             defer end_patches.deinit(self.allocator);
 
-            // Use result_layout to determine the exact size we need to copy
-            // This follows the Rust backend approach: the layout determines the byte size
-            var result_size: u32 = 8; // Default to 8 bytes (one word)
+            // Determine result size from layout
             var is_str_result = false;
-
-            // Check if result is a string (layout.Idx.str is a sentinel value)
-            if (ite.result_layout == .str) {
-                result_size = 24; // Strings are 24 bytes (ptr, len, capacity)
-                is_str_result = true;
-            } else if (self.layout_store) |ls| {
-                const result_layout = ls.getLayout(ite.result_layout);
-                switch (result_layout.tag) {
-                    .list => {
-                        result_size = 24; // Lists are 24 bytes (ptr, len, capacity)
-                    },
-                    .tuple => {
-                        const tuple_data = ls.getTupleData(result_layout.data.tuple.idx);
-                        result_size = tuple_data.size;
-                    },
-                    .record => {
-                        const record_data = ls.getRecordData(result_layout.data.record.idx);
-                        result_size = record_data.size;
-                    },
-                    .tag_union => {
-                        const tu_data = ls.getTagUnionData(result_layout.data.tag_union.idx);
-                        result_size = tu_data.size;
-                    },
-                    else => {
-                        // Primitive types - 8 bytes or less, use register
-                        result_size = 8;
-                    },
-                }
-            }
+            const result_size: u32 = switch (ite.result_layout) {
+                // Scalar types - size based on type
+                .i8, .u8, .bool => 1,
+                .i16, .u16 => 2,
+                .i32, .u32, .f32 => 4,
+                .i64, .u64, .f64 => 8,
+                .i128, .u128, .dec => 16,
+                .str => blk: {
+                    is_str_result = true;
+                    break :blk 24; // Strings are 24 bytes (ptr, len, capacity)
+                },
+                else => if (self.layout_store) |ls| blk: {
+                    const result_layout = ls.getLayout(ite.result_layout);
+                    break :blk switch (result_layout.tag) {
+                        .list => 24, // Lists are 24 bytes (ptr, len, capacity)
+                        .tuple => ls.getTupleData(result_layout.data.tuple.idx).size,
+                        .record => ls.getRecordData(result_layout.data.record.idx).size,
+                        .tag_union => ls.getTagUnionData(result_layout.data.tag_union.idx).size,
+                        else => 8,
+                    };
+                } else 8,
+            };
 
             // Determine storage strategy based on result size
             var result_slot: ?i32 = null;
@@ -1845,15 +1836,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // On first branch, determine result storage strategy
                 if (first_branch) {
                     first_branch = false;
-                    switch (body_loc) {
-                        .stack, .stack_str, .list_stack => {
-                            // Composite type - allocate exact size from layout
-                            result_slot = self.codegen.allocStackSlot(result_size);
-                        },
-                        else => {
-                            // Simple type - use register
-                            result_reg = try self.codegen.allocGeneralFor(0);
-                        },
+                    // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
+                    if (result_size > 8) {
+                        result_slot = self.codegen.allocStackSlot(result_size);
+                    } else {
+                        switch (body_loc) {
+                            .stack, .stack_str, .list_stack => {
+                                result_slot = self.codegen.allocStackSlot(result_size);
+                            },
+                            else => {
+                                result_reg = try self.codegen.allocGeneralFor(0);
+                            },
+                        }
                     }
                 }
 
@@ -1881,13 +1875,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Handle case where all branches were composite but else is the first evaluation
             if (result_slot == null and result_reg == null) {
-                switch (else_loc) {
-                    .stack, .stack_str, .list_stack => {
-                        result_slot = self.codegen.allocStackSlot(result_size);
-                    },
-                    else => {
-                        result_reg = try self.codegen.allocGeneralFor(0);
-                    },
+                // Use stack for types > 8 bytes (e.g., i128, Dec) or stack-based values
+                if (result_size > 8) {
+                    result_slot = self.codegen.allocStackSlot(result_size);
+                } else {
+                    switch (else_loc) {
+                        .stack, .stack_str, .list_stack => {
+                            result_slot = self.codegen.allocStackSlot(result_size);
+                        },
+                        else => {
+                            result_reg = try self.codegen.allocGeneralFor(0);
+                        },
+                    }
                 }
             }
 
@@ -2716,22 +2715,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
             switch (loc) {
                 .immediate_i64 => |val| {
+                    std.debug.assert(size == 8); // Layout and value type must agree
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadImm(reg, val);
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    // Zero-fill remaining bytes if layout is larger than 8 bytes
-                    if (size > 8) {
-                        try self.codegen.emitLoadImm(reg, 0);
-                        var filled: u32 = 8;
-                        while (filled < size) {
-                            try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(filled)), reg);
-                            filled += 8;
-                        }
-                    }
                     self.codegen.freeGeneral(reg);
                     return;
                 },
                 .immediate_i128 => |val| {
+                    std.debug.assert(size == 16); // Layout and value type must agree
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     const reg = try self.codegen.allocGeneralFor(0);
@@ -2743,18 +2735,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return;
                 },
                 .general_reg => |reg| {
+                    std.debug.assert(size == 8); // Layout and value type must agree
                     try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    // Zero-fill remaining bytes if layout is larger than 8 bytes
-                    if (size > 8) {
-                        const zero_reg = try self.codegen.allocGeneralFor(0);
-                        try self.codegen.emitLoadImm(zero_reg, 0);
-                        var filled: u32 = 8;
-                        while (filled < size) {
-                            try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(filled)), zero_reg);
-                            filled += 8;
-                        }
-                        self.codegen.freeGeneral(zero_reg);
-                    }
                     return;
                 },
                 .stack, .stack_str, .stack_i128, .list_stack => {
