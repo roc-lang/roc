@@ -376,9 +376,21 @@ fn unifyFromAnno(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error
     return self.unifyWithCtx(a, b, env, .anno);
 }
 
+/// Unify two types with a specific constraint origin var for error reporting.
+/// The origin_var's region will be used in error messages instead of the default.
+fn unifyWithOrigin(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var });
+}
+
 /// Unify two types where `a` is the expected type and `b` is the actual type
 /// Accepts a config that indicates if `a` is from an annotation or not
 fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) std.mem.Allocator.Error!unifier.Result {
+    return self.unifyWithConf(a, b, env, .{ .ctx = ctx, .constraint_origin_var = null });
+}
+
+/// Unify two types where `a` is the expected type and `b` is the actual type
+/// Accepts a full unifier config for fine-grained control
+fn unifyWithConf(self: *Self, a: Var, b: Var, env: *Env, conf: unifier.Conf) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -393,7 +405,7 @@ fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) s
         &self.occurs_scratch,
         a,
         b,
-        unifier.Conf{ .ctx = ctx, .constraint_origin_var = null },
+        conf,
     );
 
     // Set regions and add to the current rank all variables created during unification.
@@ -5391,19 +5403,11 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
-                // Extract the function and return type from the constraint
-                const resolved_constraint = self.types.resolveVar(constraint.fn_var);
-                const mb_resolved_func = resolved_constraint.desc.content.unwrapFunc();
-                // If fn_var didn't resolve to a function, handle based on what it is
-                const resolved_func = mb_resolved_func orelse {
-                    // If it's a flex var, the constraint's function type wasn't determined.
-                    // This can happen with recursive types. Skip without error.
-                    if (resolved_constraint.desc.content == .flex) continue;
-                    // If it's an error, skip - error already reported elsewhere
-                    if (resolved_constraint.desc.content == .err) continue;
-                    // Otherwise, this is unexpected - skip but continue processing
+                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                if (constraint_fn_resolved == .err) {
+                    // If this constraint is already an error, the skip this pass
                     continue;
-                };
+                }
 
                 // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
@@ -5464,74 +5468,53 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 }
 
                 // Copy the actual method from the dest module env to this module env
-                const real_method_var = if (is_this_module) blk: {
+                const method_var = if (is_this_module) blk: {
                     if (self.types.resolveVar(def_var).desc.rank == .generalized)
-                        break :blk try self.instantiateVar(def_var, env, .{ .explicit = region })
+                        break :blk try self.instantiateVar(def_var, env, .use_last_var)
                     else
                         break :blk def_var;
                 } else blk: {
                     // Copy the method from the other module's type store
                     const copied_var = try self.copyVar(def_var, original_env, region);
-                    // For builtin methods, we need to instantiate the copied var to convert
-                    // rigid type variables to flex, so they can unify with the call site
-                    const is_builtin = original_module_ident == self.cir.idents.builtin_module;
-                    if (is_builtin) {
-                        break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
-                    } else {
-                        break :blk copied_var;
-                    }
+                    break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                 };
 
-                // Unify the actual function var against the inferred var
-                // We break this down into arg-by-arg and return type unification
-                // for better error messages (instead of showing the whole function types)
-
-                // Extract the function type from the real method
-                const resolved_real = self.types.resolveVar(real_method_var);
-                const mb_real_func = resolved_real.desc.content.unwrapFunc();
-                if (mb_real_func == null) {
-                    // The looked-up definition is not a function - report as missing method
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                    );
-                    continue;
-                }
-                const real_func = mb_real_func.?;
-
-                // Check arity matches
-                const constraint_args = self.types.sliceVars(resolved_func.args);
-                const real_args = self.types.sliceVars(real_func.args);
-
-                if (constraint_args.len != real_args.len) {
-                    // Arity mismatch - the method exists but has wrong number of arguments
-                    try self.reportConstraintError(
-                        deferred_constraint.var_,
-                        constraint,
-                        .{ .missing_method = .nominal },
-                        env,
-                    );
-                    continue;
-                }
-
-                // Unify each argument pair
-                var any_arg_failed = false;
-                for (constraint_args, real_args) |constraint_arg, real_arg| {
-                    const arg_result = try self.unify(real_arg, constraint_arg, env);
-                    if (arg_result.isProblem()) {
-                        any_arg_failed = true;
-                    }
-                }
-
-                // Unify return types - this will generate the error with the expression region
-                const ret_result = try self.unify(real_func.ret, resolved_func.ret, env);
-
-                if (any_arg_failed or ret_result.isProblem()) {
+                // Unwrap the constraint type
+                const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
+                    const unify_result = try self.unify(method_var, constraint.fn_var, env);
+                    self.setDetailIfTypeMismatch(unify_result, problem.TypeMismatchDetail{
+                        .incompatible_method_type = .{
+                            .dispatcher_var = constraint.fn_var,
+                            .dispatcher_name = nominal_type.ident.ident_idx,
+                            .method_name = constraint.fn_name,
+                        },
+                    });
                     try self.unifyWith(deferred_constraint.var_, .err, env);
-                    try self.unifyWith(resolved_func.ret, .err, env);
+                    continue;
+                };
+
+                // Unify the method from the type with the constraint method
+                const fn_result = try self.unifyWithOrigin(method_var, constraint.fn_var, env, deferred_constraint.var_);
+                self.setDetailIfTypeMismatch(fn_result, problem.TypeMismatchDetail{
+                    .incompatible_method_type = .{
+                        .dispatcher_var = constraint.fn_var,
+                        .dispatcher_name = nominal_type.ident.ident_idx,
+                        .method_name = constraint.fn_name,
+                    },
+                });
+
+                // If there was a problem, then ensure the error gets propagated
+                // to all args and return types.
+                if (fn_result.isProblem()) {
+                    for (self.types.sliceVars(constraint_fn.args)) |arg| {
+                        // I don't _think_ we should need to do this, but eval
+                        // tests fail if we don't,
+                        try self.unifyWith(arg, .err, env);
+                    }
+                    try self.unifyWith(deferred_constraint.var_, .err, env);
+                    try self.unifyWith(constraint_fn.ret, .err, env);
                 }
+
                 // Note: from_numeral constraint validation happens during comptime evaluation
                 // in ComptimeEvaluator.validateDeferredNumericLiterals()
             }

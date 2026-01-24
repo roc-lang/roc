@@ -188,12 +188,24 @@ pub const TypeMismatchDetail = union(enum) {
     incompatible_fn_args_bound_var: IncompatibleFnArgsBoundVar,
     /// App's export type doesn't match the platform's required type
     incompatible_platform_requirement: IncompatiblePlatformRequirement,
+    /// Method type doesn't match where clause requirement
+    incompatible_method_type: IncompatibleMethodType,
 };
 
 /// Problem data for platform requirement type mismatches
 pub const IncompatiblePlatformRequirement = struct {
     /// The identifier that the platform requires
     required_ident: Ident.Idx,
+};
+
+/// Problem data for method type mismatches (from where clause)
+pub const IncompatibleMethodType = struct {
+    /// The dispatcher type (eg Utf8Format) - also used for the call site region
+    dispatcher_var: Var,
+    /// The name of the type being dispatched (eg Utf8Format)
+    dispatcher_name: Ident.Idx,
+    /// The method name (eg encode_str)
+    method_name: Ident.Idx,
 };
 
 /// Problem data for when list elements have incompatible types
@@ -542,6 +554,9 @@ pub const ReportBuilder = struct {
                         },
                         .incompatible_fn_args_bound_var => |data| {
                             return self.buildIncompatibleFnArgsBoundVar(mismatch.types, data);
+                        },
+                        .incompatible_method_type => |data| {
+                            return self.buildIncompatibleMethodType(mismatch.types, data);
                         },
                         .incompatible_platform_requirement => {
                             // For now, use generic type mismatch report for platform requirements
@@ -2575,6 +2590,69 @@ pub const ReportBuilder = struct {
                 else => {},
             }
         }
+
+        return report;
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildIncompatibleMethodType(
+        self: *Self,
+        types: TypePair,
+        data: IncompatibleMethodType,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        const method_name = self.can_ir.getIdentText(data.method_name);
+        const dispatcher_str = self.can_ir.getIdentText(data.dispatcher_name);
+
+        // Note: The unifier's actual/expected are opposite to display order.
+        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
+        const actual_fn_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
+        const expected_fn_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
+
+        // Use constraint_origin_var if available (points to the call site), else fall back to dispatcher_var
+        const region_var = if (types.constraint_origin_var) |origin_var|
+            origin_var
+        else
+            data.dispatcher_var;
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(region_var)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+
+        try report.document.addAnnotated(dispatcher_str, .inline_code);
+        try report.document.addReflowingText(" can't be used here because its ");
+        try report.document.addAnnotated(method_name, .inline_code);
+        try report.document.addReflowingText(" method has an incompatible type:");
+        try report.document.addLineBreak();
+
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated(dispatcher_str, .inline_code);
+        try report.document.addReflowingText(".");
+        try report.document.addAnnotated(method_name, .inline_code);
+        try report.document.addReflowingText(" has the type:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(actual_fn_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addReflowingText("But the expected signature is:");
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addCodeBlock(expected_fn_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try report.document.addAnnotated("Hint:", .emphasized);
+        try report.document.addReflowingText(" Check that the method signature matches what's expected, including argument and return types.");
 
         return report;
     }
