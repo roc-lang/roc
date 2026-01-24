@@ -725,8 +725,10 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                         return try std.fmt.allocPrint(gpa, "{d}", .{ptr.*});
                     },
                     .dec => {
-                        const ptr = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?)));
-                        return try renderDecimal(gpa, ptr.*);
+                        const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+                        var buf: [RocDec.max_str_length]u8 = undefined;
+                        const slice = dec.format_to_buf(&buf);
+                        return try gpa.dupe(u8, slice);
                     },
                 };
             },
@@ -877,53 +879,4 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
         return out.toOwnedSlice();
     }
     return try gpa.dupe(u8, "<unsupported>");
-}
-
-fn renderDecimal(gpa: std.mem.Allocator, dec: RocDec) ![]u8 {
-    if (dec.num == 0) {
-        return try gpa.dupe(u8, "0");
-    }
-
-    var out = std.array_list.AlignedManaged(u8, null).init(gpa);
-    errdefer out.deinit();
-
-    const is_negative = dec.num < 0;
-    // Use @abs which handles i128 min correctly by returning u128
-    // (negating i128 min directly would overflow)
-    const abs_value: u128 = @abs(dec.num);
-
-    if (is_negative) {
-        try out.append('-');
-    }
-
-    const one: u128 = @intCast(RocDec.one_point_zero_i128);
-    const integer_part = @divTrunc(abs_value, one);
-    const fractional_part = @rem(abs_value, one);
-
-    try std.fmt.format(out.writer(), "{d}", .{integer_part});
-
-    if (fractional_part == 0) {
-        return out.toOwnedSlice();
-    }
-
-    try out.writer().writeByte('.');
-
-    const decimal_places: usize = @as(usize, RocDec.decimal_places);
-    var digits: [decimal_places]u8 = undefined;
-    @memset(digits[0..], '0');
-    var remaining = fractional_part;
-    var idx: usize = decimal_places;
-    while (idx > 0) : (idx -= 1) {
-        const digit: u8 = @intCast(@mod(remaining, 10));
-        digits[idx - 1] = digit + '0';
-        remaining = @divTrunc(remaining, 10);
-    }
-
-    var end: usize = decimal_places;
-    while (end > 1 and digits[end - 1] == '0') {
-        end -= 1;
-    }
-
-    try out.writer().writeAll(digits[0..end]);
-    return out.toOwnedSlice();
 }

@@ -141,9 +141,10 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
         layout_mod.Idx.dec => blk: {
             var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
-            // Dec values are stored scaled by 10^18 - show integer part for comparison
-            const int_part = @divTrunc(result, dec_scale);
-            break :blk std.fmt.allocPrint(allocator, "{}", .{int_part});
+            const dec = builtins.dec.RocDec{ .num = result };
+            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const slice = dec.format_to_buf(&buf);
+            break :blk allocator.dupe(u8, slice);
         },
         layout_mod.Idx.str => blk: {
             // RocStr is 24 bytes
@@ -306,7 +307,8 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator using integer string representation
+    // DevEvaluator uses integer layouts, so we compare as integers
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
     try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
@@ -471,11 +473,12 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using Dec string representation
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const dec_slice = actual_dec.format_to_buf(&buf);
+    const dec_str = try test_allocator.dupe(u8, dec_slice);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -513,11 +516,12 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+    // Compare with DevEvaluator using Dec string representation
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const dec_slice = actual_dec.format_to_buf(&buf);
+    const dec_str = try test_allocator.dupe(u8, dec_slice);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -614,7 +618,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
     // Build string representation for comparison with DevEvaluator
-    var tuple_parts: [32]i128 = undefined;
+    var tuple_parts_storage: [32][]const u8 = undefined;
     var tuple_count: usize = 0;
 
     for (expected_elements) |expected_element| {
@@ -624,7 +628,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
-        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
+        const is_dec = element.layout.data.scalar.tag != .int;
+        const int_val = if (!is_dec) blk: {
             // Suffixed integer literals remain as integers
             break :blk element.asI128();
         } else blk: {
@@ -634,17 +639,30 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
 
-        tuple_parts[tuple_count] = int_val;
+        // Store formatted string for comparison
+        tuple_parts_storage[tuple_count] = if (is_dec) blk: {
+            const dec_value = element.asDec(ops);
+            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const dec_slice = dec_value.format_to_buf(&dec_buf);
+            break :blk try test_allocator.dupe(u8, dec_slice);
+        } else blk: {
+            break :blk try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+        };
         tuple_count += 1;
 
         try std.testing.expectEqual(expected_element.value, int_val);
     }
 
+    // Clean up tuple parts at the end
+    defer for (tuple_parts_storage[0..tuple_count]) |part| {
+        test_allocator.free(part);
+    };
+
     // Format tuple string based on count
     const tuple_str = switch (tuple_count) {
-        1 => try std.fmt.allocPrint(test_allocator, "({}", .{tuple_parts[0]}),
-        2 => try std.fmt.allocPrint(test_allocator, "({}, {})", .{ tuple_parts[0], tuple_parts[1] }),
-        3 => try std.fmt.allocPrint(test_allocator, "({}, {}, {})", .{ tuple_parts[0], tuple_parts[1], tuple_parts[2] }),
+        1 => try std.fmt.allocPrint(test_allocator, "({s})", .{tuple_parts_storage[0]}),
+        2 => try std.fmt.allocPrint(test_allocator, "({s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1] }),
+        3 => try std.fmt.allocPrint(test_allocator, "({s}, {s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1], tuple_parts_storage[2] }),
         else => try std.fmt.allocPrint(test_allocator, "(tuple with {} elements)", .{tuple_count}),
     };
     defer test_allocator.free(tuple_str);

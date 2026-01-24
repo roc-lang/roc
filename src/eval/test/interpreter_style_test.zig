@@ -167,7 +167,7 @@ test "interpreter: (|n| n + 1)(41) yields 42" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
@@ -185,7 +185,7 @@ test "interpreter: (|a, b| a + b)(40, 2) yields 42" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter: 6 / 3 yields 2" {
@@ -205,7 +205,7 @@ test "interpreter: 6 / 3 yields 2" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
+    try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter: 7 % 3 yields 1" {
@@ -225,7 +225,7 @@ test "interpreter: 7 % 3 yields 1" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("1", rendered);
+    try std.testing.expectEqualStrings("1.0", rendered);
 }
 
 test "interpreter: 0.2 + 0.3 yields 0.5" {
@@ -452,7 +452,7 @@ test "interpreter: record update copies base fields" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("(1, 2)", rendered);
+    try std.testing.expectEqualStrings("(1.0, 2.0)", rendered);
 }
 
 test "interpreter: record update overrides field" {
@@ -470,7 +470,7 @@ test "interpreter: record update overrides field" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("(1, 3)", rendered);
+    try std.testing.expectEqualStrings("(1.0, 3.0)", rendered);
 }
 
 test "interpreter: record update expression can reference base" {
@@ -488,7 +488,7 @@ test "interpreter: record update expression can reference base" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("7", rendered);
+    try std.testing.expectEqualStrings("7.0", rendered);
 }
 
 // TODO: Fix
@@ -507,7 +507,7 @@ test "interpreter: record update expression can reference base" {
 //     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer helpers.interpreter_allocator.free(rendered);
-//     try std.testing.expectEqualStrings("(1, 2, 3)", rendered);
+//     try std.testing.expectEqualStrings("(1.0, 2.0, 3.0)", rendered);
 // }
 
 // TODO: Fix
@@ -526,7 +526,7 @@ test "interpreter: record update expression can reference base" {
 //     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer helpers.interpreter_allocator.free(rendered);
-//     try std.testing.expectEqualStrings("(4, 6, 5)", rendered);
+//     try std.testing.expectEqualStrings("(4.0, 6.0, 5.0)", rendered);
 // }
 
 // TODO: Fix
@@ -545,7 +545,7 @@ test "interpreter: record update expression can reference base" {
 //     const result = try interp2.eval(resources.expr_idx, &ops);
 //     const rendered = try interp2.renderValueRoc(result);
 //     defer helpers.interpreter_allocator.free(rendered);
-//     try std.testing.expectEqualStrings("(7, 6, 15)", rendered);
+//     try std.testing.expectEqualStrings("(7.0, 6.0, 15.0)", rendered);
 // }
 
 test "interpreter: [1, 2, 3] == [1, 2, 3] yields True" {
@@ -639,7 +639,7 @@ test "interpreter: match tuple pattern destructures" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
+    try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter: match bool patterns" {
@@ -657,7 +657,7 @@ test "interpreter: match bool patterns" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("1", rendered);
+    try std.testing.expectEqualStrings("1.0", rendered);
 }
 
 test "interpreter: match result tag payload" {
@@ -675,7 +675,7 @@ test "interpreter: match result tag payload" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("4", rendered);
+    try std.testing.expectEqualStrings("4.0", rendered);
 }
 
 test "interpreter: match record destructures fields" {
@@ -693,7 +693,7 @@ test "interpreter: match record destructures fields" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+    try std.testing.expectEqualStrings("3.0", rendered);
 }
 
 test "interpreter: render Try.Ok literal" {
@@ -712,7 +712,7 @@ test "interpreter: render Try.Ok literal" {
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("Ok(42)", rendered);
+    try std.testing.expectEqualStrings("Ok(42.0)", rendered);
 }
 
 test "interpreter: render Try.Err string" {
@@ -750,7 +750,7 @@ test "interpreter: render Try.Ok tuple payload" {
     const rt_var = try interp2.translateTypeVar(resources.module_env, can.ModuleEnv.varFrom(resources.expr_idx));
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("Ok((1, 2))", rendered);
+    try std.testing.expectEqualStrings("Ok((1.0, 2.0))", rendered);
 }
 
 test "interpreter: match tuple payload tag" {
@@ -768,7 +768,7 @@ test "interpreter: match tuple payload tag" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+    try std.testing.expectEqualStrings("3.0", rendered);
 }
 
 test "interpreter: match record payload tag" {
@@ -786,7 +786,7 @@ test "interpreter: match record payload tag" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("1", rendered);
+    try std.testing.expectEqualStrings("1.0", rendered);
 }
 
 test "interpreter: match list pattern destructures" {
@@ -804,7 +804,7 @@ test "interpreter: match list pattern destructures" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 }
 
 test "debug List.len expression" {}
@@ -826,7 +826,7 @@ test "interpreter: match list rest binds slice" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+    try std.testing.expectEqualStrings("3.0", rendered);
 }
 
 test "interpreter: match empty list branch" {
@@ -844,7 +844,7 @@ test "interpreter: match empty list branch" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter: simple for loop sum" {
@@ -863,7 +863,7 @@ test "interpreter: simple for loop sum" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("10", rendered);
+    try std.testing.expectEqualStrings("10.0", rendered);
 }
 
 test "interpreter: List.fold sum with inline lambda" {
@@ -881,7 +881,7 @@ test "interpreter: List.fold sum with inline lambda" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("10", rendered);
+    try std.testing.expectEqualStrings("10.0", rendered);
 }
 
 test "interpreter: List.fold product with inline lambda" {
@@ -899,7 +899,7 @@ test "interpreter: List.fold product with inline lambda" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("24", rendered);
+    try std.testing.expectEqualStrings("24.0", rendered);
 }
 
 test "interpreter: List.fold empty list with inline lambda" {
@@ -917,7 +917,7 @@ test "interpreter: List.fold empty list with inline lambda" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter: List.fold count elements with inline lambda" {
@@ -935,7 +935,7 @@ test "interpreter: List.fold count elements with inline lambda" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("4", rendered);
+    try std.testing.expectEqualStrings("4.0", rendered);
 }
 
 test "interpreter: List.fold from Builtin using numbers" {
@@ -954,7 +954,7 @@ test "interpreter: List.fold from Builtin using numbers" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 }
 
 test "interpreter: List.any True on integers" {
@@ -1560,7 +1560,7 @@ test "interpreter: tuples and records" {
     const val_t = try it.eval(res_t.expr_idx, &ops_t);
     const text_t = try it.renderValueRoc(val_t);
     defer helpers.interpreter_allocator.free(text_t);
-    try std.testing.expectEqualStrings("(1, 2)", text_t);
+    try std.testing.expectEqualStrings("(1.0, 2.0)", text_t);
 
     // Record test: { x: 1, y: 2 }
     const src_rec = "{ x: 1, y: 2 }";
@@ -1575,7 +1575,7 @@ test "interpreter: tuples and records" {
     const text_r = try ir.renderValueRoc(val_r);
     defer helpers.interpreter_allocator.free(text_r);
     // Sorted field order by name should be "{ x: 1, y: 2 }"
-    try std.testing.expectEqualStrings("{ x: 1, y: 2 }", text_r);
+    try std.testing.expectEqualStrings("{ x: 1.0, y: 2.0 }", text_r);
 }
 
 test "interpreter: empty list [] has list_of_zst layout" {
@@ -1646,11 +1646,11 @@ test "interpreter: dbg statement in block" {
     // Verify the block evaluates to x + 1 = 43
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("43", rendered);
+    try std.testing.expectEqualStrings("43.0", rendered);
 
     // Verify dbg was called with the value of x (42)
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("42.0", host.dbg_messages.items[0]);
 }
 
 test "interpreter: dbg statement with string" {
@@ -1777,7 +1777,7 @@ test "interpreter: crash at end of block in if branch" {
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
     // 42 / 2 = 21
-    try std.testing.expectEqualStrings("21", rendered);
+    try std.testing.expectEqualStrings("21.0", rendered);
 }
 
 test "interpreter: simple break inside for loop" {
@@ -1810,7 +1810,7 @@ test "interpreter: simple break inside for loop" {
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
     // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 }
 
 test "interpreter: simple break inside while loop" {
@@ -1845,7 +1845,7 @@ test "interpreter: simple break inside while loop" {
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
     // sum of 1 + 2 + 3 = 6 (loop breaks before adding 4)
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 }
 
 // Boolean/if support intentionally omitted for now
@@ -1874,11 +1874,11 @@ test "dbg: integer literal" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("123", rendered);
+    try std.testing.expectEqualStrings("123.0", rendered);
 
     // Verify dbg was called with 42
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("42.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: negative integer" {
@@ -1904,10 +1904,10 @@ test "dbg: negative integer" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("-99", rendered);
+    try std.testing.expectEqualStrings("-99.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("-99", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("-99.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: float value" {
@@ -2063,7 +2063,7 @@ test "dbg: tuple" {
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
     // Tuple should render as (1, "two", 3)
-    try std.testing.expectEqualStrings("(1, \"two\", 3)", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("(1.0, \"two\", 3.0)", host.dbg_messages.items[0]);
 }
 
 test "dbg: record" {
@@ -2170,7 +2170,7 @@ test "dbg: tag with payload" {
     defer result.decref(&interp.runtime_layout_store, &ops);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("Ok(42)", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("Ok(42.0)", host.dbg_messages.items[0]);
 }
 
 test "dbg: function prints as unsupported or function marker" {
@@ -2196,7 +2196,7 @@ test "dbg: function prints as unsupported or function marker" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 
     // Function should print as <function> or <unsupported>
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
@@ -2229,10 +2229,10 @@ test "dbg: expression form returns unit" {
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
     // dbg x prints 42, then x + 1 = 43
-    try std.testing.expectEqualStrings("43", rendered);
+    try std.testing.expectEqualStrings("43.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("42.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: multiple dbg calls in sequence" {
@@ -2262,12 +2262,12 @@ test "dbg: multiple dbg calls in sequence" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
-    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
-    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+    try std.testing.expectEqualStrings("1.0", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2.0", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3.0", host.dbg_messages.items[2]);
 }
 
 test "dbg: nested dbg calls" {
@@ -2297,7 +2297,7 @@ test "dbg: nested dbg calls" {
 
     // Three nested dbg calls: inner prints 5, outer two print {}
     try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("5", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("5.0", host.dbg_messages.items[0]);
     try std.testing.expectEqualStrings("{}", host.dbg_messages.items[1]);
     try std.testing.expectEqualStrings("{}", host.dbg_messages.items[2]);
 }
@@ -2424,7 +2424,7 @@ test "dbg: as final expression returns unit" {
     try std.testing.expectEqualStrings("{}", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("42", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("42.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: with arithmetic expression" {
@@ -2453,7 +2453,7 @@ test "dbg: with arithmetic expression" {
 
     // 2 + 3 * 4 = 2 + 12 = 14
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("14", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("14.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: inside function body" {
@@ -2481,10 +2481,10 @@ test "dbg: inside function body" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 1), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("21", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("21.0", host.dbg_messages.items[0]);
 }
 
 test "dbg: function called multiple times" {
@@ -2512,12 +2512,12 @@ test "dbg: function called multiple times" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("6", rendered);
+    try std.testing.expectEqualStrings("6.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("1", host.dbg_messages.items[0]);
-    try std.testing.expectEqualStrings("2", host.dbg_messages.items[1]);
-    try std.testing.expectEqualStrings("3", host.dbg_messages.items[2]);
+    try std.testing.expectEqualStrings("1.0", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("2.0", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("3.0", host.dbg_messages.items[2]);
 }
 
 test "dbg: with string containing special chars" {
@@ -2598,11 +2598,11 @@ test "dbg: variable after mutation in binding" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("15", rendered);
+    try std.testing.expectEqualStrings("15.0", rendered);
 
     try std.testing.expectEqual(@as(usize, 2), host.dbg_messages.items.len);
-    try std.testing.expectEqualStrings("10", host.dbg_messages.items[0]);
-    try std.testing.expectEqualStrings("15", host.dbg_messages.items[1]);
+    try std.testing.expectEqualStrings("10.0", host.dbg_messages.items[0]);
+    try std.testing.expectEqualStrings("15.0", host.dbg_messages.items[1]);
 }
 
 test "dbg: list of strings" {
@@ -2658,7 +2658,7 @@ test "issue 8729: var reassignment in tuple pattern in while loop" {
 
     const rendered = try interp.renderValueRoc(result);
     defer helpers.interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("3", rendered);
+    try std.testing.expectEqualStrings("3.0", rendered);
 
     // The loop should have run 3 times, outputting "word" each time
     try std.testing.expectEqual(@as(usize, 3), host.dbg_messages.items.len);

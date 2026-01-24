@@ -101,7 +101,7 @@ test "interpreter poly: return a function then call (int)" {
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter poly: return a function then call (string)" {
@@ -146,7 +146,7 @@ test "interpreter captures (monomorphic): adder" {
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter captures (monomorphic): constant function" {
@@ -191,7 +191,7 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("41", rendered);
+    try std.testing.expectEqualStrings("41.0", rendered);
 }
 
 test "interpreter captures (polymorphic): capture id and apply to string" {
@@ -235,7 +235,7 @@ test "interpreter higher-order: apply f then call with 41" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: double apply f inside a function
@@ -255,7 +255,7 @@ test "interpreter higher-order: apply f twice" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: pass a constructed closure as an argument, then apply with an int
@@ -275,7 +275,7 @@ test "interpreter higher-order: pass constructed closure and apply" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("41", rendered);
+    try std.testing.expectEqualStrings("41.0", rendered);
 }
 
 // Higher-order: construct a function then pass it to a consumer and evaluate
@@ -295,7 +295,7 @@ test "interpreter higher-order: construct then pass then call" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: compose = \f -> \g -> \x -> f(g(x)) and apply
@@ -315,7 +315,7 @@ test "interpreter higher-order: compose id with +1" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order + capture: returns polymorphic function that uses a captured increment
@@ -335,7 +335,7 @@ test "interpreter higher-order: return poly fn using captured +n" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Recursion via block let-binding using a named recursive closure
@@ -355,7 +355,7 @@ test "interpreter recursion: simple countdown" {
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer interpreter_allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("2", rendered);
+    //     try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter if: else-if chain selects middle branch" {
@@ -396,7 +396,7 @@ test "interpreter var and reassign" {
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
     defer interpreter_allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
+    try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter logical or is short-circuiting" {
@@ -459,7 +459,7 @@ test "interpreter recursion: factorial 5 -> 120" {
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer interpreter_allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("120", rendered);
+    //     try std.testing.expectEqualStrings("120.0", rendered);
 }
 
 // Additional complex recursion tests (mutual recursion, nested tuple builders)
@@ -482,14 +482,14 @@ test "interpreter recursion: fibonacci 5 -> 5" {
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
     //     defer interpreter_allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("5", rendered);
+    //     try std.testing.expectEqualStrings("5.0", rendered);
 }
 
 // Tag union tests (anonymous, non-recursive) — RED first
 
 test "interpreter tag union: one-arg tag Ok(42)" {
     const roc_src =
-        \\Ok(42)
+        \\Ok(42.0)
     ;
 
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
@@ -506,14 +506,14 @@ test "interpreter tag union: one-arg tag Ok(42)" {
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer interpreter_allocator.free(rendered);
     const expected =
-        \\Ok(42)
+        \\Ok(42.0)
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
 test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const roc_src =
-        \\Point(1, 2)
+        \\Point(1.0, 2.0)
     ;
 
     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
@@ -530,7 +530,7 @@ test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
     defer interpreter_allocator.free(rendered);
     const expected =
-        \\Point(1, 2)
+        \\Point(1.0, 2.0)
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
@@ -561,7 +561,7 @@ test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
     // have full type info for the inner tag. The key is that we get here without
     // stack overflow.
     const expected =
-        \\Ok((<tag_union variant=0>, 5))
+        \\Ok((<tag_union variant=0>, 5.0))
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
