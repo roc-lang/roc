@@ -1727,13 +1727,46 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             var end_patches = std.ArrayList(usize).empty;
             defer end_patches.deinit(self.allocator);
 
-            // Check if result might be a composite type (stack-based)
-            // We'll detect this from the first branch and allocate accordingly
+            // Use result_layout to determine the exact size we need to copy
+            // This follows the Rust backend approach: the layout determines the byte size
+            var result_size: u32 = 8; // Default to 8 bytes (one word)
+            var is_str_result = false;
+
+            // Check if result is a string (layout.Idx.str is a sentinel value)
+            if (ite.result_layout == .str) {
+                result_size = 24; // Strings are 24 bytes (ptr, len, capacity)
+                is_str_result = true;
+            } else if (self.layout_store) |ls| {
+                const result_layout = ls.getLayout(ite.result_layout);
+                switch (result_layout.tag) {
+                    .list => {
+                        result_size = 24; // Lists are 24 bytes (ptr, len, capacity)
+                    },
+                    .tuple => {
+                        const tuple_data = ls.getTupleData(result_layout.data.tuple.idx);
+                        result_size = tuple_data.size;
+                    },
+                    .record => {
+                        const record_data = ls.getRecordData(result_layout.data.record.idx);
+                        result_size = record_data.size;
+                    },
+                    .tag_union => {
+                        const tu_data = ls.getTagUnionData(result_layout.data.tag_union.idx);
+                        result_size = tu_data.size;
+                    },
+                    else => {
+                        // Primitive types - 8 bytes or less, use register
+                        result_size = 8;
+                    },
+                }
+            }
+
+            // Determine storage strategy based on result size
             var result_slot: ?i32 = null;
             var result_reg: ?GeneralReg = null;
-            var first_branch = true;
 
             // Generate each branch
+            var first_branch = true;
             for (branches) |branch| {
                 // Generate condition
                 const cond_loc = try self.generateExpr(branch.cond);
@@ -1752,9 +1785,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     first_branch = false;
                     switch (body_loc) {
                         .stack, .stack_str, .list_stack => {
-                            // Composite type - allocate a result slot on stack
-                            // Use 24 bytes which covers strings, lists, and small records/tuples
-                            result_slot = self.codegen.allocStackSlot(24);
+                            // Composite type - allocate exact size from layout
+                            result_slot = self.codegen.allocStackSlot(result_size);
                         },
                         else => {
                             // Simple type - use register
@@ -1765,8 +1797,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Copy result to the appropriate location
                 if (result_slot) |slot| {
-                    // Copy from body_loc to result slot
-                    try self.copyValueToStackOffset(slot, body_loc);
+                    // Copy from body_loc to result slot using the layout-determined size
+                    try self.copyBytesToStackOffset(slot, body_loc, result_size);
                 } else if (result_reg) |reg| {
                     const body_reg = try self.ensureInGeneralReg(body_loc);
                     try self.emitMovRegReg(reg, body_reg);
@@ -1789,7 +1821,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (result_slot == null and result_reg == null) {
                 switch (else_loc) {
                     .stack, .stack_str, .list_stack => {
-                        result_slot = self.codegen.allocStackSlot(24);
+                        result_slot = self.codegen.allocStackSlot(result_size);
                     },
                     else => {
                         result_reg = try self.codegen.allocGeneralFor(0);
@@ -1798,8 +1830,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             if (result_slot) |slot| {
-                // Copy from else_loc to result slot
-                try self.copyValueToStackOffset(slot, else_loc);
+                // Copy from else_loc to result slot using the layout-determined size
+                try self.copyBytesToStackOffset(slot, else_loc, result_size);
             } else if (result_reg) |reg| {
                 const else_reg = try self.ensureInGeneralReg(else_loc);
                 try self.emitMovRegReg(reg, else_reg);
@@ -1812,8 +1844,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.patchJump(patch, end_offset);
             }
 
-            // Return the result location
+            // Return the result location - use .stack_str for strings so nested if-then-else copies correctly
             if (result_slot) |slot| {
+                if (is_str_result) {
+                    return .{ .stack_str = slot };
+                }
                 return .{ .stack = slot };
             } else if (result_reg) |reg| {
                 return .{ .general_reg = reg };
@@ -2665,6 +2700,33 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     self.codegen.freeGeneral(reg);
                 },
             }
+        }
+
+        /// Copy a specific number of bytes from a value location to a stack offset
+        /// This uses the layout-determined size rather than inferring from ValueLocation type
+        fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
+            // Get the source offset
+            const src_offset: i32 = switch (loc) {
+                .stack => |off| off,
+                .stack_str => |off| off,
+                .stack_i128 => |off| off,
+                .list_stack => |info| info.struct_offset,
+                else => {
+                    // For non-stack locations, use the simple 8-byte copy
+                    try self.copyValueToStackOffset(dest_offset, loc);
+                    return;
+                },
+            };
+
+            // Copy in 8-byte chunks
+            const reg = try self.codegen.allocGeneralFor(0);
+            var copied: u32 = 0;
+            while (copied < size) {
+                try self.codegen.emitLoadStack(.w64, reg, src_offset + @as(i32, @intCast(copied)));
+                try self.codegen.emitStoreStack(.w64, dest_offset + @as(i32, @intCast(copied)), reg);
+                copied += 8;
+            }
+            self.codegen.freeGeneral(reg);
         }
 
         /// Zero out a stack area
