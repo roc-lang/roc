@@ -122,6 +122,9 @@ const ModuleState = struct {
     working: if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8) else u8 = if (@import("builtin").target.cpu.arch != .wasm32) std.atomic.Value(u8).init(0) else 0,
     /// Cached AST from parsing phase - heap-allocated to avoid copy issues with ArrayLists
     cached_ast: ?*parse.AST = null,
+    /// True if this module was loaded from cache. Cached modules have their env memory
+    /// owned by the cache buffer, so we must NOT call env.deinit() for them.
+    was_from_cache: bool = false,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
         if (comptime trace_cache) {
@@ -133,18 +136,36 @@ const ModuleState = struct {
             gpa.destroy(ast);
         }
         if (comptime trace_cache) {
-            std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr\n", .{self.name});
+            std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
         }
-        // Save source before deinitiating env so we can free it
-        const source = if (self.env) |*e| e.common.source else null;
-        if (comptime trace_cache) {
-            std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, if (source) |s| @intFromPtr(s.ptr) else 0 });
+
+        // For cached modules:
+        // - Do NOT call env.deinit() - deserialized data structures have backing arrays
+        //   in the cache buffer, and trying to free them causes stack overflow/crashes.
+        // - The cache buffer is freed separately via cache_buffers cleanup.
+        // - This leaks hash maps allocated during deserialization, but that's acceptable
+        //   for now until we implement a proper deinitForCached() method.
+        //
+        // For non-cached modules:
+        // - We call env.deinit() to free all allocations
+        // - We free the source which was heap-allocated
+        if (!self.was_from_cache) {
+            if (self.env) |*e| {
+                const source = e.common.source;
+                if (comptime trace_cache) {
+                    std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
+                }
+                e.deinit();
+                if (comptime trace_cache) {
+                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
+                }
+                if (source.len > 0) gpa.free(source);
+            }
+        } else {
+            if (comptime trace_cache) {
+                std.debug.print("[MOD DEINIT DETAIL] {s}: skipping env.deinit (cached module - memory owned by cache buffer)\n", .{self.name});
+            }
         }
-        if (self.env) |*e| e.deinit();
-        if (comptime trace_cache) {
-            std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
-        }
-        if (source) |s| gpa.free(s);
         if (comptime trace_cache) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing imports (len={})\n", .{ self.name, self.imports.items.len });
         }

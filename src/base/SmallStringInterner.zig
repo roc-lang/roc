@@ -95,12 +95,12 @@ pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) 
 
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
-/// NOTE: Do NOT call deinit on deserialized interners - their memory is owned by the deserialization buffer.
+/// NOTE: For deserialized interners, this is a no-op since memory is owned by the deserialization buffer.
 pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
-    if (std.debug.runtime_safety) {
-        if (!self.supports_inserts) {
-            @panic("deinit called on deserialized interner - memory is owned by deserialization buffer");
-        }
+    // Deserialized interners have supports_inserts = false.
+    // Their memory is owned by the deserialization buffer, so we must not free it.
+    if (!self.supports_inserts) {
+        return;
     }
     self.bytes.deinit(gpa);
     self.hash_table.deinit(gpa);

@@ -5001,6 +5001,9 @@ const CheckResult = struct {
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
+    cache_hits: u32 = 0,
+    cache_misses: u32 = 0,
+    modules_compiled: u32 = 0,
 
     /// Free allocated memory
     pub fn deinit(self: *CheckResult, gpa: Allocator) void {
@@ -5262,10 +5265,16 @@ fn checkFileWithBuildEnv(
             };
         }
 
+        // Get cache stats even on error
+        const cache_stats = build_env.getCacheStats();
+
         return CheckResult{
             .reports = reports,
             .error_count = error_count,
             .warning_count = warning_count,
+            .cache_hits = cache_stats.cache_hits,
+            .cache_misses = cache_stats.cache_misses,
+            .modules_compiled = cache_stats.modules_compiled,
         };
     };
 
@@ -5313,6 +5322,9 @@ fn checkFileWithBuildEnv(
     else
         build_env.getTimingInfo();
 
+    // Get cache stats from coordinator
+    const cache_stats = build_env.getCacheStats();
+
     if (comptime build_options.trace_cache) {
         std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
     }
@@ -5320,9 +5332,12 @@ fn checkFileWithBuildEnv(
     return CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .was_cached = false, // TODO: Set based on cache stats
         .error_count = error_count,
         .warning_count = warning_count,
+        .cache_hits = cache_stats.cache_hits,
+        .cache_misses = cache_stats.cache_misses,
+        .modules_compiled = cache_stats.modules_compiled,
     };
 }
 
@@ -5425,6 +5440,11 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     if (args.time) {
         printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
     }
+
+    // Print cache stats if verbose
+    if (args.verbose) {
+        printCacheStats(stderr, check_result.cache_hits, check_result.cache_misses, check_result.modules_compiled);
+    }
 }
 
 fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
@@ -5445,6 +5465,21 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
         writer.print("  ({} ns)", .{t.check_diagnostics_ns}) catch {};
+    }
+}
+
+/// Print cache statistics when --verbose flag is passed
+fn printCacheStats(writer: anytype, cache_hits: u32, cache_misses: u32, modules_compiled: u32) void {
+    const total = cache_hits + cache_misses;
+    if (total > 0) {
+        const hit_rate: f64 = @as(f64, @floatFromInt(cache_hits)) /
+            @as(f64, @floatFromInt(total)) * 100.0;
+        writer.print("\nCache: {}/{} modules cached ({d:.1}% hit rate), {} compiled\n", .{
+            cache_hits,
+            total,
+            hit_rate,
+            modules_compiled,
+        }) catch {};
     }
 }
 

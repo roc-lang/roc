@@ -46,7 +46,10 @@ const messages = @import("messages.zig");
 const channel = @import("channel.zig");
 const compile_package = @import("compile_package.zig");
 const module_discovery = @import("module_discovery.zig");
-const CacheManager = @import("cache_manager.zig").CacheManager;
+const cache_manager_mod = @import("cache_manager.zig");
+const CacheManager = cache_manager_mod.CacheManager;
+const ImportInfo = cache_manager_mod.ImportInfo;
+const CacheModule = @import("cache_module.zig").CacheModule;
 
 // Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
 const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
@@ -68,6 +71,7 @@ const CanonicalizedResult = messages.CanonicalizedResult;
 const TypeCheckedResult = messages.TypeCheckedResult;
 const DiscoveredLocalImport = messages.DiscoveredLocalImport;
 const DiscoveredExternalImport = messages.DiscoveredExternalImport;
+const CacheHitResult = messages.CacheHitResult;
 
 const Channel = channel.Channel;
 const FileProvider = compile_package.FileProvider;
@@ -121,6 +125,9 @@ pub const ModuleState = struct {
     depth: u32,
     /// DFS visit color for cycle detection: 0=white, 1=gray, 2=black
     visit_color: u8,
+    /// True if this module was loaded from cache in this build.
+    /// Used by parent modules to determine if fast path is valid.
+    was_cache_hit: bool,
 
     pub fn init(name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -135,6 +142,7 @@ pub const ModuleState = struct {
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
             .visit_color = 0,
+            .was_cache_hit = false,
         };
     }
 
@@ -159,13 +167,21 @@ pub const ModuleState = struct {
         // Free module env if present (only if we own module data)
         if (owns_module_data) {
             if (self.env) |env| {
-                if (comptime trace_cache) {
-                    std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+                // For cached modules, skip everything - env and source point into cache buffer,
+                // and calling deinit on deserialized structures causes crashes.
+                if (self.was_cache_hit) {
+                    if (comptime trace_cache) {
+                        std.debug.print("[MOD DEINIT] {s}: skipping env.deinit (cached module)\n", .{self.name});
+                    }
+                } else {
+                    if (comptime trace_cache) {
+                        std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
+                    }
+                    const source = env.common.source;
+                    env.deinit();
+                    gpa.destroy(env);
+                    if (source.len > 0) gpa.free(source);
                 }
-                const source = env.common.source;
-                env.deinit();
-                gpa.destroy(env);
-                if (source.len > 0) gpa.free(source);
             }
         }
 
@@ -362,6 +378,15 @@ pub const Coordinator = struct {
     total_typecheck_ns: u64,
     total_typecheck_diag_ns: u64,
 
+    /// Cache statistics for this build
+    cache_hits: u32,
+    cache_misses: u32,
+    modules_compiled: u32,
+
+    /// Cache buffers that need to be kept alive for cached modules.
+    /// These are freed when the coordinator is deinitialized.
+    cache_buffers: std.ArrayList(CacheModule.CacheData),
+
     pub fn init(
         gpa: Allocator,
         mode: Mode,
@@ -395,6 +420,10 @@ pub const Coordinator = struct {
             .total_canonicalize_diag_ns = 0,
             .total_typecheck_ns = 0,
             .total_typecheck_diag_ns = 0,
+            .cache_hits = 0,
+            .cache_misses = 0,
+            .modules_compiled = 0,
+            .cache_buffers = std.ArrayList(CacheModule.CacheData).empty,
         };
     }
 
@@ -449,6 +478,15 @@ pub const Coordinator = struct {
 
         self.result_channel.deinit();
         self.workers.deinit(self.gpa);
+
+        // Free cache buffers that were keeping cached module data alive
+        if (comptime trace_cache) {
+            std.debug.print("[COORD DEINIT] freeing {} cache buffers\n", .{self.cache_buffers.items.len});
+        }
+        for (self.cache_buffers.items) |*buf| {
+            buf.deinit(self.gpa);
+        }
+        self.cache_buffers.deinit(self.gpa);
     }
 
     /// Set a virtual file provider
@@ -672,6 +710,7 @@ pub const Coordinator = struct {
             .type_checked => |*r| try self.handleTypeChecked(r),
             .parse_failed => |*r| try self.handleParseFailed(r),
             .cycle_detected => |*r| try self.handleCycleDetected(r),
+            .cache_hit => |*r| try self.handleCacheHit(r),
         }
     }
 
@@ -889,6 +928,84 @@ pub const Coordinator = struct {
         // Mark as done
         mod.phase = .Done;
         mod.visit_color = 2; // Black
+        mod.was_cache_hit = false; // This was NOT a cache hit (we just compiled it)
+
+        // Update cache stats
+        self.cache_misses += 1;
+        self.modules_compiled += 1;
+
+        // Store to cache
+        if (self.cache_manager) |cache| {
+            if (mod.env) |env| {
+                // Compute source hash for metadata
+                const source_hash = CacheManager.computeSourceHash(env.common.source);
+
+                // Compute full cache key (source + compiler_version)
+                const full_cache_key = CacheManager.generateCacheKey(env.common.source, self.compiler_version);
+
+                // Collect import info for metadata
+                // Note: We use owned strings that we free after storing
+                var imports = std.ArrayList(ImportInfo).empty;
+                defer {
+                    for (imports.items) |*imp| {
+                        imp.deinit(self.gpa);
+                    }
+                    imports.deinit(self.gpa);
+                }
+
+                // Add local imports (dupe strings since we'll free them)
+                for (mod.imports.items) |imp_id| {
+                    if (pkg.getModule(imp_id)) |imp_mod| {
+                        const mod_name = self.gpa.dupe(u8, imp_mod.name) catch continue;
+                        imports.append(self.gpa, .{
+                            .package = "", // Local import - empty string, not owned
+                            .module = mod_name,
+                        }) catch {
+                            self.gpa.free(mod_name);
+                            continue;
+                        };
+                    }
+                }
+
+                // Add external imports (these have format "pkg.Module")
+                for (mod.external_imports.items) |ext_name| {
+                    if (std.mem.indexOfScalar(u8, ext_name, '.')) |dot_idx| {
+                        const pkg_part = self.gpa.dupe(u8, ext_name[0..dot_idx]) catch continue;
+                        const mod_part = self.gpa.dupe(u8, ext_name[dot_idx + 1 ..]) catch {
+                            self.gpa.free(pkg_part);
+                            continue;
+                        };
+                        imports.append(self.gpa, .{
+                            .package = pkg_part,
+                            .module = mod_part,
+                        }) catch {
+                            self.gpa.free(pkg_part);
+                            self.gpa.free(mod_part);
+                            continue;
+                        };
+                    }
+                }
+
+                // Count errors and warnings
+                var error_count: u32 = 0;
+                var warning_count: u32 = 0;
+                for (mod.reports.items) |*rep| {
+                    if (rep.severity == .fatal or rep.severity == .runtime_error) {
+                        error_count += 1;
+                    } else if (rep.severity == .warning) {
+                        warning_count += 1;
+                    }
+                }
+
+                // Store metadata for fast path lookup
+                cache.storeMetadata(source_hash, full_cache_key, imports.items, error_count, warning_count) catch {};
+
+                // Store full cache
+                cache.store(full_cache_key, env, error_count, warning_count) catch {};
+
+                // imports are freed by the defer block above
+            }
+        }
 
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
@@ -960,6 +1077,106 @@ pub const Coordinator = struct {
         // Decrement counters
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
+    }
+
+    /// Handle a cache hit result (fast path)
+    fn handleCacheHit(self: *Coordinator, result: *CacheHitResult) !void {
+        if (comptime trace_cache) {
+            std.debug.print("[COORD] CACHE HIT (fast path): pkg={s} module={s}\n", .{
+                result.package_name,
+                result.module_name,
+            });
+        }
+
+        const pkg = self.packages.get(result.package_name) orelse return;
+        const mod = pkg.getModule(result.module_id) orelse return;
+
+        // Store cache buffer to keep it alive for the lifetime of module_env
+        // It will be freed when the coordinator is deinitialized
+        try self.cache_buffers.append(self.gpa, result.cache_data);
+
+        // Set module from cache
+        mod.env = result.module_env;
+        mod.was_cache_hit = true; // Mark as cache hit for dependent checks
+        mod.phase = .Done;
+        mod.visit_color = 2; // Black
+
+        // Update cache stats
+        self.cache_hits += 1;
+
+        // Decrement counters
+        if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
+        if (self.total_remaining > 0) self.total_remaining -= 1;
+
+        // Wake dependents (they may now be able to use fast path too)
+        for (mod.dependents.items) |dep_id| {
+            try self.tryUnblock(pkg, dep_id);
+        }
+        try self.wakeCrossPackageDependents(result.package_name, result.module_id);
+    }
+
+    /// Check if all imports in the list were cache hits in this build.
+    /// This is used for the fast path - if all dependencies were cache hits,
+    /// we can skip parsing/canonicalizing/type-checking and load directly from cache.
+    fn checkAllImportsCached(
+        self: *Coordinator,
+        source_pkg_name: []const u8,
+        imports: []const ImportInfo,
+    ) bool {
+        // Skip "Builtin" since it's always available and doesn't need caching check
+        for (imports) |imp| {
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            // Determine the target package name
+            const pkg_name = if (imp.package.len == 0)
+                // Local import - use source package
+                source_pkg_name
+            else blk: {
+                // External import - resolve shorthand to package name
+                const source_pkg = self.packages.get(source_pkg_name) orelse {
+                    if (comptime trace_cache) {
+                        std.debug.print("[COORD] checkAllImportsCached: source pkg {s} not found\n", .{source_pkg_name});
+                    }
+                    return false;
+                };
+                break :blk source_pkg.shorthands.get(imp.package) orelse {
+                    if (comptime trace_cache) {
+                        std.debug.print("[COORD] checkAllImportsCached: shorthand {s} not found in {s}\n", .{ imp.package, source_pkg_name });
+                    }
+                    return false;
+                };
+            };
+
+            // Look up the module in the target package
+            const pkg = self.packages.get(pkg_name) orelse {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: pkg {s} not found\n", .{pkg_name});
+                }
+                return false;
+            };
+            const mod_id = pkg.module_names.get(imp.module) orelse {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: module {s} not found in {s}\n", .{ imp.module, pkg_name });
+                }
+                return false;
+            };
+            const mod = pkg.getModule(mod_id) orelse {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: module id {} not found in {s}\n", .{ mod_id, pkg_name });
+                }
+                return false;
+            };
+
+            // Check if this dependency was a cache hit
+            if (!mod.was_cache_hit) {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] checkAllImportsCached: {s}.{s} was not a cache hit\n", .{ pkg_name, imp.module });
+                }
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// Handle cycle detection inline during canonicalization result processing
@@ -1237,6 +1454,71 @@ pub const Coordinator = struct {
                 },
             };
         };
+
+        // FAST PATH: Check cache before parsing
+        if (self.cache_manager) |cache| {
+            // Compute source hash for metadata lookup
+            const source_hash = CacheManager.computeSourceHash(src);
+
+            // Look up metadata by source hash
+            if (cache.getMetadata(source_hash)) |metadata| {
+                defer {
+                    var meta = metadata;
+                    meta.deinit(self.gpa);
+                }
+
+                // Check if ALL imports were cache hits in this build
+                const all_deps_cached = self.checkAllImportsCached(task.package_name, metadata.imports);
+
+                if (all_deps_cached) {
+                    // Try to load from full cache using the key from metadata
+                    const cache_result = cache.loadFromCacheByKey(
+                        metadata.full_cache_key,
+                        src,
+                        task.module_name,
+                    );
+
+                    if (cache_result == .hit) {
+                        if (comptime trace_cache) {
+                            std.debug.print("[COORD] FAST PATH HIT: pkg={s} module={s}\n", .{
+                                task.package_name,
+                                task.module_name,
+                            });
+                        }
+
+                        return .{
+                            .cache_hit = .{
+                                .package_name = task.package_name,
+                                .module_id = task.module_id,
+                                .module_name = task.module_name,
+                                .path = task.path,
+                                .module_env = cache_result.hit.module_env,
+                                .source = src,
+                                .error_count = cache_result.hit.error_count,
+                                .warning_count = cache_result.hit.warning_count,
+                                .cache_data = cache_result.hit.cache_data,
+                            },
+                        };
+                    }
+                }
+
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] FAST PATH MISS (deps not cached): pkg={s} module={s}\n", .{
+                        task.package_name,
+                        task.module_name,
+                    });
+                }
+            } else {
+                if (comptime trace_cache) {
+                    std.debug.print("[COORD] FAST PATH MISS (no metadata): pkg={s} module={s}\n", .{
+                        task.package_name,
+                        task.module_name,
+                    });
+                }
+            }
+        }
+
+        // SLOW PATH: Parse, canonicalize, type-check
 
         // Create ModuleEnv using module allocator (for IPC, this is shared memory)
         const module_alloc = self.getModuleAllocator();

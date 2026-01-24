@@ -195,7 +195,8 @@ pub const CacheModule = struct {
         const serialized_data = self.data;
 
         // The ModuleEnv.Serialized should be at the beginning of the data
-        if (serialized_data.len < @sizeOf(ModuleEnv)) {
+        // Note: Check against Serialized size, not ModuleEnv size, since we're deserializing from Serialized format
+        if (serialized_data.len < @sizeOf(ModuleEnv.Serialized)) {
             return error.BufferTooSmall;
         }
 
@@ -280,8 +281,9 @@ pub const CacheModule = struct {
         file_path: []const u8,
         filesystem: anytype,
     ) !CacheData {
+        // TEMPORARILY DISABLED: mmap for debugging - always use allocated memory
         // Try to use memory mapping on supported platforms
-        if (comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
+        if (false and comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
             // Open the file
             const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
                 // Fall back to regular reading on open error

@@ -528,13 +528,19 @@ pub const BuildEnv = struct {
                 if (coord_mod.env) |env| {
                     if (sched_mod.env == null) {
                         if (comptime trace_cache) {
-                            std.debug.print("[TRANSFER]   Transferring env for {s}\n", .{coord_mod.name});
+                            std.debug.print("[TRANSFER]   Transferring env for {s} (was_cache_hit={})\n", .{ coord_mod.name, coord_mod.was_cache_hit });
                         }
                         // Copy env content to scheduler (scheduler owns inline, not pointer)
                         sched_mod.env = env.*;
-                        // Free the coordinator's heap-allocated struct wrapper (but NOT its contents)
-                        // The contents are now owned by sched_mod.env
-                        self.gpa.destroy(env);
+                        // Transfer the cache flag so scheduler knows not to deinit cached envs
+                        sched_mod.was_from_cache = coord_mod.was_cache_hit;
+
+                        // Only free the heap-allocated struct wrapper if it was NOT a cache hit.
+                        // Cache hit envs are deserialized in-place into the cache buffer and
+                        // are NOT heap-allocated - freeing them would cause "Invalid free".
+                        if (!coord_mod.was_cache_hit) {
+                            self.gpa.destroy(env);
+                        }
                         // Clear coordinator's pointer to prevent double-free during deinit
                         coord_mod.env = null;
                     }
@@ -1785,6 +1791,25 @@ pub const BuildEnv = struct {
         }
 
         return total;
+    }
+
+    /// Cache statistics for the build
+    pub const BuildCacheStats = struct {
+        cache_hits: u32 = 0,
+        cache_misses: u32 = 0,
+        modules_compiled: u32 = 0,
+    };
+
+    /// Get cache statistics from the coordinator
+    pub fn getCacheStats(self: *BuildEnv) BuildCacheStats {
+        if (self.coordinator) |coord| {
+            return .{
+                .cache_hits = coord.cache_hits,
+                .cache_misses = coord.cache_misses,
+                .modules_compiled = coord.modules_compiled,
+            };
+        }
+        return .{};
     }
 };
 
