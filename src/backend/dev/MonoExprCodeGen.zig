@@ -513,11 +513,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Now evaluate RHS (safe even if it involves calls)
             const rhs_loc = try self.generateExpr(binop.rhs);
 
-            // Check if this is a structural comparison (records/tuples)
+            // Check if this is a structural comparison (records/tuples/lists)
             if (binop.op == .eq or binop.op == .neq) {
                 const lhs_expr = self.store.getExpr(binop.lhs);
                 if (lhs_expr == .record or lhs_expr == .tuple) {
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
+                }
+                if (lhs_expr == .list) {
+                    return self.generateListComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
             }
 
@@ -1318,6 +1321,137 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .general_reg = result_reg };
         }
 
+        /// Generate list comparison (element by element)
+        fn generateListComparison(
+            self: *Self,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            lhs_expr: MonoExpr,
+            op: MonoExpr.BinOp,
+        ) Error!ValueLocation {
+            // Get list elements for element-by-element comparison
+            const lhs_elems = switch (lhs_expr) {
+                .list => |l| self.store.getExprSpan(l.elems),
+                else => return Error.UnsupportedExpression,
+            };
+
+            // Determine element size (default to 8 bytes)
+            const elem_size: i32 = switch (lhs_expr) {
+                .list => |l| switch (l.elem_layout) {
+                    .i8, .u8 => 1,
+                    .i16, .u16 => 2,
+                    .i32, .u32, .f32 => 4,
+                    .i64, .u64, .f64, .str => 8,
+                    .i128, .u128, .dec => 16,
+                    else => 8,
+                },
+                else => 8,
+            };
+
+            const result_reg = try self.codegen.allocGeneralFor(0);
+
+            if (lhs_elems.len == 0) {
+                // Empty lists are equal
+                try self.codegen.emitLoadImm(result_reg, if (op == .eq) 1 else 0);
+                return .{ .general_reg = result_reg };
+            }
+
+            // Start with result = 1 (equal)
+            try self.codegen.emitLoadImm(result_reg, 1);
+
+            const temp_lhs = try self.codegen.allocGeneralFor(0);
+            const temp_rhs = try self.codegen.allocGeneralFor(0);
+
+            // Compare each element
+            // List data starts at base_offset (ptr points there)
+            // But we stored the ptr at list_struct_offset, so we need to load it first
+            // Actually, list elements are stored contiguously starting at list_data_offset
+            // For comparing two lists, we compare element[i] from each
+
+            // For list literals, we know the elements are stored at:
+            // lhs: lhs_data_offset + i * elem_size
+            // rhs: rhs_data_offset + i * elem_size
+            // But we only have the list struct locations (lhs_loc, rhs_loc)
+            // which point to (ptr, len) pairs.
+
+            // The ptr in each list struct points to the element data
+            // Load ptrs first, then compare elements through them
+
+            // Load lhs ptr
+            const lhs_ptr_reg = try self.codegen.allocGeneralFor(0);
+            switch (lhs_loc) {
+                .stack => |base_offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, lhs_ptr_reg, .FP, base_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, lhs_ptr_reg, .RBP, base_offset);
+                    }
+                },
+                else => return Error.UnsupportedExpression,
+            }
+
+            // Load rhs ptr
+            const rhs_ptr_reg = try self.codegen.allocGeneralFor(0);
+            switch (rhs_loc) {
+                .stack => |base_offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, rhs_ptr_reg, .FP, base_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, rhs_ptr_reg, .RBP, base_offset);
+                    }
+                },
+                else => return Error.UnsupportedExpression,
+            }
+
+            // Compare each element through the pointers
+            for (0..lhs_elems.len) |i| {
+                const offset: i32 = @as(i32, @intCast(i)) * elem_size;
+
+                // Load lhs element: [lhs_ptr + offset]
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
+                }
+
+                // Load rhs element: [rhs_ptr + offset]
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
+                } else {
+                    try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
+                }
+
+                // Compare elements: if not equal, set result to 0
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                } else {
+                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                    // Use CMOV to set result to 0 if not equal
+                    const zero_reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(zero_reg, 0);
+                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                    self.codegen.freeGeneral(zero_reg);
+                }
+            }
+
+            self.codegen.freeGeneral(temp_lhs);
+            self.codegen.freeGeneral(temp_rhs);
+            self.codegen.freeGeneral(lhs_ptr_reg);
+            self.codegen.freeGeneral(rhs_ptr_reg);
+
+            // If neq, invert the result
+            if (op == .neq) {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.eorRegRegImm(.w64, result_reg, result_reg, 1);
+                } else {
+                    try self.codegen.emit.xorRegImm8(.w64, result_reg, 1);
+                }
+            }
+
+            return .{ .general_reg = result_reg };
+        }
+
         /// Generate floating-point binary operation
         fn generateFloatBinop(
             self: *Self,
@@ -1799,8 +1933,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // For JIT evaluation, we can allocate list data on the stack
             // Roc lists are (ptr, len) pairs where ptr points to element data
-            // Stack layout: [elem0, elem1, ..., elemN]
-            // We'll store elements starting at a negative offset from RBP
 
             // Determine element size based on layout
             const elem_size: i32 = switch (list.elem_layout) {
@@ -1813,11 +1945,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             const num_elems: i32 = @intCast(elems.len);
-            const total_size = elem_size * num_elems;
+            const total_elem_size: u32 = @intCast(elem_size * num_elems);
 
-            // Allocate stack space for elements
-            // Use a fixed offset below current stack variables
-            const list_data_offset: i32 = -256 - total_size; // Below other stack variables
+            // Dynamically allocate stack space for elements
+            const list_data_offset: i32 = self.codegen.allocStackSlot(total_elem_size);
 
             // Store each element
             for (elems, 0..) |elem_id, i| {
@@ -1837,7 +1968,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Create the list struct: (ptr, len)
-            // For stack-allocated lists, ptr = RBP + list_data_offset
+            // For stack-allocated lists, ptr = RBP/FP + list_data_offset
             const ptr_reg = try self.codegen.allocGeneralFor(0);
             const len_reg = try self.codegen.allocGeneralFor(1);
 
@@ -1854,8 +1985,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Load length
             try self.codegen.emitLoadImm(len_reg, num_elems);
 
-            // Store as a struct on the stack: (ptr at offset, len at offset+8)
-            const list_struct_offset: i32 = -128; // Fixed location for list struct
+            // Dynamically allocate stack space for list struct (16 bytes for ptr + len)
+            const list_struct_offset: i32 = self.codegen.allocStackSlot(16);
 
             if (comptime builtin.cpu.arch == .aarch64) {
                 try self.codegen.emit.strRegMemSoff(.w64, ptr_reg, .FP, list_struct_offset);

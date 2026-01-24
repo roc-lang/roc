@@ -430,10 +430,20 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                         return self.lowerStrInspekt(arg_id, arg_type_var, arg_layout, module_env, region);
                     }
                 }
-                // For other low-level ops, we would need to convert the op enum
-                // For now, return a placeholder - full low-level op support would
-                // require converting between CIR.Expr.LowLevel and MonoExpr.LowLevel
-                break :blk .{ .runtime_error = {} };
+                // Convert CIR LowLevel ops to MonoExpr LowLevel ops
+                const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
+                    .list_len => .list_len,
+                    .list_is_empty => .list_is_empty,
+                    else => break :blk .{ .runtime_error = {} }, // Not yet implemented
+                };
+                const args = try self.lowerExprSpan(module_env, call.args);
+                break :blk .{
+                    .low_level = .{
+                        .op = mono_op,
+                        .args = args,
+                        .ret_layout = self.getExprLayout(module_env, expr),
+                    },
+                };
             }
 
             const fn_id = try self.lowerExprFromIdx(module_env, call.func);
@@ -538,6 +548,34 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_dot_access => |dot| blk: {
             const receiver = try self.lowerExprFromIdx(module_env, dot.receiver);
+            const field_name = module_env.getIdent(dot.field_name);
+
+            // Check if this is a list.len or list.is_empty access
+            const receiver_expr = module_env.store.getExpr(dot.receiver);
+            if (receiver_expr == .e_list) {
+                if (std.mem.eql(u8, field_name, "len")) {
+                    // Convert list.len to low_level list_len operation
+                    const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
+                    break :blk .{
+                        .low_level = .{
+                            .op = .list_len,
+                            .args = args,
+                            .ret_layout = .u64,
+                        },
+                    };
+                } else if (std.mem.eql(u8, field_name, "is_empty") or std.mem.eql(u8, field_name, "isEmpty")) {
+                    // Convert list.is_empty to low_level list_is_empty operation
+                    const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
+                    break :blk .{
+                        .low_level = .{
+                            .op = .list_is_empty,
+                            .args = args,
+                            .ret_layout = .bool,
+                        },
+                    };
+                }
+            }
+
             break :blk .{
                 .field_access = .{
                     .record_expr = receiver,
