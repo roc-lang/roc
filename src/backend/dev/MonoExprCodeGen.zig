@@ -3712,7 +3712,40 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                             }
                                         },
                                         .closure => |level2_closure| {
-                                            return try self.generateClosureCall(level2_closure, inner_call.args, ret_layout);
+                                            // Bind captures first
+                                            try self.bindClosureCaptures(level2_closure);
+
+                                            // Get the lambda from the closure
+                                            const lambda_expr = self.store.getExpr(level2_closure.lambda);
+                                            switch (lambda_expr) {
+                                                .lambda => |level2_lambda| {
+                                                    // Bind inner_call.args to this lambda's params
+                                                    const level2_args = self.store.getExprSpan(inner_call.args);
+                                                    const level2_params = self.store.getPatternSpan(level2_lambda.params);
+
+                                                    for (level2_params, level2_args) |param_id, arg_id| {
+                                                        const arg_loc = try self.generateExpr(arg_id);
+                                                        try self.bindPattern(param_id, arg_loc);
+                                                    }
+
+                                                    // Evaluate body - should return lambda for outer_args
+                                                    const level2_body_expr = self.store.getExpr(level2_lambda.body);
+
+                                                    switch (level2_body_expr) {
+                                                        .lambda => |level3_lambda| {
+                                                            return try self.generateLambdaCall(level3_lambda, outer_args, ret_layout);
+                                                        },
+                                                        .closure => |level3_closure| {
+                                                            return try self.generateClosureCall(level3_closure, outer_args, ret_layout);
+                                                        },
+                                                        .block => |level3_block| {
+                                                            return try self.generateBlockCall(level3_block, outer_args, ret_layout);
+                                                        },
+                                                        else => return Error.UnsupportedExpression,
+                                                    }
+                                                },
+                                                else => return Error.UnsupportedExpression,
+                                            }
                                         },
                                         else => return Error.UnsupportedExpression,
                                     }

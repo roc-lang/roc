@@ -376,6 +376,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
+            // Check if this is explicitly a Dec type
+            if (num.kind == .dec) {
+                // Dec values are scaled by 10^18 (one_point_zero = 10^18)
+                const one_point_zero: i128 = 1_000_000_000_000_000_000;
+                const scaled_val = val * one_point_zero;
+                break :blk .{ .dec_literal = scaled_val };
+            }
             if (val >= std.math.minInt(i64) and val <= std.math.maxInt(i64)) {
                 break :blk .{ .i64_literal = @intCast(val) };
             }
