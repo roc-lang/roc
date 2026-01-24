@@ -1,9 +1,25 @@
 const std = @import("std");
 const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
+const builtin = @import("builtin");
 
 const ansi_term = @import("ansi_term.zig");
 const Unix = @import("Unix.zig");
+const Windows = @import("Windows.zig");
+
+const SupportedOS = enum { windows, linux, macos };
+
+pub const SUPPORTED_OS = switch (builtin.os.tag) {
+    .windows => SupportedOS.windows,
+    .linux => SupportedOS.linux,
+    .macos => SupportedOS.macos,
+    else => |tag| @compileError(@tagName(tag) ++ " is not a support OS for ReplLine!"),
+};
+
+pub const NEW_LINE = switch (SUPPORTED_OS) {
+    .linux, .macos => "\n",
+    .windows => "\r\n",
+};
 
 const History = struct {
     allocator: Allocator,
@@ -225,7 +241,18 @@ fn findCommandFn(state: *LineState) CommandFn {
     };
 }
 
-pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ![]u8 {
+pub const ReadLineError =
+    error{InvalidUtf8} ||
+    Allocator.Error ||
+    std.fs.File.ReadError ||
+    std.Io.Writer.Error ||
+    CommandError ||
+    switch (SUPPORTED_OS) {
+        .linux, .macos => Unix.Error,
+        .windows => Windows.Error,
+    };
+
+pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);
 
@@ -255,9 +282,17 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
         .history_index = null,
     };
 
-    const old = try Unix.init();
+
+    const old = switch (SUPPORTED_OS) {
+        .linux, .macos => try Unix.init(),
+        .windows => try Windows.init(),
+    };
     defer old.deinit();
 
+    if (SUPPORTED_OS == .windows) {
+        try ansi_term.setCursorColumn(out, 0);
+        try ansi_term.clearFromCursorToLineEnd(out);
+    }
     try out.writeAll(prompt);
     try out.flush();
 
@@ -275,7 +310,7 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
             }
         };
     }
-    try out.writeAll("\n");
+    try out.writeAll(NEW_LINE);
     try out.flush();
     return try outlive.dupe(u8, state.line_buffer.items);
 }
