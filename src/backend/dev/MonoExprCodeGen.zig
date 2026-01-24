@@ -147,6 +147,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             stack: i32,
             /// 128-bit value on the stack (16 bytes: low at offset, high at offset+8)
             stack_i128: i32,
+            /// 24-byte string value on the stack (for RocStr: ptr/data, len, capacity)
+            stack_str: i32,
             /// List value on the stack - tracks both struct and element locations
             /// for proper copying when returning lists
             list_stack: struct {
@@ -1212,7 +1214,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.emitMovRegReg(low_reg, reg);
                     try self.codegen.emitLoadImm(high_reg, 0);
                 },
-                .stack => |offset| {
+                .stack, .stack_str => |offset| {
                     try self.codegen.emitLoadStack(.w64, low_reg, offset);
                     try self.codegen.emitLoadImm(high_reg, 0);
                 },
@@ -1288,7 +1290,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Load LHS element
                 switch (lhs_loc) {
-                    .stack => |base_offset| {
+                    .stack, .stack_str => |base_offset| {
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + offset);
                         } else {
@@ -1306,7 +1308,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Load RHS element
                 switch (rhs_loc) {
-                    .stack => |base_offset| {
+                    .stack, .stack_str => |base_offset| {
                         if (comptime builtin.cpu.arch == .aarch64) {
                             try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + offset);
                         } else {
@@ -1749,7 +1751,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 if (first_branch) {
                     first_branch = false;
                     switch (body_loc) {
-                        .stack => {
+                        .stack, .stack_str, .list_stack => {
                             // Composite type - allocate a result slot on stack
                             // Use 24 bytes which covers strings, lists, and small records/tuples
                             result_slot = self.codegen.allocStackSlot(24);
@@ -1786,7 +1788,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Handle case where all branches were composite but else is the first evaluation
             if (result_slot == null and result_reg == null) {
                 switch (else_loc) {
-                    .stack => {
+                    .stack, .stack_str, .list_stack => {
                         result_slot = self.codegen.allocStackSlot(24);
                     },
                     else => {
@@ -1796,6 +1798,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             if (result_slot) |slot| {
+                // Copy from else_loc to result slot
                 try self.copyValueToStackOffset(slot, else_loc);
             } else if (result_reg) |reg| {
                 const else_reg = try self.ensureInGeneralReg(else_loc);
@@ -1809,6 +1812,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.patchJump(patch, end_offset);
             }
 
+            // Return the result location
             if (result_slot) |slot| {
                 return .{ .stack = slot };
             } else if (result_reg) |reg| {
@@ -2349,7 +2353,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Return location pointing to the field within the record
             return switch (record_loc) {
-                .stack => |s| .{ .stack = s + @as(i32, @intCast(field_offset)) },
+                .stack, .stack_str => |s| .{ .stack = s + @as(i32, @intCast(field_offset)) },
                 .general_reg => |reg| {
                     // Record in register - need to extract field
                     // For small records, this works; for larger ones we'd need to spill
@@ -2429,7 +2433,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Return location pointing to the element within the tuple
             return switch (tuple_loc) {
-                .stack => |s| .{ .stack = s + @as(i32, @intCast(elem_offset)) },
+                .stack, .stack_str => |s| .{ .stack = s + @as(i32, @intCast(elem_offset)) },
                 .general_reg => |reg| {
                     if (elem_offset == 0) {
                         return .{ .general_reg = reg };
@@ -2576,6 +2580,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitStoreStack(.w64, offset, reg);
                     self.codegen.freeGeneral(reg);
                 },
+                .stack_str => |src_offset| {
+                    // Copy 24-byte RocStr struct
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    // Copy ptr/data (first 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    // Copy len (second 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    // Copy capacity/flags (third 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
+                    self.codegen.freeGeneral(reg);
+                },
                 .list_stack => |list_info| {
                     // Copy 24-byte list struct
                     const reg = try self.codegen.allocGeneralFor(0);
@@ -2587,6 +2605,62 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitStoreStack(.w64, offset + 8, reg);
                     // Copy capacity (third 8 bytes)
                     try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+            }
+        }
+
+        /// Copy a 24-byte composite value (string, list, etc.) to a stack offset
+        /// This handles all ValueLocation types and always copies exactly 24 bytes
+        fn copyCompositeToStackOffset(self: *Self, offset: i32, loc: ValueLocation) Error!void {
+            switch (loc) {
+                .stack => |src_offset| {
+                    // Copy all 24 bytes from source stack location
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    // Word 0
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    // Word 1
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    // Word 2
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .stack_str => |src_offset| {
+                    // Copy 24-byte RocStr struct
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    try self.codegen.emitLoadStack(.w64, reg, src_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .list_stack => |list_info| {
+                    // Copy 24-byte list struct
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    // Copy ptr (first 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    // Copy len (second 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    // Copy capacity (third 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                else => {
+                    // For other types, use the regular copy and zero the rest
+                    try self.copyValueToStackOffset(offset, loc);
+                    // Zero the remaining 16 bytes
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadImm(reg, 0);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
                     try self.codegen.emitStoreStack(.w64, offset + 16, reg);
                     self.codegen.freeGeneral(reg);
                 },
@@ -2757,7 +2831,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 self.codegen.freeGeneral(ptr_reg);
             }
 
-            return .{ .stack = base_offset };
+            return .{ .stack_str = base_offset };
         }
 
         /// Store a discriminant value at the given offset
@@ -3863,6 +3937,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Only load low 64 bits
                     try self.codegen.emitLoadStack(.w64, target_reg, offset);
                 },
+                .stack_str => |offset| {
+                    // Load ptr/data (first 8 bytes of string struct)
+                    try self.codegen.emitLoadStack(.w64, target_reg, offset);
+                },
                 .list_stack => |list_info| {
                     // Load ptr (first 8 bytes of list struct)
                     try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
@@ -3896,6 +3974,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
                 .stack_i128 => |offset| {
                     // Only load low 64 bits
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    try self.codegen.emitLoadStack(.w64, reg, offset);
+                    return reg;
+                },
+                .stack_str => |offset| {
+                    // Load ptr/data (first 8 bytes of string struct)
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadStack(.w64, reg, offset);
                     return reg;
@@ -3949,7 +4033,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadStackF64(reg, offset);
                     return reg;
                 },
-                .general_reg, .immediate_i64, .immediate_i128, .stack_i128, .list_stack => {
+                .general_reg, .immediate_i64, .immediate_i128, .stack_i128, .stack_str, .list_stack => {
                     // Convert int to float - not supported
                     return Error.InvalidLocalLocation;
                 },
@@ -4089,7 +4173,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .str => {
                     // Strings are 24 bytes (ptr, len, capacity) - same as lists
                     switch (loc) {
-                        .stack => |stack_offset| {
+                        .stack, .stack_str => |stack_offset| {
                             // Copy 24-byte RocStr struct from stack to result buffer
                             const temp_reg = try self.codegen.allocGeneralFor(0);
 
