@@ -576,9 +576,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const args = try self.lowerExprSpan(module_env, tag.args);
             const args_slice = module_env.store.sliceExpr(tag.args);
 
-            // Get discriminant from tag name - handle True/False specially
+            // Get discriminant from tag name
+            // For Result type: tags are sorted alphabetically, so Err=0, Ok=1
+            // For Bool type: False=0, True=1
             const tag_name_text = module_env.getIdent(tag.name);
-            const discriminant: u16 = if (args_slice.len == 0) disc_blk: {
+            const discriminant: u16 = if (std.mem.eql(u8, tag_name_text, "Ok") or std.ascii.eqlIgnoreCase(tag_name_text, "ok"))
+                1 // Ok comes after Err alphabetically
+            else if (std.mem.eql(u8, tag_name_text, "Err") or std.ascii.eqlIgnoreCase(tag_name_text, "err"))
+                0 // Err comes first alphabetically
+            else if (args_slice.len == 0) disc_blk: {
                 // Zero-argument tag - check for True/False
                 if (std.mem.eql(u8, tag_name_text, "True") or std.ascii.eqlIgnoreCase(tag_name_text, "true")) {
                     break :disc_blk 1;
@@ -587,7 +593,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 } else {
                     break :disc_blk 0; // TODO: proper discriminant lookup
                 }
-            } else 0; // TODO: proper discriminant lookup for tags with args
+            } else 0; // TODO: proper discriminant lookup for other tags with args
 
             // For zero-argument tags like True/False, use zero_arg_tag
             if (args_slice.len == 0 and (std.mem.eql(u8, tag_name_text, "True") or

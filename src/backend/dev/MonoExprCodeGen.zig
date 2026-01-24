@@ -1136,7 +1136,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Start with equality result = 1 (true for eq, will be inverted for neq)
             try self.codegen.emitLoadImm(result_reg, 1);
 
-            const elem_size: i32 = 8;
+            // Records use 16 bytes per field (for tag unions), tuples use 8 bytes
+            const elem_size: i32 = if (lhs_expr == .record) 16 else 8;
             const temp_lhs = try self.codegen.allocGeneralFor(0);
             const temp_rhs = try self.codegen.allocGeneralFor(0);
 
@@ -1497,14 +1498,37 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     },
                     .tag => |tag_pattern| {
                         // Match on tag discriminant
-                        // For now, just check the discriminant byte
-                        // TODO: Handle payload extraction (args)
-                        const value_reg = try self.ensureInGeneralReg(value_loc);
+                        // Tag unions are stored on stack as: [discriminant @ 0, payload @ 8]
+                        // Or for zero-arg tags, just the discriminant in a register
 
-                        // For tag unions, the discriminant is typically at the end
-                        // For simple cases (like Result), discriminant is first byte
+                        // Load discriminant based on value location
+                        const disc_reg = try self.codegen.allocGeneralFor(0);
+                        switch (value_loc) {
+                            .stack => |base_offset| {
+                                // Load discriminant from stack offset 0
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, disc_reg, .FP, base_offset);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, disc_reg, .RBP, base_offset);
+                                }
+                            },
+                            .general_reg => |reg| {
+                                // Value is directly in register (zero-arg tag case)
+                                try self.emitMovRegReg(disc_reg, reg);
+                            },
+                            .immediate_i64 => |val| {
+                                // Immediate discriminant value
+                                try self.codegen.emitLoadImm(disc_reg, val);
+                            },
+                            else => {
+                                self.codegen.freeGeneral(disc_reg);
+                                return Error.UnsupportedExpression;
+                            },
+                        }
+
                         // Compare discriminant with pattern's expected value
-                        try self.emitCmpImm(value_reg, @intCast(tag_pattern.discriminant));
+                        try self.emitCmpImm(disc_reg, @intCast(tag_pattern.discriminant));
+                        self.codegen.freeGeneral(disc_reg);
 
                         // Jump to next branch if not equal
                         const is_last_branch = (i == branches.len - 1);
@@ -1516,19 +1540,24 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // Pattern matched - bind any args if present
                         const args = self.store.getPatternSpan(tag_pattern.args);
                         if (args.len > 0) {
-                            // TODO: Proper payload extraction
-                            // For now, if there's a single arg and it's a bind pattern,
-                            // we assume the payload is in the same register (shifted/masked)
-                            // This is a simplification that works for simple cases
-                            for (args) |arg_pattern_id| {
+                            // For tag unions stored on stack, payload is at offset 8
+                            for (args, 0..) |arg_pattern_id, arg_idx| {
                                 const arg_pattern = self.store.getPattern(arg_pattern_id);
                                 switch (arg_pattern) {
                                     .bind => |arg_bind| {
-                                        // Bind the payload - for simple cases, payload is often
-                                        // stored after the discriminant or in the same value
-                                        // This is a placeholder - proper implementation needs layout info
+                                        // Bind the payload at stack offset + 8
                                         const symbol_key: u48 = @bitCast(arg_bind.symbol);
-                                        try self.symbol_locations.put(symbol_key, value_loc);
+                                        switch (value_loc) {
+                                            .stack => |base_offset| {
+                                                // Payload is at base_offset + 8 + (arg_idx * 8)
+                                                const payload_offset = base_offset + 8 + @as(i32, @intCast(arg_idx)) * 8;
+                                                try self.symbol_locations.put(symbol_key, .{ .stack = payload_offset });
+                                            },
+                                            else => {
+                                                // For non-stack values (shouldn't happen for tags with args)
+                                                try self.symbol_locations.put(symbol_key, value_loc);
+                                            },
+                                        }
                                     },
                                     .wildcard => {
                                         // Ignore this payload field
@@ -1602,11 +1631,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate code for a tag with arguments
         fn generateTag(self: *Self, tag: anytype) Error!ValueLocation {
-            // For now, tags with arguments are stored as:
-            // - discriminant in the low byte
-            // - payload in the remaining bytes (if it fits in a register)
-            // This is a simplified representation - proper implementation
-            // needs layout information for complex payloads
+            // Tag unions are stored on the stack as:
+            // - Byte 0: discriminant
+            // - Bytes 8-15: payload (aligned to 8 bytes)
+            // This is a simplified representation for 64-bit payloads
             const args = self.store.getExprSpan(tag.args);
 
             if (args.len == 0) {
@@ -1615,22 +1643,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emitLoadImm(result_reg, @intCast(tag.discriminant));
                 return .{ .general_reg = result_reg };
             } else if (args.len == 1) {
-                // Single argument - put payload in register
-                // For simple types, the value is the payload
+                // Single argument - store on stack with discriminant
+                // Allocate 16 bytes: 8 for discriminant slot + 8 for payload
+                const tag_offset = self.codegen.allocStackSlot(16);
+
+                // Store discriminant at offset 0
+                const disc_reg = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(disc_reg, @intCast(tag.discriminant));
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, disc_reg, .FP, tag_offset);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, tag_offset, disc_reg);
+                }
+                self.codegen.freeGeneral(disc_reg);
+
+                // Generate and store payload at offset 8
                 const payload_loc = try self.generateExpr(args[0]);
                 const payload_reg = try self.ensureInGeneralReg(payload_loc);
-
-                // For Result types, we store discriminant in high byte
-                // This is a simplification - proper layout depends on payload size
-                const result_reg = try self.codegen.allocGeneralFor(0);
-
-                // Copy payload to result
-                try self.emitMovRegReg(result_reg, payload_reg);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, payload_reg, .FP, tag_offset + 8);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, tag_offset + 8, payload_reg);
+                }
                 self.codegen.freeGeneral(payload_reg);
 
-                // For now, just return the payload - the discriminant is implicit
-                // in the fact that we matched this pattern
-                return .{ .general_reg = result_reg };
+                return .{ .stack = tag_offset };
             } else {
                 // Multiple arguments - need struct/tuple handling
                 return Error.UnsupportedExpression;
@@ -1741,25 +1778,54 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Multi-field record - store on stack
-            // Each field is 8 bytes (simplified - proper implementation needs layout info)
-            const field_size: i32 = 8;
+            // Use 16 bytes per field to handle tag unions and other multi-word values
+            const field_size: i32 = 16;
             const num_fields: i32 = @intCast(fields.len);
             // Allocate stack space for all fields (use dynamic allocation to avoid conflicts)
             const record_offset: i32 = self.codegen.allocStackSlot(@as(u32, @intCast(num_fields * field_size)));
 
             for (fields, 0..) |field_id, i| {
                 const field_loc = try self.generateExpr(field_id);
-                const field_reg = try self.ensureInGeneralReg(field_loc);
+                const dest_offset = record_offset + @as(i32, @intCast(i)) * field_size;
 
-                const offset = record_offset + @as(i32, @intCast(i)) * field_size;
+                // Copy field value to record slot
+                // For stack-based multi-word values (tag unions), copy both words
+                switch (field_loc) {
+                    .stack => |src_offset| {
+                        // Copy 16 bytes from source to destination
+                        const temp_reg = try self.codegen.allocGeneralFor(0);
 
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, field_reg, .FP, offset);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, offset, field_reg);
+                        // Copy first 8 bytes
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp_reg);
+                        }
+
+                        // Copy second 8 bytes
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
+                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp_reg);
+                        }
+
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    else => {
+                        // Simple value - store in first 8 bytes
+                        const field_reg = try self.ensureInGeneralReg(field_loc);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, field_reg, .FP, dest_offset);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, field_reg);
+                        }
+                        self.codegen.freeGeneral(field_reg);
+                    },
                 }
-
-                self.codegen.freeGeneral(field_reg);
             }
 
             return .{ .stack = record_offset };
@@ -1768,42 +1834,27 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Generate code for field access on a record
         fn generateFieldAccess(self: *Self, fa: anytype) Error!ValueLocation {
             // First, determine the actual field index by looking at the record
-            // expression's field_names (if it's a record literal)
-            const record_expr = self.store.getExpr(fa.record_expr);
+            // expression's field_names. We may need to follow lookups to find the original record.
             var actual_field_idx: u16 = fa.field_idx;
 
-            // If the receiver is a record literal, look up the field index
-            if (record_expr == .record) {
-                const field_names = self.store.getFieldNameSpan(record_expr.record.field_names);
-                for (field_names, 0..) |name, i| {
-                    if (@as(u32, @bitCast(name)) == @as(u32, @bitCast(fa.field_name))) {
-                        actual_field_idx = @intCast(i);
-                        break;
-                    }
-                }
-            }
+            // Try to find the field index by looking at the record expression or its definition
+            actual_field_idx = self.findFieldIndex(fa.record_expr, fa.field_name) orelse fa.field_idx;
 
             // Generate the record expression
             const record_loc = try self.generateExpr(fa.record_expr);
 
             // For single-field records, the record IS the field
-            // For multi-field records, we need to load from the correct offset
-            const field_size: i32 = 8;
+            // For multi-field records, we need to return the stack offset of the field
+            // Records use 16 bytes per field to handle tag unions and other multi-word values
+            const field_size: i32 = 16;
             const field_offset = @as(i32, actual_field_idx) * field_size;
 
             switch (record_loc) {
                 .stack => |base_offset| {
-                    // Load field from stack
-                    const result_reg = try self.codegen.allocGeneralFor(0);
+                    // For multi-word fields (like tag unions), return the stack offset
+                    // The caller can then access discriminant at offset 0, payload at offset 8
                     const offset = base_offset + field_offset;
-
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, offset);
-                    }
-
-                    return .{ .general_reg = result_reg };
+                    return .{ .stack = offset };
                 },
                 .general_reg => |reg| {
                     // Single-field record - the register IS the field value
@@ -1821,6 +1872,45 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return Error.UnsupportedExpression;
                 },
                 else => return Error.UnsupportedExpression,
+            }
+        }
+
+        /// Find the correct field index by looking at the record expression.
+        /// If record_expr is a record literal, look through its field_names.
+        /// If record_expr is a lookup, try to follow the symbol to its definition.
+        /// Returns null if we can't determine the field index.
+        fn findFieldIndex(self: *Self, record_expr: MonoExprId, target_field_name: base.Ident.Idx) ?u16 {
+            const expr = self.store.getExpr(record_expr);
+
+            switch (expr) {
+                .record => |rec| {
+                    // Record literal - look through field_names to find a match
+                    const field_names = self.store.getFieldNameSpan(rec.field_names);
+                    const target_bits: u32 = @bitCast(target_field_name);
+                    for (field_names, 0..) |field_name, idx| {
+                        const field_bits: u32 = @bitCast(field_name);
+                        if (field_bits == target_bits) {
+                            return @intCast(idx);
+                        }
+                    }
+                    return null;
+                },
+                .lookup => |lookup| {
+                    // Follow the lookup to its definition
+                    if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+                        return self.findFieldIndex(def_expr_id, target_field_name);
+                    }
+                    return null;
+                },
+                .tag => |tag| {
+                    // Tag with args that may be a record - try the first arg
+                    const args = self.store.getExprSpan(tag.args);
+                    if (args.len > 0) {
+                        return self.findFieldIndex(args[0], target_field_name);
+                    }
+                    return null;
+                },
+                else => return null,
             }
         }
 
