@@ -237,6 +237,11 @@ pub const Tag = enum {
     diag_return_outside_fn,
     diag_mutually_recursive_type_aliases,
     diag_deprecated_number_suffix,
+
+    // RC expressions (inserted by RC insertion pass, added at end to preserve enum ordering)
+    expr_incref,
+    expr_decref,
+    expr_free,
 };
 
 /// Typed payload union for accessing node data in a type-safe manner.
@@ -300,6 +305,10 @@ pub const Payload = extern union {
     expr_anno_only: ExprAnnoOnly,
     expr_return: ExprReturn,
     expr_type_var_dispatch: ExprTypeVarDispatch,
+    // RC expressions (inserted by RC insertion pass)
+    expr_incref: ExprIncref,
+    expr_decref: ExprDecref,
+    expr_free: ExprFree,
 
     // === Pattern payloads ===
     pattern_identifier: PatternIdentifier,
@@ -896,6 +905,27 @@ pub const Payload = extern union {
         anno: u32,
         has_where: u32,
         where_span2_idx: u32, // Index into span2_data: (where_start, where_len) when has_where == 1
+    };
+
+    // === RC expression payloads (inserted by RC insertion pass) ===
+
+    /// expr_incref: increment reference count for a pattern
+    pub const ExprIncref = extern struct {
+        pattern_idx: u32,
+        count: u32,
+        _padding: [4]u8 = .{ 0, 0, 0, 0 },
+    };
+
+    /// expr_decref: decrement reference count for a pattern
+    pub const ExprDecref = extern struct {
+        pattern_idx: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+    };
+
+    /// expr_free: free memory for a pattern
+    pub const ExprFree = extern struct {
+        pattern_idx: u32,
+        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
     // === Diagnostic payload structs ===

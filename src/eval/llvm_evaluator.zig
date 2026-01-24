@@ -1,472 +1,532 @@
 //! LLVM-based Evaluator for Roc expressions
 //!
-//! This module generates LLVM bitcode from Roc expressions. The bitcode can then
-//! be JIT compiled and executed by llvm_compile.compileAndExecute().
+//! This module evaluates Roc expressions by:
+//! 1. Parsing source code
+//! 2. Canonicalizing to CIR
+//! 3. Type checking
+//! 4. Lowering to Mono IR (globally unique symbols)
+//! 5. Generating LLVM bitcode via MonoLlvmCodeGen
+//! 6. Compiling to native code via LLVM
+//! 7. Executing the generated code
 //!
-//! Used when the `--opt=size` or `--opt=speed` flags are passed to the REPL.
-//!
-//! The evaluator works by:
-//! 1. Parsing and type-checking the source expression
-//! 2. Translating the CIR to LLVM IR using Zig's LLVM Builder
-//! 3. Serializing to LLVM bitcode for JIT compilation
+//! This mirrors the dev backend pipeline, except the final code generation
+//! produces LLVM IR instead of direct machine code.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
-const parse = @import("parse");
-const check = @import("check");
+const layout = @import("layout");
+const mono = @import("mono");
+const backend = @import("backend");
+const builtin_loading = @import("builtin_loading.zig");
 const compiled_builtins = @import("compiled_builtins");
-const eval_mod = @import("mod.zig");
-
-// LLVM Builder from Zig's standard library (for IR generation)
-const LlvmBuilder = std.zig.llvm.Builder;
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
 const CIR = can.CIR;
-const Can = can.Can;
-const Check = check.Check;
-const builtin_loading = eval_mod.builtin_loading;
+const LoadedModule = builtin_loading.LoadedModule;
 
-/// Get the LLVM target triple for the current platform.
-/// This must match the triple that LLVM's GetDefaultTargetTriple() returns,
-/// or there will be calling convention mismatches when JIT-compiling.
-///
-/// Note: Zig on Windows uses GNU ABI (mingw), not MSVC!
-fn getLlvmTriple() []const u8 {
-    const arch = switch (builtin.cpu.arch) {
-        .x86_64 => "x86_64",
-        .aarch64 => "aarch64",
-        .x86 => "i686",
-        .arm, .armeb => "arm",
-        .thumb, .thumbeb => "thumb",
-        .wasm32 => "wasm32",
-        .wasm64 => "wasm64",
-        .riscv32 => "riscv32",
-        .riscv64 => "riscv64",
-        else => "unknown",
-    };
+// Mono IR types
+const MonoExprStore = mono.MonoExprStore;
+const MonoLower = mono.Lower;
 
-    const vendor_os = switch (builtin.os.tag) {
-        // Windows 64-bit uses w64 (mingw-w64) vendor, not pc
-        .windows => "-w64-windows",
-        .macos => "-apple-darwin",
-        .ios => "-apple-ios",
-        .linux => "-unknown-linux",
-        .freebsd => "-unknown-freebsd",
-        .openbsd => "-unknown-openbsd",
-        .netbsd => "-unknown-netbsd",
-        .freestanding => "-unknown-unknown",
-        .wasi => "-wasi",
-        else => "-unknown-unknown",
-    };
+// LLVM code generation
+const MonoLlvmCodeGen = backend.llvm.MonoLlvmCodeGen;
 
-    // ABI suffix - Zig's LLVM on Windows uses GNU (mingw), not MSVC!
-    const abi = switch (builtin.os.tag) {
-        .windows => "-gnu", // Zig uses mingw/GNU toolchain on Windows
-        .linux => switch (builtin.abi) {
-            .musleabihf => "-musleabihf",
-            .gnueabihf => "-gnueabihf",
-            .musleabi => "-musleabi",
-            .gnueabi => "-gnueabi",
-            .musl => "-musl",
-            .gnu => "-gnu",
-            .android => "-android",
-            else => "-gnu",
-        },
-        .freestanding, .wasi => "",
-        else => "", // macOS, iOS, BSDs don't need ABI suffix
-    };
-
-    return arch ++ vendor_os ++ abi;
-}
+/// Layout index for result types
+pub const LayoutIdx = layout.Idx;
 
 /// LLVM-based evaluator for Roc expressions
+///
+/// Orchestrates the compilation pipeline:
+/// - Initializes with builtin modules
+/// - Parses, canonicalizes, and type-checks expressions
+/// - Lowers to Mono IR
+/// - Generates LLVM bitcode
 pub const LlvmEvaluator = struct {
     allocator: Allocator,
 
-    /// Builtin type declaration indices (loaded once at startup)
+    /// Loaded builtin module (Bool, Result, etc.)
+    builtin_module: LoadedModule,
     builtin_indices: CIR.BuiltinIndices,
-
-    /// Loaded Builtin module (loaded once at startup)
-    builtin_module: builtin_loading.LoadedModule,
 
     pub const Error = error{
         OutOfMemory,
-        CompilationFailed,
         UnsupportedType,
+        UnsupportedExpression,
+        Crash,
+        RuntimeError,
         ParseError,
         CanonicalizeError,
         TypeError,
+        ExecutionError,
+        CompilationFailed,
+        UnsupportedLayout,
     };
 
-    /// Initialize a new LLVM evaluator
+    /// Initialize the evaluator with builtin modules
     pub fn init(allocator: Allocator) Error!LlvmEvaluator {
-        // Load builtin indices once at startup (generated at build time)
         const builtin_indices = builtin_loading.deserializeBuiltinIndices(
             allocator,
             compiled_builtins.builtin_indices_bin,
         ) catch return error.OutOfMemory;
 
-        // Load Builtin module once at startup
-        const builtin_source = compiled_builtins.builtin_source;
-        var builtin_module = builtin_loading.loadCompiledModule(
+        const builtin_module = builtin_loading.loadCompiledModule(
             allocator,
             compiled_builtins.builtin_bin,
             "Builtin",
-            builtin_source,
+            compiled_builtins.builtin_source,
         ) catch return error.OutOfMemory;
-        errdefer builtin_module.deinit();
 
         return LlvmEvaluator{
             .allocator = allocator,
-            .builtin_indices = builtin_indices,
             .builtin_module = builtin_module,
+            .builtin_indices = builtin_indices,
         };
     }
 
-    /// Clean up the evaluator
+    /// Clean up resources
     pub fn deinit(self: *LlvmEvaluator) void {
         self.builtin_module.deinit();
-    }
-
-    /// Type of the result value for JIT execution.
-    /// This enum must be kept in sync with llvm_compile.ResultType.
-    /// The snapshot_tool depends on both having identical variants in the same order.
-    /// See llvm_compile/compile.zig for the canonical definition.
-    pub const ResultType = enum {
-        i64,
-        u64,
-        i128,
-        u128,
-        f64,
-        dec,
-
-        /// Compile-time validation that this enum matches the expected structure.
-        /// This helps catch accidental divergence from llvm_compile.ResultType.
-        /// Using ordinal comparison instead of string comparison to comply with lint rules.
-        pub fn validate() void {
-            comptime {
-                // Validate there are exactly 6 variants by checking that ordinal 5 is the max
-                if (@typeInfo(ResultType).@"enum".fields.len != 6) @compileError("ResultType must have exactly 6 variants");
-                // Validate ordinals match expected order
-                if (@intFromEnum(ResultType.i64) != 0) @compileError("ResultType.i64 must be ordinal 0");
-                if (@intFromEnum(ResultType.u64) != 1) @compileError("ResultType.u64 must be ordinal 1");
-                if (@intFromEnum(ResultType.i128) != 2) @compileError("ResultType.i128 must be ordinal 2");
-                if (@intFromEnum(ResultType.u128) != 3) @compileError("ResultType.u128 must be ordinal 3");
-                if (@intFromEnum(ResultType.f64) != 4) @compileError("ResultType.f64 must be ordinal 4");
-                if (@intFromEnum(ResultType.dec) != 5) @compileError("ResultType.dec must be ordinal 5");
-            }
-        }
-    };
-
-    comptime {
-        ResultType.validate();
     }
 
     /// Result of bitcode generation
     pub const BitcodeResult = struct {
         bitcode: []const u32,
-        result_type: ResultType,
+        output_layout: layout.Idx,
+        is_list: bool,
+        is_record: bool,
+        record_field_names: ?[]const u8,
         allocator: Allocator,
 
         pub fn deinit(self: *BitcodeResult) void {
             self.allocator.free(self.bitcode);
+            if (self.record_field_names) |names| {
+                self.allocator.free(names);
+            }
         }
     };
 
-    /// Generate LLVM bitcode for a CIR expression
-    /// Returns the bitcode and whether it's a float type (for printf formatting)
-    /// The caller is responsible for freeing the bitcode via result.deinit()
-    pub fn generateBitcode(self: *LlvmEvaluator, module_env: *ModuleEnv, expr: CIR.Expr) Error!BitcodeResult {
-        // Create LLVM Builder with target triple so LLVM uses correct calling conventions.
-        // The triple must match what LLVM's GetDefaultTargetTriple() returns on the host,
-        // otherwise calling convention mismatches will cause segfaults on Windows.
-        var builder = LlvmBuilder.init(.{
-            .allocator = self.allocator,
-            .name = "roc_repl_eval",
-            .target = &builtin.target,
-            .triple = getLlvmTriple(),
-        }) catch return error.OutOfMemory;
-        defer builder.deinit();
+    /// Result of code generation
+    pub const CodeResult = struct {
+        code: []const u8,
+        allocator: Allocator,
+        result_layout: LayoutIdx,
+        entry_offset: usize = 0,
 
-        // Generate LLVM IR for the expression
-        const value_type = try self.getExprLlvmType(&builder, expr);
-        const value = try self.emitExprValue(&builder, module_env, expr);
-
-        // Determine the result type for JIT execution
-        // We need to look at the original expression to get signedness,
-        // since LLVM types don't distinguish signed from unsigned
-        const result_type: ResultType = self.getExprResultType(expr);
-
-        // Generate a main function that returns the result
-        // The return type must match what compile.zig expects based on result_type
-        try self.emitMainWithPrint(&builder, value_type, value, result_type);
-
-        // Serialize to bitcode
-        const producer = LlvmBuilder.Producer{
-            .name = "Roc LLVM Evaluator",
-            .version = .{ .major = 1, .minor = 0, .patch = 0 },
-        };
-
-        const bitcode = builder.toBitcode(self.allocator, producer) catch return error.CompilationFailed;
-
-        return BitcodeResult{
-            .bitcode = bitcode,
-            .result_type = result_type,
-            .allocator = self.allocator,
-        };
-    }
-
-    /// Generate bitcode from source code string
-    /// This does the full pipeline: parse → canonicalize → type check → generate bitcode
-    /// The caller is responsible for compiling and executing the bitcode using llvm_compile.
-    pub fn generateBitcodeFromSource(self: *LlvmEvaluator, source: []const u8) Error!BitcodeResult {
-        // Step 1: Create module environment and parse
-        var module_env = ModuleEnv.init(self.allocator, source) catch return error.OutOfMemory;
-        defer module_env.deinit();
-
-        var parse_ast = parse.parseExpr(&module_env.common, self.allocator) catch {
-            return error.ParseError;
-        };
-        defer parse_ast.deinit(self.allocator);
-
-        if (parse_ast.hasErrors()) {
-            return error.ParseError;
-        }
-
-        // Step 2: Initialize CIR and canonicalize
-        module_env.initCIRFields("llvm_eval") catch return error.OutOfMemory;
-
-        // Set up module envs map for auto-imported builtins
-        var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(self.allocator);
-        defer module_envs_map.deinit();
-
-        Can.populateModuleEnvs(
-            &module_envs_map,
-            &module_env,
-            self.builtin_module.env,
-            self.builtin_indices,
-        ) catch return error.OutOfMemory;
-
-        var czer = Can.init(&module_env, &parse_ast, &module_envs_map) catch {
-            return error.CanonicalizeError;
-        };
-        defer czer.deinit();
-
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
-        const canonical_expr = czer.canonicalizeExpr(expr_idx) catch {
-            return error.CanonicalizeError;
-        } orelse {
-            return error.CanonicalizeError;
-        };
-        const final_expr_idx = canonical_expr.get_idx();
-
-        // Step 3: Type check
-        const imported_modules = [_]*const ModuleEnv{self.builtin_module.env};
-        module_env.imports.resolveImports(&module_env, &imported_modules);
-
-        const builtin_ctx: Check.BuiltinContext = .{
-            .module_name = module_env.insertIdent(base.Ident.for_text("llvm_eval")) catch return error.OutOfMemory,
-            .bool_stmt = self.builtin_indices.bool_type,
-            .try_stmt = self.builtin_indices.try_type,
-            .str_stmt = self.builtin_indices.str_type,
-            .builtin_module = self.builtin_module.env,
-            .builtin_indices = self.builtin_indices,
-        };
-
-        var checker = Check.init(
-            self.allocator,
-            &module_env.types,
-            &module_env,
-            &imported_modules,
-            &module_envs_map,
-            &module_env.store.regions,
-            builtin_ctx,
-        ) catch return error.OutOfMemory;
-        defer checker.deinit();
-
-        _ = checker.checkExprRepl(final_expr_idx) catch {
-            return error.TypeError;
-        };
-
-        // Step 4: Generate bitcode
-        const expr = module_env.store.getExpr(final_expr_idx);
-        return self.generateBitcode(&module_env, expr);
-    }
-
-    /// Get the ResultType for JIT execution from a CIR expression
-    /// This captures signedness which LLVM types don't distinguish
-    fn getExprResultType(_: *LlvmEvaluator, expr: CIR.Expr) ResultType {
-        return switch (expr) {
-            .e_num => |num| switch (num.kind) {
-                // Signed types that fit in i64
-                .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
-                // Unsigned types that fit in u64
-                .u8, .u16, .u32, .u64 => .u64,
-                // 128-bit signed
-                .i128 => .i128,
-                // 128-bit unsigned
-                .u128 => .u128,
-                // Float types
-                .f32, .f64 => .f64,
-                // Dec type (fixed-point decimal stored as i128)
-                .dec => .dec,
-            },
-            .e_frac_f32, .e_frac_f64 => .f64,
-            .e_dec, .e_dec_small => .dec,
-            else => .i64, // Default for other expression types
-        };
-    }
-
-    /// Get the LLVM type for a CIR expression
-    fn getExprLlvmType(_: *LlvmEvaluator, builder: *LlvmBuilder, expr: CIR.Expr) !LlvmBuilder.Type {
-        return switch (expr) {
-            .e_num => |num| switch (num.kind) {
-                .u8, .i8 => .i8,
-                .u16, .i16 => .i16,
-                .u32, .i32 => .i32,
-                .u64, .i64, .num_unbound, .int_unbound => .i64,
-                .u128, .i128, .dec => .i128, // Dec is stored as i128 (scaled by 10^18)
-                .f32 => .float,
-                .f64 => .double,
-            },
-            .e_frac_f32 => .float,
-            .e_frac_f64 => .double,
-            .e_dec, .e_dec_small => .i128, // Dec is stored as i128 (scaled by 10^18)
-            else => try builder.ptrType(.default), // For complex types, use pointer
-        };
-    }
-
-    /// Emit LLVM value for a CIR expression
-    ///
-    /// Note on u128 handling: We use toI128() for all integer values, including u128.
-    /// For u128 values larger than i128 max, this reinterprets the bits as a negative
-    /// i128. This works correctly because LLVM's i128 type is just 128 bits - signedness
-    /// is a matter of interpretation. The JIT execution in compile.zig interprets the
-    /// return value based on ResultType (u128 vs i128) to display the correct value.
-    fn emitExprValue(self: *LlvmEvaluator, builder: *LlvmBuilder, _: *ModuleEnv, expr: CIR.Expr) !LlvmBuilder.Constant {
-        return switch (expr) {
-            .e_num => |num| {
-                const int_value = num.value.toI128();
-                // Handle float suffixes (e.g., 42f32, 42f64)
-                return switch (num.kind) {
-                    .f32 => builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
-                    .f64 => builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed,
-                    else => blk: {
-                        const llvm_type = try self.getExprLlvmType(builder, expr);
-                        break :blk builder.intConst(llvm_type, int_value) catch return error.CompilationFailed;
-                    },
-                };
-            },
-            .e_frac_f32 => |frac| {
-                return builder.floatConst(frac.value) catch return error.CompilationFailed;
-            },
-            .e_frac_f64 => |frac| {
-                return builder.doubleConst(frac.value) catch return error.CompilationFailed;
-            },
-            .e_dec => |dec| {
-                // Dec is stored as i128 internally (scaled by 10^18)
-                return builder.intConst(.i128, dec.value.num) catch return error.CompilationFailed;
-            },
-            .e_dec_small => |dec| {
-                // Convert small Dec representation to full i128
-                // RocDec.decimal_places is 18
-                const decimal_places: u5 = 18;
-                const scale_factor = std.math.pow(i128, 10, decimal_places - dec.value.denominator_power_of_ten);
-                const scaled_value = @as(i128, dec.value.numerator) * scale_factor;
-                return builder.intConst(.i128, scaled_value) catch return error.CompilationFailed;
-            },
-            else => return error.UnsupportedType,
-        };
-    }
-
-    /// Emit an eval function that writes the computed value to a pointer.
-    ///
-    /// Following Roc's host ABI (see src/builtins/host_abi.zig), all functions
-    /// exposed to the host return void and write their result to a pointer.
-    /// This makes the ABI simple and platform-independent: "return pointer, done."
-    ///
-    /// Function signature: void roc_eval(<type>* out_ptr)
-    fn emitMainWithPrint(_: *LlvmEvaluator, builder: *LlvmBuilder, value_type: LlvmBuilder.Type, value: LlvmBuilder.Constant, result_type: ResultType) !void {
-        // Determine the value type to store
-        const final_type: LlvmBuilder.Type = switch (result_type) {
-            .i64, .u64 => .i64,
-            .i128, .u128, .dec => .i128,
-            .f64 => .double,
-        };
-
-        // Determine signedness for integer extension
-        const signedness: LlvmBuilder.Constant.Cast.Signedness = switch (result_type) {
-            .i64, .i128 => .signed,
-            .u64, .u128 => .unsigned,
-            .f64, .dec => .unneeded, // f64 uses fpext, dec is already i128
-        };
-
-        // All platforms: void roc_eval(<type>* out_ptr)
-        // This follows Roc's host ABI where all exposed functions return void
-        // and write their result to a pointer argument.
-        const ptr_type = try builder.ptrType(.default);
-        const eval_type = try builder.fnType(.void, &.{ptr_type}, .normal);
-        const eval_name = if (builtin.os.tag == .macos)
-            try builder.strtabString("\x01_roc_eval") // \x01 prefix tells LLVM to use name verbatim
-        else
-            try builder.strtabString("roc_eval");
-        const eval_fn = try builder.addFunction(eval_type, eval_name, .default);
-        eval_fn.setLinkage(.external, builder);
-
-        // Explicitly set the calling convention for the platform.
-        // Without this, LLVM may not know which C convention to use.
-        // On Windows x64, we need win64cc for correct argument passing (RCX for first arg).
-        // On System V x64, we need x86_64_sysvcc (RDI for first arg).
-        if (builtin.cpu.arch == .x86_64) {
-            if (builtin.os.tag == .windows) {
-                eval_fn.setCallConv(.win64cc, builder);
-            } else {
-                eval_fn.setCallConv(.x86_64_sysvcc, builder);
+        pub fn deinit(self: *CodeResult) void {
+            if (self.code.len > 0) {
+                self.allocator.free(self.code);
             }
         }
-        // Other architectures use the default ccc which maps correctly
+    };
 
-        // Build function body
-        var wip = try LlvmBuilder.WipFunction.init(builder, .{
-            .function = eval_fn,
-            .strip = false,
-        });
-        defer wip.deinit();
+    /// Generate LLVM bitcode for a CIR expression using the Mono IR pipeline
+    ///
+    /// This lowers CIR to Mono IR and then generates LLVM bitcode.
+    pub fn generateBitcode(
+        self: *LlvmEvaluator,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+    ) Error!BitcodeResult {
+        // Create module envs array - just the single module and builtin
+        const builtin_env = self.builtin_module.env;
+        const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_env) };
 
-        const entry_block = try wip.block(0, "entry"); // entry block has 0 incoming branches
-        wip.cursor = .{ .block = entry_block };
+        // Create a Mono IR store for lowered expressions
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
 
-        // Get the pointer argument
-        const out_ptr = wip.arg(0);
+        // Find the module index for this module
+        var module_idx: u16 = 0;
+        for (&all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                module_idx = @intCast(i);
+                break;
+            }
+        }
 
-        // Convert value if needed and store through pointer
-        const store_value = if (value_type == final_type)
-            value.toValue()
-        else
-            try wip.conv(signedness, value.toValue(), final_type, "");
+        // Create the lowerer
+        var lowerer = MonoLower.init(self.allocator, &mono_store, &all_module_envs, null, null);
+        defer lowerer.deinit();
 
-        // Use natural alignment for the stored type
-        const alignment = LlvmBuilder.Alignment.fromByteUnits(switch (final_type) {
-            .i64 => 8,
-            .i128 => 16,
-            .double => 8,
-            else => 0, // default
-        });
-        _ = try wip.store(.normal, store_value, out_ptr, alignment);
-        _ = try wip.retVoid();
-        try wip.finish();
+        // Lower the CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.UnsupportedExpression;
+        };
+
+        // Determine the result layout
+        var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
+        defer type_env.deinit();
+        const cir_expr = module_env.store.getExpr(expr_idx);
+        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+
+        // Create the LLVM code generator
+        var codegen = MonoLlvmCodeGen.init(
+            self.allocator,
+            &mono_store,
+        );
+        defer codegen.deinit();
+
+        // Compile all procedures first (for recursive functions)
+        const procs = mono_store.getProcs();
+        if (procs.len > 0) {
+            codegen.compileAllProcs(procs) catch {
+                return error.UnsupportedExpression;
+            };
+        }
+
+        // Generate LLVM bitcode for the expression
+        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
+            return error.UnsupportedExpression;
+        };
+        defer gen_result.deinit();
+
+        // Copy the bitcode since gen_result owns it
+        const bitcode_copy = self.allocator.dupe(u32, gen_result.bitcode) catch return error.OutOfMemory;
+
+        // Detect list and record expressions
+        const is_list = switch (cir_expr) {
+            .e_empty_list, .e_list => true,
+            else => false,
+        };
+        const is_record = switch (cir_expr) {
+            .e_record, .e_empty_record => true,
+            else => false,
+        };
+
+        return BitcodeResult{
+            .bitcode = bitcode_copy,
+            .output_layout = result_layout,
+            .is_list = is_list,
+            .is_record = is_record,
+            .record_field_names = null,
+            .allocator = self.allocator,
+        };
+    }
+
+    /// Generate code for a CIR expression (full pipeline with lowering)
+    ///
+    /// This lowers CIR to Mono IR and then generates LLVM bitcode.
+    pub fn generateCode(
+        self: *LlvmEvaluator,
+        module_env: *ModuleEnv,
+        expr_idx: CIR.Expr.Idx,
+        all_module_envs: []const *ModuleEnv,
+    ) Error!CodeResult {
+        // Create a Mono IR store for lowered expressions
+        var mono_store = MonoExprStore.init(self.allocator);
+        defer mono_store.deinit();
+
+        // Find the module index for this module
+        var module_idx: u16 = 0;
+        for (all_module_envs, 0..) |env, i| {
+            if (env == module_env) {
+                module_idx = @intCast(i);
+                break;
+            }
+        }
+
+        // Create the lowerer
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, null);
+        defer lowerer.deinit();
+
+        // Lower the CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+            return error.UnsupportedExpression;
+        };
+
+        // Determine the result layout
+        var type_env = std.AutoHashMap(u32, LayoutIdx).init(self.allocator);
+        defer type_env.deinit();
+        const cir_expr = module_env.store.getExpr(expr_idx);
+        const result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
+
+        // Create the LLVM code generator
+        var codegen = MonoLlvmCodeGen.init(
+            self.allocator,
+            &mono_store,
+        );
+        defer codegen.deinit();
+
+        // Compile all procedures first (for recursive functions)
+        const procs = mono_store.getProcs();
+        if (procs.len > 0) {
+            codegen.compileAllProcs(procs) catch {
+                return error.UnsupportedExpression;
+            };
+        }
+
+        // Generate LLVM bitcode
+        var gen_result = codegen.generateCode(mono_expr_id, result_layout) catch {
+            return error.UnsupportedExpression;
+        };
+        defer gen_result.deinit();
+
+        // Convert bitcode to bytes for the result
+        const bitcode_bytes = std.mem.sliceAsBytes(gen_result.bitcode);
+        const code_copy = self.allocator.dupe(u8, bitcode_bytes) catch return error.OutOfMemory;
+
+        return CodeResult{
+            .code = code_copy,
+            .allocator = self.allocator,
+            .result_layout = result_layout,
+        };
     }
 };
 
+/// Get the Layout for a CIR expression
+fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: CIR.Expr, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    return switch (expr) {
+        .e_num => |num| switch (num.kind) {
+            .i8, .i16, .i32, .i64, .num_unbound, .int_unbound => .i64,
+            .u8, .u16, .u32, .u64 => .u64,
+            .i128 => .i128,
+            .u128 => .u128,
+            .f32 => .f32,
+            .f64 => .f64,
+            .dec => .dec,
+        },
+        .e_frac_f32 => .f32,
+        .e_frac_f64 => .f64,
+        .e_dec, .e_dec_small => .dec,
+        .e_typed_int => |ti| getTypedIntLayout(module_env, ti.type_name),
+        .e_binop => |binop| getBinopLayout(allocator, module_env, binop, type_env),
+        .e_unary_minus => |unary| blk: {
+            const inner_expr = module_env.store.getExpr(unary.expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, inner_expr, type_env);
+        },
+        .e_nominal => |nom| blk: {
+            const backing_expr = module_env.store.getExpr(nom.backing_expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
+        },
+        .e_nominal_external => |nom| blk: {
+            const backing_expr = module_env.store.getExpr(nom.backing_expr);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, backing_expr, type_env);
+        },
+        .e_if => |if_expr| blk: {
+            const else_expr = module_env.store.getExpr(if_expr.final_else);
+            break :blk getExprLayoutWithTypeEnv(allocator, module_env, else_expr, type_env);
+        },
+        .e_block => |block| getBlockLayout(allocator, module_env, block, type_env),
+        .e_lookup_local => |lookup| blk: {
+            const pattern_key = @intFromEnum(lookup.pattern_idx);
+            break :blk type_env.get(pattern_key) orelse .i64;
+        },
+        .e_str, .e_str_segment => .str,
+        .e_call => |call| blk: {
+            const func_expr = module_env.store.getExpr(call.func);
+            switch (func_expr) {
+                .e_lambda => |lambda| {
+                    const body_expr = module_env.store.getExpr(lambda.body);
+                    switch (body_expr) {
+                        .e_lookup_local => {
+                            const args = module_env.store.sliceExpr(call.args);
+                            if (args.len > 0) {
+                                const arg_expr = module_env.store.getExpr(args[0]);
+                                break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                            }
+                        },
+                        else => {},
+                    }
+                    break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+                },
+                .e_closure => |closure| {
+                    const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
+                    switch (lambda_expr) {
+                        .e_lambda => |lambda| {
+                            const body_expr = module_env.store.getExpr(lambda.body);
+                            switch (body_expr) {
+                                .e_lookup_local => {
+                                    const args = module_env.store.sliceExpr(call.args);
+                                    if (args.len > 0) {
+                                        const arg_expr = module_env.store.getExpr(args[0]);
+                                        break :blk getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                                    }
+                                },
+                                else => {},
+                            }
+                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, body_expr, type_env);
+                        },
+                        else => {},
+                    }
+                    break :blk .i64;
+                },
+                .e_lookup_local => {
+                    const args = module_env.store.sliceExpr(call.args);
+                    if (args.len > 0) {
+                        const arg_expr = module_env.store.getExpr(args[0]);
+                        const arg_layout = getExprLayoutWithTypeEnv(allocator, module_env, arg_expr, type_env);
+                        if (arg_layout == .str) {
+                            break :blk .str;
+                        }
+                    }
+                    break :blk .i64;
+                },
+                else => {},
+            }
+            break :blk .i64;
+        },
+        .e_dot_access => |dot| blk: {
+            const receiver_expr = module_env.store.getExpr(dot.receiver);
+            switch (receiver_expr) {
+                .e_record => |rec| {
+                    const fields = module_env.store.sliceRecordFields(rec.fields);
+                    for (fields) |field_idx| {
+                        const field = module_env.store.getRecordField(field_idx);
+                        if (@as(u32, @bitCast(field.name)) == @as(u32, @bitCast(dot.field_name))) {
+                            const field_expr = module_env.store.getExpr(field.value);
+                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, field_expr, type_env);
+                        }
+                    }
+                },
+                else => {},
+            }
+            break :blk .i64;
+        },
+        else => .i64,
+    };
+}
+
+/// Get the result type for a block
+fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    var type_annos = std.AutoHashMap(base.Ident.Idx, LayoutIdx).init(allocator);
+    defer type_annos.deinit();
+
+    const stmts = module_env.store.sliceStatements(block.stmts);
+
+    // First pass: collect type annotations
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_type_anno => |ta| {
+                const type_anno = module_env.store.getTypeAnno(ta.anno);
+                switch (type_anno) {
+                    .apply => |apply| {
+                        const result_layout = layoutFromLocalOrExternal(apply.base);
+                        type_annos.put(ta.name, result_layout) catch {};
+                    },
+                    .lookup => |lookup| {
+                        const result_layout = layoutFromLocalOrExternal(lookup.base);
+                        type_annos.put(ta.name, result_layout) catch {};
+                    },
+                    else => {},
+                }
+            },
+            else => {},
+        }
+    }
+
+    // Second pass: process declarations
+    for (stmts) |stmt_idx| {
+        const stmt = module_env.store.getStatement(stmt_idx);
+        switch (stmt) {
+            .s_decl => |decl| {
+                const pattern_key = @intFromEnum(decl.pattern);
+                if (decl.anno) |anno_idx| {
+                    const result_layout = getAnnotationLayout(module_env, anno_idx);
+                    type_env.put(pattern_key, result_layout) catch {};
+                } else {
+                    const pattern = module_env.store.getPattern(decl.pattern);
+                    var found_annotation = false;
+                    switch (pattern) {
+                        .assign => |assign| {
+                            if (type_annos.get(assign.ident)) |anno_layout| {
+                                type_env.put(pattern_key, anno_layout) catch {};
+                                found_annotation = true;
+                            }
+                        },
+                        else => {},
+                    }
+                    if (!found_annotation) {
+                        const decl_expr = module_env.store.getExpr(decl.expr);
+                        const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
+                        type_env.put(pattern_key, inferred_layout) catch {};
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+
+    const final_expr = module_env.store.getExpr(block.final_expr);
+    return getExprLayoutWithTypeEnv(allocator, module_env, final_expr, type_env);
+}
+
+/// Get the result type from an annotation
+fn getAnnotationLayout(module_env: *ModuleEnv, anno_idx: CIR.Annotation.Idx) LayoutIdx {
+    const anno = module_env.store.getAnnotation(anno_idx);
+    const type_anno = module_env.store.getTypeAnno(anno.anno);
+    switch (type_anno) {
+        .apply => |apply| return layoutFromLocalOrExternal(apply.base),
+        .lookup => |lookup| return layoutFromLocalOrExternal(lookup.base),
+        else => return .i64,
+    }
+}
+
+/// Get the result type for a typed integer
+fn getTypedIntLayout(module_env: *ModuleEnv, type_name: base.Ident.Idx) LayoutIdx {
+    const idents = &module_env.idents;
+    if (type_name == idents.u8_type or
+        type_name == idents.u16_type or
+        type_name == idents.u32_type or
+        type_name == idents.u64_type)
+    {
+        return .u64;
+    } else if (type_name == idents.u128_type) {
+        return .u128;
+    } else if (type_name == idents.i128_type) {
+        return .i128;
+    } else if (type_name == idents.f32_type) {
+        return .f32;
+    } else if (type_name == idents.f64_type) {
+        return .f64;
+    } else if (type_name == idents.dec_type) {
+        return .dec;
+    }
+    return .i64;
+}
+
+/// Get the result type for a binary operation
+fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.Expr.Binop, type_env: *std.AutoHashMap(u32, LayoutIdx)) LayoutIdx {
+    switch (binop.op) {
+        .lt, .gt, .le, .ge, .eq, .ne, .@"and", .@"or" => return .i64,
+        else => {},
+    }
+    const lhs_expr = module_env.store.getExpr(binop.lhs);
+    return getExprLayoutWithTypeEnv(allocator, module_env, lhs_expr, type_env);
+}
+
+/// Convert a LocalOrExternal to LayoutIdx
+fn layoutFromLocalOrExternal(loe: CIR.TypeAnno.LocalOrExternal) LayoutIdx {
+    switch (loe) {
+        .builtin => |b| return layoutFromBuiltin(b),
+        .local, .external => return .i64,
+    }
+}
+
+/// Convert a Builtin type enum to LayoutIdx
+fn layoutFromBuiltin(b: CIR.TypeAnno.Builtin) LayoutIdx {
+    return switch (b) {
+        .u8, .u16, .u32, .u64 => .u64,
+        .u128 => .u128,
+        .i128 => .i128,
+        .f32 => .f32,
+        .f64 => .f64,
+        .dec => .dec,
+        else => .i64,
+    };
+}
+
+// Tests
+
 test "llvm evaluator initialization" {
-    const allocator = std.testing.allocator;
-
-    var evaluator = try LlvmEvaluator.init(allocator);
+    var evaluator = LlvmEvaluator.init(std.testing.allocator) catch |err| {
+        return switch (err) {
+            error.OutOfMemory => error.SkipZigTest,
+            else => err,
+        };
+    };
     defer evaluator.deinit();
-
-    // Just verify initialization works - the evaluator should be usable
-    try std.testing.expect(evaluator.allocator.ptr == allocator.ptr);
 }

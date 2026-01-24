@@ -439,6 +439,24 @@ test "NodeStore round trip - Expressions" {
         },
     });
 
+    // RC expressions (inserted by RC insertion pass after canonicalization)
+    try expressions.append(gpa, CIR.Expr{
+        .e_incref = .{
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+            .count = rand.random().int(u16),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_decref = .{
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_free = .{
+            .pattern_idx = rand_idx(CIR.Pattern.Idx),
+        },
+    });
+
     for (expressions.items, 0..) |expr, i| {
         const region = from_raw_offsets(@intCast(i * 100), @intCast(i * 100 + 50));
         const idx = try store.addExpr(expr, region);

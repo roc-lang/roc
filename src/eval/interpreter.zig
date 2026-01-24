@@ -7638,6 +7638,18 @@ pub const Interpreter = struct {
         return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
     }
 
+    /// Like renderValueRocWithType but with REPL-specific formatting.
+    /// Strips .0 suffix from whole-number Dec values when the type is unbound.
+    pub fn renderValueRocForRepl(self: *Interpreter, value: StackValue, rt_var: types.Var, roc_ops: *RocOps) Error![]u8 {
+        var cb_ctx = ToInspectCallbackContext{
+            .interpreter = self,
+            .roc_ops = roc_ops,
+        };
+        var ctx = self.makeRenderCtxWithCallback(&cb_ctx);
+        ctx.strip_unbound_numeral_decimal = true;
+        return render_helpers.renderValueRocWithType(&ctx, value, rt_var);
+    }
+
     fn makeListSliceValue(
         self: *Interpreter,
         list_layout: Layout,
@@ -8425,18 +8437,8 @@ pub const Interpreter = struct {
                 return error.MethodLookupFailed;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-                // Fallback: search all definitions for the method
-                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-                for (all_defs) |def_idx| {
-                    const def = origin_env.store.getDef(def_idx);
-                    const pat = origin_env.store.getPattern(def.pattern);
-                    if (pat == .assign and pat.assign.ident == method_ident) {
-                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
-                    }
-                }
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse
                 return error.MethodLookupFailed;
-            };
 
             const result = MethodResolutionResult{
                 .origin_env = origin_env,
@@ -8542,18 +8544,8 @@ pub const Interpreter = struct {
                 return null;
             };
 
-            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse exposed_blk: {
-                // Fallback: search all definitions for the method
-                const all_defs = origin_env.store.sliceDefs(origin_env.all_defs);
-                for (all_defs) |def_idx| {
-                    const def = origin_env.store.getDef(def_idx);
-                    const pat = origin_env.store.getPattern(def.pattern);
-                    if (pat == .assign and pat.assign.ident == method_ident) {
-                        break :exposed_blk @as(u16, @intCast(@intFromEnum(def_idx)));
-                    }
-                }
+            const node_idx = origin_env.getExposedNodeIndexById(method_ident) orelse
                 return null;
-            };
 
             const result = MethodResolutionResult{
                 .origin_env = origin_env,
@@ -12887,6 +12879,12 @@ pub const Interpreter = struct {
                 } });
             },
 
+            // Reference counting operations - no-ops in interpreter (memory managed by GC)
+            .e_incref, .e_decref, .e_free => {
+                const value = try self.evalEmptyRecord(expr_idx, expected_rt_var);
+                try value_stack.push(value);
+            },
+
             // If we reach here, there's a new expression type that hasn't been added.
             // else => unreachable,
         }
@@ -12967,13 +12965,10 @@ pub const Interpreter = struct {
         }
         value.is_initialized = true;
 
-        // If the rt_var is still flex but we evaluated to a numeric type,
-        // update the rt_var to a concrete numeric type for method dispatch.
-        // This is needed because getRuntimeLayout defaults flex vars to Dec layout
-        // but doesn't update the rt_var itself.
+        // If the rt_var is still flex, update it to a concrete type for method dispatch.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const rt_resolved = self.runtime_types.resolveVar(value.rt_var);
         if (rt_resolved.desc.content == .flex) {
-            // Create concrete type based on the layout we used
             const concrete_rt_var = switch (layout_val.tag) {
                 .scalar => switch (layout_val.data.scalar.tag) {
                     .int => switch (layout_val.data.scalar.data.int) {
@@ -13077,7 +13072,8 @@ pub const Interpreter = struct {
         const layout_val = try self.getRuntimeLayout(layout_rt_var);
 
         // Check if the resolved type is flex/rigid (unconstrained).
-        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        // If so, give it a concrete Dec type for method dispatch to work.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {
@@ -13118,7 +13114,8 @@ pub const Interpreter = struct {
         }
 
         // Check if the resolved type is flex/rigid (unconstrained).
-        // If so, we need to give it a concrete Dec type for method dispatch to work.
+        // If so, give it a concrete Dec type for method dispatch to work.
+        // REPL rendering will still strip .0 from whole-number Dec values regardless of type.
         const resolved_rt = self.runtime_types.resolveVar(layout_rt_var);
         const is_flex_or_rigid = resolved_rt.desc.content == .flex or resolved_rt.desc.content == .rigid;
         const final_rt_var = if (is_flex_or_rigid) blk: {

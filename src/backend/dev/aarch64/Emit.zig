@@ -46,20 +46,37 @@ fn emit32(self: *Emit, inst: u32) !void {
 // Movement instructions
 
 /// MOV reg, reg (register to register)
-/// This is an alias for ORR Xd, XZR, Xm (or ORR Wd, WZR, Wm for 32-bit)
+/// For normal registers: ORR Xd, XZR, Xm
+/// For SP as source: ADD Xd, SP, #0 (since ORR treats reg 31 as XZR, not SP)
 pub fn movRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
-    // ORR <Xd>, XZR, <Xm>
-    // 31 30 29 28 27 26 25 24 23 22 21 20    16 15      10 9    5 4    0
-    // sf  0  1  0  1  0  1  0  0  0  0  Rm[4:0]  0  0  0  0  0  0  Rn[4:0]  Rd[4:0]
-    const sf = width.sf();
-    const inst: u32 = (@as(u32, sf) << 31) |
-        (0b0101010 << 24) |
-        (0b000 << 21) |
-        (@as(u32, src.enc()) << 16) |
-        (0b000000 << 10) |
-        (@as(u32, GeneralReg.ZRSP.enc()) << 5) | // XZR as Rn
-        dst.enc();
-    try self.emit32(inst);
+    // Special case: when source is SP, use ADD Xd, SP, #0
+    // because ORR treats register 31 as XZR, not SP
+    if (src == .ZRSP) {
+        // ADD <Xd>, SP, #0
+        // ARM encoding: sf 0 0 1 0 0 0 1 shift(2) imm12(12) Rn(5) Rd(5)
+        // For ADD immediate with SP, Rn=31 is interpreted as SP
+        const sf = width.sf();
+        const inst: u32 = (@as(u32, sf) << 31) |
+            (0b0010001 << 24) | // ADD immediate opcode
+            (0b00 << 22) | // shift = 0
+            (0 << 10) | // imm12 = 0
+            (@as(u32, src.enc()) << 5) | // Rn = SP (31)
+            dst.enc(); // Rd
+        try self.emit32(inst);
+    } else {
+        // ORR <Xd>, XZR, <Xm>
+        // 31 30 29 28 27 26 25 24 23 22 21 20    16 15      10 9    5 4    0
+        // sf  0  1  0  1  0  1  0  0  0  0  Rm[4:0]  0  0  0  0  0  0  Rn[4:0]  Rd[4:0]
+        const sf = width.sf();
+        const inst: u32 = (@as(u32, sf) << 31) |
+            (0b0101010 << 24) |
+            (0b000 << 21) |
+            (@as(u32, src.enc()) << 16) |
+            (0b000000 << 10) |
+            (@as(u32, GeneralReg.ZRSP.enc()) << 5) | // XZR as Rn
+            dst.enc();
+        try self.emit32(inst);
+    }
 }
 
 /// MOVZ - Move with zero (load immediate, clearing other bits)
@@ -155,6 +172,62 @@ pub fn subRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
     try self.emit32(inst);
 }
 
+/// ADDS reg, reg, reg (add and set flags)
+pub fn addsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // ADDS <Xd>, <Xn>, <Xm> - same as ADD but with S bit set
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0101011 << 24) | // ADD with S bit (bit 29)
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// ADC reg, reg, reg (add with carry)
+pub fn adcRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // ADC <Xd>, <Xn>, <Xm>
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0011010000 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SUBS reg, reg, reg (subtract and set flags)
+pub fn subsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SUBS <Xd>, <Xn>, <Xm> - same as SUB but with S bit set
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b1101011 << 24) | // SUB with S bit (bit 29)
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SBC reg, reg, reg (subtract with carry/borrow)
+pub fn sbcRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SBC <Xd>, <Xn>, <Xm>
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b1011010000 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b000000 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// MUL reg, reg, reg (alias for MADD with XZR as addend)
 pub fn mulRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
     // MADD <Xd>, <Xn>, <Xm>, XZR
@@ -166,6 +239,30 @@ pub fn mulRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
         (@as(u32, src2.enc()) << 16) |
         (0 << 15) |
         (@as(u32, GeneralReg.ZRSP.enc()) << 10) | // XZR as Ra
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// UMULH reg, reg, reg (unsigned multiply high - gives high 64 bits of 64x64->128 multiply)
+pub fn umulhRegRegReg(self: *Emit, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // UMULH <Xd>, <Xn>, <Xm>
+    // 1 0 0 1 1 0 1 1 1 1 0 Rm 0 1 1 1 1 1 Rn Rd
+    const inst: u32 = (0b10011011110 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b011111 << 10) |
+        (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// SMULH reg, reg, reg (signed multiply high - gives high 64 bits of 64x64->128 signed multiply)
+pub fn smulhRegRegReg(self: *Emit, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
+    // SMULH <Xd>, <Xn>, <Xm>
+    // 1 0 0 1 1 0 1 1 0 1 0 Rm 0 1 1 1 1 1 Rn Rd
+    const inst: u32 = (0b10011011010 << 21) |
+        (@as(u32, src2.enc()) << 16) |
+        (0b011111 << 10) |
         (@as(u32, src1.enc()) << 5) |
         dst.enc();
     try self.emit32(inst);
@@ -195,6 +292,22 @@ pub fn udivRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: G
         (@as(u32, src2.enc()) << 16) |
         (0b000010 << 10) |
         (@as(u32, src1.enc()) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
+/// MSUB reg, reg, reg, reg (multiply-subtract: dst = ra - rn * rm)
+pub fn msubRegRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, rn: GeneralReg, rm: GeneralReg, ra: GeneralReg) !void {
+    // MSUB <Xd>, <Xn>, <Xm>, <Xa>
+    // sf 0 0 1 1 0 1 1 0 0 0 Rm 1 Ra Rn Rd
+    // Result: Xa - Xn * Xm
+    const sf = width.sf();
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b0011011000 << 21) |
+        (@as(u32, rm.enc()) << 16) |
+        (1 << 15) | // o0=1 for MSUB (vs o0=0 for MADD)
+        (@as(u32, ra.enc()) << 10) |
+        (@as(u32, rn.enc()) << 5) |
         dst.enc();
     try self.emit32(inst);
 }
@@ -374,13 +487,29 @@ pub fn ret(self: *Emit) !void {
     try self.emit32(inst);
 }
 
+/// BLR Xn (branch with link to register - call to address in register)
+pub fn blrReg(self: *Emit, reg: GeneralReg) !void {
+    // BLR <Xn>
+    // 1101011 0001 11111 000000 Rn[4:0] 00000
+    const inst: u32 = (0b1101011 << 25) |
+        (0b0001 << 21) |
+        (0b11111 << 16) |
+        (0b000000 << 10) |
+        (@as(u32, reg.enc()) << 5) |
+        0b00000;
+    try self.emit32(inst);
+}
+
 /// BL (branch with link - function call)
 pub fn bl(self: *Emit, offset_bytes: i32) !void {
     // BL <label>
     // 1 00101 imm26
-    const offset_words = @divExact(offset_bytes, 4);
-    const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
-    const inst: u32 = (0b100101 << 26) | imm26;
+    // Note: offset must be multiple of 4 for valid instruction alignment
+    // All ARM64 instructions are 4 bytes, so offsets should always be aligned
+    std.debug.assert(@mod(offset_bytes, 4) == 0);
+    const offset_words: i26 = @intCast(@divExact(offset_bytes, 4));
+    const imm26: u26 = @bitCast(offset_words);
+    const inst: u32 = (@as(u32, 0b100101) << 26) | imm26;
     try self.emit32(inst);
 }
 
@@ -390,7 +519,7 @@ pub fn b(self: *Emit, offset_bytes: i32) !void {
     // 0 00101 imm26
     const offset_words = @divExact(offset_bytes, 4);
     const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
-    const inst: u32 = (0b000101 << 26) | imm26;
+    const inst: u32 = (@as(u32, 0b000101) << 26) | imm26;
     try self.emit32(inst);
 }
 
@@ -591,14 +720,21 @@ pub fn strbRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, uoffset: u12) 
 /// STP (store pair) - commonly used for pushing to stack
 pub fn stpPreIndex(self: *Emit, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
     // STP <Xt1>, <Xt2>, [<Xn|SP>, #<imm>]!
-    // opc 10 1 0 100 11 imm7 Rt2 Rn Rt
+    // ARM encoding: opc 101 V 0110 imm7 Rt2 Rn Rt
+    // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+    // bits 29-27: 101
+    // bit 26: V (0 for scalar)
+    // bits 25-22: 0110 (pre-index marker)
+    // bits 21-15: imm7 (signed, scaled by register size)
+    // bits 14-10: Rt2
+    // bits 9-5: Rn (base register)
+    // bits 4-0: Rt
     const opc: u2 = if (width == .w64) 0b10 else 0b00;
     const imm7: u7 = @bitCast(imm_offset);
     const inst: u32 = (@as(u32, opc) << 30) |
         (0b101 << 27) |
         (0b0 << 26) |
-        (0b100 << 23) |
-        (0b11 << 21) | // Pre-index
+        (0b0110 << 22) | // Pre-index: bits 25-22 = 0110
         (@as(u32, imm7) << 15) |
         (@as(u32, reg2.enc()) << 10) |
         (@as(u32, base.enc()) << 5) |
@@ -609,14 +745,23 @@ pub fn stpPreIndex(self: *Emit, width: RegisterWidth, reg1: GeneralReg, reg2: Ge
 /// LDP (load pair) - commonly used for popping from stack
 pub fn ldpPostIndex(self: *Emit, width: RegisterWidth, reg1: GeneralReg, reg2: GeneralReg, base: GeneralReg, imm_offset: i7) !void {
     // LDP <Xt1>, <Xt2>, [<Xn|SP>], #<imm>
-    // opc 10 1 0 100 01 imm7 Rt2 Rn Rt
+    // ARM encoding: opc 101 V opc2 L imm7 Rt2 Rn Rt
+    // bits 31-30: opc (10 for 64-bit, 00 for 32-bit)
+    // bits 29-27: 101
+    // bit 26: V (0 for scalar)
+    // bits 25-23: 001 (post-index addressing mode)
+    // bit 22: L (1 for load LDP, 0 for store STP)
+    // bits 21-15: imm7 (signed, scaled by register size)
+    // bits 14-10: Rt2
+    // bits 9-5: Rn (base register)
+    // bits 4-0: Rt
     const opc: u2 = if (width == .w64) 0b10 else 0b00;
     const imm7: u7 = @bitCast(imm_offset);
     const inst: u32 = (@as(u32, opc) << 30) |
         (0b101 << 27) |
         (0b0 << 26) |
-        (0b100 << 23) |
-        (0b01 << 21) | // Post-index
+        (0b001 << 23) | // Post-index mode: bits 25-23 = 001
+        (0b1 << 22) | // L=1 for LDP (load)
         (@as(u32, imm7) << 15) |
         (@as(u32, reg2.enc()) << 10) |
         (@as(u32, base.enc()) << 5) |

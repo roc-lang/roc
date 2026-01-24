@@ -132,6 +132,8 @@ comptime {
     for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
+        num.exportDivTrunc(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_trunc.");
+        num.exportRemTrunc(T, ROC_BUILTINS ++ "." ++ NUM ++ ".rem_trunc.");
 
         num.exportRound(f32, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f32.");
         num.exportRound(f64, T, ROC_BUILTINS ++ "." ++ NUM ++ ".round_f64.");
