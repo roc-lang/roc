@@ -210,7 +210,7 @@ fn findCommandFn(state: *LineState) CommandFn {
         ansi_term.ctrlKey('D') => exitRepl,
         ansi_term.ctrlKey('L') => clearScreen,
         ansi_term.ctrlKey('C') => cancelLine,
-        control_code.lf => acceptLine,
+        control_code.lf, control_code.cr => acceptLine,
         control_code.esc => {
             if (state.bytes_read >= 3 and state.in_buffer[1] == '[') {
                 return switch (state.in_buffer[2]) {
@@ -281,7 +281,6 @@ fn helper(self: *ReplLine, outlive: Allocator, prompt: []const u8, out: *std.Io.
         .history = &self.history,
         .history_index = null,
     };
-
 
     const old = switch (SUPPORTED_OS) {
         .linux, .macos => try Unix.init(),
