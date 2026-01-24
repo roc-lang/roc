@@ -671,7 +671,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
+        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);
