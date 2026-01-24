@@ -102,6 +102,9 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Local type declarations found inside function bodies.
+/// Collected during canonicalization, then added to all_statements at the end.
+scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
@@ -231,6 +234,7 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
+    self.scratch_local_type_decls.deinit(gpa);
 }
 
 /// Options for initializing the canonicalizer.
@@ -263,6 +267,7 @@ pub fn init(
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
     };
 
     // Top-level scope is not a function boundary
@@ -2628,6 +2633,11 @@ pub fn canonicalizeFile(
 
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
+
+    // Add local type declarations to all_statements
+    for (self.scratch_local_type_decls.items) |stmt_idx| {
+        try self.env.store.addScratchStatement(stmt_idx);
+    }
 
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
@@ -10296,6 +10306,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     };
 
                     const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+
+                    // Collect local type decls to add to all_statements later
+                    try self.scratch_local_type_decls.append(self.env.gpa, stmt_idx);
 
                     // Introduce the type into the current scope for local use
                     try self.introduceType(type_header.name, stmt_idx, region);
