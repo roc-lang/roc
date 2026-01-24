@@ -167,18 +167,17 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             }
         },
         eval_mod.list_i64_layout => blk: {
-            // List result buffer layout: [0-7] ptr, [8-15] len, [16+] element data
-            // Allocate enough space for list struct + up to 32 elements
+            // List result buffer layout: [0-7] ptr, [8-15] len, [16-23] capacity
+            // With heap allocation, ptr points to heap memory that survives the call
             const ListResultBuffer = extern struct {
                 ptr: [*]const i64,
                 len: usize,
-                // Element data follows - elements will be copied here by the JIT code
-                elements: [32]i64,
+                capacity: usize,
             };
             var result: ListResultBuffer align(8) = .{
                 .ptr = undefined,
                 .len = 0,
-                .elements = undefined,
+                .capacity = 0,
             };
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
 
