@@ -3299,6 +3299,8 @@ fn compileAndSerializeModulesForEmbedding(
     ctx: *CliContext,
     roc_file_path: []const u8,
     allow_errors: bool,
+    dump_platform_abi: ?[]const u8,
+    target_ptr_size: u8, // 4 for 32-bit, 8 for 64-bit
 ) !SerializedModulesResult {
     // Track total errors and warnings across all modules
     var total_error_count: usize = 0;
@@ -3517,6 +3519,212 @@ fn compileAndSerializeModulesForEmbedding(
             }
         }
         all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+        // Generate platform ABI header if requested
+        if (dump_platform_abi) |output_path| {
+            const platform_abi = @import("platform_abi.zig");
+
+            // Struct to hold argument type information
+            const ArgTypeInfo = struct {
+                name: []const u8,
+                roc_type: []const u8,
+            };
+
+            // Build a map of function names to their type strings
+            var type_map = std.StringHashMap([]const u8).init(ctx.gpa);
+            defer {
+                var it = type_map.iterator();
+                while (it.next()) |entry| {
+                    ctx.gpa.free(entry.key_ptr.*);
+                    ctx.gpa.free(entry.value_ptr.*);
+                }
+                type_map.deinit();
+            }
+
+            // Build a map of function names to their argument information
+            var arg_types_map = std.StringHashMap([]ArgTypeInfo).init(ctx.gpa);
+            defer {
+                var it = arg_types_map.iterator();
+                while (it.next()) |entry| {
+                    ctx.gpa.free(entry.key_ptr.*);
+                    for (entry.value_ptr.*) |arg_info| {
+                        ctx.gpa.free(arg_info.name);
+                        ctx.gpa.free(arg_info.roc_type);
+                    }
+                    ctx.gpa.free(entry.value_ptr.*);
+                }
+                arg_types_map.deinit();
+            }
+
+            // Build a map of function names to their return types
+            var ret_types_map = std.StringHashMap([]const u8).init(ctx.gpa);
+            defer {
+                var it = ret_types_map.iterator();
+                while (it.next()) |entry| {
+                    ctx.gpa.free(entry.key_ptr.*);
+                    ctx.gpa.free(entry.value_ptr.*);
+                }
+                ret_types_map.deinit();
+            }
+
+            // Extract types for all hosted functions
+            for (compiled_modules.items, 0..) |*m, module_idx| {
+                // Skip app module and platform main.roc
+                if (module_idx == app_env_index or module_idx == primary_env_index) continue;
+                const platform_env = &m.env;
+
+                // Initialize TypeWriter for this module
+                var type_writer = try platform_env.initTypeWriter();
+                defer type_writer.deinit();
+
+                const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
+                for (all_defs) |def_idx| {
+                    const def = platform_env.store.getDef(def_idx);
+                    const expr = platform_env.store.getExpr(def.expr);
+
+                    if (expr == .e_hosted_lambda) {
+                        const hosted = expr.e_hosted_lambda;
+                        const local_name = platform_env.getIdent(hosted.symbol_name);
+
+                        var plat_module_name = platform_env.module_name;
+                        if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
+                            plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
+                        }
+                        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name });
+                        defer ctx.gpa.free(qualified_name);
+
+                        const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
+                            qualified_name[0 .. qualified_name.len - 1]
+                        else
+                            qualified_name;
+
+                        // Extract type using TypeWriter
+                        const pattern_var = can.ModuleEnv.varFrom(def.pattern);
+                        try type_writer.write(pattern_var, .one_line);
+                        const type_str = type_writer.get();
+
+                        // Store in map (dupe the type string)
+                        try type_map.put(try ctx.gpa.dupe(u8, stripped_name), try ctx.gpa.dupe(u8, type_str));
+
+                        // Extract function argument types
+                        const resolved = platform_env.types.resolveVar(pattern_var);
+
+                        var arg_types = std.ArrayList(ArgTypeInfo).empty;
+                        defer arg_types.deinit(ctx.gpa);
+
+                        if (resolved.desc.content == .structure) {
+                            const flat_type = resolved.desc.content.structure;
+                            if (flat_type == .fn_pure or flat_type == .fn_effectful) {
+                                const func = if (flat_type == .fn_pure) flat_type.fn_pure else flat_type.fn_effectful;
+
+                                // Get argument type variables
+                                const args_slice = platform_env.types.sliceVars(func.args);
+
+                                for (args_slice, 0..) |arg_var, i| {
+                                    // Write arg type to string using TypeWriter
+                                    try type_writer.write(arg_var, .one_line);
+                                    const arg_type_str = try ctx.gpa.dupe(u8, type_writer.get());
+
+                                    // Use generic parameter names for now (arg0, arg1, etc.)
+                                    // TODO: Extract actual parameter names from patterns
+                                    const param_name = try std.fmt.allocPrint(ctx.gpa, "arg{}", .{i});
+
+                                    try arg_types.append(ctx.gpa, .{
+                                        .name = param_name,
+                                        .roc_type = arg_type_str,
+                                    });
+                                }
+
+                                // Extract return type
+                                const ret_var = func.ret;
+                                try type_writer.write(ret_var, .one_line);
+                                const ret_type_str = try ctx.gpa.dupe(u8, type_writer.get());
+
+                                // Store return type in map
+                                try ret_types_map.put(
+                                    try ctx.gpa.dupe(u8, stripped_name),
+                                    ret_type_str,
+                                );
+                            }
+                        }
+
+                        // Store argument types in map
+                        try arg_types_map.put(
+                            try ctx.gpa.dupe(u8, stripped_name),
+                            try arg_types.toOwnedSlice(ctx.gpa),
+                        );
+                    }
+                }
+            }
+
+            var hosted_fns_abi = std.ArrayList(platform_abi.HostedFunctionAbi).empty;
+            defer {
+                for (hosted_fns_abi.items) |*fn_abi| fn_abi.deinit(ctx.gpa);
+                hosted_fns_abi.deinit(ctx.gpa);
+            }
+
+            // Convert HostedFunctionInfo to HostedFunctionAbi
+            for (all_hosted_fns.items, 0..) |fn_info, idx| {
+                const name = try ctx.gpa.dupe(u8, fn_info.name_text);
+                const qualified_name = try ctx.gpa.dupe(u8, fn_info.name_text);
+
+                // Look up type from map, use placeholder if not found
+                const roc_type = if (type_map.get(fn_info.name_text)) |type_str|
+                    try ctx.gpa.dupe(u8, type_str)
+                else
+                    try ctx.gpa.dupe(u8, "() => {}");
+
+                const args_struct_name = try platform_abi.generateStructName(ctx.gpa, fn_info.name_text);
+
+                // Get argument types and convert to C fields
+                // Filter out void-typed fields (from empty records {})
+                const arg_types = arg_types_map.get(fn_info.name_text) orelse &[_]ArgTypeInfo{};
+                var fields_list = std.ArrayList(platform_abi.CField).empty;
+                errdefer fields_list.deinit(ctx.gpa);
+
+                for (arg_types) |arg_type| {
+                    const c_type = try platform_abi.rocTypeToCType(ctx.gpa, arg_type.roc_type);
+                    // Skip void-typed fields (empty records {} used as arguments)
+                    if (!std.mem.eql(u8, c_type, "void")) {
+                        try fields_list.append(ctx.gpa, .{
+                            .name = try ctx.gpa.dupe(u8, arg_type.name),
+                            .c_type = c_type,
+                            .roc_type = try ctx.gpa.dupe(u8, arg_type.roc_type),
+                        });
+                    } else {
+                        // Free the "void" string we won't use
+                        ctx.gpa.free(c_type);
+                    }
+                }
+
+                const fields = try fields_list.toOwnedSlice(ctx.gpa);
+
+                // Get return type from map
+                const ret_roc_type = ret_types_map.get(fn_info.name_text) orelse "{}";
+                const ret_is_void = platform_abi.isVoidType(ret_roc_type);
+                const ret_c_type = if (ret_is_void)
+                    try ctx.gpa.dupe(u8, "void")
+                else
+                    try platform_abi.rocTypeToCType(ctx.gpa, ret_roc_type);
+
+                try hosted_fns_abi.append(ctx.gpa, .{
+                    .name = name,
+                    .qualified_name = qualified_name,
+                    .index = @intCast(idx),
+                    .roc_type_str = roc_type,
+                    .args_struct_name = args_struct_name,
+                    .fields = fields,
+                    .return_roc_type = try ctx.gpa.dupe(u8, ret_roc_type),
+                    .return_c_type = ret_c_type,
+                    .return_is_void = ret_is_void,
+                });
+            }
+
+            try platform_abi.generateCHeader(ctx.gpa, output_path, hosted_fns_abi.items, target_ptr_size);
+
+            const stdout = ctx.io.stdout();
+            stdout.print("\nPlatform ABI header written to: {s}\n", .{output_path}) catch {};
+        }
 
         // Reassign global indices for platform sibling modules only
         // (not app, not platform main.roc - only exposed modules like Stdout, Stderr, Stdin)
@@ -4670,8 +4878,11 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 
     std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
+    // Calculate target pointer size for platform ABI header generation
+    const target_ptr_size: u8 = @intCast(target.ptrBitWidth() / 8);
+
     // Compile - errors are already reported by the compilation functions
-    const compile_result = try compileAndSerializeModulesForEmbedding(ctx, args.path, args.allow_errors);
+    const compile_result = try compileAndSerializeModulesForEmbedding(ctx, args.path, args.allow_errors, args.dump_platform_abi, target_ptr_size);
     std.log.debug("Portable serialization complete, {} bytes", .{compile_result.bytes.len});
 
     const serialized_data: SerializedData = .{
@@ -5319,6 +5530,15 @@ fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) !void
         error.TooNested => stderr.print("Too deeply nested\n", .{}) catch {},
         error.InvalidPackageName => stderr.print("Invalid package name\n", .{}) catch {},
 
+        // Platform ABI errors
+        error.NotAPlatformModule => stderr.print(
+            "Error: --dump-platform-abi only works with platform modules\n" ++
+                "This appears to be an app or package, not a platform.\n",
+            .{},
+        ) catch {},
+        error.NoPlatformFound => stderr.print("No platform module found\n", .{}) catch {},
+        error.NoRootModule => stderr.print("No root module environment found\n", .{}) catch {},
+
         // Catch-all for any other errors
         else => stderr.print("{s}\n", .{@errorName(err)}) catch {},
     }
@@ -5416,6 +5636,10 @@ const BuildAppError = std.mem.Allocator.Error || std.fs.File.OpenError || std.fs
     InvalidNumberExtension,
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
+    // Platform ABI errors
+    NotAPlatformModule,
+    NoPlatformFound,
+    NoRootModule,
 };
 
 /// Result from checking a file that preserves the BuildEnv for further processing (e.g., docs generation)
@@ -5638,6 +5862,62 @@ fn checkFileWithBuildEnv(
     };
 }
 
+/// Display check results (errors/warnings) to the terminal
+fn displayCheckResults(ctx: *CliContext, check_result: *const CheckResult, filepath: []const u8, elapsed: u64) !void {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    // Handle cached results vs fresh compilation results differently
+    if (check_result.was_cached) {
+        // For cached results, use the stored diagnostic counts
+        const total_errors = check_result.error_count;
+        const total_warnings = check_result.warning_count;
+
+        if (total_errors > 0 or total_warnings > 0) {
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                total_errors,
+                total_warnings,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{filepath}) catch {};
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s} (loaded from cache)", .{filepath}) catch {};
+        }
+    } else {
+        // For fresh compilation, process and display reports normally
+        // Render reports grouped by module
+        for (check_result.reports) |module| {
+            for (module.reports) |*report| {
+                // Render the diagnostic report to stderr
+                try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
+            }
+        }
+
+        // Flush stderr to ensure all error output is visible
+        ctx.io.flush();
+
+        if (check_result.error_count > 0 or check_result.warning_count > 0) {
+            stderr.writeAll("\n") catch {};
+            stderr.print("Found {} error(s) and {} warning(s) in ", .{
+                check_result.error_count,
+                check_result.warning_count,
+            }) catch {};
+            formatElapsedTime(stderr, elapsed) catch {};
+            stderr.print(" for {s}.\n", .{filepath}) catch {};
+
+            // Flush before exit
+            ctx.io.flush();
+        } else {
+            stdout.print("No errors found in ", .{}) catch {};
+            formatElapsedTime(stdout, elapsed) catch {};
+            stdout.print(" for {s}\n", .{filepath}) catch {};
+            ctx.io.flush();
+        }
+    }
+}
+
 fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -5653,7 +5933,6 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         .verbose = args.verbose,
     };
 
-    // Use BuildEnv to check the file
     var check_result = checkFileWithBuildEnv(
         ctx,
         args.path,
@@ -5667,69 +5946,12 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
 
     const elapsed = timer.read();
 
-    // Handle cached results vs fresh compilation results differently
-    if (check_result.was_cached) {
-        // For cached results, use the stored diagnostic counts
-        const total_errors = check_result.error_count;
-        const total_warnings = check_result.warning_count;
+    // Display check results
+    try displayCheckResults(ctx, &check_result, args.path, elapsed);
 
-        if (total_errors > 0 or total_warnings > 0) {
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                total_errors,
-                total_warnings,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
-            return error.CheckFailed;
-        } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)", .{args.path}) catch {};
-        }
-    } else {
-        // For fresh compilation, process and display reports normally
-        var has_errors = false;
-
-        // Render reports grouped by module
-        for (check_result.reports) |module| {
-            for (module.reports) |*report| {
-
-                // Render the diagnostic report to stderr
-                try reporting.renderReportToTerminal(report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal());
-
-                if (report.severity == .fatal or report.severity == .runtime_error) {
-                    has_errors = true;
-                }
-            }
-        }
-
-        // Flush stderr to ensure all error output is visible
-        ctx.io.flush();
-
-        if (check_result.error_count > 0 or check_result.warning_count > 0) {
-            stderr.writeAll("\n") catch {};
-            stderr.print("Found {} error(s) and {} warning(s) in ", .{
-                check_result.error_count,
-                check_result.warning_count,
-            }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s}.\n", .{args.path}) catch {};
-
-            // Flush before exit
-            ctx.io.flush();
-
-            // Exit with code 1 for errors, code 2 for warnings only
-            if (check_result.error_count > 0) {
-                return error.CheckFailed;
-            } else {
-                std.process.exit(2);
-            }
-        } else {
-            stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s}\n", .{args.path}) catch {};
-            ctx.io.flush();
-        }
+    // Exit if there were errors
+    if (check_result.error_count > 0) {
+        return error.CheckFailed;
     }
 
     // Print timing breakdown if requested

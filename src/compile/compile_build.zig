@@ -521,15 +521,15 @@ pub const BuildEnv = struct {
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
-        // Allow app, module, type_module, and default_app files
+        // Allow app, module, type_module, default_app, and platform files
         const is_executable = header_info.kind == .app or header_info.kind == .default_app;
 
-        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module) {
+        if (!is_executable and header_info.kind != .module and header_info.kind != .type_module and header_info.kind != .platform) {
             return error.UnsupportedHeader;
         }
 
         // Create package entry
-        const pkg_name = if (is_executable) "app" else "module";
+        const pkg_name = if (is_executable) "app" else if (header_info.kind == .platform) "platform" else "module";
         const key_pkg = try self.gpa.dupe(u8, pkg_name);
         const pkg_root_file = try self.gpa.dupe(u8, root_abs);
         const pkg_root_dir = try self.gpa.dupe(u8, root_dir);

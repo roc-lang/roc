@@ -94,6 +94,7 @@ pub const BuildArgs = struct {
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
     z_bench_parse: ?[]const u8 = null, // benchmark parser on a file or directory
     z_dump_linker: bool = false, // dump linker inputs to temp directory for debugging
+    dump_platform_abi: ?[]const u8 = null, // path to output C header file with platform ABI
 };
 
 /// Arguments for `roc test`
@@ -229,7 +230,7 @@ fn parseCheck(args: []const []const u8) CliArgs {
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
-            \\Check the code for problems, but don’t build or run it
+            \\Check the code for problems, but don't build or run it
             \\
             \\Usage: roc check [OPTIONS] [ROC_FILE]
             \\
@@ -237,11 +238,11 @@ fn parseCheck(args: []const []const u8) CliArgs {
             \\  [ROC_FILE]  The .roc file to check [default: main.roc]
             \\
             \\Options:
-            \\      --main=<main>  The .roc file of the main app/package module to resolve dependencies from
-            \\      --time         Print timing information for each compilation phase. Will not print anything if everything is cached.
-            \\      --no-cache     Disable caching
-            \\      --verbose      Enable verbose output including cache statistics
-            \\  -h, --help         Print help
+            \\      --main=<main>                The .roc file of the main app/package module to resolve dependencies from
+            \\      --time                       Print timing information for each compilation phase. Will not print anything if everything is cached.
+            \\      --no-cache                   Disable caching
+            \\      --verbose                    Enable verbose output including cache statistics
+            \\  -h, --help                       Print help
             \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
@@ -279,6 +280,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_bench_tokenize: ?[]const u8 = null;
     var z_bench_parse: ?[]const u8 = null;
     var z_dump_linker: bool = false;
+    var dump_platform_abi: ?[]const u8 = null;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
             return CliArgs{ .help = 
@@ -297,6 +299,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
+            \\      --dump-platform-abi=<path>     Generate C header file with platform ABI
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
             \\      --z-bench-parse=<path>         Benchmark parser on a file or directory
             \\      --z-dump-linker                Dump linker inputs to temp directory for debugging
@@ -359,6 +362,12 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--z-dump-linker")) {
             z_dump_linker = true;
+        } else if (mem.startsWith(u8, arg, "--dump-platform-abi")) {
+            if (getFlagValue(arg)) |value| {
+                dump_platform_abi = value;
+            } else {
+                return CliArgs{ .problem = ArgProblem{ .missing_flag_value = .{ .flag = "--dump-platform-abi" } } };
+            }
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -366,7 +375,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker, .dump_platform_abi = dump_platform_abi } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {
