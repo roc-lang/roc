@@ -2660,7 +2660,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.push(.RBX);
                 try self.codegen.emit.push(.R12);
 
-                // CRITICAL: Initialize stack_offset to account for saved RBX at [RBP-8]
+                // CRITICAL: Allocate stack space for local variables BEFORE they're used.
+                // Without this, stack slots would be in the red zone and get corrupted
+                // when we call builtin functions. After the pushes, RSP = RBP - 16.
+                // Subtracting MAIN_STACK_SIZE gives RSP = RBP - 16 - 64 = RBP - 80.
+                const MAIN_STACK_SIZE: i32 = 64;
+                try self.codegen.emit.subRegImm32(.w64, .RSP, MAIN_STACK_SIZE);
+
+                // Initialize stack_offset to account for saved RBX at [RBP-8]
                 // and R12 at [RBP-16]. With stack_offset = -16, first allocation returns -32.
                 self.codegen.stack_offset = -16;
             }
@@ -2678,6 +2685,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.ldpPostIndex(.w64, .FP, .LR, .ZRSP, 2);
                 try self.codegen.emit.ret();
             } else {
+                // Deallocate local variable stack space (must match MAIN_STACK_SIZE in prologue)
+                const MAIN_STACK_SIZE: i32 = 64;
+                try self.codegen.emit.addRegImm32(.w64, .RSP, MAIN_STACK_SIZE);
                 // Restore R12 and RBX (in reverse order of push)
                 try self.codegen.emit.pop(.R12);
                 try self.codegen.emit.pop(.RBX);

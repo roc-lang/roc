@@ -364,19 +364,19 @@ pub fn ret(self: *Emit) !void {
 /// PUSH r64 (push register onto stack)
 pub fn push(self: *Emit, reg: GeneralReg) !void {
     // PUSH r64: 50+rd (or REX.B 50+rd for R8-R15)
-    if (reg.enc() >= 8) {
+    if (reg.requiresRex()) {
         try self.buf.append(self.allocator, 0x41); // REX.B
     }
-    try self.buf.append(self.allocator, 0x50 + @as(u8, reg.enc() & 0x7));
+    try self.buf.append(self.allocator, 0x50 + @as(u8, reg.enc()));
 }
 
 /// POP r64 (pop register from stack)
 pub fn pop(self: *Emit, reg: GeneralReg) !void {
     // POP r64: 58+rd (or REX.B 58+rd for R8-R15)
-    if (reg.enc() >= 8) {
+    if (reg.requiresRex()) {
         try self.buf.append(self.allocator, 0x41); // REX.B
     }
-    try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc() & 0x7));
+    try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc()));
 }
 
 /// JMP rel32 (unconditional jump with 32-bit offset)
@@ -408,7 +408,7 @@ pub fn callRelocated(self: *Emit, name: []const u8) !void {
 pub fn callReg(self: *Emit, reg: GeneralReg) !void {
     // CALL r64: FF /2
     // REX prefix needed for R8-R15
-    if (reg.enc() >= 8) {
+    if (reg.requiresRex()) {
         try self.buf.append(self.allocator, 0x41); // REX.B
     }
     try self.buf.append(self.allocator, 0xFF);
