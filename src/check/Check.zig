@@ -5397,6 +5397,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
             // Iterate over the constraints
             const constraints = self.types.sliceStaticDispatchConstraints(deferred_constraint.constraints);
             for (constraints) |constraint| {
+                const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
+                if (constraint_fn_resolved == .err) {
+                    // If this constraint is already an error, the skip this pass
+                    continue;
+                }
+
                 // Look up the method in the original env using index-based lookup.
                 // Methods are stored with qualified names like "Type.method" (or "Module.Type.method" for builtins).
                 const method_ident = original_env.lookupMethodIdentFromEnvConst(self.cir, nominal_type.ident.ident_idx, constraint.fn_name) orelse {
@@ -5467,9 +5473,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     break :blk try self.instantiateVar(copied_var, env, .{ .explicit = region });
                 };
 
-                // Unwrap the constraint and method types.
-                // If either is not a function, then report the mismatch
-                const constraint_fn = self.types.resolveVar(constraint.fn_var).desc.content.unwrapFunc() orelse {
+                // Unwrap the constraint type
+                const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
                     const unify_result = try self.unify(method_var, constraint.fn_var, env);
                     self.setDetailIfTypeMismatch(unify_result, problem.TypeMismatchDetail{
                         .incompatible_method_type = .{
@@ -5481,20 +5486,8 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     try self.unifyWith(deferred_constraint.var_, .err, env);
                     continue;
                 };
-                // const method_fn = self.types.resolveVar(method_var).desc.content.unwrapFunc() orelse {
-                //     const unify_result = try self.unify(method_var, constraint.fn_var, env);
-                //     self.setDetailIfTypeMismatch(unify_result, problem.TypeMismatchDetail{
-                //         .incompatible_method_type = .{
-                //             .dispatcher_var = constraint.fn_var,
-                //             .dispatcher_name = nominal_type.ident.ident_idx,
-                //             .method_name = constraint.fn_name,
-                //         },
-                //     });
-                //     try self.unifyWith(constraint_fn.ret, .err, env);
-                //     try self.unifyWith(deferred_constraint.var_, .err, env);
-                //     continue;
-                // };
 
+                // Unify the method from the type with the constraint method
                 const fn_result = try self.unifyWithOrigin(method_var, constraint.fn_var, env, deferred_constraint.var_);
                 self.setDetailIfTypeMismatch(fn_result, problem.TypeMismatchDetail{
                     .incompatible_method_type = .{
@@ -5504,78 +5497,12 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     },
                 });
 
-                // Extract the function and return type from the constraint
-
-                // Unify the actual function var against the inferred var
-                // We break this down into arg-by-arg and return type unification
-                // for better error messages (instead of showing the whole function types)
-
-                // Check arity matches
-                // const constraint_args = self.types.sliceVars(constraint_fn.args);
-                // const method_args = self.types.sliceVars(method_fn.args);
-
-                // If there's an arity mismatch, then let report the mismatch
-                // Note that later, once we have better hints, the arity mismatch
-                // will be reported here nicely
-                // if (constraint_args.len != method_args.len) {
-                //     const unify_result = try self.unify(method_var, constraint.fn_var, env);
-                //     self.setDetailIfTypeMismatch(unify_result, problem.TypeMismatchDetail{
-                //         .incompatible_method_type = .{
-                //             .dispatcher_var = constraint.fn_var,
-                //             .dispatcher_name = nominal_type.ident.ident_idx,
-                //             .method_name = constraint.fn_name,
-                //         },
-                //     });
-                //     try self.unifyWith(deferred_constraint.var_, .err, env);
-                //     try self.unifyWith(constraint_fn.ret, .err, env);
-                //     continue;
-                // }
-
-                // Unify each argument pair
-                // var any_arg_failed = false;
-                // for (
-                //     method_args,
-                //     constraint_args,
-                // ) |method_arg, constraint_arg| {
-                //     const arg_result = try self.unify(method_arg, constraint_arg, env);
-                //     if (arg_result.isProblem()) {
-                //         any_arg_failed = true;
-                //     }
-                // }
-
-                // Unify return types - this will generate the error with the expression region
-                // const ret_result = try self.unify(method_fn.ret, constraint_fn.ret, env);
-
-                // self.setDetailIfTypeMismatch(ret_result, problem.TypeMismatchDetail{
-                //     .incompatible_method_type = .{
-                //         .dispatcher_var = constraint.fn_var,
-                //         .dispatcher_name = nominal_type.ident.ident_idx,
-                //         .method_name = constraint.fn_name,
-                //     },
-                // });
-
-                // std.debug.print("ret_result {}\n", .{ret_result});
-                // std.debug.print("dispatcher {s}\n", .{
-                //     try self.type_writer.writeGet(deferred_constraint.var_, .one_line),
-                // });
-
-                // Unify the whole function together - this will catch pure vs effectful differences
-                // const fn_result = try self.unify(method_var, constraint.fn_var, env);
-                // self.setDetailIfTypeMismatch(fn_result, problem.TypeMismatchDetail{
-                //     .incompatible_method_type = .{
-                //         .dispatcher_var = constraint.fn_var,
-                //         .dispatcher_name = nominal_type.ident.ident_idx,
-                //         .method_name = constraint.fn_name,
-                //     },
-                // });
-
-                // if (any_arg_failed or ret_result.isProblem() or fn_result.isProblem()) {
-                //     try self.unifyWith(deferred_constraint.var_, .err, env);
-                //     try self.unifyWith(constraint_fn.ret, .err, env);
-                // }
-
+                // If there was a problem, then ensure the error gets propagated
+                // to all args and return types.
                 if (fn_result.isProblem()) {
                     for (self.types.sliceVars(constraint_fn.args)) |arg| {
+                        // I don't _think_ we should need to do this, but eval
+                        // tests fail if we don't,
                         try self.unifyWith(arg, .err, env);
                     }
                     try self.unifyWith(deferred_constraint.var_, .err, env);
