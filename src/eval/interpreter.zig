@@ -5903,7 +5903,7 @@ pub const Interpreter = struct {
 
     /// The canonical error message for stack overflow.
     /// Used by all stack overflow detection to ensure consistent user-facing messaging.
-    const stack_overflow_message = "This Roc program overflowed its stack memory. This usually means there is infinite recursion somewhere in the code.";
+    const stack_overflow_message = "This Roc program overflowed its stack memory. This usually means there is very deep or infinite recursion somewhere in the code.";
 
     /// Trigger a stack overflow error.
     /// This is the single entry point for all stack overflow handling in the interpreter.
