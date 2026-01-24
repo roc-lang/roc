@@ -638,6 +638,27 @@ pub fn movsdRegMem(self: *Emit, dst: FloatReg, base: GeneralReg, disp: i32) !voi
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
 }
 
+/// MOVSS xmm, [base + disp32] (load scalar single from memory)
+pub fn movssRegMem(self: *Emit, dst: FloatReg, base: GeneralReg, disp: i32) !void {
+    try self.buf.append(self.allocator, 0xF3);
+    const r: u1 = dst.rexB();
+    const b: u1 = base.rexB();
+    if (r == 1 or b == 1) {
+        try self.buf.append(self.allocator, rex(0, r, 0, b));
+    }
+    try self.buf.append(self.allocator, 0x0F);
+    try self.buf.append(self.allocator, 0x10);
+
+    const base_enc = base.enc();
+    if (base_enc == 4) {
+        try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+        try self.buf.append(self.allocator, 0x24);
+    } else {
+        try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+    }
+    try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+}
+
 /// MOVSD [base + disp32], xmm (store scalar double to memory)
 pub fn movsdMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !void {
     try self.buf.append(self.allocator, 0xF2);
