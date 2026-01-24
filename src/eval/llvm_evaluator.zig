@@ -259,8 +259,8 @@ pub const LlvmEvaluator = struct {
             const expr = module_env.store.getExpr(expr_idx);
             try ctx.emitStringToPtr(expr, out_ptr);
         } else {
-            // Generate LLVM IR for the expression
-            const value = ctx.emitExpr(expr_idx) catch |err| {
+            // Generate LLVM IR for the expression with target layout (layout-driven approach)
+            const value = ctx.emitExprWithLayout(expr_idx, output_layout) catch |err| {
                 // Map internal errors to public error type
                 return switch (err) {
                     error.OutOfMemory => error.OutOfMemory,
@@ -341,10 +341,11 @@ pub const LlvmEvaluator = struct {
         };
 
         /// Emit LLVM IR for an expression, returning a runtime value
-        fn emitExpr(ctx: *ExprContext, expr_idx: CIR.Expr.Idx) ExprError!LlvmBuilder.Value {
+        /// When target_layout is provided, literals are emitted with that type directly.
+        fn emitExprWithLayout(ctx: *ExprContext, expr_idx: CIR.Expr.Idx, target_layout: ?layout.Idx) ExprError!LlvmBuilder.Value {
             const expr = ctx.module_env.store.getExpr(expr_idx);
             return switch (expr) {
-                .e_num => |num| ctx.emitNum(num, expr),
+                .e_num => |num| ctx.emitNum(num, target_layout),
                 .e_frac_f32 => |frac| (ctx.builder.floatConst(frac.value) catch return error.CompilationFailed).toValue(),
                 .e_frac_f64 => |frac| (ctx.builder.doubleConst(frac.value) catch return error.CompilationFailed).toValue(),
                 .e_dec => |dec| (ctx.builder.intConst(.i128, dec.value.num) catch return error.CompilationFailed).toValue(),
@@ -395,7 +396,7 @@ pub const LlvmEvaluator = struct {
                 },
                 .e_nominal_external => |nominal| {
                     // Emit the backing expression (e.g., for Bool.True, emit the True tag)
-                    return ctx.emitExpr(nominal.backing_expr);
+                    return ctx.emitExprWithLayout(nominal.backing_expr, target_layout);
                 },
                 .e_nominal => {
                     // Local nominal types require special handling
@@ -416,8 +417,56 @@ pub const LlvmEvaluator = struct {
             };
         }
 
-        /// Emit a numeric literal
-        fn emitNum(ctx: *ExprContext, num: anytype, expr: CIR.Expr) ExprError!LlvmBuilder.Value {
+        /// Emit LLVM IR for an expression without a specific target layout.
+        /// The type will be inferred from the expression itself.
+        fn emitExpr(ctx: *ExprContext, expr_idx: CIR.Expr.Idx) ExprError!LlvmBuilder.Value {
+            return ctx.emitExprWithLayout(expr_idx, null);
+        }
+
+        /// Emit a numeric literal with an optional target layout.
+        /// When target_layout is provided, the literal is emitted with that type directly (like Rust's approach).
+        /// When null, the type is inferred from num.kind.
+        fn emitNum(ctx: *ExprContext, num: anytype, target_layout: ?layout.Idx) ExprError!LlvmBuilder.Value {
+            const u128_value: u128 = @bitCast(num.value.bytes);
+
+            // If we have a target layout, use it directly (like Rust's int_with_precision)
+            if (target_layout) |tgt_layout| {
+                return switch (tgt_layout) {
+                    .f32 => blk: {
+                        const int_value = num.value.toI128();
+                        break :blk (ctx.builder.floatConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
+                    },
+                    .f64 => blk: {
+                        const int_value = num.value.toI128();
+                        break :blk (ctx.builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
+                    },
+                    .dec => blk: {
+                        // Dec is i128 scaled by 10^18
+                        const int_value = num.value.toI128();
+                        const dec_value = int_value * 1000000000000000000;
+                        break :blk (ctx.builder.intConst(.i128, dec_value) catch return error.CompilationFailed).toValue();
+                    },
+                    .i128, .u128 => (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue(),
+                    .i64, .u64 => (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                    .i32, .u32 => (ctx.builder.intConst(.i32, @as(u32, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                    .i16, .u16 => (ctx.builder.intConst(.i16, @as(u16, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                    .i8, .u8 => (ctx.builder.intConst(.i8, @as(u8, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                    .bool => (ctx.builder.intConst(.i1, @as(u1, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                    else => {
+                        // Unknown layout - fall through to inference
+                        return ctx.emitNumInferred(num);
+                    },
+                };
+            }
+
+            // No target layout - infer from num.kind (fallback path)
+            return ctx.emitNumInferred(num);
+        }
+
+        /// Emit a numeric literal by inferring type from num.kind (fallback when no target layout)
+        fn emitNumInferred(ctx: *ExprContext, num: anytype) ExprError!LlvmBuilder.Value {
+            const u128_value: u128 = @bitCast(num.value.bytes);
+
             return switch (num.kind) {
                 .f32 => blk: {
                     const int_value = num.value.toI128();
@@ -427,28 +476,27 @@ pub const LlvmEvaluator = struct {
                     const int_value = num.value.toI128();
                     break :blk (ctx.builder.doubleConst(@floatFromInt(int_value)) catch return error.CompilationFailed).toValue();
                 },
-                .u128, .i128 => blk: {
-                    // 128-bit values: use u128 interpretation since LLVM doesn't distinguish signedness
-                    // This handles large unsigned values that would overflow i128 (like Rust's const_u128)
-                    const u128_value: u128 = @bitCast(num.value.bytes);
-                    break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
-                },
-                else => blk: {
-                    const u128_value: u128 = @bitCast(num.value.bytes);
-                    const llvm_type = ctx.evaluator.getExprLlvmTypeFromExpr(ctx.builder, expr) catch return error.CompilationFailed;
-                    // For i64 type, check if value fits - if not, emit as i128 (will be converted later)
-                    if (llvm_type == .i64) {
-                        if (u128_value <= std.math.maxInt(u64)) {
-                            break :blk (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue();
-                        }
-                        // Value too large for i64 - emit as i128, convertNumericToLayout will handle it
-                        break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
-                    }
-                    if (llvm_type == .i128) {
-                        break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
-                    }
+                .u128, .i128 => (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue(),
+                .i64 => (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .u64 => (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .i32 => (ctx.builder.intConst(.i32, @as(u32, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .u32 => (ctx.builder.intConst(.i32, @as(u32, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .i16 => (ctx.builder.intConst(.i16, @as(u16, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .u16 => (ctx.builder.intConst(.i16, @as(u16, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .i8 => (ctx.builder.intConst(.i8, @as(u8, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .u8 => (ctx.builder.intConst(.i8, @as(u8, @truncate(u128_value))) catch return error.CompilationFailed).toValue(),
+                .dec => blk: {
                     const int_value = num.value.toI128();
-                    break :blk (ctx.builder.intConst(llvm_type, int_value) catch return error.CompilationFailed).toValue();
+                    const dec_value = int_value * 1000000000000000000;
+                    break :blk (ctx.builder.intConst(.i128, dec_value) catch return error.CompilationFailed).toValue();
+                },
+                // For unbound types, default to i64 but emit as i128 if value doesn't fit in signed i64
+                .num_unbound, .int_unbound => blk: {
+                    if (u128_value <= std.math.maxInt(i64)) {
+                        break :blk (ctx.builder.intConst(.i64, @as(u64, @truncate(u128_value))) catch return error.CompilationFailed).toValue();
+                    }
+                    // Value too large for signed i64 - emit as i128 to preserve correctness
+                    break :blk (ctx.builder.intConst(.i128, u128_value) catch return error.CompilationFailed).toValue();
                 },
             };
         }
@@ -786,9 +834,9 @@ pub const LlvmEvaluator = struct {
                                 ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr)
                         else
                             ctx.evaluator.getExprOutputLayout(ctx.module_env, decl.expr);
-                        // Evaluate the expression
-                        var val = try ctx.emitExpr(decl.expr);
-                        // Convert to target layout if needed (e.g., int literal with float annotation)
+                        // Evaluate expression with target layout (layout-driven approach like Rust)
+                        var val = try ctx.emitExprWithLayout(decl.expr, decl_layout);
+                        // Convert if expression wasn't a literal (e.g., binop, lookup)
                         val = try ctx.convertNumericToLayout(val, decl_layout);
                         // Bind to pattern
                         try ctx.locals.put(decl.pattern, val);
@@ -801,8 +849,9 @@ pub const LlvmEvaluator = struct {
                                 ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr)
                         else
                             ctx.evaluator.getExprOutputLayout(ctx.module_env, var_stmt.expr);
-                        var val = try ctx.emitExpr(var_stmt.expr);
-                        // Convert to target layout if needed
+                        // Evaluate expression with target layout (layout-driven approach like Rust)
+                        var val = try ctx.emitExprWithLayout(var_stmt.expr, var_layout);
+                        // Convert if expression wasn't a literal (e.g., binop, lookup)
                         val = try ctx.convertNumericToLayout(val, var_layout);
                         try ctx.locals.put(var_stmt.pattern_idx, val);
                         ctx.local_layouts.put(var_stmt.pattern_idx, var_layout) catch {};
@@ -1413,22 +1462,26 @@ pub const LlvmEvaluator = struct {
 
             // Determine target LLVM type from layout
             const target_type: LlvmBuilder.Type = switch (target_layout) {
+                .i8, .u8 => .i8,
+                .i16, .u16 => .i16,
+                .i32, .u32 => .i32,
+                .i64, .u64 => .i64,
+                .i128, .u128, .dec => .i128,
                 .f32 => .float,
                 .f64 => .double,
-                .i128, .u128 => .i128,
                 else => return val, // No conversion needed for other types
             };
 
             // If already the correct type, return as-is
             if (val_type == target_type) return val;
 
-            // Convert integer to larger integer or float
+            // Convert integer to integer or float
             if (val_type == .i8 or val_type == .i16 or val_type == .i32 or val_type == .i64 or val_type == .i128) {
                 // For float targets, convert int to float
                 if (target_type == .float or target_type == .double) {
                     return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
                 }
-                // For int targets (like i128), use appropriate extension based on target signedness
+                // For int targets, use appropriate extension/truncation based on target signedness
                 if (target_layout.isSigned()) {
                     return ctx.wip.conv(.signed, val, target_type, "") catch return error.CompilationFailed;
                 } else {
