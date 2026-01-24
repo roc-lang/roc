@@ -24,8 +24,8 @@ const builtin_loading = eval.builtin_loading;
 const compiled_builtins = @import("compiled_builtins");
 const build_options = @import("build_options");
 
-// Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
-const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
+// Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
+const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
 const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
@@ -143,7 +143,7 @@ const ModuleState = struct {
     was_from_cache: bool = false,
 
     fn deinit(self: *ModuleState, gpa: Allocator) void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: checking cached_ast\n", .{self.name});
         }
         // Free cached AST if present
@@ -151,7 +151,7 @@ const ModuleState = struct {
             ast.deinit(gpa);
             gpa.destroy(ast);
         }
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: getting source ptr (was_from_cache={})\n", .{ self.name, self.was_from_cache });
         }
 
@@ -166,50 +166,50 @@ const ModuleState = struct {
         if (!self.was_from_cache) {
             if (self.env) |*e| {
                 const source = e.common.source;
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
                 }
                 e.deinit();
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
                 }
                 if (source.len > 0) gpa.free(source);
             }
         } else {
             if (self.env) |*e| {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
                 }
                 // The source is heap-allocated separately (read from file), not part of the cache buffer.
                 // We need to free it even for cached modules.
                 const source = e.common.source;
                 e.deinitCachedModule();
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
                 }
                 if (source.len > 0) gpa.free(source);
             }
         }
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing imports (len={})\n", .{ self.name, self.imports.items.len });
         }
         self.imports.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing external_imports (len={})\n", .{ self.name, self.external_imports.items.len });
         }
         self.external_imports.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing dependents (len={})\n", .{ self.name, self.dependents.items.len });
         }
         self.dependents.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing reports (len={}, cap={})\n", .{ self.name, self.reports.items.len, self.reports.capacity });
         }
         // If reports were emitted, they've been cleared via clearRetainingCapacity() and ownership
         // transferred to OrderedSink. If not emitted (e.g., module failed before .Done), we must
         // deinit them here to avoid leaks.
         for (self.reports.items, 0..) |*report, i| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[MOD DEINIT DETAIL] {s}: deinit report {} title=\"{s}\" owned_strings.len={} doc_elements={} allocator_ptr={}\n", .{
                     self.name,
                     i,
@@ -228,15 +228,15 @@ const ModuleState = struct {
             }
             report.deinit();
         }
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: calling reports.deinit\n", .{self.name});
         }
         self.reports.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: freeing path\n", .{self.name});
         }
         gpa.free(self.path);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT DETAIL] {s}: done\n", .{self.name});
         }
     }
@@ -390,13 +390,13 @@ pub const PackageEnv = struct {
     pub fn deinit(self: *PackageEnv) void {
         // NOTE: builtin_modules is not owned by PackageEnv, so we don't deinit it here
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[SCHED DEINIT] {s}: starting with {} modules\n", .{ self.package_name, self.modules.items.len });
         }
 
         // Deinit modules
         for (self.modules.items, 0..) |*ms, idx| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[SCHED DEINIT] {s}: module {} ({s}) env={} ast={}\n", .{
                     self.package_name,
                     idx,
@@ -406,7 +406,7 @@ pub const PackageEnv = struct {
                 });
             }
             ms.deinit(self.gpa);
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[SCHED DEINIT] {s}: module {} done\n", .{ self.package_name, idx });
             }
         }
@@ -782,7 +782,7 @@ pub const PackageEnv = struct {
         // to CommonEnv remains valid after this function returns.
         var parse_ast = parse.parse(&st.env.?.common, self.gpa) catch {
             // If parsing fails, proceed to canonicalization to report errors
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize (parse error)\n", .{st.name});
             }
             st.phase = .Canonicalize;
@@ -798,7 +798,7 @@ pub const PackageEnv = struct {
 
         // Go directly to Canonicalize - sibling discovery happens after canonicalization
         // based on ModuleEnv.imports
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[TRACE-CACHE] PHASE: {s} Parse->Canonicalize\n", .{st.name});
         }
         st.phase = .Canonicalize;
@@ -963,14 +963,14 @@ pub const PackageEnv = struct {
 
                 // Mark both Done and adjust counters
                 if (st.phase != .Done) {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ st.name, mod_name });
                     }
                     st.phase = .Done;
                     self.remaining_modules -= 1;
                 }
                 if (child.phase != .Done) {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[TRACE-CACHE] PHASE: {s} ->Done (CYCLE DETECTED with {s})\n", .{ mod_name, st.name });
                     }
                     child.phase = .Done;
@@ -990,7 +990,7 @@ pub const PackageEnv = struct {
             }
         }
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[TRACE-CACHE] PHASE: {s} Canonicalize->WaitingOnImports (imports={d}, external={d})\n", .{
                 st.name,
                 st.imports.items.len,
@@ -1037,7 +1037,7 @@ pub const PackageEnv = struct {
         }
 
         if (ready) {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[TRACE-CACHE] PHASE: {s} WaitingOnImports->TypeCheck\n", .{st.name});
             }
             st.phase = .TypeCheck;
@@ -1383,7 +1383,7 @@ pub const PackageEnv = struct {
         // to ModuleEnv instances stored in the modules ArrayList, not to heap-allocated copies.
 
         // Done
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[TRACE-CACHE] PHASE: {s} TypeCheck->Done (dependents={d})\n", .{
                 st.name,
                 st.dependents.items.len,

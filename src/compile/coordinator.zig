@@ -52,8 +52,8 @@ const CacheManager = cache_manager_mod.CacheManager;
 const ImportInfo = cache_manager_mod.ImportInfo;
 const CacheModule = @import("cache_module.zig").CacheModule;
 
-// Compile-time flag for cache tracing - enabled via `zig build -Dtrace-cache`
-const trace_cache = if (@hasDecl(build_options, "trace_cache")) build_options.trace_cache else false;
+// Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
+const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
 
 const Allocator = std.mem.Allocator;
 const ModuleEnv = can.ModuleEnv;
@@ -151,7 +151,7 @@ pub const ModuleState = struct {
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator, owns_module_data: bool) void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: starting, env={}, ast={}, owns={}\n", .{
                 self.name,
                 if (self.env != null) @as(u8, 1) else @as(u8, 0),
@@ -161,7 +161,7 @@ pub const ModuleState = struct {
         }
         // Free cached AST if present (always in gpa, not module_allocator)
         if (self.cached_ast) |ast| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[MOD DEINIT] {s}: freeing ast\n", .{self.name});
             }
             ast.deinit(gpa);
@@ -174,14 +174,14 @@ pub const ModuleState = struct {
                 // For cached modules, the env struct is deserialized into the cache buffer (don't free it),
                 // but the source is heap-allocated separately and MUST be freed.
                 if (self.was_cache_hit) {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[MOD DEINIT] {s}: skipping env.deinit (cached module), but freeing source\n", .{self.name});
                     }
                     // Free the heap-allocated source (it's NOT part of the cache buffer)
                     const source = env.common.source;
                     if (source.len > 0) gpa.free(source);
                 } else {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
                     }
                     const source = env.common.source;
@@ -192,7 +192,7 @@ pub const ModuleState = struct {
             }
         }
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: freeing imports\n", .{self.name});
         }
         self.imports.deinit(gpa);
@@ -205,7 +205,7 @@ pub const ModuleState = struct {
             rep.deinit();
         }
         self.reports.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[MOD DEINIT] {s}: freeing path and name\n", .{self.name});
         }
         gpa.free(self.path);
@@ -244,22 +244,22 @@ pub const PackageState = struct {
     }
 
     pub fn deinit(self: *PackageState, gpa: Allocator, owns_module_data: bool) void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: deiniting {} modules\n", .{ self.name, self.modules.items.len });
         }
         for (self.modules.items, 0..) |*mod, i| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[PKG DEINIT] {s}: deinit module {} ({s})\n", .{ self.name, i, mod.name });
             }
             mod.deinit(gpa, owns_module_data);
         }
         self.modules.deinit(gpa);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: modules done, deiniting names\n", .{self.name});
         }
         self.module_names.deinit();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: names done, deiniting shorthands\n", .{self.name});
         }
         var sh_it = self.shorthands.iterator();
@@ -269,12 +269,12 @@ pub const PackageState = struct {
         }
         self.shorthands.deinit();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] {s}: freeing name and root_dir\n", .{self.name});
         }
         gpa.free(self.name);
         gpa.free(self.root_dir);
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[PKG DEINIT] done\n", .{});
         }
     }
@@ -442,37 +442,37 @@ pub const Coordinator = struct {
     }
 
     pub fn deinit(self: *Coordinator) void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] starting shutdown...\n", .{});
         }
         // Stop workers
         self.shutdown();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] shutdown done, freeing packages...\n", .{});
         }
 
         // Free packages
         var pkg_it = self.packages.iterator();
         while (pkg_it.next()) |entry| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD DEINIT] deinit package {s}\n", .{entry.key_ptr.*});
             }
             entry.value_ptr.*.deinit(self.gpa, self.owns_module_data);
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD DEINIT] package deinit done, now destroying\n", .{});
             }
             self.gpa.destroy(entry.value_ptr.*);
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD DEINIT] package destroyed\n", .{});
             }
         }
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] all packages done, calling packages.deinit()\n", .{});
         }
         self.packages.deinit();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] packages done\n", .{});
         }
 
@@ -494,7 +494,7 @@ pub const Coordinator = struct {
         self.workers.deinit(self.gpa);
 
         // Free cache buffers that were keeping cached module data alive
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD DEINIT] freeing {} cache buffers\n", .{self.cache_buffers.items.len});
         }
         for (self.cache_buffers.items) |*buf| {
@@ -582,7 +582,7 @@ pub const Coordinator = struct {
             self.task_mutex.lock();
             defer self.task_mutex.unlock();
         }
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             switch (task) {
                 .parse => |t| std.debug.print("[COORD] ENQUEUE parse: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
                 .canonicalize => |t| std.debug.print("[COORD] ENQUEUE canonicalize: pkg={s} module={s}\n", .{ t.package_name, t.module_name }),
@@ -730,13 +730,13 @@ pub const Coordinator = struct {
 
     /// Handle a successful parse result
     fn handleParsed(self: *Coordinator, result: *ParsedResult) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse return;
         const mod = pkg.getModule(result.module_id) orelse return;
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
@@ -751,7 +751,7 @@ pub const Coordinator = struct {
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
         result.reports.clearRetainingCapacity();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] PARSED: mod.reports AFTER: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
@@ -779,7 +779,7 @@ pub const Coordinator = struct {
 
     /// Handle a successful canonicalization result
     fn handleCanonicalized(self: *Coordinator, result: *CanonicalizedResult) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: pkg={s} module={s} local_imports={} ext_imports={} result_reports={}\n", .{
                 result.package_name,
                 result.module_name,
@@ -791,7 +791,7 @@ pub const Coordinator = struct {
         const pkg = self.packages.get(result.package_name) orelse return;
         const mod = pkg.getModule(result.module_id) orelse return;
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod.reports BEFORE: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
@@ -815,7 +815,7 @@ pub const Coordinator = struct {
         // Append reports - we take ownership, so clear result.reports after copying
         // to prevent WorkerResult.deinit from freeing the shared memory
         for (result.reports.items, 0..) |rep, ri| {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] CANONICALIZED: result report {}: owned_strings.len={}\n", .{ ri, rep.owned_strings.items.len });
                 if (rep.owned_strings.items.len > 0) {
                     std.debug.print("[COORD] CANONICALIZED: first owned_string ptr={} len={}\n", .{ @intFromPtr(rep.owned_strings.items[0].ptr), rep.owned_strings.items[0].len });
@@ -826,7 +826,7 @@ pub const Coordinator = struct {
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
         result.reports.clearRetainingCapacity();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] CANONICALIZED: mod ptr={} mod.reports AFTER: len={} cap={}\n", .{ @intFromPtr(mod), mod.reports.items.len, mod.reports.capacity });
             if (mod.reports.items.len > 0) {
                 const mr = &mod.reports.items[0];
@@ -913,13 +913,13 @@ pub const Coordinator = struct {
 
     /// Handle a successful type-check result
     fn handleTypeChecked(self: *Coordinator, result: *TypeCheckedResult) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: pkg={s} module={s} result_reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse return;
         const mod = pkg.getModule(result.module_id) orelse return;
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports BEFORE append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
@@ -933,7 +933,7 @@ pub const Coordinator = struct {
         // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
         result.reports.clearRetainingCapacity();
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] TYPE_CHECKED: mod.reports AFTER append: len={} cap={}\n", .{ mod.reports.items.len, mod.reports.capacity });
         }
 
@@ -1077,7 +1077,7 @@ pub const Coordinator = struct {
 
     /// Handle a parse failure
     fn handleParseFailed(self: *Coordinator, result: *messages.ParseFailure) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] PARSE FAILED: pkg={s} module={s} reports={}\n", .{ result.package_name, result.module_name, result.reports.items.len });
         }
         const pkg = self.packages.get(result.package_name) orelse return;
@@ -1136,7 +1136,7 @@ pub const Coordinator = struct {
 
     /// Handle a cache hit result (fast path)
     fn handleCacheHit(self: *Coordinator, result: *CacheHitResult) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] CACHE HIT (fast path): pkg={s} module={s}\n", .{
                 result.package_name,
                 result.module_name,
@@ -1189,13 +1189,13 @@ pub const Coordinator = struct {
             else blk: {
                 // External import - resolve shorthand to package name
                 const source_pkg = self.packages.get(source_pkg_name) orelse {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[COORD] checkAllImportsCached: source pkg {s} not found\n", .{source_pkg_name});
                     }
                     return false;
                 };
                 break :blk source_pkg.shorthands.get(imp.package) orelse {
-                    if (comptime trace_cache) {
+                    if (comptime trace_build) {
                         std.debug.print("[COORD] checkAllImportsCached: shorthand {s} not found in {s}\n", .{ imp.package, source_pkg_name });
                     }
                     return false;
@@ -1204,7 +1204,7 @@ pub const Coordinator = struct {
 
             // Look up the package to get its root directory
             const pkg = self.packages.get(pkg_name) orelse {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] checkAllImportsCached: pkg {s} not found\n", .{pkg_name});
                 }
                 return false;
@@ -1212,7 +1212,7 @@ pub const Coordinator = struct {
 
             // Resolve the import's file path
             const module_path = self.resolveModulePath(pkg.root_dir, imp.module) catch {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] checkAllImportsCached: failed to resolve path for {s}.{s}\n", .{ pkg_name, imp.module });
                 }
                 return false;
@@ -1221,12 +1221,12 @@ pub const Coordinator = struct {
 
             // Read the source file and compute its current hash
             const source = self.file_provider.read(self.file_provider.ctx, module_path, self.gpa) catch {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] checkAllImportsCached: failed to read {s}\n", .{module_path});
                 }
                 return false;
             } orelse {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] checkAllImportsCached: file not found {s}\n", .{module_path});
                 }
                 return false;
@@ -1237,13 +1237,13 @@ pub const Coordinator = struct {
             const current_hash = CacheManager.computeSourceHash(source);
             if (!std.mem.eql(u8, &current_hash, &imp.source_hash)) {
                 // Dependency has changed since we cached
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash mismatch (file changed)\n", .{ pkg_name, imp.module });
                 }
                 return false;
             }
 
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] checkAllImportsCached: {s}.{s} hash matches\n", .{ pkg_name, imp.module });
             }
         }
@@ -1291,7 +1291,7 @@ pub const Coordinator = struct {
         for (mod.imports.items) |imp_id| {
             const imp = pkg.getModule(imp_id) orelse continue;
             if (imp.phase != .Done) {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on local import {}\n", .{ pkg.name, mod.name, imp_id });
                 }
                 return; // Not ready yet
@@ -1301,14 +1301,14 @@ pub const Coordinator = struct {
         // Check external imports
         for (mod.external_imports.items) |ext_name| {
             if (!self.isExternalReady(pkg.name, ext_name)) {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] UNBLOCK WAIT: pkg={s} module={s} waiting on external {s}\n", .{ pkg.name, mod.name, ext_name });
                 }
                 return;
             }
         }
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] UNBLOCK: pkg={s} module={s} -> TypeCheck\n", .{ pkg.name, mod.name });
         }
 
@@ -1354,7 +1354,7 @@ pub const Coordinator = struct {
     /// Schedule an external import in its owning package
     /// Also registers the source module as a cross-package dependent of the target
     pub fn scheduleExternalImport(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] SCHEDULE EXT IMPORT: from {s} importing {s}\n", .{ source_pkg, import_name });
         }
 
@@ -1365,13 +1365,13 @@ pub const Coordinator = struct {
 
         // Resolve shorthand to target package
         const source = self.packages.get(source_pkg) orelse {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] SCHEDULE EXT IMPORT: source pkg {s} not found\n", .{source_pkg});
             }
             return;
         };
         const target_pkg_name = source.shorthands.get(qual) orelse {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] SCHEDULE EXT IMPORT: shorthand {s} not found in {s}\n", .{ qual, source_pkg });
             }
             return;
@@ -1379,7 +1379,7 @@ pub const Coordinator = struct {
 
         // Get or create module in target package
         const target_pkg = self.packages.get(target_pkg_name) orelse {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] SCHEDULE EXT IMPORT: target pkg {s} not found\n", .{target_pkg_name});
             }
             return;
@@ -1390,7 +1390,7 @@ pub const Coordinator = struct {
         const module_id = try target_pkg.ensureModule(self.gpa, rest, path);
         const mod = target_pkg.getModule(module_id).?;
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] SCHEDULE EXT IMPORT: resolved to {s}:{} phase={}\n", .{ target_pkg_name, module_id, mod.phase });
         }
 
@@ -1410,7 +1410,7 @@ pub const Coordinator = struct {
         source_pkg: []const u8,
         source_module_id: ModuleId,
     ) !void {
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] REGISTER CROSS-PKG DEP: {s}:{} depends on {s}:{}\n", .{ source_pkg, source_module_id, target_pkg, target_module_id });
         }
 
@@ -1440,13 +1440,13 @@ pub const Coordinator = struct {
         const key = std.fmt.bufPrint(&key_buf, "{s}:{d}", .{ pkg_name, module_id }) catch return;
 
         const dependents = self.cross_package_dependents.get(key) orelse {
-            if (comptime trace_cache) {
+            if (comptime trace_build) {
                 std.debug.print("[COORD] WAKE CROSS-PKG: {s}:{} has no dependents\n", .{ pkg_name, module_id });
             }
             return;
         };
 
-        if (comptime trace_cache) {
+        if (comptime trace_build) {
             std.debug.print("[COORD] WAKE CROSS-PKG: {s}:{} waking {} dependents\n", .{ pkg_name, module_id, dependents.items.len });
         }
 
@@ -1564,7 +1564,7 @@ pub const Coordinator = struct {
                     );
 
                     if (cache_result == .hit) {
-                        if (comptime trace_cache) {
+                        if (comptime trace_build) {
                             std.debug.print("[COORD] FAST PATH HIT: pkg={s} module={s}\n", .{
                                 task.package_name,
                                 task.module_name,
@@ -1587,14 +1587,14 @@ pub const Coordinator = struct {
                     }
                 }
 
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] FAST PATH MISS (deps not cached): pkg={s} module={s}\n", .{
                         task.package_name,
                         task.module_name,
                     });
                 }
             } else {
-                if (comptime trace_cache) {
+                if (comptime trace_build) {
                     std.debug.print("[COORD] FAST PATH MISS (no metadata): pkg={s} module={s}\n", .{
                         task.package_name,
                         task.module_name,

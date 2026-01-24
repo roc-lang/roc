@@ -303,7 +303,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_dump_linker: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help =
+            return CliArgs{ .help = 
             \\Build a binary from the given .roc file, but don't run it
             \\
             \\Usage: roc build [OPTIONS] [ROC_FILE]

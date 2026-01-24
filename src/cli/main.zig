@@ -5261,7 +5261,7 @@ fn checkFileWithBuildEnv(
         // Note: BuildEnv.deinit() will clean up the cache manager
     }
 
-    if (comptime build_options.trace_cache) {
+    if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
     }
 
@@ -5312,14 +5312,14 @@ fn checkFileWithBuildEnv(
         };
     };
 
-    if (comptime build_options.trace_cache) {
+    if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Build complete, draining reports...\n", .{});
     }
 
     // Drain all reports
     const drained = try build_env.drainReports();
 
-    if (comptime build_options.trace_cache) {
+    if (comptime build_options.trace_build) {
         std.debug.print("[CLI] Reports drained: {} modules\n", .{drained.len});
     }
 
@@ -5359,7 +5359,7 @@ fn checkFileWithBuildEnv(
     // Get cache stats from coordinator
     const cache_stats = build_env.getCacheStats();
 
-    if (comptime build_options.trace_cache) {
+    if (comptime build_options.trace_build) {
         std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
     }
 

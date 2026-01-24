@@ -4161,7 +4161,7 @@ pub const Serialized = extern struct {
 /// Called before type-checking, when all dependencies are canonicalized.
 /// This converts expr_pending_lookup to expr_external_lookup (or leaves as-is for error).
 pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []const *@TypeOf(env.*)) void {
-    const trace_pending = @import("build_options").trace_cache;
+    const trace_pending = @import("build_options").trace_build;
 
     const nodes_len = store.nodes.len();
 
