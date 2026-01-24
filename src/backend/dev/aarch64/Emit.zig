@@ -243,6 +243,12 @@ pub fn subsRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: G
     try self.emit32(inst);
 }
 
+/// CMP reg, reg (compare two registers by subtracting and setting flags)
+/// This is an alias for SUBS with destination XZR (discard result)
+pub fn cmp(self: *Emit, width: RegisterWidth, src1: GeneralReg, src2: GeneralReg) !void {
+    try self.subsRegRegReg(width, .ZRSP, src1, src2);
+}
+
 /// SBC reg, reg, reg (subtract with carry/borrow)
 pub fn sbcRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) !void {
     // SBC <Xd>, <Xn>, <Xm>
@@ -444,6 +450,14 @@ pub fn eorRegRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src1: Ge
         (@as(u32, src1.enc()) << 5) |
         dst.enc();
     try self.emit32(inst);
+}
+
+/// EOR reg, reg, imm (exclusive OR with immediate)
+/// Uses IP0 as scratch register for the immediate
+pub fn eorRegRegImm(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: u64) !void {
+    // Load immediate into IP0, then EOR
+    try self.movRegImm64(.IP0, imm);
+    try self.eorRegRegReg(width, dst, src, .IP0);
 }
 
 /// LSL reg, reg, imm (logical shift left by immediate)
@@ -715,6 +729,65 @@ pub fn sturRegMem(self: *Emit, width: RegisterWidth, src: GeneralReg, base: Gene
         (@as(u32, base.enc()) << 5) |
         src.enc();
     try self.emit32(inst);
+}
+
+/// LDR with signed offset (i32)
+/// Handles arbitrary signed offsets by choosing appropriate encoding:
+/// - Small offsets (-256 to 255): use LDUR (unscaled)
+/// - Positive aligned offsets (0 to 32760 for 64-bit): use LDR with unsigned offset
+/// - Other offsets: compute address in IP0 then load with zero offset
+pub fn ldrRegMemSoff(self: *Emit, width: RegisterWidth, dst: GeneralReg, base: GeneralReg, offset: i32) !void {
+    // Try LDUR for small signed offsets
+    if (offset >= -256 and offset <= 255) {
+        try self.ldurRegMem(width, dst, base, @intCast(offset));
+        return;
+    }
+
+    // Try unsigned offset for positive, aligned offsets
+    if (offset >= 0) {
+        const scale: u5 = if (width == .w64) 3 else 2; // 8 or 4 bytes
+        const uoff: u32 = @intCast(offset);
+        if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) { // Check alignment
+            const scaled = uoff >> scale;
+            if (scaled <= 4095) {
+                try self.ldrRegMemUoff(width, dst, base, @intCast(scaled));
+                return;
+            }
+        }
+    }
+
+    // Fallback: compute effective address in IP0, then load
+    try self.movRegImm32(.w64, .IP0, offset);
+    try self.addRegRegReg(.w64, .IP0, base, .IP0);
+    try self.ldurRegMem(width, dst, .IP0, 0);
+}
+
+/// STR with signed offset (i32)
+/// Handles arbitrary signed offsets by choosing appropriate encoding
+pub fn strRegMemSoff(self: *Emit, width: RegisterWidth, src: GeneralReg, base: GeneralReg, offset: i32) !void {
+    // Try STUR for small signed offsets
+    if (offset >= -256 and offset <= 255) {
+        try self.sturRegMem(width, src, base, @intCast(offset));
+        return;
+    }
+
+    // Try unsigned offset for positive, aligned offsets
+    if (offset >= 0) {
+        const scale: u5 = if (width == .w64) 3 else 2; // 8 or 4 bytes
+        const uoff: u32 = @intCast(offset);
+        if ((uoff & ((@as(u32, 1) << scale) - 1)) == 0) { // Check alignment
+            const scaled = uoff >> scale;
+            if (scaled <= 4095) {
+                try self.strRegMemUoff(width, src, base, @intCast(scaled));
+                return;
+            }
+        }
+    }
+
+    // Fallback: compute effective address in IP0, then store
+    try self.movRegImm32(.w64, .IP0, offset);
+    try self.addRegRegReg(.w64, .IP0, base, .IP0);
+    try self.sturRegMem(width, src, .IP0, 0);
 }
 
 /// LDRB (load register byte, zero-extend)

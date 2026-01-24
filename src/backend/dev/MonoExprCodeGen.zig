@@ -1336,16 +1336,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             };
 
             // Determine element size (default to 8 bytes)
-            const elem_size: i32 = switch (lhs_expr) {
-                .list => |l| switch (l.elem_layout) {
-                    .i8, .u8 => 1,
-                    .i16, .u16 => 2,
-                    .i32, .u32, .f32 => 4,
-                    .i64, .u64, .f64, .str => 8,
-                    .i128, .u128, .dec => 16,
-                    else => 8,
-                },
-                else => 8,
+            const elem_layout = switch (lhs_expr) {
+                .list => |l| l.elem_layout,
+                else => .i64,
+            };
+
+            // Check if elements are themselves lists by examining the actual elements
+            // (elem_layout may not correctly indicate nested lists)
+            const is_nested_list = blk: {
+                if (lhs_elems.len > 0) {
+                    const first_elem = self.store.getExpr(lhs_elems[0]);
+                    break :blk (first_elem == .list or first_elem == .empty_list);
+                }
+                break :blk false;
+            };
+
+            const elem_size: i32 = switch (elem_layout) {
+                .i8, .u8 => 1,
+                .i16, .u16 => 2,
+                .i32, .u32, .f32 => 4,
+                .i64, .u64, .f64, .str => 8,
+                .i128, .u128, .dec => 16,
+                else => if (is_nested_list) 16 else 8, // Lists are 16 bytes (ptr + len)
             };
 
             const result_reg = try self.codegen.allocGeneralFor(0);
@@ -1407,31 +1419,116 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             for (0..lhs_elems.len) |i| {
                 const offset: i32 = @as(i32, @intCast(i)) * elem_size;
 
-                // Load lhs element: [lhs_ptr + offset]
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
-                }
+                if (is_nested_list) {
+                    // For nested lists, we need to compare the inner list contents,
+                    // not just pointers. Inner lists are stored as (ptr, len) pairs.
+                    // Load inner list pointers
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
+                        try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
+                    }
 
-                // Load rhs element: [rhs_ptr + offset]
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
-                } else {
-                    try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
-                }
+                    // Load inner list lengths
+                    const inner_len_lhs = try self.codegen.allocGeneralFor(0);
+                    const inner_len_rhs = try self.codegen.allocGeneralFor(0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, inner_len_lhs, lhs_ptr_reg, offset + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, inner_len_rhs, rhs_ptr_reg, offset + 8);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, inner_len_lhs, lhs_ptr_reg, offset + 8);
+                        try self.codegen.emit.movRegMem(.w64, inner_len_rhs, rhs_ptr_reg, offset + 8);
+                    }
 
-                // Compare elements: if not equal, set result to 0
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
-                    try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                    // Compare lengths first
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cmp(.w64, inner_len_lhs, inner_len_rhs);
+                        try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                    } else {
+                        try self.codegen.emit.cmpRegReg(.w64, inner_len_lhs, inner_len_rhs);
+                        const zero_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitLoadImm(zero_reg, 0);
+                        try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                        self.codegen.freeGeneral(zero_reg);
+                    }
+
+                    // Now compare inner list elements
+                    // Get the inner list's element info from the expression
+                    const inner_list_expr = self.store.getExpr(lhs_elems[i]);
+                    const inner_elem_count: usize = switch (inner_list_expr) {
+                        .list => |l| self.store.getExprSpan(l.elems).len,
+                        .empty_list => 0,
+                        else => 0,
+                    };
+                    const inner_elem_layout = switch (inner_list_expr) {
+                        .list => |l| l.elem_layout,
+                        else => .i64,
+                    };
+                    const inner_elem_size: i32 = switch (inner_elem_layout) {
+                        .i8, .u8 => 1,
+                        .i16, .u16 => 2,
+                        .i32, .u32, .f32 => 4,
+                        .i64, .u64, .f64, .str => 8,
+                        .i128, .u128, .dec => 16,
+                        else => 8,
+                    };
+
+
+                    // Compare each inner element
+                    // temp_lhs = inner lhs ptr, temp_rhs = inner rhs ptr
+                    const inner_temp_lhs = try self.codegen.allocGeneralFor(0);
+                    const inner_temp_rhs = try self.codegen.allocGeneralFor(0);
+                    for (0..inner_elem_count) |j| {
+                        const inner_offset: i32 = @as(i32, @intCast(j)) * inner_elem_size;
+
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, inner_temp_lhs, temp_lhs, inner_offset);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, inner_temp_rhs, temp_rhs, inner_offset);
+                            try self.codegen.emit.cmp(.w64, inner_temp_lhs, inner_temp_rhs);
+                            try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, inner_temp_lhs, temp_lhs, inner_offset);
+                            try self.codegen.emit.movRegMem(.w64, inner_temp_rhs, temp_rhs, inner_offset);
+                            try self.codegen.emit.cmpRegReg(.w64, inner_temp_lhs, inner_temp_rhs);
+                            const zero_reg2 = try self.codegen.allocGeneralFor(0);
+                            try self.codegen.emitLoadImm(zero_reg2, 0);
+                            try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg2);
+                            self.codegen.freeGeneral(zero_reg2);
+                        }
+                    }
+                    self.codegen.freeGeneral(inner_temp_lhs);
+                    self.codegen.freeGeneral(inner_temp_rhs);
+                    self.codegen.freeGeneral(inner_len_lhs);
+                    self.codegen.freeGeneral(inner_len_rhs);
                 } else {
-                    try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
-                    // Use CMOV to set result to 0 if not equal
-                    const zero_reg = try self.codegen.allocGeneralFor(0);
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
-                    self.codegen.freeGeneral(zero_reg);
+                    // Load lhs element: [lhs_ptr + offset]
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, lhs_ptr_reg, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_lhs, lhs_ptr_reg, offset);
+                    }
+
+                    // Load rhs element: [rhs_ptr + offset]
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, rhs_ptr_reg, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_rhs, rhs_ptr_reg, offset);
+                    }
+
+                    // Compare elements: if not equal, set result to 0
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cmp(.w64, temp_lhs, temp_rhs);
+                        try self.codegen.emit.csel(.w64, result_reg, result_reg, .ZRSP, .eq);
+                    } else {
+                        try self.codegen.emit.cmpRegReg(.w64, temp_lhs, temp_rhs);
+                        // Use CMOV to set result to 0 if not equal
+                        const zero_reg = try self.codegen.allocGeneralFor(0);
+                        try self.codegen.emitLoadImm(zero_reg, 0);
+                        try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero_reg);
+                        self.codegen.freeGeneral(zero_reg);
+                    }
                 }
             }
 
@@ -1856,10 +1953,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Load 64-bit immediate into register
         fn loadImm64(self: *Self, dst: GeneralReg, value: i64) !void {
+            // Cast to u64 - the bit pattern is the same for signed/unsigned
+            const uvalue: u64 = @bitCast(value);
             if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegImm64(dst, value);
+                try self.codegen.emit.movRegImm64(dst, uvalue);
             } else {
-                try self.codegen.emit.movRegImm64(dst, value);
+                try self.codegen.emit.movRegImm64(dst, uvalue);
             }
         }
 
@@ -1934,8 +2033,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // For JIT evaluation, we can allocate list data on the stack
             // Roc lists are (ptr, len) pairs where ptr points to element data
 
+            // Check if elements are nested lists by examining the first element
+            const is_nested_list = blk: {
+                if (elems.len > 0) {
+                    const first_elem = self.store.getExpr(elems[0]);
+                    break :blk (first_elem == .list or first_elem == .empty_list);
+                }
+                break :blk false;
+            };
+
             // Determine element size based on layout
-            const elem_size: i32 = switch (list.elem_layout) {
+            // For nested lists, elements are 16-byte structs (ptr + len)
+            const elem_size: i32 = if (is_nested_list) 16 else switch (list.elem_layout) {
                 .i8, .u8 => 1,
                 .i16, .u16 => 2,
                 .i32, .u32, .f32 => 4,
@@ -1953,18 +2062,52 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Store each element
             for (elems, 0..) |elem_id, i| {
                 const elem_loc = try self.generateExpr(elem_id);
-                const elem_reg = try self.ensureInGeneralReg(elem_loc);
-
                 const elem_offset = list_data_offset + @as(i32, @intCast(i)) * elem_size;
 
-                // Store element to stack
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, elem_offset);
+                if (is_nested_list) {
+                    // For nested lists, copy both ptr and len (16 bytes total)
+                    switch (elem_loc) {
+                        .stack => |src_offset| {
+                            const temp_reg = try self.codegen.allocGeneralFor(0);
+                            // Copy ptr (first 8 bytes)
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_offset);
+                                // Copy len (second 8 bytes)
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_offset + 8);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
+                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset, temp_reg);
+                                // Copy len (second 8 bytes)
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
+                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset + 8, temp_reg);
+                            }
+                            self.codegen.freeGeneral(temp_reg);
+                        },
+                        else => {
+                            // For other locations, fall back to single value
+                            const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, elem_offset);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset, elem_reg);
+                            }
+                            self.codegen.freeGeneral(elem_reg);
+                        },
+                    }
                 } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset, elem_reg);
-                }
+                    const elem_reg = try self.ensureInGeneralReg(elem_loc);
 
-                self.codegen.freeGeneral(elem_reg);
+                    // Store element to stack
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, elem_offset);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, elem_offset, elem_reg);
+                    }
+
+                    self.codegen.freeGeneral(elem_reg);
+                }
             }
 
             // Create the list struct: (ptr, len)
