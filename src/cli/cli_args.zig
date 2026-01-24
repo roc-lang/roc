@@ -90,6 +90,7 @@ pub const BuildArgs = struct {
     output: ?[]const u8 = null, // the path where the output binary should be created
     debug: bool = false, // include debug information in the output binary
     allow_errors: bool = false, // allow building even if there are type errors
+    verbose: bool = false, // enable verbose output including cache statistics
     wasm_memory: ?usize = null, // initial memory size for WASM targets (default: 64MB)
     wasm_stack_size: ?usize = null, // stack size for WASM targets (default: 8MB)
     z_bench_tokenize: ?[]const u8 = null, // benchmark tokenizer on a file or directory
@@ -294,6 +295,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var output: ?[]const u8 = null;
     var debug: bool = false;
     var allow_errors: bool = false;
+    var verbose: bool = false;
     var wasm_memory: ?usize = null;
     var wasm_stack_size: ?usize = null;
     var z_bench_tokenize: ?[]const u8 = null;
@@ -301,7 +303,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     var z_dump_linker: bool = false;
     for (args) |arg| {
         if (isHelpFlag(arg)) {
-            return CliArgs{ .help = 
+            return CliArgs{ .help =
             \\Build a binary from the given .roc file, but don't run it
             \\
             \\Usage: roc build [OPTIONS] [ROC_FILE]
@@ -315,6 +317,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             \\      --target=<target>              Target to compile for (e.g., x64musl, x64glibc, arm64musl). Defaults to native target with musl for static linking
             \\      --debug                        Include debug information in the output binary
             \\      --allow-errors                 Allow building even if there are type errors (warnings are always allowed)
+            \\      --verbose                      Enable verbose output including cache statistics
             \\      --wasm-memory=<bytes>          Initial memory size for WASM targets in bytes (default: 67108864 = 64MB)
             \\      --wasm-stack-size=<bytes>      Stack size for WASM targets in bytes (default: 8388608 = 8MB)
             \\      --z-bench-tokenize=<path>      Benchmark tokenizer on a file or directory
@@ -379,6 +382,8 @@ fn parseBuild(args: []const []const u8) CliArgs {
             }
         } else if (mem.eql(u8, arg, "--z-dump-linker")) {
             z_dump_linker = true;
+        } else if (mem.eql(u8, arg, "--verbose")) {
+            verbose = true;
         } else {
             if (path != null) {
                 return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "build", .arg = arg } } };
@@ -386,7 +391,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
             path = arg;
         }
     }
-    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
+    return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .target = target, .output = output, .debug = debug, .allow_errors = allow_errors, .verbose = verbose, .wasm_memory = wasm_memory, .wasm_stack_size = wasm_stack_size, .z_bench_tokenize = z_bench_tokenize, .z_bench_parse = z_bench_parse, .z_dump_linker = z_dump_linker } };
 }
 
 fn parseBundle(alloc: mem.Allocator, args: []const []const u8) std.mem.Allocator.Error!CliArgs {

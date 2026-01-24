@@ -5417,6 +5417,11 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
                 check_result.warning_count,
             }) catch {};
             formatElapsedTime(stderr, elapsed) catch {};
+            // Include inline cache stats summary
+            const total_modules = check_result.cache_hits + check_result.cache_misses;
+            if (total_modules > 0 and check_result.cache_hits > 0) {
+                stderr.print(" ({}/{} cached)", .{ check_result.cache_hits, total_modules }) catch {};
+            }
             stderr.print(" for {s}.\n", .{args.path}) catch {};
 
             // Flush before exit
@@ -5431,6 +5436,11 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         } else {
             stdout.print("No errors found in ", .{}) catch {};
             formatElapsedTime(stdout, elapsed) catch {};
+            // Include inline cache stats summary
+            const total_modules = check_result.cache_hits + check_result.cache_misses;
+            if (total_modules > 0 and check_result.cache_hits > 0) {
+                stdout.print(" ({}/{} cached)", .{ check_result.cache_hits, total_modules }) catch {};
+            }
             stdout.print(" for {s}\n", .{args.path}) catch {};
             ctx.io.flush();
         }
@@ -5441,9 +5451,9 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         printTimingBreakdown(stdout, if (builtin.target.cpu.arch == .wasm32) null else check_result.timing);
     }
 
-    // Print cache stats if verbose
+    // Print detailed cache stats if verbose
     if (args.verbose) {
-        printCacheStats(stderr, check_result.cache_hits, check_result.cache_misses, check_result.modules_compiled);
+        printCacheStats(stdout, check_result.cache_hits, check_result.cache_misses, check_result.modules_compiled);
     }
 }
 
