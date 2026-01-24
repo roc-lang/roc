@@ -111,6 +111,22 @@ pub fn movk(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: u16, shift:
     try self.emit32(inst);
 }
 
+/// MOVN - Move with NOT (load inverted immediate)
+/// Sets dst = ~(imm16 << shift), useful for loading negative values
+pub fn movn(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) !void {
+    // MOVN <Xd>, #<imm16>, LSL #<shift>
+    // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
+    // sf  0  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
+    const sf = width.sf();
+    const hw: u2 = @truncate(shift >> 4);
+    const inst: u32 = (@as(u32, sf) << 31) |
+        (0b00100101 << 23) |
+        (@as(u32, hw) << 21) |
+        (@as(u32, imm) << 5) |
+        dst.enc();
+    try self.emit32(inst);
+}
+
 /// Load a 64-bit immediate into a register
 /// Uses MOVZ + MOVK sequence as needed
 pub fn movRegImm64(self: *Emit, dst: GeneralReg, imm: u64) !void {
@@ -136,6 +152,18 @@ pub fn movRegImm64(self: *Emit, dst: GeneralReg, imm: u64) !void {
     } else {
         try self.movz(.w64, dst, imm16_3, 48);
     }
+}
+
+/// Load a 32-bit (or smaller) signed immediate into a register
+/// Uses MOVZ + MOVK sequence, treating the value as a bit pattern
+pub fn movRegImm32(self: *Emit, width: RegisterWidth, dst: GeneralReg, imm: i32) !void {
+    // Treat as unsigned bit pattern (matches Rust implementation style)
+    const val: u32 = @bitCast(imm);
+    const low16: u16 = @truncate(val);
+    const high16: u16 = @truncate(val >> 16);
+
+    try self.movz(width, dst, low16, 0);
+    if (high16 != 0) try self.movk(width, dst, high16, 16);
 }
 
 // Arithmetic instructions
