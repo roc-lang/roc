@@ -10,6 +10,7 @@ const Windows = @import("Windows.zig");
 
 const SupportedOS = enum { windows, linux, macos };
 
+/// The operating system this build is targeting.
 pub const SUPPORTED_OS = switch (builtin.os.tag) {
     .windows => SupportedOS.windows,
     .linux => SupportedOS.linux,
@@ -17,6 +18,7 @@ pub const SUPPORTED_OS = switch (builtin.os.tag) {
     else => |tag| @compileError(@tagName(tag) ++ " is not a support OS for ReplLine!"),
 };
 
+/// Platform-specific newline sequence.
 pub const NEW_LINE = switch (SUPPORTED_OS) {
     .linux, .macos => "\n",
     .windows => "\r\n",
@@ -226,6 +228,7 @@ fn findCommandFn(state: *LineState) CommandFn {
     };
 }
 
+/// All possible errors that can occur during line reading.
 pub const ReadLineError =
     error{InvalidUtf8} ||
     Allocator.Error ||
@@ -237,6 +240,7 @@ pub const ReadLineError =
         .windows => Windows.Error,
     };
 
+/// Reads a line of input from stdin with line editing and history support.
 pub fn readLine(self: *ReplLine, outlive: Allocator, prompt: []const u8) ReadLineError![]u8 {
     var stdout_buffer: [1024]u8 = undefined;
     var stdout_writer = std.fs.File.stdout().writerStreaming(&stdout_buffer);

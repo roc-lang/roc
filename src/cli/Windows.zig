@@ -8,6 +8,7 @@ input_mode: windows.DWORD,
 
 const Windows = @This();
 
+/// Errors that can occur when configuring the Windows console.
 pub const Error = error{ GetConsoleModeFailure, SetConsoleModeFailure };
 
 // method to enable raw mode on Windows terminals
