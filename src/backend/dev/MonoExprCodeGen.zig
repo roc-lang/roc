@@ -1120,13 +1120,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             lhs_expr: MonoExpr,
             op: MonoExpr.BinOp,
         ) Error!ValueLocation {
-            const elem_count: usize = switch (lhs_expr) {
-                .record => |r| self.store.getExprSpan(r.fields).len,
-                .tuple => |t| self.store.getExprSpan(t.elems).len,
+            // Get element expressions to determine sizes for nested structures
+            const elem_exprs: []const MonoExprId = switch (lhs_expr) {
+                .record => |r| self.store.getExprSpan(r.fields),
+                .tuple => |t| self.store.getExprSpan(t.elems),
                 else => unreachable,
             };
 
-            if (elem_count == 0) {
+            if (elem_exprs.len == 0) {
                 // Empty records/tuples are always equal
                 return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
             }
@@ -1136,13 +1137,42 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Start with equality result = 1 (true for eq, will be inverted for neq)
             try self.codegen.emitLoadImm(result_reg, 1);
 
-            // Records use 16 bytes per field (for tag unions), tuples use 8 bytes
-            const elem_size: i32 = if (lhs_expr == .record) 16 else 8;
+            // Calculate comparison byte offsets
+            // Records: 16 bytes per field, but only compare first 8 bytes of each slot
+            // Tuples: 8 bytes per element, nested tuples are flattened
+            var offsets: [32]i32 = undefined; // Max 32 comparison points
+            var offset_count: usize = 0;
+            const is_record = lhs_expr == .record;
+
+            if (is_record) {
+                // Records: compare first 8 bytes of each 16-byte slot
+                for (0..elem_exprs.len) |i| {
+                    offsets[offset_count] = @as(i32, @intCast(i)) * 16;
+                    offset_count += 1;
+                }
+            } else {
+                // Tuples: compare all 8-byte slots including nested tuples
+                var current_offset: i32 = 0;
+                for (elem_exprs) |elem_id| {
+                    const elem_expr = self.store.getExpr(elem_id);
+                    const elem_slots: usize = switch (elem_expr) {
+                        .tuple => |t| self.store.getExprSpan(t.elems).len,
+                        else => 1,
+                    };
+                    for (0..elem_slots) |_| {
+                        offsets[offset_count] = current_offset;
+                        offset_count += 1;
+                        current_offset += 8;
+                    }
+                }
+            }
+
             const temp_lhs = try self.codegen.allocGeneralFor(0);
             const temp_rhs = try self.codegen.allocGeneralFor(0);
 
-            for (0..elem_count) |i| {
-                const offset: i32 = @as(i32, @intCast(i)) * elem_size;
+            // Compare all elements at their respective offsets
+            for (0..offset_count) |i| {
+                const offset: i32 = offsets[i];
 
                 // Load LHS element
                 switch (lhs_loc) {
@@ -1928,24 +1958,72 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             // Multi-element tuple - store on stack
-            const elem_size: i32 = 8;
-            const num_elems: i32 = @intCast(elems.len);
+            // First pass: calculate total size needed (including nested structures)
+            var total_size: u32 = 0;
+            var elem_offsets: [16]u32 = undefined; // Max 16 elements
+            for (elems, 0..) |elem_id, i| {
+                elem_offsets[i] = total_size;
+                const elem_expr = self.store.getExpr(elem_id);
+                // Check if element is a nested tuple - needs more space
+                const elem_size: u32 = switch (elem_expr) {
+                    .tuple => |t| @as(u32, @intCast(self.store.getExprSpan(t.elems).len)) * 8,
+                    else => 8,
+                };
+                total_size += elem_size;
+            }
+
             // Allocate stack space for all elements (use dynamic allocation to avoid conflicts)
-            const tuple_offset: i32 = self.codegen.allocStackSlot(@as(u32, @intCast(num_elems * elem_size)));
+            const tuple_offset: i32 = self.codegen.allocStackSlot(total_size);
 
             for (elems, 0..) |elem_id, i| {
                 const elem_loc = try self.generateExpr(elem_id);
-                const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                const dest_offset = tuple_offset + @as(i32, @intCast(elem_offsets[i]));
+                const elem_expr = self.store.getExpr(elem_id);
 
-                const offset = tuple_offset + @as(i32, @intCast(i)) * elem_size;
-
-                if (comptime builtin.cpu.arch == .aarch64) {
-                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, offset);
-                } else {
-                    try self.codegen.emit.movMemReg(.w64, .RBP, offset, elem_reg);
+                // Handle nested tuples specially - copy all elements
+                switch (elem_expr) {
+                    .tuple => |t| {
+                        const nested_elems = self.store.getExprSpan(t.elems);
+                        switch (elem_loc) {
+                            .stack => |src_offset| {
+                                // Copy all nested elements
+                                const temp_reg = try self.codegen.allocGeneralFor(0);
+                                for (0..nested_elems.len) |j| {
+                                    const src_elem_offset = src_offset + @as(i32, @intCast(j)) * 8;
+                                    const dst_elem_offset = dest_offset + @as(i32, @intCast(j)) * 8;
+                                    if (comptime builtin.cpu.arch == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_elem_offset);
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_elem_offset);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_elem_offset);
+                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_elem_offset, temp_reg);
+                                    }
+                                }
+                                self.codegen.freeGeneral(temp_reg);
+                            },
+                            else => {
+                                // Single-value nested tuple - just store it
+                                const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
+                                } else {
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
+                                }
+                                self.codegen.freeGeneral(elem_reg);
+                            },
+                        }
+                    },
+                    else => {
+                        // Simple value - store 8 bytes
+                        const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
+                        }
+                        self.codegen.freeGeneral(elem_reg);
+                    },
                 }
-
-                self.codegen.freeGeneral(elem_reg);
             }
 
             return .{ .stack = tuple_offset };
