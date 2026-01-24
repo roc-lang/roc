@@ -780,6 +780,13 @@ pub const Import = struct {
             self.resolved_modules.deinit(allocator);
         }
 
+        /// Deinit only the hash map, not the SafeLists.
+        /// Used for cached modules where the SafeLists point into the cache buffer
+        /// but the map was heap-allocated during deserialization.
+        pub fn deinitMapOnly(self: *Store, allocator: std.mem.Allocator) void {
+            self.map.deinit(allocator);
+        }
+
         /// Get or create an Import.Idx for the given module name.
         /// The module name is first checked against existing imports by comparing strings.
         /// New imports are initially unresolved (UNRESOLVED_MODULE).

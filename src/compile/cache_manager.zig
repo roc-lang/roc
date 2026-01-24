@@ -318,12 +318,14 @@ pub const CacheManager = struct {
         // Restore the ModuleEnv from cache
         const module_env = try cache.restore(self.allocator, module_name, source);
 
-        return CacheResult{ .hit = .{
-            .module_env = module_env,
-            .error_count = cache.header.error_count,
-            .warning_count = cache.header.warning_count,
-            .cache_data = mapped_cache, // Transfer ownership - keeps buffer alive
-        } };
+        return CacheResult{
+            .hit = .{
+                .module_env = module_env,
+                .error_count = cache.header.error_count,
+                .warning_count = cache.header.warning_count,
+                .cache_data = mapped_cache, // Transfer ownership - keeps buffer alive
+            },
+        };
     }
 
     /// Compute source-only hash (without compiler version) for metadata lookups.

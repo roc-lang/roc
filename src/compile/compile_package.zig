@@ -140,15 +140,13 @@ const ModuleState = struct {
         }
 
         // For cached modules:
-        // - Do NOT call env.deinit() - deserialized data structures have backing arrays
-        //   in the cache buffer, and trying to free them causes stack overflow/crashes.
-        // - The cache buffer is freed separately via cache_buffers cleanup.
-        // - This leaks hash maps allocated during deserialization, but that's acceptable
-        //   for now until we implement a proper deinitForCached() method.
+        // - Call deinitCachedModule() to free only heap-allocated hash maps
+        // - The cache buffer is freed separately via cache_buffers cleanup
+        // - STILL free the source - it's heap-allocated separately, not part of the cache buffer
         //
         // For non-cached modules:
-        // - We call env.deinit() to free all allocations
-        // - We free the source which was heap-allocated
+        // - Call full env.deinit() to free all allocations
+        // - Free the source which was heap-allocated
         if (!self.was_from_cache) {
             if (self.env) |*e| {
                 const source = e.common.source;
@@ -162,8 +160,18 @@ const ModuleState = struct {
                 if (source.len > 0) gpa.free(source);
             }
         } else {
-            if (comptime trace_cache) {
-                std.debug.print("[MOD DEINIT DETAIL] {s}: skipping env.deinit (cached module - memory owned by cache buffer)\n", .{self.name});
+            if (self.env) |*e| {
+                if (comptime trace_cache) {
+                    std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
+                }
+                // The source is heap-allocated separately (read from file), not part of the cache buffer.
+                // We need to free it even for cached modules.
+                const source = e.common.source;
+                e.deinitCachedModule();
+                if (comptime trace_cache) {
+                    std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
+                }
+                if (source.len > 0) gpa.free(source);
             }
         }
         if (comptime trace_cache) {

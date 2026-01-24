@@ -167,12 +167,15 @@ pub const ModuleState = struct {
         // Free module env if present (only if we own module data)
         if (owns_module_data) {
             if (self.env) |env| {
-                // For cached modules, skip everything - env and source point into cache buffer,
-                // and calling deinit on deserialized structures causes crashes.
+                // For cached modules, the env struct is deserialized into the cache buffer (don't free it),
+                // but the source is heap-allocated separately and MUST be freed.
                 if (self.was_cache_hit) {
                     if (comptime trace_cache) {
-                        std.debug.print("[MOD DEINIT] {s}: skipping env.deinit (cached module)\n", .{self.name});
+                        std.debug.print("[MOD DEINIT] {s}: skipping env.deinit (cached module), but freeing source\n", .{self.name});
                     }
+                    // Free the heap-allocated source (it's NOT part of the cache buffer)
+                    const source = env.common.source;
+                    if (source.len > 0) gpa.free(source);
                 } else {
                     if (comptime trace_cache) {
                         std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});

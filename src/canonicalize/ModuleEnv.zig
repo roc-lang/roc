@@ -593,6 +593,25 @@ pub fn deinit(self: *Self) void {
     }
 }
 
+/// Deinitialize a cached module environment.
+/// This only frees heap-allocated data from deserialization (hash maps),
+/// not the cache buffer data (SafeLists, arrays, strings).
+///
+/// After deserialization, the memory ownership is mixed:
+/// - Hash map storage (map.entries, map.metadata) -> heap allocated, needs freeing
+/// - SafeLists, arrays, strings -> point into cache buffer, must NOT be freed
+///
+/// Call this instead of deinit() for modules loaded from cache.
+pub fn deinitCachedModule(self: *Self) void {
+    // Only free the hash map that was allocated during deserialization
+    // (see CIR.Import.Store.Serialized.deserialize which calls ensureTotalCapacity)
+    self.imports.deinitMapOnly(self.gpa);
+
+    // import_mapping is initialized empty during deserialization and may have
+    // items added later, so we need to free it
+    self.import_mapping.deinit();
+}
+
 // Module compilation functionality
 
 /// Records a diagnostic error during canonicalization without blocking compilation.
