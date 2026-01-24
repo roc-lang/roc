@@ -1199,14 +1199,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const reg = try self.ensureInGeneralReg(inner_loc);
             const result_reg = try self.codegen.allocGeneralFor(0);
 
-            // TODO: PLACEHOLDER - Uses NEG instead of proper boolean NOT
-            // WHY: Boolean NOT should flip 0↔1, but NEG gives: NEG(0)=0, NEG(1)=-1
-            // IMPACT: `not False` = 0 (correct), `not True` = -1 (wrong, should be 0)
-            // PROPER FIX: Use XOR with 1:
-            //   - AArch64: EOR Rd, Rn, #1
-            //   - x86: XOR reg, 1
-            // This correctly flips: 0 XOR 1 = 1, 1 XOR 1 = 0
-            try self.codegen.emitNeg(.w64, result_reg, reg);
+            // Boolean NOT: XOR with 1 to flip 0↔1
+            // 0 XOR 1 = 1 (False -> True)
+            // 1 XOR 1 = 0 (True -> False)
+            try self.codegen.emitXorImm(.w64, result_reg, reg, 1);
 
             self.codegen.freeGeneral(reg);
             return .{ .general_reg = result_reg };

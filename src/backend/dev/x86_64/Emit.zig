@@ -306,6 +306,17 @@ pub fn xorRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
 }
 
+/// XOR reg, imm8 (XOR with sign-extended 8-bit immediate)
+pub fn xorRegImm8(self: *Emit, width: RegisterWidth, reg: GeneralReg, imm: i8) !void {
+    if (width.requiresSizeOverride()) {
+        try self.buf.append(self.allocator, 0x66);
+    }
+    try self.emitRex(width, null, reg);
+    try self.buf.append(self.allocator, 0x83); // XOR r/m, imm8
+    try self.buf.append(self.allocator, modRM(0b11, 6, reg.enc())); // /6 = XOR
+    try self.buf.append(self.allocator, @bitCast(imm));
+}
+
 /// SHL reg, imm8 (shift left)
 pub fn shlRegImm8(self: *Emit, width: RegisterWidth, reg: GeneralReg, imm: u8) !void {
     if (width.requiresSizeOverride()) {

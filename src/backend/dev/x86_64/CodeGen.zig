@@ -546,6 +546,14 @@ pub const SystemVCodeGen = struct {
         try self.emit.orRegReg(width, dst, b);
     }
 
+    /// Emit bitwise XOR with immediate: dst = src ^ imm
+    pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
+        if (dst != src) {
+            try self.emit.movRegReg(width, dst, src);
+        }
+        try self.emit.xorRegImm8(width, dst, imm);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0

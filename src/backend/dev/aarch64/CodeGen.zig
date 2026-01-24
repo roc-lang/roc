@@ -494,6 +494,13 @@ pub const AArch64CodeGen = struct {
         try self.emit.orrRegRegReg(width, dst, a, b);
     }
 
+    /// Emit bitwise XOR with immediate: dst = src ^ imm
+    pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
+        // Load immediate into scratch register and use EOR
+        try self.emit.movRegImm32(width, .IP0, imm);
+        try self.emit.eorRegRegReg(width, dst, src, .IP0);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
