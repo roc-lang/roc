@@ -1998,9 +1998,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Load 64-bit immediate into register
         fn loadImm64(self: *Self, dst: GeneralReg, value: i64) !void {
             if (comptime builtin.cpu.arch == .aarch64) {
-                try self.codegen.emit.movRegImm64(dst, value);
+                try self.codegen.emit.movRegImm64(dst, @bitCast(value));
             } else {
-                try self.codegen.emit.movRegImm64(dst, value);
+                try self.codegen.emit.movRegImm64(dst, @bitCast(value));
             }
         }
 
@@ -2359,199 +2359,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.copyValueToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc);
             }
 
-            // Multi-element tuple - store on stack
-            // First pass: calculate total size needed (including nested structures)
-            var total_size: u32 = 0;
-            var elem_offsets: [16]u32 = undefined; // Max 16 elements
-            var elem_sizes: [16]u32 = undefined; // Size of each element
-            for (elems, 0..) |elem_id, i| {
-                elem_offsets[i] = total_size;
-                const elem_expr = self.store.getExpr(elem_id);
-                // Calculate element size based on type
-                const elem_size: u32 = switch (elem_expr) {
-                    .tuple => |t| @as(u32, @intCast(self.store.getExprSpan(t.elems).len)) * 8,
-                    .tag => 16, // Tag unions with payloads need 16 bytes (discriminant + payload)
-                    .list => 24, // Lists are (ptr, len, capacity) = 24 bytes
-                    else => 8,
-                };
-                elem_sizes[i] = elem_size;
-                total_size += elem_size;
-            }
-
-            // Allocate stack space for all elements (use dynamic allocation to avoid conflicts)
-            const tuple_offset: i32 = self.codegen.allocStackSlot(total_size);
-
-            for (elems, 0..) |elem_id, i| {
-                const elem_loc = try self.generateExpr(elem_id);
-                const dest_offset = tuple_offset + @as(i32, @intCast(elem_offsets[i]));
-                const elem_expr = self.store.getExpr(elem_id);
-                const this_elem_size = elem_sizes[i];
-
-                // Handle multi-word values specially - copy all bytes
-                switch (elem_expr) {
-                    .tuple => |t| {
-                        const nested_elems = self.store.getExprSpan(t.elems);
-                        switch (elem_loc) {
-                            .stack => |src_offset| {
-                                // Copy all nested elements
-                                const temp_reg = try self.codegen.allocGeneralFor(0);
-                                for (0..nested_elems.len) |j| {
-                                    const src_elem_offset = src_offset + @as(i32, @intCast(j)) * 8;
-                                    const dst_elem_offset = dest_offset + @as(i32, @intCast(j)) * 8;
-                                    if (comptime builtin.cpu.arch == .aarch64) {
-                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_elem_offset);
-                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_elem_offset);
-                                    } else {
-                                        try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_elem_offset);
-                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_elem_offset, temp_reg);
-                                    }
-                                }
-                                self.codegen.freeGeneral(temp_reg);
-                            },
-                            else => {
-                                // Single-value nested tuple - just store it
-                                const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
-                                }
-                                self.codegen.freeGeneral(elem_reg);
-                            },
-                        }
-                    },
-                    .tag => {
-                        // Tags are 16-byte structures on the stack
-                        switch (elem_loc) {
-                            .stack => |src_offset| {
-                                // Copy 16 bytes (2 x 8-byte words)
-                                const temp_reg = try self.codegen.allocGeneralFor(0);
-                                // First 8 bytes
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp_reg);
-                                }
-                                // Second 8 bytes
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 8);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp_reg);
-                                }
-                                self.codegen.freeGeneral(temp_reg);
-                            },
-                            .general_reg => |reg| {
-                                // Zero-arg tag in register - just store 8 bytes
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, reg);
-                                }
-                            },
-                            else => {
-                                // Immediate or other - store what we can
-                                const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
-                                }
-                                self.codegen.freeGeneral(elem_reg);
-                            },
-                        }
-                    },
-                    .list => {
-                        // Lists are 24-byte structures (ptr, len, capacity)
-                        switch (elem_loc) {
-                            .stack => |src_offset| {
-                                // Copy 24 bytes (3 x 8-byte words)
-                                const temp_reg = try self.codegen.allocGeneralFor(0);
-                                // First 8 bytes (ptr)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp_reg);
-                                }
-                                // Second 8 bytes (len)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 8);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp_reg);
-                                }
-                                // Third 8 bytes (capacity)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 16);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 16);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 16);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 16, temp_reg);
-                                }
-                                self.codegen.freeGeneral(temp_reg);
-                            },
-                            .list_stack => |list_info| {
-                                // List with full info - copy the list struct (24 bytes)
-                                const temp_reg = try self.codegen.allocGeneralFor(0);
-                                // First 8 bytes (ptr)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, temp_reg);
-                                }
-                                // Second 8 bytes (len)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 8);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 8);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 8);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 8, temp_reg);
-                                }
-                                // Third 8 bytes (capacity)
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 16);
-                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dest_offset + 16);
-                                } else {
-                                    try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 16);
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset + 16, temp_reg);
-                                }
-                                self.codegen.freeGeneral(temp_reg);
-                            },
-                            else => {
-                                // Fallback - store what we can
-                                const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                                if (comptime builtin.cpu.arch == .aarch64) {
-                                    try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
-                                } else {
-                                    try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
-                                }
-                                self.codegen.freeGeneral(elem_reg);
-                            },
-                        }
-                    },
-                    else => {
-                        // Simple value - store 8 bytes
-                        _ = this_elem_size; // May be used for larger types in the future
-                        const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                        if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.strRegMemSoff(.w64, elem_reg, .FP, dest_offset);
-                        } else {
-                            try self.codegen.emit.movMemReg(.w64, .RBP, dest_offset, elem_reg);
-                        }
-                        self.codegen.freeGeneral(elem_reg);
-                    },
-                }
-            }
-
-            return .{ .stack = tuple_offset };
+            return .{ .stack = base_offset };
         }
 
         /// Generate code for tuple element access
@@ -2716,6 +2524,20 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadImm(reg, @bitCast(bits));
                     try self.codegen.emitStoreStack(.w64, offset, reg);
+                    self.codegen.freeGeneral(reg);
+                },
+                .list_stack => |list_info| {
+                    // Copy 24-byte list struct
+                    const reg = try self.codegen.allocGeneralFor(0);
+                    // Copy ptr (first 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    // Copy len (second 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 8);
+                    try self.codegen.emitStoreStack(.w64, offset + 8, reg);
+                    // Copy capacity (third 8 bytes)
+                    try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset + 16);
+                    try self.codegen.emitStoreStack(.w64, offset + 16, reg);
                     self.codegen.freeGeneral(reg);
                 },
             }
