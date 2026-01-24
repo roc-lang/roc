@@ -101,11 +101,25 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             if (i > 0) {
                 try output.appendSlice(", ");
             }
-            // Format as Dec - the i128 value is already Dec-scaled from the interpreter
-            const dec_val = builtins.dec.RocDec{ .num = result_buf[i] };
-            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
-            const elem_str = dec_val.format_to_buf(&dec_buf);
-            try output.appendSlice(elem_str);
+            const raw_val = result_buf[i];
+            // Detect if this is a Dec-scaled value or a raw integer
+            // Dec values for small integers like 10 would be 10 * 10^18 = 10^19
+            // Raw integers would be much smaller (< 10^17)
+            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
+            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+
+            if (abs_val < one_point_zero / 10) {
+                // This is a raw integer, not Dec-scaled - format as "N.0"
+                const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{raw_val});
+                defer allocator.free(elem_str);
+                try output.appendSlice(elem_str);
+            } else {
+                // This is a Dec-scaled value - format as Dec
+                const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                const elem_str = dec_val.format_to_buf(&dec_buf);
+                try output.appendSlice(elem_str);
+            }
         }
 
         try output.append(')');
