@@ -251,6 +251,9 @@ fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx 
         },
         // For blocks, we need to process type annotations first
         .e_block => |block| self.getBlockLayout(module_env, block),
+        // For if-then-else, layout is determined from type info in lowerExprInner
+        // This fallback should rarely be used
+        .e_if => .i64,
         else => .i64, // Default
     };
 }
@@ -716,6 +719,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Check if this if-then-else returns closures (lambda set dispatch case)
             const lambda_set_result = try self.collectIfClosureLambdaSet(module_env, if_expr);
 
+            // Get result layout from the type system via the expression's type variable
+            const result_layout = if (expr_idx) |idx|
+                self.computeLayoutFromExprIdx(module_env, idx) orelse .i64
+            else
+                .i64;
+
             if (lambda_set_result.has_closure_branches) {
                 // Branches are closures - lower with lambda set info
                 const branches = try self.lowerIfBranchesWithLambdaSet(
@@ -732,7 +741,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{ .if_then_else = .{
                     .branches = branches,
                     .final_else = final_else,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = result_layout,
                 } };
             } else {
                 // Normal if-then-else (no closures)
@@ -741,7 +750,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :blk .{ .if_then_else = .{
                     .branches = branches,
                     .final_else = final_else,
-                    .result_layout = self.getExprLayout(module_env, expr),
+                    .result_layout = result_layout,
                 } };
             }
         },
