@@ -1224,6 +1224,16 @@ pub fn divC(
     return @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops }).num;
 }
 
+/// Truncating division: divide and truncate to the nearest integer toward zero.
+pub fn divTruncC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    const quotient = @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops });
+    return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
+}
+
 /// TODO: Document logC.
 pub fn logC(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.log, .{arg}).num;

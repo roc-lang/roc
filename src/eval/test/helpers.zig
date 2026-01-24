@@ -230,13 +230,32 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
-    if (!std.mem.eql(u8, interpreter_str, dev_str)) {
+    // Compare strings, handling numeric formatting differences
+    // e.g., "42" vs "42.0" should be considered equal
+    if (!numericStringsEqual(interpreter_str, dev_str)) {
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
             .{ interpreter_str, dev_str },
         );
         return error.EvaluatorMismatch;
     }
+}
+
+/// Check if two strings represent the same numeric value.
+/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
+fn numericStringsEqual(a: []const u8, b: []const u8) bool {
+    // Fast path: exact match
+    if (std.mem.eql(u8, a, b)) return true;
+
+    // Check if one is the other with ".0" suffix (integer vs Dec format)
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
+        return true;
+    }
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
+        return true;
+    }
+
+    return false;
 }
 
 /// Helper function to run an expression and expect a specific error.

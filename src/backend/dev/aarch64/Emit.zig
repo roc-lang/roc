@@ -739,6 +739,38 @@ pub fn sturRegMem(self: *Emit, width: RegisterWidth, src: GeneralReg, base: Gene
     try self.emit32(inst);
 }
 
+/// STURB (store register byte unscaled) with signed offset
+pub fn sturbRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, offset: i9) !void {
+    // STURB <Wt>, [<Xn|SP>, #<simm>]
+    // 00 111 0 00 00 0 imm9 00 Rn Rt
+    const imm9: u9 = @bitCast(offset);
+    const inst: u32 = (0b00 << 30) | // size = 00 for byte
+        (0b111000 << 24) |
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, imm9) << 12) |
+        (0b00 << 10) |
+        (@as(u32, base.enc()) << 5) |
+        src.enc();
+    try self.emit32(inst);
+}
+
+/// STURH (store register halfword unscaled) with signed offset
+pub fn sturhRegMem(self: *Emit, src: GeneralReg, base: GeneralReg, offset: i9) !void {
+    // STURH <Wt>, [<Xn|SP>, #<simm>]
+    // 01 111 0 00 00 0 imm9 00 Rn Rt
+    const imm9: u9 = @bitCast(offset);
+    const inst: u32 = (0b01 << 30) | // size = 01 for halfword
+        (0b111000 << 24) |
+        (0b00 << 22) |
+        (0 << 21) |
+        (@as(u32, imm9) << 12) |
+        (0b00 << 10) |
+        (@as(u32, base.enc()) << 5) |
+        src.enc();
+    try self.emit32(inst);
+}
+
 /// LDR with signed offset (i32)
 /// Handles arbitrary signed offsets by choosing appropriate encoding:
 /// - Small offsets (-256 to 255): use LDUR (unscaled)

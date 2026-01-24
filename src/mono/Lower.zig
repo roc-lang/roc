@@ -1632,7 +1632,7 @@ fn cirBinopToMonoBinop(op: CIR.Expr.Binop.Op) MonoExpr.BinOp {
         .ge => .gte,
         .@"and" => .@"and",
         .@"or" => .@"or",
-        .div_trunc => .div, // Truncating division maps to div for now
+        .div_trunc => .div_trunc,
     };
 }
 

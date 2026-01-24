@@ -557,6 +557,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 }
             }
 
+            // Check if operands are i128/Dec (need special handling even for comparisons that return bool)
+            const operands_are_i128 = switch (lhs_loc) {
+                .immediate_i128, .stack_i128 => true,
+                else => switch (rhs_loc) {
+                    .immediate_i128, .stack_i128 => true,
+                    else => false,
+                },
+            };
+
             // Determine if this is an integer or float operation
             const is_float = switch (binop.result_layout) {
                 .f32, .f64 => true,
@@ -565,7 +574,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             if (is_float) {
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
-            } else if (binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
+            } else if (operands_are_i128 or binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
+                // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
                 return self.generateI128Binop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             } else {
                 return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
@@ -617,7 +627,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .add => try self.codegen.emitAdd(.w64, result_reg, lhs_reg, rhs_reg),
                 .sub => try self.codegen.emitSub(.w64, result_reg, lhs_reg, rhs_reg),
                 .mul => try self.codegen.emitMul(.w64, result_reg, lhs_reg, rhs_reg),
-                .div => {
+                .div, .div_trunc => {
+                    // For integers, div and div_trunc are the same (integer division truncates)
                     if (is_unsigned) {
                         try self.codegen.emitUDiv(.w64, result_reg, lhs_reg, rhs_reg);
                     } else {
@@ -848,13 +859,58 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
                     }
                 },
+                .div_trunc => {
+                    if (result_layout == .dec) {
+                        // Dec truncating division: divide and truncate to whole number
+                        // divTruncC(RocDec, RocDec, *RocOps) -> i128
+                        try self.callDecDivTrunc(lhs_parts, rhs_parts, result_low, result_high);
+                    } else {
+                        // 128-bit integer truncating division: same as regular i128 div
+                        try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, false);
+                    }
+                },
                 .mod => {
                     // 128-bit integer remainder: call builtin function
                     try self.callI128DivRem(lhs_parts, rhs_parts, result_low, result_high, is_unsigned, true);
                 },
+                // Comparison operations for i128/Dec
+                .eq, .neq => {
+                    // Compare both low and high parts
+                    const result_reg = try self.codegen.allocGeneralFor(2);
+                    try self.generateI128Equality(lhs_parts, rhs_parts, result_reg, op == .eq);
+
+                    // Free the extra result_high we allocated
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+                    self.codegen.freeGeneral(lhs_parts.low);
+                    self.codegen.freeGeneral(lhs_parts.high);
+                    self.codegen.freeGeneral(rhs_parts.low);
+                    self.codegen.freeGeneral(rhs_parts.high);
+
+                    return .{ .general_reg = result_reg };
+                },
+                .lt, .lte, .gt, .gte => {
+                    // i128 comparison: compare high parts first, if equal compare low parts
+                    const result_reg = try self.codegen.allocGeneralFor(2);
+                    try self.generateI128Comparison(lhs_parts, rhs_parts, result_reg, op, is_unsigned);
+
+                    // Free the extra result_high we allocated
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+                    self.codegen.freeGeneral(lhs_parts.low);
+                    self.codegen.freeGeneral(lhs_parts.high);
+                    self.codegen.freeGeneral(rhs_parts.low);
+                    self.codegen.freeGeneral(rhs_parts.high);
+
+                    return .{ .general_reg = result_reg };
+                },
                 else => {
-                    // Comparisons and boolean ops - just use low 64 bits for now
-                    return self.generateIntBinop(op, lhs_loc, rhs_loc, .i64);
+                    // Boolean ops - use low 64 bits (booleans are 0 or 1)
+                    self.codegen.freeGeneral(result_high);
+                    self.codegen.freeGeneral(result_low);
+                    self.codegen.freeGeneral(lhs_parts.high);
+                    self.codegen.freeGeneral(rhs_parts.high);
+                    return self.generateIntBinop(op, .{ .general_reg = lhs_parts.low }, .{ .general_reg = rhs_parts.low }, .i64);
                 },
             }
 
@@ -999,6 +1055,102 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 try self.codegen.emit.movRegReg(.w64, result_high, .X1);
             } else {
                 // x86_64 calling convention for divC(RocDec, RocDec, *RocOps) -> i128:
+                // arg1 (RocDec): RDI (low), RSI (high)
+                // arg2 (RocDec): RDX (low), RCX (high)
+                // arg3 (*RocOps): R8
+                // return: RAX (low), RDX (high)
+
+                // Load function address into R11 first (before clobbering arg regs)
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+
+                const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8 };
+                const sources = [_]GeneralReg{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high, roc_ops_reg };
+
+                // Save sources that would be clobbered before use
+                var saved: [5]?GeneralReg = .{ null, null, null, null, null };
+                var next_temp: GeneralReg = .R9;
+
+                for (0..5) |i| {
+                    const src = sources[i];
+                    for (0..i) |j| {
+                        if (src == arg_regs[j]) {
+                            var found: ?GeneralReg = null;
+                            for (0..i) |k| {
+                                if (sources[k] == src and saved[k] != null) {
+                                    found = saved[k];
+                                    break;
+                                }
+                            }
+                            if (found) |s| {
+                                saved[i] = s;
+                            } else {
+                                try self.codegen.emit.movRegReg(.w64, next_temp, src);
+                                saved[i] = next_temp;
+                                next_temp = if (next_temp == .R9) .R10 else .RAX;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Move to argument registers
+                for (0..5) |i| {
+                    const src = saved[i] orelse sources[i];
+                    try self.codegen.emit.movRegReg(.w64, arg_regs[i], src);
+                }
+
+                // Call through R11
+                try self.codegen.emit.callReg(.R11);
+
+                // Get result from RAX, RDX (handle conflicts)
+                if (result_low == .RDX) {
+                    try self.codegen.emit.movRegReg(.w64, .R9, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .R9);
+                } else if (result_high == .RAX) {
+                    try self.codegen.emit.movRegReg(.w64, .R9, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                    try self.codegen.emit.movRegReg(.w64, result_low, .R9);
+                } else {
+                    try self.codegen.emit.movRegReg(.w64, result_low, .RAX);
+                    try self.codegen.emit.movRegReg(.w64, result_high, .RDX);
+                }
+            }
+        }
+
+        /// Call Dec truncating division builtin: divTruncC(RocDec, RocDec, *RocOps) -> i128
+        fn callDecDivTrunc(self: *Self, lhs_parts: I128Parts, rhs_parts: I128Parts, result_low: GeneralReg, result_high: GeneralReg) Error!void {
+            // Get the address of the Dec truncating divide function
+            const fn_addr = @intFromPtr(&builtins.dec.divTruncC);
+
+            // Get the saved RocOps register
+            const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // aarch64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
+                // arg1 (RocDec): X0 (low), X1 (high)
+                // arg2 (RocDec): X2 (low), X3 (high)
+                // arg3 (*RocOps): X4
+                // return: X0 (low), X1 (high)
+
+                // Move arguments to correct registers
+                try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
+                try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
+                try self.codegen.emit.movRegReg(.w64, .X4, roc_ops_reg);
+
+                // Load function address and call
+                const addr_reg = try self.codegen.allocGeneralFor(5);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+
+                // Get result from X0, X1
+                try self.codegen.emit.movRegReg(.w64, result_low, .X0);
+                try self.codegen.emit.movRegReg(.w64, result_high, .X1);
+            } else {
+                // x86_64 calling convention for divTruncC(RocDec, RocDec, *RocOps) -> i128:
                 // arg1 (RocDec): RDI (low), RSI (high)
                 // arg2 (RocDec): RDX (low), RCX (high)
                 // arg3 (*RocOps): R8
@@ -1224,6 +1376,175 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             return .{ .low = low_reg, .high = high_reg };
+        }
+
+        /// Generate i128 equality comparison (eq or neq)
+        /// Compares both low and high parts - equal only if both parts match
+        fn generateI128Equality(
+            self: *Self,
+            lhs_parts: I128Parts,
+            rhs_parts: I128Parts,
+            result_reg: GeneralReg,
+            is_eq: bool,
+        ) Error!void {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Compare low parts
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
+                // Use CSET to get 1 if equal, 0 if not
+                try self.codegen.emit.cset(.w64, result_reg, .eq);
+
+                // Compare high parts
+                const temp = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+                try self.codegen.emit.cset(.w64, temp, .eq);
+
+                // AND the results: both must be equal
+                try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, temp);
+                self.codegen.freeGeneral(temp);
+
+                // For neq, invert the result
+                if (!is_eq) {
+                    try self.codegen.emit.eorRegRegImm(.w64, result_reg, result_reg, 1);
+                }
+            } else {
+                // x86_64: compare both parts and combine
+                // Compare low parts
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
+                // Set result to 1 if equal
+                try self.codegen.emitLoadImm(result_reg, 1);
+                const zero = try self.codegen.allocGeneralFor(0);
+                try self.codegen.emitLoadImm(zero, 0);
+                try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero);
+
+                // Compare high parts
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+                // If high parts not equal, set to 0
+                try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, zero);
+
+                self.codegen.freeGeneral(zero);
+
+                // For neq, invert the result
+                if (!is_eq) {
+                    try self.codegen.emit.xorRegImm8(.w64, result_reg, 1);
+                }
+            }
+        }
+
+        /// Generate i128 ordering comparison (lt, lte, gt, gte)
+        /// Compares high parts first; if equal, compares low parts
+        fn generateI128Comparison(
+            self: *Self,
+            lhs_parts: I128Parts,
+            rhs_parts: I128Parts,
+            result_reg: GeneralReg,
+            op: MonoExpr.BinOp,
+            is_unsigned: bool,
+        ) Error!void {
+            // Strategy: compare high parts (signed for signed, unsigned for unsigned)
+            // If high parts are not equal, use that result
+            // If high parts are equal, compare low parts (always unsigned since they're magnitudes)
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // Compare high parts
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+
+                // Get signed/unsigned condition for high part
+                // aarch64: cc = unsigned <, cs = unsigned >=, hi = unsigned >, ls = unsigned <=
+                const high_cond: Condition = switch (op) {
+                    .lt => if (is_unsigned) .cc else .lt,
+                    .lte => if (is_unsigned) .ls else .le,
+                    .gt => if (is_unsigned) .hi else .gt,
+                    .gte => if (is_unsigned) .cs else .ge,
+                    else => unreachable,
+                };
+
+                // Get unsigned condition for low part (low parts are always unsigned)
+                const low_cond: Condition = switch (op) {
+                    .lt => .cc,
+                    .lte => .ls,
+                    .gt => .hi,
+                    .gte => .cs,
+                    else => unreachable,
+                };
+
+                // Result of comparing high parts (for strict inequality case)
+                try self.codegen.emit.cset(.w64, result_reg, high_cond);
+
+                // If high parts are equal, we need to check low parts
+                const temp = try self.codegen.allocGeneralFor(0);
+
+                // Compare low parts
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
+                try self.codegen.emit.cset(.w64, temp, low_cond);
+
+                // Check if high parts were equal
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+                // If high parts equal, use low comparison result
+                try self.codegen.emit.csel(.w64, result_reg, temp, result_reg, .eq);
+
+                self.codegen.freeGeneral(temp);
+            } else {
+                // x86_64 implementation
+                // Compare high parts first
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+
+                // Prepare result values
+                const one_reg = try self.codegen.allocGeneralFor(0);
+                const zero_reg = try self.codegen.allocGeneralFor(1);
+                try self.codegen.emitLoadImm(one_reg, 1);
+                try self.codegen.emitLoadImm(zero_reg, 0);
+
+                // Get signed/unsigned condition for high part
+                const high_true_cond: Condition = switch (op) {
+                    .lt => if (is_unsigned) .below else .less,
+                    .lte => if (is_unsigned) .below_or_equal else .less_or_equal,
+                    .gt => if (is_unsigned) .above else .greater,
+                    .gte => if (is_unsigned) .above_or_equal else .greater_or_equal,
+                    else => unreachable,
+                };
+
+                // Start with high comparison result
+                try self.codegen.emitLoadImm(result_reg, 0);
+                try self.codegen.emit.cmovcc(high_true_cond, .w64, result_reg, one_reg);
+
+                // If high parts not equal, we're done - result is set
+                // If high parts are equal, need to use low comparison
+                // Save high-equal status first
+
+                const temp = try self.codegen.allocGeneralFor(2);
+
+                // Compare high parts again for equality check
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.high, rhs_parts.high);
+                // temp = 1 if high parts equal
+                try self.codegen.emitLoadImm(temp, 0);
+                try self.codegen.emit.cmovcc(.equal, .w64, temp, one_reg);
+
+                // Now compare low parts (unsigned since they're magnitudes)
+                try self.codegen.emit.cmpRegReg(.w64, lhs_parts.low, rhs_parts.low);
+
+                const low_true_cond: Condition = switch (op) {
+                    .lt => .below,
+                    .lte => .below_or_equal,
+                    .gt => .above,
+                    .gte => .above_or_equal,
+                    else => unreachable,
+                };
+
+                // Get low comparison result
+                const low_result = try self.codegen.allocGeneralFor(3);
+                try self.codegen.emitLoadImm(low_result, 0);
+                try self.codegen.emit.cmovcc(low_true_cond, .w64, low_result, one_reg);
+
+                // If high parts were equal, use low result instead
+                // test temp, temp; if temp != 0 (high parts equal), use low_result
+                try self.codegen.emit.testRegReg(.w64, temp, temp);
+                try self.codegen.emit.cmovcc(.not_equal, .w64, result_reg, low_result);
+
+                self.codegen.freeGeneral(temp);
+                self.codegen.freeGeneral(low_result);
+                self.codegen.freeGeneral(one_reg);
+                self.codegen.freeGeneral(zero_reg);
+            }
         }
 
         /// Generate structural comparison for records/tuples
@@ -2506,9 +2827,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const elem_exprs = self.store.getExprSpan(tup.elems);
 
             // Copy each element to its offset within the tuple
+            // Use ByOriginalIndex functions because elem_exprs is in source order,
+            // but the layout store has elements sorted by alignment
             for (elem_exprs, 0..) |elem_expr_id, i| {
-                const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
-                const elem_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
+                const elem_offset = ls.getTupleElementOffsetByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
+                const elem_size = ls.getTupleElementSizeByOriginalIndex(tuple_layout.data.tuple.idx, @intCast(i));
                 const elem_loc = try self.generateExpr(elem_expr_id);
                 try self.copyBytesToStackOffset(base_offset + @as(i32, @intCast(elem_offset)), elem_loc, elem_size);
             }
@@ -2715,10 +3038,41 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
             switch (loc) {
                 .immediate_i64 => |val| {
-                    std.debug.assert(size == 8); // Layout and value type must agree
                     const reg = try self.codegen.allocGeneralFor(0);
                     try self.codegen.emitLoadImm(reg, val);
-                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        switch (size) {
+                            1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
+                            2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
+                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            16 => {
+                                // i64 being stored as Dec (i128) - sign extend
+                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                                // Store sign extension in high part
+                                const high: i64 = if (val < 0) -1 else 0;
+                                try self.codegen.emitLoadImm(reg, high);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                            },
+                            else => unreachable,
+                        }
+                    } else {
+                        switch (size) {
+                            1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
+                            2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
+                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            16 => {
+                                // i64 being stored as Dec (i128) - sign extend
+                                try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                                // Store sign extension in high part
+                                const high: i64 = if (val < 0) -1 else 0;
+                                try self.codegen.emitLoadImm(reg, high);
+                                try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                            },
+                            else => unreachable,
+                        }
+                    }
                     self.codegen.freeGeneral(reg);
                     return;
                 },
@@ -2735,8 +3089,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return;
                 },
                 .general_reg => |reg| {
-                    std.debug.assert(size == 8); // Layout and value type must agree
-                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        switch (size) {
+                            1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
+                            2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
+                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            else => unreachable, // general_reg only valid for sizes 1, 2, 4, 8
+                        }
+                    } else {
+                        switch (size) {
+                            1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
+                            2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
+                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            else => unreachable, // general_reg only valid for sizes 1, 2, 4, 8
+                        }
+                    }
                     return;
                 },
                 .stack, .stack_str, .stack_i128, .list_stack => {
@@ -4679,7 +5048,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // stp x19, x20, [sp, #-16]!
                 try self.codegen.emit.stpPreIndex(.w64, .X19, .X20, .ZRSP, -2);
 
-                // CRITICAL: Initialize stack_offset to account for saved X19/X20 at [FP-16].
+                // CRITICAL: Allocate stack space for local variables BEFORE they're used.
+                // Without this, stack slots would be below SP and could get corrupted
+                // when we call builtin functions. After X19/X20 save, SP = FP - 16.
+                // We need enough space for tuples, nested lists, etc.
+                const MAIN_STACK_SIZE: u12 = 256;
+                try self.codegen.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, MAIN_STACK_SIZE);
+
+                // Initialize stack_offset to account for saved X19/X20 at [FP-16].
                 // allocStackSlot decrements stack_offset and returns the new value.
                 // With stack_offset = -16, first allocation of 16 bytes returns -32,
                 // which is below the saved registers and won't corrupt them.
@@ -4712,6 +5088,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Restores callee-saved registers and frame pointer, then returns.
         fn emitMainEpilogue(self: *Self) Error!void {
             if (comptime builtin.cpu.arch == .aarch64) {
+                // Deallocate local variable stack space (must match MAIN_STACK_SIZE in prologue)
+                const MAIN_STACK_SIZE: u12 = 256;
+                try self.codegen.emit.addRegRegImm12(.w64, .ZRSP, .ZRSP, MAIN_STACK_SIZE);
                 // Restore X19 and X20
                 // ldp x19, x20, [sp], #16
                 try self.codegen.emit.ldpPostIndex(.w64, .X19, .X20, .ZRSP, 2);

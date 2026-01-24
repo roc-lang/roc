@@ -667,6 +667,44 @@ pub const Store = struct {
         return self.layoutSizeAlign(element_layout).size;
     }
 
+    /// Get the offset of a tuple element by its ORIGINAL index (source order).
+    /// This searches through the sorted elements to find the one with the matching original index.
+    pub fn getTupleElementOffsetByOriginalIndex(self: *const Self, tuple_idx: TupleIdx, original_index: u32) u32 {
+        const tuple_data = self.getTupleData(tuple_idx);
+        const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
+
+        // Find the sorted position of the element with the given original index
+        var sorted_position: ?u32 = null;
+        for (0..sorted_elements.len) |i| {
+            const element = sorted_elements.get(@intCast(i));
+            if (element.index == original_index) {
+                sorted_position = @intCast(i);
+                break;
+            }
+        }
+
+        // Use the sorted position to get the offset
+        const pos = sorted_position orelse return 0; // Shouldn't happen if original_index is valid
+        return self.getTupleElementOffset(tuple_idx, pos);
+    }
+
+    /// Get the size of a tuple element by its ORIGINAL index (source order).
+    pub fn getTupleElementSizeByOriginalIndex(self: *const Self, tuple_idx: TupleIdx, original_index: u32) u32 {
+        const tuple_data = self.getTupleData(tuple_idx);
+        const sorted_elements = self.tuple_fields.sliceRange(tuple_data.getFields());
+
+        // Find the element with the given original index
+        for (0..sorted_elements.len) |i| {
+            const element = sorted_elements.get(@intCast(i));
+            if (element.index == original_index) {
+                const element_layout = self.getLayout(element.layout);
+                return self.layoutSizeAlign(element_layout).size;
+            }
+        }
+
+        return 0; // Shouldn't happen if original_index is valid
+    }
+
     pub fn targetUsize(_: *const Self) target.TargetUsize {
         return target.TargetUsize.native;
     }

@@ -597,6 +597,30 @@ pub const AArch64CodeGen = struct {
         }
     }
 
+    /// Store byte to stack slot
+    pub fn emitStoreStackByte(self: *Self, offset: i32, src: GeneralReg) !void {
+        if (offset >= -256 and offset <= 255) {
+            try self.emit.sturbRegMem(src, .FP, @intCast(offset));
+        } else {
+            // Large offset - add offset to FP, then store
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.strbRegMem(src, .IP0, 0);
+        }
+    }
+
+    /// Store halfword (2 bytes) to stack slot
+    pub fn emitStoreStackHalfword(self: *Self, offset: i32, src: GeneralReg) !void {
+        if (offset >= -256 and offset <= 255) {
+            try self.emit.sturhRegMem(src, .FP, @intCast(offset));
+        } else {
+            // Large offset - add offset to FP, then store
+            try self.emit.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
+            try self.emit.addRegRegReg(.w64, .IP0, .FP, .IP0);
+            try self.emit.strhRegMem(src, .IP0, 0);
+        }
+    }
+
     /// Load float64 from stack slot
     pub fn emitLoadStackF64(self: *Self, dst: FloatReg, offset: i32) !void {
         if (offset >= 0) {
