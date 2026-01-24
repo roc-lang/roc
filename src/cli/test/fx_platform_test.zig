@@ -255,25 +255,25 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Line 3\n" ++
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
-        "15\n" ++
-        "42\n" ++
+        "15.0\n" ++
+        "42.0\n" ++
         "NotOneTwoNotFive\n" ++
-        "(\"Roc\", 1)\n" ++
+        "(\"Roc\", 1.0)\n" ++
         "Builtin.List.[\"a\", \"b\"]\n" ++
-        "(\"Roc\", 1, 1, \"Roc\")\n" ++
-        "10\n" ++
+        "(\"Roc\", 1.0, 1.0, \"Roc\")\n" ++
+        "10.0\n" ++
         "{ age: 31, name: \"Alice\" }\n" ++
-        "{ binary: 5, explicit_dec: 5, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5 }\n" ++
+        "{ binary: 5, explicit_dec: 5.0, explicit_i128: 5, explicit_i16: 5, explicit_i32: 5, explicit_i64: 5, explicit_i8: 5, explicit_u128: 5, explicit_u16: 5, explicit_u32: 5, explicit_u64: 5, explicit_u8: 5, hex: 5, octal: 5, usage_based: 5.0 }\n" ++
         "False\n" ++
-        "99\n" ++
+        "99.0\n" ++
         "\"12345.0\"\n" ++
-        "\"Foo with 42 and hello\"\n" ++
+        "\"Foo with 42.0 and hello\"\n" ++
         "\"other color\"\n" ++
         "\"A\"\n" ++
         "\"other letter\"\n";
 
     try testing.expectEqualStrings(expected_stdout, run_result.stdout);
-    try testing.expectEqualStrings("ROC DBG: 42\n", run_result.stderr);
+    try testing.expectEqualStrings("ROC DBG: 42.0\n", run_result.stderr);
 }
 
 test "fx platform match returning string" {

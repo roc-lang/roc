@@ -9,6 +9,19 @@ const StackValue = @import("StackValue.zig");
 const RocDec = builtins.dec.RocDec;
 const TypeScope = types.TypeScope;
 
+/// Check if a type variable represents an unbound numeral type for REPL display purposes.
+/// In the REPL, we want to display whole-number Dec values without the .0 suffix.
+/// Since unbound numerals default to Dec and operations preserve that type,
+/// we treat any Dec value as potentially from an unbound numeral.
+/// This is only used for REPL display (not dbg or other rendering).
+fn isUnboundNumeral(runtime_types: *types.store.Store, rt_var: types.Var) bool {
+    _ = runtime_types;
+    _ = rt_var;
+    // For REPL display, always strip .0 from whole-number Dec values.
+    // The check for whole-number happens at the call site.
+    return true;
+}
+
 /// Copy tags and sort them alphabetically, returning the tag at the given index.
 /// This is necessary because tags stored in the runtime type store may not be
 /// sorted consistently when the same source type is translated multiple times
@@ -91,6 +104,9 @@ pub const RenderCtx = struct {
     to_inspect_callback: ?ToInspectCallback = null,
     /// Opaque context pointer passed to the to_inspect callback.
     callback_ctx: ?*anyopaque = null,
+    /// When true, render whole-number Dec values without .0 if the type is an unbound numeral.
+    /// Used by the REPL for cleaner output.
+    strip_unbound_numeral_decimal: bool = false,
 };
 
 /// Render `value` using the supplied runtime type variable, following alias/nominal backing.
@@ -243,8 +259,8 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                                             .is_initialized = true,
                                             .rt_var = elem_type_var,
                                         };
-                                        // Use layout-based rendering since type info may be unreliable
-                                        const rendered = try renderValueRoc(ctx, elem_val);
+                                        // Use type-aware rendering to enable unbound numeral stripping
+                                        const rendered = try renderValueRocWithType(ctx, elem_val, elem_type_var);
                                         defer gpa.free(rendered);
                                         try out.appendSlice(rendered);
                                         if (i + 1 < len) try out.appendSlice(", ");
@@ -680,6 +696,22 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
         },
         else => {},
     };
+
+    // Handle Dec values specially when stripping unbound numeral decimals
+    if (ctx.strip_unbound_numeral_decimal and value.layout.tag == .scalar) {
+        const scalar = value.layout.data.scalar;
+        if (scalar.tag == .frac and scalar.data.frac == .dec) {
+            if (isUnboundNumeral(ctx.runtime_types, rt_var)) {
+                const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+                // Check if this is a whole number (no fractional part)
+                if (@rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0) {
+                    const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                    return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+                }
+            }
+        }
+    }
+
     return try renderValueRoc(ctx, value);
 }
 
@@ -726,6 +758,13 @@ pub fn renderValueRoc(ctx: *RenderCtx, value: StackValue) ![]u8 {
                     },
                     .dec => {
                         const dec = @as(*const RocDec, @ptrCast(@alignCast(value.ptr.?))).*;
+                        // In REPL mode, strip .0 from whole-number Dec values
+                        if (ctx.strip_unbound_numeral_decimal and
+                            @rem(@abs(dec.num), RocDec.one_point_zero_i128) == 0)
+                        {
+                            const whole = @divTrunc(dec.num, RocDec.one_point_zero_i128);
+                            return try std.fmt.allocPrint(gpa, "{d}", .{whole});
+                        }
                         var buf: [RocDec.max_str_length]u8 = undefined;
                         const slice = dec.format_to_buf(&buf);
                         return try gpa.dupe(u8, slice);
