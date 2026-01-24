@@ -1,3 +1,4 @@
+// implementation taken from https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
 const windows = @cImport(@cInclude("windows.h"));
@@ -9,6 +10,7 @@ const Windows = @This();
 
 pub const Error = error{ GetConsoleModeFailure, SetConsoleModeFailure };
 
+// method to enable raw mode on Windows terminals
 pub fn init() Error!Windows {
     const h_out = std.fs.File.stdout().handle;
     const h_in = std.fs.File.stdin().handle;
@@ -71,6 +73,7 @@ pub fn init() Error!Windows {
     };
 }
 
+// method to restore the previous terminal settings
 pub fn deinit(state: Windows) void {
     const h_out = std.fs.File.stdout().handle;
     const h_in = std.fs.File.stdin().handle;

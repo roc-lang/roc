@@ -1,3 +1,4 @@
+// implementation taken/modified from https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
 const Unix = @This();
@@ -6,6 +7,7 @@ old_termios: std.posix.termios,
 
 pub const Error = std.posix.TermiosGetError || std.posix.TermiosSetError;
 
+// method to enable raw mode on Unix terminals
 pub fn init() Error!Unix {
     const stdin_handle = std.fs.File.stdin().handle;
     const old_termios: std.posix.termios = try std.posix.tcgetattr(stdin_handle);
@@ -21,6 +23,7 @@ pub fn init() Error!Unix {
     return Unix{ .old_termios = old_termios };
 }
 
+// method to restore the previous terminal settings
 pub fn deinit(unix: Unix) void {
     const stdin_handle = std.fs.File.stdin().handle;
 

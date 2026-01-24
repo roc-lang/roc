@@ -1,3 +1,4 @@
+// This code is modified from the implementation in https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 const control_code = std.ascii.control_code;
 const Allocator = std.mem.Allocator;
@@ -21,6 +22,7 @@ pub const NEW_LINE = switch (SUPPORTED_OS) {
     .windows => "\r\n",
 };
 
+// struct to manage REPL history
 const History = struct {
     allocator: Allocator,
     entries: std.ArrayList([]const u8),
@@ -47,6 +49,7 @@ const History = struct {
     }
 };
 
+// struct to manage REPL line editing
 const ReplLine = @This();
 
 allocator: Allocator,
@@ -118,11 +121,6 @@ fn exitRepl(_: *LineState) !void {
 
 fn acceptLine(_: *LineState) !void {
     return error.NewLine;
-}
-
-// TODO: remove this when done testing
-fn debugInBuffer(state: *LineState) !void {
-    _ = try state.out.print("in_buffer = {any}\n", .{state.in_buffer[0..state.bytes_read]});
 }
 
 fn cancelLine(state: *LineState) !void {
@@ -218,26 +216,13 @@ fn findCommandFn(state: *LineState) CommandFn {
                     ansi_term.RIGHT => moveCursorRight,
                     ansi_term.UP => historyBackward,
                     ansi_term.DOWN => historyForward,
-                    else => {
-                        // TODO: remove these comments
-                        state.out.print("got control code\n", .{}) catch unreachable;
-                        return debugInBuffer;
-                        // return doNothing;
-                    },
+                    else => doNothing,
                 };
             } else {
-                // TODO: remove these comments
-                state.out.print("got control code\n", .{}) catch unreachable;
-                return debugInBuffer;
-                // return doNothing;
+                return doNothing;
             }
         },
-        else => {
-            // TODO: remove these comments
-            state.out.print("got byte: {}\n", .{key}) catch unreachable;
-            return debugInBuffer;
-            // return doNothing;
-        },
+        else => doNothing,
     };
 }
 
