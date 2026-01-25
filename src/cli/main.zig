@@ -671,6 +671,7 @@ fn mainArgs(allocs: *Allocators, args: []const []const u8) !void {
         .fmt => |format_args| rocFormat(&ctx, format_args),
         .test_cmd => |test_args| try rocTest(&ctx, test_args),
         .repl => |repl_args| rocRepl(&ctx, repl_args),
+        .glue => |glue_args| rocGlue(&ctx, glue_args),
         .version => ctx.io.stdout().print("Roc compiler version {s}\n", .{build_options.compiler_version}),
         .docs => |docs_args| rocDocs(&ctx, docs_args),
         .experimental_lsp => |lsp_args| try lsp.runWithStdIo(allocs.gpa, .{
@@ -3957,6 +3958,543 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
 fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
     return cli_repl.run(ctx, repl_args.backend);
+}
+
+/// Print platform glue information for a platform's main.roc file using full compilation path.
+/// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
+fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
+    const stdout = ctx.io.stdout();
+    const stderr = ctx.io.stderr();
+
+    // 1. Parse platform header to get requires entries and verify it's a platform file
+    const platform_info = parsePlatformHeader(ctx, args.path) catch |err| {
+        switch (err) {
+            error.NotPlatformFile => {
+                stderr.print("Error: '{s}' is not a platform file.\n", .{args.path}) catch {};
+                stderr.print("The glue command only works with platform files.\n", .{}) catch {};
+            },
+            error.FileNotFound => {
+                stderr.print("Error: File not found: '{s}'\n", .{args.path}) catch {};
+            },
+            error.ParseFailed => {
+                stderr.print("Error: Failed to parse '{s}'\n", .{args.path}) catch {};
+            },
+            else => {
+                stderr.print("Error: Failed to process '{s}': {}\n", .{ args.path, err }) catch {};
+            },
+        }
+        return;
+    };
+    defer platform_info.deinit(ctx.gpa);
+
+    // 2. Extract exposed modules from platform
+    var exposed_modules = std.ArrayList([]const u8).empty;
+    defer exposed_modules.deinit(ctx.gpa);
+
+    extractExposedModulesFromPlatform(ctx, args.path, &exposed_modules) catch |err| {
+        stderr.print("Error: Failed to extract exposed modules: {}\n", .{err}) catch {};
+        return;
+    };
+
+    // 3. Get platform directory for module resolution
+    const platform_dir = std.fs.path.dirname(args.path) orelse ".";
+
+    // 4. Sort modules by dependency order
+    const sorted_modules = sortPlatformModulesByDependency(
+        ctx,
+        exposed_modules.items,
+        platform_dir,
+    ) catch |err| {
+        switch (err) {
+            error.CyclicDependency => stderr.print("Error: Circular dependency detected in platform modules\n", .{}) catch {},
+            else => stderr.print("Error: Failed to sort modules: {}\n", .{err}) catch {},
+        }
+        return;
+    };
+    defer ctx.gpa.free(sorted_modules);
+
+    // 5. Load builtin modules for compilation
+    var builtin_modules = eval.BuiltinModules.init(ctx.gpa) catch |err| {
+        stderr.print("Error: Failed to load builtin modules: {}\n", .{err}) catch {};
+        return;
+    };
+    defer builtin_modules.deinit();
+
+    // 6. Compile each module
+    var compiled_modules = std.array_list.Managed(CompiledModule).init(ctx.gpa);
+    defer {
+        for (compiled_modules.items) |*m| {
+            m.env.deinit();
+        }
+        compiled_modules.deinit();
+    }
+
+    // Pre-allocate to avoid invalidating pointers
+    compiled_modules.ensureTotalCapacity(sorted_modules.len) catch {
+        stderr.print("Error: Out of memory\n", .{}) catch {};
+        return;
+    };
+
+    var sibling_env_ptrs = ctx.gpa.alloc(*ModuleEnv, sorted_modules.len) catch {
+        stderr.print("Error: Out of memory\n", .{}) catch {};
+        return;
+    };
+    defer ctx.gpa.free(sibling_env_ptrs);
+
+    for (sorted_modules, 0..) |module_name, i| {
+        const module_filename = std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name}) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        defer ctx.gpa.free(module_filename);
+
+        const module_path = std.fs.path.join(ctx.gpa, &[_][]const u8{ platform_dir, module_filename }) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        defer ctx.gpa.free(module_path);
+
+        const compiled = compileModuleForSerialization(
+            ctx,
+            module_path,
+            module_name,
+            &builtin_modules,
+            sibling_env_ptrs[0..i],
+            sorted_modules[0..i],
+        ) catch |err| {
+            stderr.print("Error: Failed to compile module '{s}': {}\n", .{ module_name, err }) catch {};
+            return;
+        };
+        compiled_modules.appendAssumeCapacity(compiled);
+        sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
+    }
+
+    // 7. Collect and sort hosted functions globally
+    const HostedCompiler = can.HostedCompiler;
+    var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+    defer {
+        for (all_hosted_fns.items) |fn_info| {
+            ctx.gpa.free(fn_info.name_text);
+        }
+        all_hosted_fns.deinit(ctx.gpa);
+    }
+
+    for (compiled_modules.items) |*m| {
+        var module_fns = HostedCompiler.collectAndSortHostedFunctions(&m.env) catch continue;
+        defer {
+            for (module_fns.items) |fn_info| {
+                m.env.gpa.free(fn_info.name_text);
+            }
+            module_fns.deinit(m.env.gpa);
+        }
+
+        for (module_fns.items) |fn_info| {
+            // Duplicate the name_text since we're storing it in a different list
+            const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
+            all_hosted_fns.append(ctx.gpa, .{
+                .symbol_name = fn_info.symbol_name,
+                .expr_idx = fn_info.expr_idx,
+                .name_text = name_copy,
+            }) catch {
+                ctx.gpa.free(name_copy);
+                continue;
+            };
+        }
+    }
+
+    // Sort hosted functions globally
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
+        }
+    };
+    std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+
+    // 8. Print output
+    stdout.print("Platform Glue Information\n", .{}) catch {};
+    stdout.print("========================\n\n", .{}) catch {};
+
+    // Print requires (entry points)
+    stdout.print("Requires (Entry Points):\n", .{}) catch {};
+    stdout.print("------------------------\n", .{}) catch {};
+
+    for (platform_info.requires_entries) |entry| {
+        stdout.print("  {s} : {s}\n", .{ entry.name, entry.type_str }) catch {};
+    }
+
+    // Print exposes (modules) with resolved types
+    stdout.print("\nExposes (Modules):\n", .{}) catch {};
+    stdout.print("------------------\n", .{}) catch {};
+
+    for (compiled_modules.items) |*m| {
+        // Get base module name (strip .roc if present)
+        var mod_name = m.module_name;
+        if (std.mem.endsWith(u8, mod_name, ".roc")) {
+            mod_name = mod_name[0 .. mod_name.len - 4];
+        }
+
+        stdout.print("  {s}\n", .{mod_name}) catch {};
+
+        // Print type info using TypeWriter for resolved types
+        printCompiledModuleTypes(ctx, m, mod_name, stdout, &all_hosted_fns);
+    }
+
+    // Print hosted function summary
+    stdout.print("\nHosted Function Summary:\n", .{}) catch {};
+    stdout.print("------------------------\n", .{}) catch {};
+    stdout.print("Total: {} hosted functions\n", .{all_hosted_fns.items.len}) catch {};
+
+    for (all_hosted_fns.items, 0..) |fn_info, idx| {
+        stdout.print("  [{d}] {s}!\n", .{ idx, fn_info.name_text }) catch {};
+    }
+}
+
+/// Information extracted from a platform header for glue generation.
+const PlatformHeaderInfo = struct {
+    requires_entries: []RequiresEntry,
+
+    const RequiresEntry = struct {
+        name: []const u8,
+        type_str: []const u8,
+    };
+
+    fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
+        for (self.requires_entries) |entry| {
+            gpa.free(entry.name);
+            gpa.free(entry.type_str);
+        }
+        gpa.free(self.requires_entries);
+    }
+};
+
+/// Parse a platform header to extract requires entries and validate it's a platform file.
+fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHeaderInfo {
+    // Read source file
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, platform_path, std.math.maxInt(usize)) catch |err| switch (err) {
+        error.FileNotFound => return error.FileNotFound,
+        else => return error.ParseFailed,
+    };
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch {
+        ctx.gpa.free(source);
+        return error.OutOfMemory;
+    };
+    defer ctx.gpa.free(source);
+
+    // Get module name from path
+    const module_name = std.fs.path.stem(platform_path);
+
+    // Create ModuleEnv
+    var env = ModuleEnv.init(ctx.gpa, source) catch return error.OutOfMemory;
+    defer env.deinit();
+
+    env.common.source = source;
+    env.module_name = module_name;
+    env.common.calcLineStarts(ctx.gpa) catch return error.OutOfMemory;
+
+    // Parse the source code
+    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return error.ParseFailed;
+    defer parse_ast.deinit(ctx.gpa);
+
+    // Get the file header
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    // Check if this is a platform file
+    switch (header) {
+        .platform => |platform_header| {
+            // Extract requires entries
+            const requires_entries_ast = parse_ast.store.requiresEntrySlice(platform_header.requires_entries);
+            var requires_entries = std.ArrayList(PlatformHeaderInfo.RequiresEntry).empty;
+            errdefer {
+                for (requires_entries.items) |entry| {
+                    ctx.gpa.free(entry.name);
+                    ctx.gpa.free(entry.type_str);
+                }
+                requires_entries.deinit(ctx.gpa);
+            }
+
+            for (requires_entries_ast) |entry_idx| {
+                const entry = parse_ast.store.getRequiresEntry(entry_idx);
+                if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
+                    const name = env.common.getIdent(ident_idx);
+
+                    // Format type annotation to string
+                    var type_buf = std.ArrayList(u8).empty;
+                    defer type_buf.deinit(ctx.gpa);
+
+                    printTypeAnnoToBuf(ctx.gpa, &env, &parse_ast, entry.type_anno, &type_buf);
+
+                    try requires_entries.append(ctx.gpa, .{
+                        .name = try ctx.gpa.dupe(u8, name),
+                        .type_str = try type_buf.toOwnedSlice(ctx.gpa),
+                    });
+                }
+            }
+
+            return PlatformHeaderInfo{
+                .requires_entries = try requires_entries.toOwnedSlice(ctx.gpa),
+            };
+        },
+        else => return error.NotPlatformFile,
+    }
+}
+
+/// Print type information for a compiled module using TypeWriter for resolved types.
+fn printCompiledModuleTypes(
+    ctx: *CliContext,
+    compiled_module: *CompiledModule,
+    module_name: []const u8,
+    writer: anytype,
+    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+) void {
+    const env = &compiled_module.env;
+
+    // First, look for nominal type declarations (s_nominal_decl)
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        if (stmt == .s_nominal_decl) {
+            const nominal = stmt.s_nominal_decl;
+            const type_header = env.store.getTypeHeader(nominal.header);
+            const type_name = env.getIdent(type_header.relative_name);
+
+            // Check if this is the main type for this module
+            if (std.mem.eql(u8, type_name, module_name)) {
+                // Get the type annotation using TypeWriter
+                var type_writer = env.initTypeWriter() catch continue;
+                defer type_writer.deinit();
+
+                // Get the type var for the annotation (the backing type)
+                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
+                const type_var = ModuleEnv.varFrom(anno_node_idx);
+
+                type_writer.write(type_var, .one_line) catch continue;
+                const type_str = type_writer.get();
+
+                const kind = if (nominal.is_opaque) "::" else ":=";
+                writer.print("    Type: {s} {s} {s}\n", .{ module_name, kind, type_str }) catch {};
+                break;
+            }
+        }
+    }
+
+    // Get all definitions from the module
+    const all_defs = env.store.sliceDefs(env.all_defs);
+
+    // Collect functions and hosted functions for this module
+    var functions = std.ArrayList([]const u8).empty;
+    defer {
+        for (functions.items) |item| ctx.gpa.free(item);
+        functions.deinit(ctx.gpa);
+    }
+
+    var hosted_functions = std.ArrayList(struct { index: usize, name: []const u8 }).empty;
+    defer {
+        for (hosted_functions.items) |item| ctx.gpa.free(item.name);
+        hosted_functions.deinit(ctx.gpa);
+    }
+
+    // Build module prefix for filtering associated items
+    const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{module_name}) catch return;
+    defer ctx.gpa.free(module_prefix);
+
+    // Iterate through all defs to find functions
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const def_name = env.getIdent(pattern.assign.ident);
+
+        // Skip the module's main type definition
+        if (std.mem.eql(u8, def_name, module_name)) continue;
+
+        // Determine if this is an associated item (starts with "ModuleName.")
+        // and get the local name (without the module prefix)
+        const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
+            def_name[module_prefix.len..]
+        else
+            continue; // Skip defs that don't belong to this module
+
+        // Check if this is a hosted function
+        if (expr == .e_hosted_lambda) {
+            // Build qualified name for comparison (strip the `!` for comparison with sorted list)
+            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
+                def_name[0 .. def_name.len - 1]
+            else
+                def_name;
+
+            // Find the global index
+            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
+                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
+                    // Get the type
+                    var type_writer = env.initTypeWriter() catch continue;
+                    defer type_writer.deinit();
+
+                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+                    const type_var = ModuleEnv.varFrom(def_node_idx);
+
+                    type_writer.write(type_var, .one_line) catch continue;
+                    const type_str = type_writer.get();
+
+                    const formatted = std.fmt.allocPrint(ctx.gpa, "[{d}] {s} : {s}", .{ global_idx, local_name, type_str }) catch continue;
+                    hosted_functions.append(ctx.gpa, .{ .index = global_idx, .name = formatted }) catch {
+                        ctx.gpa.free(formatted);
+                        continue;
+                    };
+                    break;
+                }
+            }
+        } else if (expr == .e_lambda or def.annotation != null) {
+            // Regular function
+            var type_writer = env.initTypeWriter() catch continue;
+            defer type_writer.deinit();
+
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const type_var = ModuleEnv.varFrom(def_node_idx);
+
+            type_writer.write(type_var, .one_line) catch continue;
+            const type_str = type_writer.get();
+
+            const formatted = std.fmt.allocPrint(ctx.gpa, "{s} : {s}", .{ local_name, type_str }) catch continue;
+            functions.append(ctx.gpa, formatted) catch {
+                ctx.gpa.free(formatted);
+                continue;
+            };
+        }
+    }
+
+    // Print regular functions
+    if (functions.items.len > 0) {
+        writer.print("    Functions:\n", .{}) catch {};
+        for (functions.items) |func_str| {
+            writer.print("      {s}\n", .{func_str}) catch {};
+        }
+    }
+
+    // Print hosted functions
+    if (hosted_functions.items.len > 0) {
+        writer.print("    Hosted Functions:\n", .{}) catch {};
+        for (hosted_functions.items) |hosted| {
+            writer.print("      {s}\n", .{hosted.name}) catch {};
+        }
+    }
+}
+
+/// Print a type annotation to a buffer (for requires entries which use AST types)
+fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
+    const type_anno = ast.store.getTypeAnno(type_anno_idx);
+
+    switch (type_anno) {
+        .@"fn" => |f| {
+            const arrow = if (f.effectful) "=>" else "->";
+            const args = ast.store.typeAnnoSlice(f.args);
+            if (args.len == 0) {
+                buf.appendSlice(gpa, "()") catch {};
+            } else {
+                for (args, 0..) |arg_idx, i| {
+                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                    printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                }
+            }
+            buf.appendSlice(gpa, " ") catch {};
+            buf.appendSlice(gpa, arrow) catch {};
+            buf.appendSlice(gpa, " ") catch {};
+            printTypeAnnoToBuf(gpa, env, ast, f.ret, buf);
+        },
+        .ty => |t| {
+            // Print qualified type name
+            const qualifiers = ast.store.tokenSlice(t.qualifiers);
+            for (qualifiers) |qual_tok_idx| {
+                const qual_tok: parse.tokenize.Token.Idx = @intCast(qual_tok_idx);
+                if (ast.tokens.resolveIdentifier(qual_tok)) |ident_idx| {
+                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+                    buf.append(gpa, '.') catch {};
+                }
+            }
+            if (ast.tokens.resolveIdentifier(t.token)) |ident_idx| {
+                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+            }
+        },
+        .ty_var => |tv| {
+            if (ast.tokens.resolveIdentifier(tv.tok)) |ident_idx| {
+                buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+            }
+        },
+        .record => |r| {
+            buf.appendSlice(gpa, "{ ") catch {};
+            const fields = ast.store.annoRecordFieldSlice(r.fields);
+            for (fields, 0..) |field_idx, i| {
+                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
+                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
+                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+                    buf.appendSlice(gpa, " : ") catch {};
+                }
+                printTypeAnnoToBuf(gpa, env, ast, field.ty, buf);
+            }
+            buf.appendSlice(gpa, " }") catch {};
+            if (r.ext) |ext_idx| {
+                printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
+            }
+        },
+        .tag_union => |tu| {
+            buf.append(gpa, '[') catch {};
+            const tags = ast.store.typeAnnoSlice(tu.tags);
+            for (tags, 0..) |tag_idx, i| {
+                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                printTypeAnnoToBuf(gpa, env, ast, tag_idx, buf);
+            }
+            switch (tu.ext) {
+                .closed => {},
+                .open => buf.appendSlice(gpa, ", ..") catch {},
+                .named => |ext_idx| {
+                    buf.appendSlice(gpa, ", ..") catch {};
+                    printTypeAnnoToBuf(gpa, env, ast, ext_idx, buf);
+                },
+            }
+            buf.append(gpa, ']') catch {};
+        },
+        .tuple => |t| {
+            buf.append(gpa, '(') catch {};
+            const annos = ast.store.typeAnnoSlice(t.annos);
+            for (annos, 0..) |anno_idx, i| {
+                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                printTypeAnnoToBuf(gpa, env, ast, anno_idx, buf);
+            }
+            buf.append(gpa, ')') catch {};
+        },
+        .apply => |a| {
+            const args = ast.store.typeAnnoSlice(a.args);
+            if (args.len > 0) {
+                printTypeAnnoToBuf(gpa, env, ast, args[0], buf);
+                if (args.len > 1) {
+                    buf.append(gpa, ' ') catch {};
+                    for (args[1..], 0..) |arg_idx, i| {
+                        if (i > 0) buf.append(gpa, ' ') catch {};
+                        printTypeAnnoToBuf(gpa, env, ast, arg_idx, buf);
+                    }
+                }
+            }
+        },
+        .parens => |p| {
+            buf.append(gpa, '(') catch {};
+            printTypeAnnoToBuf(gpa, env, ast, p.anno, buf);
+            buf.append(gpa, ')') catch {};
+        },
+        .underscore => {
+            buf.append(gpa, '_') catch {};
+        },
+        .underscore_type_var => {
+            buf.append(gpa, '_') catch {};
+        },
+        .malformed => {
+            buf.appendSlice(gpa, "<malformed>") catch {};
+        },
+    }
 }
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.

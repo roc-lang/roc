@@ -17,6 +17,7 @@ pub const CliArgs = union(enum) {
     bundle: BundleArgs,
     unbundle: UnbundleArgs,
     repl: ReplArgs,
+    glue: GlueArgs,
     version,
     docs: DocsArgs,
     experimental_lsp: ExperimentalLspArgs,
@@ -151,6 +152,11 @@ pub const ReplArgs = struct {
     backend: Backend = .interpreter,
 };
 
+/// Arguments for `roc glue`
+pub const GlueArgs = struct {
+    path: []const u8, // the path of the platform .roc file
+};
+
 /// Parse a list of arguments.
 pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (args.len == 0) return try parseRun(alloc, args);
@@ -167,6 +173,7 @@ pub fn parse(alloc: mem.Allocator, args: []const []const u8) !CliArgs {
     if (mem.eql(u8, args[0], "fmt")) return try parseFormat(alloc, args[1..]);
     if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
     if (mem.eql(u8, args[0], "repl")) return parseRepl(args[1..]);
+    if (mem.eql(u8, args[0], "glue")) return parseGlue(args[1..]);
     if (mem.eql(u8, args[0], "version")) return parseVersion(args[1..]);
     if (mem.eql(u8, args[0], "docs")) return parseDocs(args[1..]);
     if (mem.eql(u8, args[0], "experimental-lsp")) return parseExperimentalLsp(args[1..]);
@@ -190,6 +197,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
+    \\  glue             Print platform glue information (entry points and exposed types)
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -667,6 +675,33 @@ fn parseRepl(args: []const []const u8) CliArgs {
         }
     }
     return CliArgs{ .repl = .{ .backend = backend } };
+}
+
+fn parseGlue(args: []const []const u8) CliArgs {
+    var path: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (isHelpFlag(arg)) {
+            return CliArgs{ .help =
+            \\Print platform glue information (entry points and exposed types)
+            \\
+            \\Usage: roc glue [OPTIONS] [PLATFORM_FILE]
+            \\
+            \\Arguments:
+            \\  [PLATFORM_FILE]  The platform .roc file to analyze [default: main.roc]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+        } else {
+            if (path != null) {
+                return CliArgs{ .problem = ArgProblem{ .unexpected_argument = .{ .cmd = "glue", .arg = arg } } };
+            }
+            path = arg;
+        }
+    }
+    return CliArgs{ .glue = GlueArgs{ .path = path orelse "main.roc" } };
 }
 
 fn parseVersion(args: []const []const u8) CliArgs {
