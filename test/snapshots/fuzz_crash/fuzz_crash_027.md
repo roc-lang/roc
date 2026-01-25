@@ -225,9 +225,9 @@ UNUSED VARIABLE - fuzz_crash_027.md:141:2:141:7
 UNUSED VARIABLE - fuzz_crash_027.md:142:2:142:7
 UNDECLARED TYPE - fuzz_crash_027.md:153:9:153:14
 TOO FEW ARGS - fuzz_crash_027.md:21:3:22:4
-INVALID IF CONDITION - fuzz_crash_027.md:50:5:50:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_027.md:64:2:64:2
-TOO FEW ARGUMENTS - fuzz_crash_027.md:111:2:113:3
+TYPE MISMATCH - fuzz_crash_027.md:50:5:50:8
+TYPE MISMATCH - fuzz_crash_027.md:64:2:64:2
+TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 TYPE MISMATCH - fuzz_crash_027.md:100:9:148:2
 TYPE MISMATCH - fuzz_crash_027.md:106:3:106:6
 # PROBLEMS
@@ -902,22 +902,22 @@ The type _List_ expects 1 argument, but got 0 instead.
 ```
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fuzz_crash_027.md:50:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**fuzz_crash_027.md:50:5:50:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the third branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The third branch of this `match` does not match the previous ones:
 **fuzz_crash_027.md:64:2:**
 ```roc
 	match a {lue | Red => {
@@ -954,18 +954,18 @@ ist
 ```
   ^^^^^
 
-The third pattern has this type:
+This third branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
     [Red, Blue, .._others]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_027.md:111:2:113:3:**
 ```roc
 	match_time(
@@ -973,9 +973,11 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
     [Blue, Red, .._others], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1036,7 +1038,7 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
 
     List(Error) -> Try({  }, _d)
 

@@ -50,7 +50,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The value's type, which does not have a method named**from_numeral**, is:
 
     [A, .._others]
 
@@ -62,7 +62,7 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The value's type, which does not have a method named**from_numeral**, is:
 
     [A, .._others]
 

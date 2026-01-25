@@ -9,7 +9,7 @@ A?
 ~~~
 # EXPECTED
 TRY OPERATOR OUTSIDE FUNCTION - try_undefined_tag.md:1:1:1:3
-EXPECTED TRY TYPE - try_undefined_tag.md:1:1:1:1
+TYPE MISMATCH - try_undefined_tag.md:1:1:1:2
 # PROBLEMS
 **TRY OPERATOR OUTSIDE FUNCTION**
 The `?` operator can only be used inside function bodies because it can cause an early return.
@@ -21,10 +21,9 @@ A?
 ^^
 
 
-**EXPECTED TRY TYPE**
-The `?` operator expects a _Try_ type (a tag union containing ONLY _Ok_ and _Err_ tags),
-but I found:
-**try_undefined_tag.md:1:1:**
+**TYPE MISMATCH**
+The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err` tags), but I found:
+**try_undefined_tag.md:1:1:1:2:**
 ```roc
 A?
 ```
@@ -32,9 +31,9 @@ A?
 
 This expression has type:
 
-_[A, .._others]_
+    [A, .._others]
 
-Tip: Maybe wrap a value using _Ok(value)_ or _Err(value)_.
+__Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 
 # TOKENS
 ~~~zig

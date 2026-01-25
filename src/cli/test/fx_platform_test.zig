@@ -1343,13 +1343,13 @@ test "fx platform issue8943 error message memory corruption" {
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
 
-    // This file is expected to fail with EXPECTED TRY TYPE and COMPTIME CRASH errors
+    // This file is expected to fail with TYPE MISMATCH and COMPTIME CRASH errors
     try checkFailure(run_result);
 
-    // Check that the EXPECTED TRY TYPE error is present
-    const has_try_type_error = std.mem.indexOf(u8, run_result.stderr, "EXPECTED TRY TYPE") != null;
+    // Check that the TYPE MISMATCH error is present
+    const has_try_type_error = std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null;
     if (!has_try_type_error) {
-        std.debug.print("Expected 'EXPECTED TRY TYPE' error but got:\n", .{});
+        std.debug.print("Expected 'TYPE MISMATCH' error but got:\n", .{});
         std.debug.print("STDERR: {s}\n", .{run_result.stderr});
         return error.ExpectedTryTypeError;
     }
@@ -1372,7 +1372,7 @@ test "fx platform issue8943 error message memory corruption" {
         search_start = pos + 1;
     }
 
-    // We expect at least 2 occurrences: one in EXPECTED TRY TYPE and one in COMPTIME CRASH
+    // We expect at least 2 occurrences: one in TYPE MISMATCH and one in COMPTIME CRASH
     // Plus one more at the end in "Found X error(s)..."
     if (filename_count < 3) {
         std.debug.print("Error output appears corrupted - filename 'issue8943.roc' found only {d} times (expected at least 3):\n", .{filename_count});

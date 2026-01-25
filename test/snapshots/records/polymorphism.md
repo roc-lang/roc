@@ -24,7 +24,7 @@ This **to_str** method is being called on a value whose type doesn't have that m
 ```
                             ^^^^^^
 
-The value's type, which does not have a method named **to_str**, is:
+The value's type, which does not have a method named**to_str**, is:
 
     { pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } }
       where [

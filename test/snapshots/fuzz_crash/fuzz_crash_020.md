@@ -192,12 +192,12 @@ UNDEFINED VARIABLE - fuzz_crash_020.md:120:6:120:9
 EXPOSED BUT NOT DEFINED - fuzz_crash_020.md:2:6:2:11
 TOO FEW ARGS - fuzz_crash_020.md:17:3:18:4
 MISSING METHOD - fuzz_crash_020.md:39:2:39:3
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_020.md:52:2:52:2
-UNUSED VALUE - fuzz_crash_020.md:86:11:86:11
+TYPE MISMATCH - fuzz_crash_020.md:52:2:52:2
+TYPE MISMATCH - fuzz_crash_020.md:86:11:86:17
 TYPE MISMATCH - fuzz_crash_020.md:77:11:77:14
-UNUSED VALUE - fuzz_crash_020.md:98:4:98:4
-UNUSED VALUE - fuzz_crash_020.md:105:2:105:2
-UNUSED VALUE - fuzz_crash_020.md:119:2:119:2
+TYPE MISMATCH - fuzz_crash_020.md:98:4:104:3
+TYPE MISMATCH - fuzz_crash_020.md:105:2:105:54
+TYPE MISMATCH - fuzz_crash_020.md:119:2:119:10
 # PROBLEMS
 **PARSE ERROR**
 A parsing error occurred: `match_branch_missing_arrow`
@@ -921,12 +921,12 @@ This **from_numeral** method is being called on a value whose type doesn't have 
 ```
 	^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The value's type, which does not have a method named**from_numeral**, is:
 
     {}
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The fourth branch of this `match` does not match the previous ones:
 **fuzz_crash_020.md:52:2:**
 ```roc
 	match a {lue  {
@@ -950,29 +950,30 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 ```
      ^^^^^
 
-The fourth pattern has this type:
+This fourth branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
     [Blue, .._others]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:86:11:**
+**fuzz_crash_020.md:86:11:86:17:**
 ```roc
 	)crash ke"Unr!" #)
 ```
-          ^^^^^^
+	         ^^^^^^
 
 It has the type:
 
     Str
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -993,9 +994,9 @@ Other code expects this to have the type:
 
     Str
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:98:4:**
+**fuzz_crash_020.md:98:4:104:3:**
 ```roc
 	m (
 		123,
@@ -1014,35 +1015,38 @@ It has the type:
         j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
       ]
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:105:2:**
+**fuzz_crash_020.md:105:2:105:54:**
 ```roc
 	b?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?
 ```
- ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 It has the type:
 
     Bool
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_020.md:119:2:**
+**fuzz_crash_020.md:119:2:119:10:**
 ```roc
 	foo == 1
 ```
- ^^^^^^^^
+	^^^^^^^^
 
 It has the type:
 
     Bool
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 # TOKENS
 ~~~zig

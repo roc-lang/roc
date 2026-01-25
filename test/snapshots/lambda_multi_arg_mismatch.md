@@ -27,7 +27,7 @@ result = multi_arg_fn(
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:25:3:27
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:33:3:35
 UNUSED VARIABLE - lambda_multi_arg_mismatch.md:3:41:3:43
-TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:5
+TYPE MISMATCH - lambda_multi_arg_mismatch.md:15:5:15:9
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:9:5:9:7
 TYPE MISMATCH - lambda_multi_arg_mismatch.md:13:5:13:9
 # PROBLEMS
@@ -69,17 +69,10 @@ multi_arg_fn = |x1, x2, x3, x4, x5, x6, x7, x8|
 
 **TYPE MISMATCH**
 The first and seventh arguments to `multi_arg_fn` must have compatible types, but they are incompatible in this call:
-**lambda_multi_arg_mismatch.md:9:5:**
+**lambda_multi_arg_mismatch.md:15:5:15:9:**
 ```roc
-    42,        # x1: U64 (type 'a')
-    "hello",   # x2: Str (type 'b') - correct
-    "world",   # x3: Str (should be 'a' = U64) - MISMATCH  
-    1.5,       # x4: F64 (type 'c') - correct
-    3.14,      # x5: F64 (should be 'a' = U64) - MISMATCH
-    [1, 2],    # x6: List I64 (type 'd') - correct
     True,      # x7: Bool (should be 'a' = U64) - MISMATCH
 ```
-    ^^
     ^^^^
 
 The first argument has the type:

@@ -21,7 +21,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                      ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
     [True, .._others]
 
@@ -33,7 +33,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                             ^^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
     [False, .._others]
 
@@ -45,7 +45,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                                                     ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
     [True, .._others]
 
@@ -57,7 +57,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 ```
                                                                              ^^^^^
 
-The value's type, which does not have a method named **not**, is:
+The value's type, which does not have a method named**not**, is:
 
     [True, .._others]
 

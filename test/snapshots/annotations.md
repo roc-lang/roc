@@ -47,7 +47,7 @@ It has the type:
 
     Pair(Str)
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
 
     Pair(U8)
 
@@ -75,7 +75,7 @@ It has the type:
 
     Pair(Str)
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
 
     Pair(U64)
 

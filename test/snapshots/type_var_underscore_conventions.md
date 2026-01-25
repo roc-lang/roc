@@ -108,7 +108,7 @@ It has the type:
 
     Str
 
-But the type annotation says it should have the type:
+But you are trying to use it as:
 
     $elem
 
