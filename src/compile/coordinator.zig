@@ -680,7 +680,18 @@ pub const Coordinator = struct {
         const pkg = self.packages.get(pkg_name) orelse return;
         const mod = pkg.getModule(module_id) orelse return;
 
-        // Mark as Parsing to prevent double-enqueue
+        // Try cache first (works for both single and multi-threaded modes)
+        // This runs in the coordinator, so it's safe to access self.packages
+        if (self.tryCacheHit(pkg, mod, module_id)) {
+            // Cache hit - module is now Done, no need to parse
+            // Note: tryCacheHit already handles remaining_modules/total_remaining
+            // for child imports, but we need to decrement for this module
+            if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
+            if (self.total_remaining > 0) self.total_remaining -= 1;
+            return;
+        }
+
+        // Cache miss - dispatch parse task
         mod.phase = .Parsing;
 
         try self.enqueueTask(.{
@@ -1410,6 +1421,143 @@ pub const Coordinator = struct {
         return true;
     }
 
+    /// Try to load a module from cache before dispatching a parse task.
+    /// Returns true if cache hit (module is now Done), false if cache miss.
+    /// This runs in the coordinator, so it can safely access self.packages.
+    fn tryCacheHit(self: *Coordinator, pkg: *PackageState, mod: *ModuleState, module_id: ModuleId) bool {
+        const cache = self.cache_manager orelse return false;
+
+        // 1. Read source file
+        // Note: We cannot use defer to free source because on cache hit,
+        // the ModuleEnv stores a reference to the source.
+        const source_opt = self.file_provider.read(
+            self.file_provider.ctx,
+            mod.path,
+            self.gpa,
+        ) catch return false;
+        const source = source_opt orelse return false;
+
+        // 2. Compute source hash
+        const source_hash = CacheManager.computeSourceHash(source);
+
+        // 3. Look up metadata by source hash
+        var meta = cache.getMetadata(source_hash) orelse {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (no metadata): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            self.gpa.free(source);
+            return false;
+        };
+
+        // 4. Verify all dependencies' hashes match their current source
+        if (!self.checkAllImportsCached(pkg.name, meta.imports)) {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (deps changed): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            meta.deinit(self.gpa);
+            self.gpa.free(source);
+            return false;
+        }
+
+        // 5. Load full cache using the key from metadata
+        const cache_result = cache.loadFromCacheByKey(
+            meta.full_cache_key,
+            source,
+            mod.name,
+        );
+
+        if (cache_result != .hit) {
+            if (comptime trace_build) {
+                std.debug.print("[COORD] tryCacheHit MISS (cache load failed): pkg={s} module={s}\n", .{
+                    pkg.name,
+                    mod.name,
+                });
+            }
+            meta.deinit(self.gpa);
+            self.gpa.free(source);
+            return false;
+        }
+
+        if (comptime trace_build) {
+            std.debug.print("[COORD] tryCacheHit HIT: pkg={s} module={s} imports={}\n", .{
+                pkg.name,
+                mod.name,
+                meta.imports.len,
+            });
+        }
+
+        // 6. Apply cache hit - set module state
+        // Note: The module_env stores a reference to source, so we do NOT free source here.
+        // The source will be freed when the module is deinitialized.
+        mod.env = cache_result.hit.module_env;
+        mod.was_cache_hit = true;
+        mod.phase = .Done;
+        mod.visit_color = .black;
+
+        // Store cache buffer to keep it alive
+        self.cache_buffers.append(self.gpa, cache_result.hit.cache_data) catch {};
+
+        // Update stats
+        self.cache_hits += 1;
+
+        // 7. Process imports from cached metadata
+        self.processCachedImportsForHit(pkg, module_id, meta.imports) catch {};
+
+        // Free metadata (imports have been processed)
+        meta.deinit(self.gpa);
+
+        return true;
+    }
+
+    /// Process imports from cached metadata after a cache hit.
+    /// Similar to handleCacheHit but called directly during enqueueParseTask.
+    fn processCachedImportsForHit(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, imports: []const ImportInfo) !void {
+        for (imports) |imp| {
+            // Skip Builtin - it's always available
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            if (imp.package.len == 0) {
+                // Local import - same package
+                const path = self.resolveModulePath(pkg.root_dir, imp.module) catch continue;
+                defer self.gpa.free(path);
+
+                const child_id = try pkg.ensureModule(self.gpa, imp.module, path);
+                const child = pkg.getModule(child_id).?;
+
+                // Track dependency for this module
+                const mod = pkg.getModule(module_id).?;
+                try mod.imports.append(self.gpa, child_id);
+
+                // Queue parse for new modules (will go through their own cache check)
+                if (child.phase == .Parse) {
+                    pkg.remaining_modules += 1;
+                    self.total_remaining += 1;
+                    try self.enqueueParseTask(pkg.name, child_id);
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] tryCacheHit queued local import: {s}\n", .{imp.module});
+                }
+            } else {
+                // External import - resolve shorthand to package
+                const import_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ imp.package, imp.module });
+                defer self.gpa.free(import_name);
+
+                try self.scheduleExternalImport(pkg.name, import_name);
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] tryCacheHit queued external import: {s}.{s}\n", .{ imp.package, imp.module });
+                }
+            }
+        }
+    }
+
     /// Handle cycle detection inline during canonicalization result processing
     fn handleCycleInline(self: *Coordinator, pkg: *PackageState, module_id: ModuleId, child_id: ModuleId) !void {
         const mod = pkg.getModule(module_id).?;
@@ -1718,80 +1866,10 @@ pub const Coordinator = struct {
             };
         };
 
-        // FAST PATH: Check cache before parsing
-        // NOTE: Skip fast path in multi-threaded mode because checkAllImportsCached
-        // accesses self.packages which violates the MPSC pattern (workers shouldn't
-        // access coordinator state). In multi-threaded mode, we do full parsing and
-        // let the coordinator handle cache hits via handleCacheHit.
-        if (self.cache_manager != null and self.mode == .single_threaded) {
-            const cache = self.cache_manager.?;
-            // Compute source hash for metadata lookup
-            const source_hash = CacheManager.computeSourceHash(src);
+        // Note: Cache checking now happens in enqueueParseTask (coordinator level)
+        // before tasks are dispatched. This works for both single and multi-threaded modes.
 
-            // Look up metadata by source hash
-            if (cache.getMetadata(source_hash)) |metadata| {
-                var meta = metadata;
-
-                // Check if ALL imports were cache hits in this build
-                const all_deps_cached = self.checkAllImportsCached(task.package_name, meta.imports);
-
-                if (all_deps_cached) {
-                    // Try to load from full cache using the key from metadata
-                    const cache_result = cache.loadFromCacheByKey(
-                        meta.full_cache_key,
-                        src,
-                        task.module_name,
-                    );
-
-                    if (cache_result == .hit) {
-                        if (comptime trace_build) {
-                            std.debug.print("[COORD] FAST PATH HIT: pkg={s} module={s}\n", .{
-                                task.package_name,
-                                task.module_name,
-                            });
-                        }
-
-                        // Transfer ownership of imports to the result - don't call meta.deinit()
-                        // since that would free the imports we're transferring.
-                        // full_cache_key is a [32]u8 array so doesn't need freeing.
-
-                        return .{
-                            .cache_hit = .{
-                                .package_name = task.package_name,
-                                .module_id = task.module_id,
-                                .module_name = task.module_name,
-                                .path = task.path,
-                                .module_env = cache_result.hit.module_env,
-                                .source = src,
-                                .error_count = cache_result.hit.error_count,
-                                .warning_count = cache_result.hit.warning_count,
-                                .cache_data = cache_result.hit.cache_data,
-                                .imports = meta.imports,
-                            },
-                        };
-                    }
-                }
-
-                // If we get here, we're not taking the cache hit path, so free metadata
-                meta.deinit(self.gpa);
-
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] FAST PATH MISS (deps not cached): pkg={s} module={s}\n", .{
-                        task.package_name,
-                        task.module_name,
-                    });
-                }
-            } else {
-                if (comptime trace_build) {
-                    std.debug.print("[COORD] FAST PATH MISS (no metadata): pkg={s} module={s}\n", .{
-                        task.package_name,
-                        task.module_name,
-                    });
-                }
-            }
-        }
-
-        // SLOW PATH: Parse, canonicalize, type-check
+        // Parse, canonicalize, type-check
 
         // Create ModuleEnv using module allocator (for IPC, this is shared memory)
         const module_alloc = self.getModuleAllocator();
