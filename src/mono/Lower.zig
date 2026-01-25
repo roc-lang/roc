@@ -75,8 +75,11 @@ all_module_envs: []const *ModuleEnv,
 /// Lambda set inference results (for closure dispatch)
 lambda_inference: ?*LambdaSetInference,
 
-/// Layout store (for computing layouts from types)
+/// Primary layout store (for module 0, computing layouts from types)
 layout_store: ?*LayoutStore,
+
+/// Per-module layout stores for external modules (created lazily)
+external_layout_stores: std.AutoHashMap(u16, *LayoutStore),
 
 /// Type scope for layout computation (for polymorphic type variable resolution)
 type_scope: TypeScope,
@@ -128,6 +131,7 @@ pub fn init(
         .all_module_envs = all_module_envs,
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
+        .external_layout_stores = std.AutoHashMap(u16, *LayoutStore).init(allocator),
         .type_scope = TypeScope.init(allocator),
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
@@ -137,6 +141,14 @@ pub fn init(
 
 /// Cleanup
 pub fn deinit(self: *Self) void {
+    // Clean up external layout stores (they were heap-allocated)
+    var it = self.external_layout_stores.valueIterator();
+    while (it.next()) |ls_ptr| {
+        ls_ptr.*.deinit();
+        self.allocator.destroy(ls_ptr.*);
+    }
+    self.external_layout_stores.deinit();
+
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
     self.type_env.deinit();
@@ -147,6 +159,40 @@ pub fn deinit(self: *Self) void {
 fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
     if (module_idx >= self.all_module_envs.len) return null;
     return self.all_module_envs[module_idx];
+}
+
+/// Get or create a layout store for the given module.
+/// For module 0, returns the primary layout_store.
+/// For external modules, creates a layout store lazily using that module's type store.
+fn getLayoutStoreForModule(self: *Self, module_idx: u16) ?*LayoutStore {
+    // Module 0 uses the primary layout store
+    if (module_idx == 0) {
+        return self.layout_store;
+    }
+
+    // Check if we already have a layout store for this external module
+    if (self.external_layout_stores.get(module_idx)) |ls| {
+        return ls;
+    }
+
+    // Need to create a new layout store for this external module
+    const module_env = self.getModuleEnv(module_idx) orelse return null;
+
+    // Allocate and initialize a new layout store
+    const ls_ptr = self.allocator.create(LayoutStore) catch return null;
+    ls_ptr.* = LayoutStore.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
+        self.allocator.destroy(ls_ptr);
+        return null;
+    };
+
+    // Cache it for future use
+    self.external_layout_stores.put(module_idx, ls_ptr) catch {
+        ls_ptr.deinit();
+        self.allocator.destroy(ls_ptr);
+        return null;
+    };
+
+    return ls_ptr;
 }
 
 /// Create a MonoSymbol from a pattern in the current module
@@ -286,7 +332,8 @@ fn lowerExternalDef(self: *Self, symbol: MonoSymbol, ident_idx: Ident.Idx) Error
 
 /// Compute layout from an expression index using the layout store
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
-    const ls = self.layout_store orelse return null;
+    // Use the layout store for the current module (handles external modules correctly)
+    const ls = self.getLayoutStoreForModule(self.current_module_idx) orelse return null;
 
     // Get the type variable from the expression index
     const type_var = ModuleEnv.varFrom(expr_idx);
@@ -415,11 +462,16 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
 
 /// Get the element layout from the for-loop pattern's type variable
 fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
-    // Get the type variable from the pattern (the element pattern in the for loop)
+    return self.getPatternLayout(pattern_idx);
+}
+
+/// Get the layout for a pattern from its type variable
+fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
+    // Get the type variable from the pattern
     const patt_type_var = ModuleEnv.varFrom(pattern_idx);
 
-    // Must have a layout store to compute element layout
-    const ls = self.layout_store orelse return error.LayoutError;
+    // Get the layout store for the current module (handles external modules correctly)
+    const ls = self.getLayoutStoreForModule(self.current_module_idx) orelse return error.LayoutError;
 
     // Compute the layout from the pattern's type variable
     return ls.addTypeVar(patt_type_var, &self.type_scope) catch return error.LayoutError;
@@ -1188,9 +1240,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
             }
 
             const fields = try self.store.addPatternSpan(field_patterns.items);
+            // Compute the record layout from the pattern's type variable
+            const record_layout = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
             break :blk .{
                 .record = .{
-                    .record_layout = .i64, // TODO
+                    .record_layout = record_layout,
                     .fields = fields,
                 },
             };
@@ -1198,9 +1252,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .tuple => |t| blk: {
             const elems = try self.lowerPatternSpan(module_env, t.patterns);
+            // Compute the tuple layout from the pattern's type variable
+            const tuple_layout = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
             break :blk .{
                 .tuple = .{
-                    .tuple_layout = .i64, // TODO
+                    .tuple_layout = tuple_layout,
                     .elems = elems,
                 },
             };
@@ -1208,10 +1264,12 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
         .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
+            // Compute the layout from the pattern's type variable
+            const layout_idx = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
             break :blk .{
                 .as_pattern = .{
                     .symbol = self.patternToSymbol(pattern_idx),
-                    .layout_idx = .i64, // TODO
+                    .layout_idx = layout_idx,
                     .inner = inner,
                 },
             };

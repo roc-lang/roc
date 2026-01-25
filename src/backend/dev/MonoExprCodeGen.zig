@@ -616,8 +616,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             }
                         }
                     }
-                } else {
-                    std.debug.print("  no layout_store!\n", .{});
                 }
             }
 
@@ -2062,22 +2060,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const record_data = ls.record_data.items.items[record_idx];
             const field_count = record_data.fields.count;
 
-            const lhs_offset: i32 = switch (lhs_loc) {
-                .stack => |o| o,
-                .stack_str => |o| o,
-                else => -999,
-            };
-            const rhs_offset: i32 = switch (rhs_loc) {
-                .stack => |o| o,
-                .stack_str => |o| o,
-                else => -999,
-            };
-            std.debug.print("generateRecordComparisonByLayout: field_count={d}, lhs_offset={d}, rhs_offset={d}\n", .{
-                field_count,
-                lhs_offset,
-                rhs_offset,
-            });
-
             if (field_count == 0) {
                 // Empty records are always equal
                 return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
@@ -2095,7 +2077,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const field_size = ls.getRecordFieldSize(stored_layout.data.record.idx, @intCast(i));
                 const offset: i32 = @intCast(field_offset);
 
-                std.debug.print("  field {d}: offset={d}, size={d}\n", .{ i, offset, field_size });
 
                 // For i128/Dec fields (16 bytes), compare both 8-byte halves
                 const num_chunks: usize = if (field_size > 8) 2 else 1;
@@ -3700,6 +3681,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateForLoop(self: *Self, for_loop: anytype) Error!ValueLocation {
             // Get the list location
             const list_loc = try self.generateExpr(for_loop.list_expr);
+
+            // Handle empty list represented as immediate 0
+            // Empty lists have null pointer and 0 length, so the loop body never executes
+            if (list_loc == .immediate_i64 and list_loc.immediate_i64 == 0) {
+                // Empty list - loop executes 0 times, just return unit
+                return .{ .immediate_i64 = 0 };
+            }
 
             // Get list pointer and length
             const list_base: i32 = switch (list_loc) {
