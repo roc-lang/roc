@@ -371,6 +371,40 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
+        /// Get the layout of an expression (if available and valid for our layout store)
+        fn getExprLayout(self: *Self, expr_id: MonoExprId) ?layout.Idx {
+            const expr = self.store.getExpr(expr_id);
+            const raw_layout: ?layout.Idx = switch (expr) {
+                // Expressions that store their layout
+                .record => |rec| rec.record_layout,
+                .tuple => |tup| tup.tuple_layout,
+                .lookup => |lookup| lookup.layout_idx,
+                .field_access => |fa| fa.field_layout,
+                .binop => |binop| binop.result_layout,
+                .call => |call| call.ret_layout,
+                // Literals with known layouts
+                .i64_literal => .i64,
+                .f64_literal => .f64,
+                .f32_literal => .f32,
+                .bool_literal => .bool,
+                .i128_literal => .i128,
+                .dec_literal => .dec,
+                // For other expressions, no layout available
+                else => null,
+            };
+
+            // Validate that the layout index is within bounds of our layout store
+            if (raw_layout) |layout_idx| {
+                const ls = self.layout_store orelse return null;
+                if (@intFromEnum(layout_idx) >= ls.layouts.len()) {
+                    // Layout index is out of bounds (from external module) - don't use it
+                    return null;
+                }
+                return layout_idx;
+            }
+            return null;
+        }
+
         /// Generate code for an expression and return where the result is stored
         fn generateExpr(self: *Self, expr_id: MonoExprId) Error!ValueLocation {
             const expr = self.store.getExpr(expr_id);
@@ -600,7 +634,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // might be a function call that returns a record/tuple/list
             if (binop.op == .eq or binop.op == .neq) {
                 const lhs_expr = self.store.getExpr(binop.lhs);
-                    // First try expression-based detection for direct literals
+                // First try expression-based detection for direct literals
                 if (lhs_expr == .record or lhs_expr == .tuple) {
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
@@ -615,7 +649,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         .lookup => |lookup| lookup.layout_idx,
                         else => null, // not a call/lookup, skip
                     };
-
 
                     if (operand_layout) |op_layout| {
                         const operand_layout_val = @intFromEnum(op_layout);
@@ -2091,7 +2124,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const field_offset = ls.getRecordFieldOffset(stored_layout.data.record.idx, @intCast(i));
                 const field_size = ls.getRecordFieldSize(stored_layout.data.record.idx, @intCast(i));
                 const offset: i32 = @intCast(field_offset);
-
 
                 // For i128/Dec fields (16 bytes), compare both 8-byte halves
                 const num_chunks: usize = if (field_size > 8) 2 else 1;
@@ -4162,8 +4194,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     else => {
                         // Generate code for the expression
                         const expr_loc = try self.generateExpr(stmt.expr);
-                        // Bind the result to the pattern
-                        try self.bindPattern(stmt.pattern, expr_loc);
+                        // Get the expression's layout (for mutable variable binding with correct size)
+                        const expr_layout = self.getExprLayout(stmt.expr);
+                        // Bind the result to the pattern, using expr layout for mutable vars
+                        try self.bindPatternWithLayout(stmt.pattern, expr_loc, expr_layout);
                     },
                 }
             }
@@ -4188,7 +4222,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Bind a value to a pattern
+        /// expr_layout_override: Optional layout from the expression being bound. If provided,
+        /// this is used for mutable variables instead of the pattern's layout_idx (which may be wrong).
         fn bindPattern(self: *Self, pattern_id: MonoPatternId, value_loc: ValueLocation) Error!void {
+            return self.bindPatternWithLayout(pattern_id, value_loc, null);
+        }
+
+        /// Bind a value to a pattern with an optional expression layout override
+        fn bindPatternWithLayout(self: *Self, pattern_id: MonoPatternId, value_loc: ValueLocation, expr_layout_override: ?layout.Idx) Error!void {
             const pattern = self.store.getPattern(pattern_id);
 
             switch (pattern) {
@@ -4205,9 +4246,23 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         } else {
                             // First binding: allocate a fixed slot and copy value there
                             const ls = self.layout_store orelse unreachable;
-                            const layout_val = ls.getLayout(bind.layout_idx);
-                            const size_align = ls.layoutSizeAlign(layout_val);
-                            const size: u32 = size_align.size;
+
+                            // Determine the size: prefer expr_layout_override (from the expression being bound),
+                            // fall back to value_loc hints, then to pattern's layout.
+                            const size: u32 = if (expr_layout_override) |expr_layout| blk: {
+                                // Use the expression's actual layout for size
+                                const expr_layout_val = ls.getLayout(expr_layout);
+                                const expr_size_align = ls.layoutSizeAlign(expr_layout_val);
+                                break :blk expr_size_align.size;
+                            } else switch (value_loc) {
+                                .stack_i128, .immediate_i128 => 16,
+                                .stack_str => 24,
+                                else => blk: {
+                                    const layout_val = ls.getLayout(bind.layout_idx);
+                                    const size_align = ls.layoutSizeAlign(layout_val);
+                                    break :blk size_align.size;
+                                },
+                            };
 
                             // Allocate a fixed stack slot for this mutable variable
                             const fixed_slot = self.codegen.allocStackSlot(size);
