@@ -619,6 +619,10 @@ pub fn deinitCachedModule(self: *Self) void {
     // import_mapping is initialized empty during deserialization and may have
     // items added later, so we need to free it
     self.import_mapping.deinit();
+
+    // rigid_vars is initialized empty during deserialization and may have
+    // items added during type checking, so we need to free it
+    self.rigid_vars.deinit(self.gpa);
 }
 
 // Module compilation functionality

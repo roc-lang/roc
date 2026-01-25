@@ -23,9 +23,11 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// Debug-only flag to catch invalid inserts into deserialized interners.
-/// Deserialized interners should never have inserts - if they do, it's a bug.
-supports_inserts: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) true else {},
+/// Flag to track whether this interner supports inserts (true) or is deserialized (false).
+/// Deserialized interners have memory owned by the deserialization buffer, so:
+/// - deinit() must NOT free memory (would double-free)
+/// - insert operations are invalid (buffer is immutable)
+supports_inserts: bool = true,
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -294,8 +296,8 @@ pub const Serialized = extern struct {
             .bytes = self.bytes.deserializeInto(base),
             .hash_table = self.hash_table.deserializeInto(base),
             .entry_count = self.entry_count,
-            // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
-            .supports_inserts = if (std.debug.runtime_safety) false else {},
+            // Mark as not supporting inserts - deserialized interners have memory owned by the buffer
+            .supports_inserts = false,
         };
     }
 };
