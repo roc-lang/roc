@@ -346,6 +346,20 @@ pub const WorkerResult = union(enum) {
     }
 };
 
+// Compile-time size assertions to catch unexpected growth of message types.
+// These types are copied between threads, so keeping them small is important
+// for performance. If you need to add fields that would exceed these limits,
+// consider using pointers instead.
+comptime {
+    const max_message_size = 512;
+    if (@sizeOf(WorkerTask) > max_message_size) {
+        @compileError("WorkerTask too large for efficient thread-safe copy");
+    }
+    if (@sizeOf(WorkerResult) > max_message_size) {
+        @compileError("WorkerResult too large for efficient thread-safe copy");
+    }
+}
+
 test "WorkerTask accessors" {
     const task = WorkerTask{
         .parse = .{

@@ -536,9 +536,9 @@ pub const BuildEnv = struct {
                         sched_mod.was_from_cache = coord_mod.was_cache_hit;
 
                         // Free the heap-allocated struct wrapper.
-                        // With Option F deserialization, both cached and non-cached envs
-                        // have their ModuleEnv struct heap-allocated via gpa.create().
-                        self.gpa.destroy(env);
+                        // IMPORTANT: Use env.gpa, not self.gpa, because the env was
+                        // allocated with env.gpa (page_allocator in multi-threaded mode).
+                        env.gpa.destroy(env);
                         // Clear coordinator's pointer to prevent double-free during deinit
                         coord_mod.env = null;
                     }

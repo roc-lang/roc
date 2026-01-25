@@ -165,6 +165,9 @@ const ModuleState = struct {
         // - Free the source which was heap-allocated
         if (!self.was_from_cache) {
             if (self.env) |*e| {
+                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                // with e.gpa (page_allocator in multi-threaded mode).
+                const env_alloc = e.gpa;
                 const source = e.common.source;
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: source={}, calling env.deinit\n", .{ self.name, @intFromPtr(source.ptr) });
@@ -173,13 +176,16 @@ const ModuleState = struct {
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source\n", .{self.name});
                 }
-                if (source.len > 0) gpa.free(source);
+                if (source.len > 0) env_alloc.free(source);
             }
         } else {
             if (self.env) |*e| {
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: calling env.deinitCachedModule (heap-allocated hash maps only)\n", .{self.name});
                 }
+                // IMPORTANT: Use e.gpa, not the passed-in gpa, because source was allocated
+                // with e.gpa (page_allocator in multi-threaded mode).
+                const env_alloc = e.gpa;
                 // The source is heap-allocated separately (read from file), not part of the cache buffer.
                 // We need to free it even for cached modules.
                 const source = e.common.source;
@@ -187,7 +193,7 @@ const ModuleState = struct {
                 if (comptime trace_build) {
                     std.debug.print("[MOD DEINIT DETAIL] {s}: freeing source for cached module\n", .{self.name});
                 }
-                if (source.len > 0) gpa.free(source);
+                if (source.len > 0) env_alloc.free(source);
             }
         }
         if (comptime trace_build) {
