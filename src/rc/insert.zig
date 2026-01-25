@@ -96,6 +96,8 @@ pub const InsertPass = struct {
 
     /// The module environment containing the CIR
     module_env: *ModuleEnv,
+    /// Heap-allocated single-element slice for layout store init
+    module_env_slice: []const *const ModuleEnv,
     /// Layout store for computing and checking if types are refcounted
     /// Owned by this pass, created using the module's compile-time types
     layout_store: LayoutStore,
@@ -114,9 +116,14 @@ pub const InsertPass = struct {
         allocator: std.mem.Allocator,
         module_env: *ModuleEnv,
     ) std.mem.Allocator.Error!Self {
-        return .{
+        // Heap-allocate the module env slice to ensure it outlives the layout store
+        const module_env_slice = try allocator.alloc(*const ModuleEnv, 1);
+        module_env_slice[0] = module_env;
+
+        return Self{
             .module_env = module_env,
-            .layout_store = try LayoutStore.init(module_env, &module_env.types, module_env.idents.builtin_str),
+            .module_env_slice = module_env_slice,
+            .layout_store = try LayoutStore.init(module_env_slice, module_env.idents.builtin_str, allocator),
             .type_scope = TypeScope.init(allocator),
             .symbol_states = std.AutoHashMap(CIR.Pattern.Idx, SymbolState).init(allocator),
             .allocator = allocator,
@@ -129,6 +136,7 @@ pub const InsertPass = struct {
         self.symbol_states.deinit();
         self.type_scope.deinit();
         self.layout_store.deinit();
+        self.allocator.free(self.module_env_slice);
     }
 
     /// Run the RC insertion pass on the module
@@ -498,16 +506,17 @@ pub const InsertPass = struct {
         // Pattern indices map directly to type variables
         const type_var: Var = @enumFromInt(@intFromEnum(pattern_idx));
 
-        // First check the cache
-        if (self.layout_store.layouts_by_var.get(type_var)) |cached_idx| {
+        // First check the cache (using module_idx=0 for single-module RC pass)
+        const cache_key = layout_mod.ModuleVarKey{ .module_idx = 0, .var_ = type_var };
+        if (self.layout_store.layouts_by_module_var.get(cache_key)) |cached_idx| {
             return cached_idx;
         }
 
         // Compute the layout from the type variable
-        // This will cache the result in layouts_by_var
+        // This will cache the result in layouts_by_module_var
         // Layout computation can fail for various reasons (unresolved types, etc.)
         // In those cases, we conservatively assume no RC is needed
-        return self.layout_store.addTypeVar(type_var, &self.type_scope) catch null;
+        return self.layout_store.addTypeVar(0, type_var, &self.type_scope) catch null;
     }
 
     /// Get the layout index for an expression by computing it from the expression's type.
@@ -517,13 +526,14 @@ pub const InsertPass = struct {
         // Expression indices map to type variables the same way as patterns
         const type_var: Var = @enumFromInt(@intFromEnum(expr_idx));
 
-        // First check the cache
-        if (self.layout_store.layouts_by_var.get(type_var)) |cached_idx| {
+        // First check the cache (using module_idx=0 for single-module RC pass)
+        const cache_key = layout_mod.ModuleVarKey{ .module_idx = 0, .var_ = type_var };
+        if (self.layout_store.layouts_by_module_var.get(cache_key)) |cached_idx| {
             return cached_idx;
         }
 
         // Compute the layout from the type variable
-        return self.layout_store.addTypeVar(type_var, &self.type_scope) catch null;
+        return self.layout_store.addTypeVar(0, type_var, &self.type_scope) catch null;
     }
 
     // Phase 2: Transform IR to insert RC operations

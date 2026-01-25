@@ -220,6 +220,15 @@ pub const DevEvaluator = struct {
     /// Required for proper RC tracking (incref/decref operations).
     roc_ops: RocOps,
 
+    /// Global layout store shared across all modules.
+    /// Created lazily on first code generation and reused for subsequent calls.
+    /// This ensures layout indices are consistent across cross-module calls.
+    global_layout_store: ?*layout.Store = null,
+
+    /// Cached all_module_envs slice for layout store initialization.
+    /// Set during generateCode and used by ensureGlobalLayoutStore.
+    cached_module_envs: ?[]const *ModuleEnv = null,
+
     pub const Error = error{
         OutOfMemory,
         UnsupportedType,
@@ -286,11 +295,42 @@ pub const DevEvaluator = struct {
             .static_interner = static_interner,
             .roc_env = roc_env,
             .roc_ops = roc_ops,
+            .global_layout_store = null,
+            .cached_module_envs = null,
         };
+    }
+
+    /// Get or create the global layout store.
+    /// The global layout store uses all module type stores for cross-module layout computation.
+    fn ensureGlobalLayoutStore(self: *DevEvaluator, all_module_envs: []const *ModuleEnv) Error!*layout.Store {
+        // If we already have a global layout store, return it
+        if (self.global_layout_store) |ls| return ls;
+
+        // Get builtin_str from module 0 (should be the builtin module)
+        const builtin_str = if (all_module_envs.len > 0)
+            all_module_envs[0].idents.builtin_str
+        else
+            null;
+
+        // Create the global layout store
+        const ls = self.allocator.create(layout.Store) catch return error.OutOfMemory;
+        ls.* = layout.Store.init(all_module_envs, builtin_str, self.allocator) catch {
+            self.allocator.destroy(ls);
+            return error.OutOfMemory;
+        };
+
+        self.global_layout_store = ls;
+        self.cached_module_envs = all_module_envs;
+        return ls;
     }
 
     /// Clean up resources
     pub fn deinit(self: *DevEvaluator) void {
+        // Clean up the global layout store if it exists
+        if (self.global_layout_store) |ls| {
+            ls.deinit();
+            self.allocator.destroy(ls);
+        }
         self.static_interner.deinit();
         self.jit_backend.deinit();
         self.allocator.destroy(self.jit_backend);
@@ -357,6 +397,7 @@ pub const DevEvaluator = struct {
         code: []const u8,
         allocator: Allocator,
         result_layout: LayoutIdx,
+        /// Reference to the global layout store (owned by DevEvaluator, not this struct)
         layout_store: ?*layout.Store = null,
         tuple_len: usize = 1,
         crash_message: ?[]const u8 = null,
@@ -368,10 +409,7 @@ pub const DevEvaluator = struct {
             if (self.code.len > 0) {
                 self.allocator.free(self.code);
             }
-            if (self.layout_store) |ls| {
-                ls.deinit();
-                self.allocator.destroy(ls);
-            }
+            // Note: layout_store is owned by DevEvaluator, not cleaned up here
         }
     };
 
@@ -397,18 +435,9 @@ pub const DevEvaluator = struct {
             }
         }
 
-        // Create a layout store for resolving layouts of composite types
-        // Heap-allocated so it can be passed to CodeResult for record formatting
-        const layout_store_ptr = self.allocator.create(layout.Store) catch {
-            return error.OutOfMemory;
-        };
-        errdefer {
-            layout_store_ptr.deinit();
-            self.allocator.destroy(layout_store_ptr);
-        }
-        layout_store_ptr.* = layout.Store.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
-            return error.OutOfMemory;
-        };
+        // Get or create the global layout store for resolving layouts of composite types
+        // This is a single store shared across all modules for cross-module correctness
+        const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
         // Run RC insertion pass to add incref/decref operations
         var rc_pass = rc.InsertPass.init(self.allocator, module_env) catch {
@@ -439,7 +468,7 @@ pub const DevEvaluator = struct {
                 const type_var = can.ModuleEnv.varFrom(expr_idx);
                 var type_scope = types.TypeScope.init(self.allocator);
                 defer type_scope.deinit();
-                if (layout_store_ptr.addTypeVar(type_var, &type_scope)) |computed_layout| {
+                if (layout_store_ptr.addTypeVar(module_idx, type_var, &type_scope)) |computed_layout| {
                     result_layout = computed_layout;
                 } else |_| {}
             },

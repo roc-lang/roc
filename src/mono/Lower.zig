@@ -60,15 +60,6 @@ const MonoExprStore = store_mod;
 const LayoutIdx = layout_mod.Idx;
 const LayoutStore = layout_mod.Store;
 const TypeScope = types.TypeScope;
-const TypeVar = types.Var;
-
-/// Key for cross-module type variable mapping.
-/// Used to map generic type variables from external modules to concrete type variables
-/// in the main module, enabling proper monomorphization of polymorphic calls.
-const ModuleVarKey = struct {
-    module_idx: u16,
-    var_: TypeVar,
-};
 
 const Self = @This();
 
@@ -84,11 +75,8 @@ all_module_envs: []const *ModuleEnv,
 /// Lambda set inference results (for closure dispatch)
 lambda_inference: ?*LambdaSetInference,
 
-/// Primary layout store (for module 0, computing layouts from types)
+/// Global layout store shared across all modules
 layout_store: ?*LayoutStore,
-
-/// Per-module layout stores for external modules (created lazily)
-external_layout_stores: std.AutoHashMap(u16, *LayoutStore),
 
 /// Type scope for layout computation (for polymorphic type variable resolution)
 type_scope: TypeScope,
@@ -102,11 +90,6 @@ lowered_symbols: std.AutoHashMap(u48, MonoExprId),
 
 /// Type environment: maps pattern_idx to layout (inferred from expressions)
 type_env: std.AutoHashMap(u32, LayoutIdx),
-
-/// Cross-module type context: maps (external_module, generic_var) to concrete var in main module.
-/// This enables monomorphization of polymorphic external functions by providing concrete type
-/// information when computing layouts for expressions in external modules.
-type_context: std.AutoHashMap(ModuleVarKey, TypeVar),
 
 /// Current module index during lowering
 current_module_idx: u16 = 0,
@@ -145,70 +128,25 @@ pub fn init(
         .all_module_envs = all_module_envs,
         .lambda_inference = lambda_inference,
         .layout_store = layout_store,
-        .external_layout_stores = std.AutoHashMap(u16, *LayoutStore).init(allocator),
         .type_scope = TypeScope.init(allocator),
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
-        .type_context = std.AutoHashMap(ModuleVarKey, TypeVar).init(allocator),
     };
 }
 
 /// Cleanup
 pub fn deinit(self: *Self) void {
-    // Clean up external layout stores (they were heap-allocated)
-    var it = self.external_layout_stores.valueIterator();
-    while (it.next()) |ls_ptr| {
-        ls_ptr.*.deinit();
-        self.allocator.destroy(ls_ptr.*);
-    }
-    self.external_layout_stores.deinit();
-
     self.lowered_patterns.deinit();
     self.lowered_symbols.deinit();
     self.type_env.deinit();
     self.type_scope.deinit();
-    self.type_context.deinit();
 }
 
 /// Get the module environment at the given index
 fn getModuleEnv(self: *const Self, module_idx: u16) ?*ModuleEnv {
     if (module_idx >= self.all_module_envs.len) return null;
     return self.all_module_envs[module_idx];
-}
-
-/// Get or create a layout store for the given module.
-/// For module 0, returns the primary layout_store.
-/// For external modules, creates a layout store lazily using that module's type store.
-fn getLayoutStoreForModule(self: *Self, module_idx: u16) ?*LayoutStore {
-    // Module 0 uses the primary layout store
-    if (module_idx == 0) {
-        return self.layout_store;
-    }
-
-    // Check if we already have a layout store for this external module
-    if (self.external_layout_stores.get(module_idx)) |ls| {
-        return ls;
-    }
-
-    // Need to create a new layout store for this external module
-    const module_env = self.getModuleEnv(module_idx) orelse return null;
-
-    // Allocate and initialize a new layout store
-    const ls_ptr = self.allocator.create(LayoutStore) catch return null;
-    ls_ptr.* = LayoutStore.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
-        self.allocator.destroy(ls_ptr);
-        return null;
-    };
-
-    // Cache it for future use
-    self.external_layout_stores.put(module_idx, ls_ptr) catch {
-        ls_ptr.deinit();
-        self.allocator.destroy(ls_ptr);
-        return null;
-    };
-
-    return ls_ptr;
 }
 
 /// Create a MonoSymbol from a pattern in the current module
@@ -291,203 +229,11 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) E
     try self.lowered_symbols.put(symbol_key, expr_id);
 }
 
-/// Build type context for an external function call.
-/// Maps generic type variables from the external function to concrete type variables
-/// from the call site arguments, enabling proper monomorphization.
-fn buildTypeContextForExternalCall(
-    self: *Self,
-    caller_module_env: *ModuleEnv,
-    ext_lookup: @TypeOf(@as(CIR.Expr, undefined).e_lookup_external),
-    call_args: CIR.Expr.Span,
-) Error!void {
-    // Resolve the import to get the external module
-    const ext_module_idx_raw = caller_module_env.imports.getResolvedModule(ext_lookup.module_idx) orelse return;
-    if (ext_module_idx_raw >= self.all_module_envs.len) return;
-    const ext_module_idx: u16 = @intCast(ext_module_idx_raw);
-    const ext_module_env = self.all_module_envs[ext_module_idx];
-
-    // Get the external function's definition
-    const def_idx: CIR.Def.Idx = @enumFromInt(ext_lookup.target_node_idx);
-    const def = ext_module_env.store.getDef(def_idx);
-
-    // Get the external function's type (this is the generic function type)
-    const ext_func_var = ModuleEnv.varFrom(def.expr);
-    const ext_func_resolved = ext_module_env.types.resolveVar(ext_func_var);
-
-    // The function type should unwrap to a function with parameters
-    const ext_func_content = ext_func_resolved.desc.content.unwrapFunc() orelse return;
-
-    // Get the external function's parameter types
-    const ext_param_vars = ext_module_env.types.sliceVars(ext_func_content.args);
-
-    // Get the call site argument expressions
-    const arg_indices = caller_module_env.store.sliceExpr(call_args);
-
-    // Map each external parameter type to the corresponding argument type
-    const min_len = @min(ext_param_vars.len, arg_indices.len);
-    for (0..min_len) |i| {
-        const ext_param_var = ext_param_vars[i];
-        const arg_expr_idx = arg_indices[i];
-
-        // Get the argument's concrete type from the caller's module
-        const arg_var = ModuleEnv.varFrom(arg_expr_idx);
-
-        // Recursively map type variables between external and caller
-        try self.mapTypeVars(ext_module_idx, ext_module_env, ext_param_var, caller_module_env, arg_var);
-    }
-
-    // Also map the return type
-    const ext_ret_var = ext_func_content.ret;
-    // The call expression's type is the return type in the caller's module
-    // We'd need the call's expr_idx here, but we don't have it at this point
-    // For now, just map parameter types - return type mapping can be added if needed
-    _ = ext_ret_var;
-}
-
-/// Recursively map type variables from external module to caller module.
-/// Walks the type structure in parallel, mapping flex/rigid vars to concrete types.
-fn mapTypeVars(
-    self: *Self,
-    ext_module_idx: u16,
-    ext_module_env: *ModuleEnv,
-    ext_var: TypeVar,
-    caller_module_env: *ModuleEnv,
-    caller_var: TypeVar,
-) Error!void {
-    const ext_resolved = ext_module_env.types.resolveVar(ext_var);
-    const caller_resolved = caller_module_env.types.resolveVar(caller_var);
-
-    // If the external var is flex or rigid, map it to the caller's concrete var
-    if (ext_resolved.desc.content == .flex or ext_resolved.desc.content == .rigid) {
-        const key = ModuleVarKey{ .module_idx = ext_module_idx, .var_ = ext_resolved.var_ };
-        // Only add if not already mapped (first mapping wins for recursive types)
-        if (!self.type_context.contains(key)) {
-            self.type_context.put(key, caller_resolved.var_) catch return error.OutOfMemory;
-        }
-        return;
-    }
-
-    // Recursively handle composite types
-    switch (ext_resolved.desc.content) {
-        .structure => |ext_flat| {
-            switch (ext_flat) {
-                .fn_pure, .fn_effectful, .fn_unbound => |ext_func| {
-                    // Map function parameter and return types
-                    if (caller_resolved.desc.content == .structure) {
-                        const caller_flat = caller_resolved.desc.content.structure;
-                        const caller_func = switch (caller_flat) {
-                            .fn_pure, .fn_effectful, .fn_unbound => |f| f,
-                            else => return,
-                        };
-                        const ext_args = ext_module_env.types.sliceVars(ext_func.args);
-                        const caller_args = caller_module_env.types.sliceVars(caller_func.args);
-                        const min_args = @min(ext_args.len, caller_args.len);
-                        for (0..min_args) |i| {
-                            try self.mapTypeVars(ext_module_idx, ext_module_env, ext_args[i], caller_module_env, caller_args[i]);
-                        }
-                        try self.mapTypeVars(ext_module_idx, ext_module_env, ext_func.ret, caller_module_env, caller_func.ret);
-                    }
-                },
-                .record => |ext_record| {
-                    // Map record field types
-                    if (caller_resolved.desc.content == .structure) {
-                        if (caller_resolved.desc.content.structure == .record) {
-                            const caller_record = caller_resolved.desc.content.structure.record;
-                            const ext_fields_slice = ext_module_env.types.getRecordFieldsSlice(ext_record.fields);
-                            const caller_fields_slice = caller_module_env.types.getRecordFieldsSlice(caller_record.fields);
-                            const ext_vars = ext_fields_slice.items(.var_);
-                            const caller_vars = caller_fields_slice.items(.var_);
-                            const min_fields = @min(ext_vars.len, caller_vars.len);
-                            for (0..min_fields) |i| {
-                                try self.mapTypeVars(ext_module_idx, ext_module_env, ext_vars[i], caller_module_env, caller_vars[i]);
-                            }
-                        }
-                    }
-                },
-                .tuple => |ext_tuple| {
-                    // Map tuple element types
-                    if (caller_resolved.desc.content == .structure) {
-                        if (caller_resolved.desc.content.structure == .tuple) {
-                            const caller_tuple = caller_resolved.desc.content.structure.tuple;
-                            const ext_elems = ext_module_env.types.sliceVars(ext_tuple.elems);
-                            const caller_elems = caller_module_env.types.sliceVars(caller_tuple.elems);
-                            const min_elems = @min(ext_elems.len, caller_elems.len);
-                            for (0..min_elems) |i| {
-                                try self.mapTypeVars(ext_module_idx, ext_module_env, ext_elems[i], caller_module_env, caller_elems[i]);
-                            }
-                        }
-                    }
-                },
-                .tag_union => |ext_tags| {
-                    // Map tag union variant types
-                    if (caller_resolved.desc.content == .structure) {
-                        if (caller_resolved.desc.content.structure == .tag_union) {
-                            const caller_tags = caller_resolved.desc.content.structure.tag_union;
-                            const ext_tags_slice = ext_module_env.types.getTagsSlice(ext_tags.tags);
-                            const caller_tags_slice = caller_module_env.types.getTagsSlice(caller_tags.tags);
-                            const ext_args_list = ext_tags_slice.items(.args);
-                            const caller_args_list = caller_tags_slice.items(.args);
-                            const min_variants = @min(ext_args_list.len, caller_args_list.len);
-                            for (0..min_variants) |i| {
-                                // Map payload types for each variant
-                                const ext_payloads = ext_module_env.types.sliceVars(ext_args_list[i]);
-                                const caller_payloads = caller_module_env.types.sliceVars(caller_args_list[i]);
-                                const min_payloads = @min(ext_payloads.len, caller_payloads.len);
-                                for (0..min_payloads) |j| {
-                                    try self.mapTypeVars(ext_module_idx, ext_module_env, ext_payloads[j], caller_module_env, caller_payloads[j]);
-                                }
-                            }
-                        }
-                    }
-                },
-                // nominal_type can have type arguments that need mapping
-                .nominal_type => |ext_nominal| {
-                    if (caller_resolved.desc.content == .structure) {
-                        if (caller_resolved.desc.content.structure == .nominal_type) {
-                            const caller_nominal = caller_resolved.desc.content.structure.nominal_type;
-                            const ext_type_args = ext_module_env.types.sliceNominalArgs(ext_nominal);
-                            const caller_type_args = caller_module_env.types.sliceNominalArgs(caller_nominal);
-                            const min_args = @min(ext_type_args.len, caller_type_args.len);
-                            for (0..min_args) |i| {
-                                try self.mapTypeVars(ext_module_idx, ext_module_env, ext_type_args[i], caller_module_env, caller_type_args[i]);
-                            }
-                        }
-                    }
-                },
-                else => {},
-            }
-        },
-        .alias => |ext_alias| {
-            // For aliases, map the backing type
-            const ext_backing = ext_module_env.types.getAliasBackingVar(ext_alias);
-            if (caller_resolved.desc.content == .alias) {
-                const caller_backing = caller_module_env.types.getAliasBackingVar(caller_resolved.desc.content.alias);
-                try self.mapTypeVars(ext_module_idx, ext_module_env, ext_backing, caller_module_env, caller_backing);
-            } else {
-                // Caller might have resolved the alias, map to it directly
-                try self.mapTypeVars(ext_module_idx, ext_module_env, ext_backing, caller_module_env, caller_var);
-            }
-        },
-        else => {},
-    }
-}
-
-/// Compute layout from an expression index using the layout store
+/// Compute layout from an expression index using the global layout store
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
-    // Use the layout store for the current module (handles external modules correctly)
-    const ls = self.getLayoutStoreForModule(self.current_module_idx) orelse return null;
-
-    // Get the type variable from the expression index
+    const ls = self.layout_store orelse return null;
     const type_var = ModuleEnv.varFrom(expr_idx);
-
-    // Try to compute the layout
-    const layout_idx = ls.addTypeVar(type_var, &self.type_scope) catch {
-        // Layout computation can fail for various reasons (recursive types, etc.)
-        // Fall back to default handling
-        return null;
-    };
-
-    return layout_idx;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch null;
 }
 
 /// Get layout for a block expression by inferring from the final expression
@@ -517,47 +263,11 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
     return self.getExprLayoutFromIdx(module_env, block.final_expr);
 }
 
-/// Get layout for an expression from its index by computing from type variable.
-/// Handles cross-module monomorphization by using type_context for generic var resolution.
-fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
-    // The expression index IS the type variable in this type system
+/// Get layout for an expression from its index using the global layout store.
+fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(expr_idx);
-
-    // Always use the main module's layout store - it's what codegen uses
-    const main_ls = self.getLayoutStoreForModule(0) orelse unreachable;
-
-    // If we're in an external module, check if we can resolve via type_context
-    if (self.current_module_idx != 0) {
-        // Resolve to find the root var
-        const resolved = module_env.types.resolveVar(type_var);
-
-        // For generic vars, use type_context to get the concrete main module var
-        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
-            const key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = resolved.var_ };
-            if (self.type_context.get(key)) |concrete_var| {
-                return main_ls.addTypeVar(concrete_var, &self.type_scope) catch unreachable;
-            }
-        }
-
-        // For non-generic types, use external module's layout store
-        // Scalar layouts (< 16) are universal, composite layouts (>= 16) will be wrong
-        // but this is a known limitation without full type translation
-        const ext_ls = self.getLayoutStoreForModule(self.current_module_idx) orelse unreachable;
-        const layout_idx = ext_ls.addTypeVar(type_var, &self.type_scope) catch unreachable;
-
-        // If it's a scalar layout, it's safe to use
-        if (@intFromEnum(layout_idx) < 16) {
-            return layout_idx;
-        }
-
-        // For composite layouts from external modules, we have a problem.
-        // Try to find a matching layout in the main module by content.
-        // For now, just return the external index and hope for the best.
-        return layout_idx;
-    }
-
-    // For main module, use directly
-    return main_ls.addTypeVar(type_var, &self.type_scope) catch unreachable;
+    const ls = self.layout_store orelse unreachable;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch unreachable;
 }
 
 /// Get the element layout from the for-loop pattern's type variable
@@ -565,45 +275,11 @@ fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!Layo
     return self.getPatternLayout(pattern_idx);
 }
 
-/// Get the layout for a pattern from its type variable.
-/// Handles cross-module monomorphization by using type_context for generic var resolution.
+/// Get the layout for a pattern from its type variable using the global layout store.
 fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
-    // Get the type variable from the pattern
-    const patt_type_var = ModuleEnv.varFrom(pattern_idx);
-
-    // Always use the main module's layout store - it's what codegen uses
-    const main_ls = self.getLayoutStoreForModule(0) orelse return error.LayoutError;
-
-    // If we're in an external module, check if we can resolve via type_context
-    if (self.current_module_idx != 0) {
-        const module_env = self.getModuleEnv(self.current_module_idx) orelse return error.LayoutError;
-
-        // Resolve to find the root var
-        const resolved = module_env.types.resolveVar(patt_type_var);
-
-        // For generic vars, use type_context to get the concrete main module var
-        if (resolved.desc.content == .flex or resolved.desc.content == .rigid) {
-            const key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = resolved.var_ };
-            if (self.type_context.get(key)) |concrete_var| {
-                return main_ls.addTypeVar(concrete_var, &self.type_scope) catch return error.LayoutError;
-            }
-        }
-
-        // For non-generic types, use external module's layout store
-        const ext_ls = self.getLayoutStoreForModule(self.current_module_idx) orelse return error.LayoutError;
-        const layout_idx = ext_ls.addTypeVar(patt_type_var, &self.type_scope) catch return error.LayoutError;
-
-        // Scalar layouts are universal
-        if (@intFromEnum(layout_idx) < 16) {
-            return layout_idx;
-        }
-
-        // Composite layouts from external modules are problematic
-        return layout_idx;
-    }
-
-    // For main module, use directly
-    return main_ls.addTypeVar(patt_type_var, &self.type_scope) catch return error.LayoutError;
+    const type_var = ModuleEnv.varFrom(pattern_idx);
+    const ls = self.layout_store orelse return error.LayoutError;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch return error.LayoutError;
 }
 
 /// Lower a single expression
@@ -696,12 +372,6 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_call => |call| blk: {
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
-
-            // If calling an external function, build type context for monomorphization
-            if (fn_expr == .e_lookup_external) {
-                const ext_lookup = fn_expr.e_lookup_external;
-                try self.buildTypeContextForExternalCall(module_env, ext_lookup, call.args);
-            }
 
             if (fn_expr == .e_low_level_lambda) {
                 const ll = fn_expr.e_low_level_lambda;
@@ -1134,7 +804,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1157,7 +827,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1179,7 +849,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1441,7 +1111,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
                                     // Compute layout for the element type
-                                    break :elem_blk ls.addTypeVar(elem_type_var, &self.type_scope) catch LayoutIdx.i64;
+                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope) catch LayoutIdx.i64;
                                 }
                             },
                             else => {},
