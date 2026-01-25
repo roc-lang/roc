@@ -457,7 +457,25 @@ pub const ReportBuilder = struct {
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
-                    else => return try self.makeMismatchReport(
+                    .platform_requirement => return try self.makeMismatchReport(
+                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                        &.{D.bytes("This expression is used in an unexpected way:")},
+                        &.{D.bytes("It has the type:")},
+                        mismatch.types.actual_snapshot,
+                        &.{D.bytes("But the platform says it should be:")},
+                        mismatch.types.expected_snapshot,
+                        &.{},
+                    ),
+                    .type_annotation => return try self.makeMismatchReport(
+                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
+                        &.{D.bytes("This expression is used in an unexpected way:")},
+                        &.{D.bytes("It has the type:")},
+                        mismatch.types.actual_snapshot,
+                        &.{D.bytes("But the annotation say it should be:")},
+                        mismatch.types.expected_snapshot,
+                        &.{},
+                    ),
+                    .none => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way:")},
                         &.{D.bytes("It has the type:")},

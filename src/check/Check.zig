@@ -1351,7 +1351,6 @@ pub fn checkPlatformRequirements(
             const app_ident = app_required_ident orelse try self.cir.insertIdent(
                 Ident.for_text(platform_env.getIdentText(required_type.ident)),
             );
-            // TODO: Make ctx better?
             _ = try self.unifyInContext(instantiated_required_var, export_var, &env, .{
                 .platform_requirement = .{ .required_ident = app_ident },
             });
@@ -3528,7 +3527,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Then, lastly, we unify the annotation types against the
                     // actual type
                     for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                        // TODO: Make ctx better?
                         _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
                     }
                 } else {
@@ -3545,7 +3543,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // If we have an expected function, use that as the expr's expected type
             if (mb_anno_func) |expected_func| {
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
-                // TODO: Make ctx better?
                 _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
             } else {
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
@@ -4075,7 +4072,6 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        // TODO: Make ctx better?
         _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
 
         // Check if the expression type contains any errors anywhere in its
@@ -5428,7 +5424,6 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     continue;
                 };
 
-                // TODO: Make ctx better? used to have constraint origin deferred_constraint.var_,
                 const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                     .method_type = .{
                         .constraint_var = deferred_constraint.var_,

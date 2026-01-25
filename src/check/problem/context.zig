@@ -28,10 +28,6 @@ pub const Context = union(enum) {
     fn_call_arity: FnCallArityContext,
     /// Argument to a function call
     fn_call_arg: FnCallArgContext,
-    /// Return position of a function
-    fn_return,
-    /// Argument in function definition (by index)
-    fn_def_arg: u32,
 
     // Control flow contexts
     /// Condition of an if expression
@@ -46,12 +42,6 @@ pub const Context = union(enum) {
     // Data structure contexts
     /// Element in a list (0-indexed)
     list_entry: ListEntryContext,
-    /// Field of a record
-    record_field: Ident.Idx,
-    /// Element of a tuple (0-indexed)
-    tuple_entry: u32,
-    /// Argument of a tag
-    tag_arg: TagArgContext,
 
     // Type annotation contexts
     /// From a type annotation
@@ -72,8 +62,6 @@ pub const Context = union(enum) {
     early_return,
     /// Statement expression (should be {})
     statement_value,
-    /// Dot-syntax method call
-    method_call: MethodCallContext,
     /// Nominal type constructor (tag, record, tuple, or value)
     nominal_constructor: NominalConstructorContext,
     /// Function arguments bound by same type variable have incompatible types
