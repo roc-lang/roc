@@ -1152,7 +1152,7 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But you are trying to use it as:
+But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 

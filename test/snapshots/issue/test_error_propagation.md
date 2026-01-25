@@ -39,7 +39,7 @@ It has the type:
 
     Str
 
-But you are trying to use it as:
+But the annotation say it should be:
 
     GoodAlias
 

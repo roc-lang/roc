@@ -35,7 +35,7 @@ It has the type:
 
     List(a)
 
-But you are trying to use it as:
+But the annotation say it should be:
 
     Str
 
