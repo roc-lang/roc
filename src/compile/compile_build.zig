@@ -309,6 +309,9 @@ pub const BuildEnv = struct {
             self.cache_manager,
         );
         coord.setFileProvider(self.file_provider);
+        // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
+        // This is required for roc build so that hosted functions can be called at runtime
+        coord.enable_hosted_transform = true;
         self.coordinator = coord;
     }
 
