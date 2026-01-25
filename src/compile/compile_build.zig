@@ -1080,22 +1080,18 @@ pub const BuildEnv = struct {
                 } else blk: {
                     const header_dir = std.fs.path.dirname(file_abs) orelse ".";
                     const abs_path = try PathUtils.makeAbsolute(self.gpa, header_dir, plat_rel);
-                    // Restrict platform dependency path to be within the workspace root(s) even if declared by app.
-                    if (!PathUtils.isWithinRoot(abs_path, self.workspace_roots.items)) {
-                        self.gpa.free(abs_path);
-                        return error.PathOutsideWorkspace;
-                    }
                     break :blk abs_path;
                 };
 
                 info.platform_alias = try self.gpa.dupe(u8, alias);
                 info.platform_path = @constCast(plat_path);
 
-                // For URL-resolved packages, add the cache directory to workspace roots
-                // so that imports within the cached package can be resolved
-                if (base.url.isSafeUrl(plat_rel)) {
-                    if (std.fs.path.dirname(plat_path)) |cache_pkg_dir| {
-                        try self.workspace_roots.append(try self.gpa.dupe(u8, cache_pkg_dir));
+                // Add platform directory to workspace roots so that imports within the platform
+                // can be resolved. This is needed for both URL packages (cached paths) and
+                // relative paths that may point outside the app directory (e.g., ../platform/main.roc)
+                if (std.fs.path.dirname(plat_path)) |plat_dir| {
+                    if (!PathUtils.isWithinRoot(plat_dir, self.workspace_roots.items)) {
+                        try self.workspace_roots.append(try self.gpa.dupe(u8, plat_dir));
                     }
                 }
 
