@@ -231,7 +231,7 @@ pub const Context = union(enum) {
     /// Context for method type mismatch (where clause)
     pub const MethodTypeContext = struct {
         /// The dispatcher type variable
-        dispatcher_var: Var,
+        constraint_var: Var,
         /// The name of the type being dispatched
         dispatcher_name: Ident.Idx,
         /// The method name

@@ -367,53 +367,17 @@ const Env = struct {
 
 /// Unify two types where `a` is the expected type and `b` is the actual type
 fn unify(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithCtx(a, b, env, .anon);
-}
-
-/// Unify two types where `a` is the expected type and `b` is the actual type
-/// In error messages, this function will indicate that `a` as "from an annotation"
-fn unifyFromAnno(self: *Self, a: Var, b: Var, env: *Env) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithCtx(a, b, env, .anno);
-}
-
-/// Unify two types with a specific constraint origin var for error reporting.
-/// The origin_var's region will be used in error messages instead of the default.
-fn unifyWithOrigin(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var });
-}
-
-/// Unify two types with explicit context for better error messages.
-/// The context indicates WHERE the type mismatch occurred (if_condition, list_entry, etc.)
-fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = null, .context = context });
-}
-
-/// Unify two types from an annotation with explicit context for error messages.
-/// Combines annotation context (for "from annotation" in error messages) with problem context.
-fn unifyFromAnnoInContext(self: *Self, a: Var, b: Var, env: *Env, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithConf(a, b, env, .{ .ctx = .anno, .constraint_origin_var = null, .context = context });
-}
-
-/// Unify two types with origin var and explicit context for error messages.
-/// Combines constraint origin (for region highlighting) with problem context.
-fn unifyWithOriginInContext(self: *Self, a: Var, b: Var, env: *Env, origin_var: Var, context: problem.Context) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithConf(a, b, env, .{ .ctx = .anon, .constraint_origin_var = origin_var, .context = context });
-}
-
-/// Unify two types where `a` is the expected type and `b` is the actual type
-/// Accepts a config that indicates if `a` is from an annotation or not
-fn unifyWithCtx(self: *Self, a: Var, b: Var, env: *Env, ctx: unifier.Conf.Ctx) std.mem.Allocator.Error!unifier.Result {
-    return self.unifyWithConf(a, b, env, .{ .ctx = ctx, .constraint_origin_var = null });
+    return self.unifyInContext(a, b, env, .none);
 }
 
 /// Unify two types where `a` is the expected type and `b` is the actual type
 /// Accepts a full unifier config for fine-grained control
-fn unifyWithConf(self: *Self, a: Var, b: Var, env: *Env, conf: unifier.Conf) std.mem.Allocator.Error!unifier.Result {
+fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) std.mem.Allocator.Error!unifier.Result {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Unify
-    const result = try unifier.unifyWithConf(
+    const result = try unifier.unifyInContext(
         self.cir,
         self.types,
         &self.problems,
@@ -423,7 +387,7 @@ fn unifyWithConf(self: *Self, a: Var, b: Var, env: *Env, conf: unifier.Conf) std
         &self.occurs_scratch,
         a,
         b,
-        conf,
+        ctx,
     );
 
     // Set regions and add to the current rank all variables created during unification.
@@ -1387,7 +1351,8 @@ pub fn checkPlatformRequirements(
             const app_ident = app_required_ident orelse try self.cir.insertIdent(
                 Ident.for_text(platform_env.getIdentText(required_type.ident)),
             );
-            _ = try self.unifyFromAnnoInContext(instantiated_required_var, export_var, &env, .{
+            // TODO: Make ctx better?
+            _ = try self.unifyInContext(instantiated_required_var, export_var, &env, .{
                 .platform_requirement = .{ .required_ident = app_ident },
             });
         } else {
@@ -3563,7 +3528,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     // Then, lastly, we unify the annotation types against the
                     // actual type
                     for (anno_func_args, arg_pattern_idxs) |expected_arg_var, pattern_idx| {
-                        _ = try self.unifyWithCtx(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .anno);
+                        // TODO: Make ctx better?
+                        _ = try self.unifyInContext(expected_arg_var, ModuleEnv.varFrom(pattern_idx), env, .type_annotation);
                     }
                 } else {
                     // This means the expected type and the actual lambda have
@@ -3579,7 +3545,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             // If we have an expected function, use that as the expr's expected type
             if (mb_anno_func) |expected_func| {
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
-                _ = try self.unifyWithCtx(expected_func.ret, body_var, env, .anno);
+                // TODO: Make ctx better?
+                _ = try self.unifyInContext(expected_func.ret, body_var, env, .type_annotation);
             } else {
                 does_fx = try self.checkExpr(lambda.body, env, .no_expectation) or does_fx;
             }
@@ -4103,7 +4070,8 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     // Check if we have an annotation
     if (mb_anno_vars) |anno_vars| {
         // Unify the anno with the expr var
-        _ = try self.unifyWithCtx(anno_vars.anno_var, expr_var, env, .anno);
+        // TODO: Make ctx better?
+        _ = try self.unifyInContext(anno_vars.anno_var, expr_var, env, .type_annotation);
 
         // Check if the expression type contains any errors anywhere in its
         // structure. If it does and we have an annotation, use the annotation
@@ -5446,7 +5414,7 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                 const constraint_fn = constraint_fn_resolved.unwrapFunc() orelse {
                     _ = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                         .method_type = .{
-                            .dispatcher_var = constraint.fn_var,
+                            .constraint_var = constraint.fn_var,
                             .dispatcher_name = nominal_type.ident.ident_idx,
                             .method_name = constraint.fn_name,
                         },
@@ -5455,9 +5423,10 @@ fn checkStaticDispatchConstraints(self: *Self, env: *Env) std.mem.Allocator.Erro
                     continue;
                 };
 
-                const fn_result = try self.unifyWithOriginInContext(method_var, constraint.fn_var, env, deferred_constraint.var_, .{
+                // TODO: Make ctx better? used to have constraint origin deferred_constraint.var_,
+                const fn_result = try self.unifyInContext(method_var, constraint.fn_var, env, .{
                     .method_type = .{
-                        .dispatcher_var = constraint.fn_var,
+                        .constraint_var = deferred_constraint.var_,
                         .dispatcher_name = nominal_type.ident.ident_idx,
                         .method_name = constraint.fn_name,
                     },

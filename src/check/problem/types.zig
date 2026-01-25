@@ -139,8 +139,6 @@ pub const TypePair = struct {
     expected_snapshot: SnapshotContentIdx,
     actual_var: Var,
     actual_snapshot: SnapshotContentIdx,
-    /// True if the expected type comes from a type annotation
-    from_annotation: bool = false,
     /// The specific region where this constraint originated from (e.g., dot access expression)
     /// If present, this region should be highlighted instead of the variable's region
     constraint_origin_var: ?Var = null,

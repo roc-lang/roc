@@ -1732,13 +1732,10 @@ pub const ReportBuilder = struct {
         types: TypePair,
         ctx: Context.MethodTypeContext,
     ) !Report {
-        // Use constraint_origin_var if available (points to the call site), else fall back to dispatcher_var
-        const region_var = types.constraint_origin_var orelse ctx.dispatcher_var;
-
         // Note: The unifier's actual/expected are opposite to display order.
         // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
         return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(region_var) },
+            .{ .simple = regionIdxFrom(ctx.constraint_var) },
             &.{
                 D.bytes("The"),
                 D.ident(ctx.method_name).withAnnotation(.inline_code),
