@@ -71,6 +71,22 @@ const DevRocEnv = struct {
     }
 
     fn deinit(self: *DevRocEnv) void {
+        // Free all tracked allocations before deiniting the map
+        var iter = self.allocations.iterator();
+        while (iter.next()) |entry| {
+            const ptr_addr = entry.key_ptr.*;
+            const alloc_info = entry.value_ptr.*;
+            const slice_ptr: [*]u8 = @ptrFromInt(ptr_addr);
+
+            switch (alloc_info.alignment) {
+                1 => self.allocator.free(@as([*]align(1) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                2 => self.allocator.free(@as([*]align(2) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                4 => self.allocator.free(@as([*]align(4) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                8 => self.allocator.free(@as([*]align(8) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                16 => self.allocator.free(@as([*]align(16) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+                else => {},
+            }
+        }
         self.allocations.deinit();
     }
 
