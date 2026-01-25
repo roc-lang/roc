@@ -316,6 +316,7 @@ pub const DevEvaluator = struct {
         code: []const u8,
         allocator: Allocator,
         result_layout: LayoutIdx,
+        layout_store: ?*layout.Store = null,
         tuple_len: usize = 1,
         crash_message: ?[]const u8 = null,
         /// Offset from start of code where execution should begin
@@ -325,6 +326,10 @@ pub const DevEvaluator = struct {
         pub fn deinit(self: *CodeResult) void {
             if (self.code.len > 0) {
                 self.allocator.free(self.code);
+            }
+            if (self.layout_store) |ls| {
+                ls.deinit();
+                self.allocator.destroy(ls);
             }
         }
     };
@@ -352,10 +357,17 @@ pub const DevEvaluator = struct {
         }
 
         // Create a layout store for resolving layouts of composite types
-        var layout_store = layout.Store.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
+        // Heap-allocated so it can be passed to CodeResult for record formatting
+        const layout_store_ptr = self.allocator.create(layout.Store) catch {
             return error.OutOfMemory;
         };
-        defer layout_store.deinit();
+        errdefer {
+            layout_store_ptr.deinit();
+            self.allocator.destroy(layout_store_ptr);
+        }
+        layout_store_ptr.* = layout.Store.init(module_env, &module_env.types, module_env.idents.builtin_str) catch {
+            return error.OutOfMemory;
+        };
 
         // Run RC insertion pass to add incref/decref operations
         var rc_pass = rc.InsertPass.init(self.allocator, module_env) catch {
@@ -365,7 +377,7 @@ pub const DevEvaluator = struct {
         const rc_expr_idx = rc_pass.runOnExpr(expr_idx) catch expr_idx;
 
         // Create the lowerer with the layout store
-        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, &layout_store);
+        var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, layout_store_ptr);
         defer lowerer.deinit();
 
         // Lower the RC-transformed CIR expression to Mono IR
@@ -379,14 +391,14 @@ pub const DevEvaluator = struct {
         const cir_expr = module_env.store.getExpr(expr_idx);
         var result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
 
-        // For composite types (tuples, records), always compute proper layout from type var
-        // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of tuple)
+        // For composite types (tuples, records, calls), compute proper layout from type var
+        // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of record)
         switch (cir_expr) {
-            .e_tuple, .e_record => {
+            .e_tuple, .e_record, .e_call => {
                 const type_var = can.ModuleEnv.varFrom(expr_idx);
                 var type_scope = types.TypeScope.init(self.allocator);
                 defer type_scope.deinit();
-                if (layout_store.addTypeVar(type_var, &type_scope)) |computed_layout| {
+                if (layout_store_ptr.addTypeVar(type_var, &type_scope)) |computed_layout| {
                     result_layout = computed_layout;
                 } else |_| {}
             },
@@ -403,7 +415,7 @@ pub const DevEvaluator = struct {
         var codegen = backend.MonoExprCodeGen.init(
             self.allocator,
             &mono_store,
-            &layout_store,
+            layout_store_ptr,
             &self.static_interner,
         );
         defer codegen.deinit();
@@ -427,6 +439,7 @@ pub const DevEvaluator = struct {
             .code = gen_result.code,
             .allocator = self.allocator,
             .result_layout = result_layout,
+            .layout_store = layout_store_ptr,
             .tuple_len = tuple_len,
             .entry_offset = gen_result.entry_offset,
         };
@@ -647,6 +660,35 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                         if (arg_layout == .str) {
                             break :blk .str;
                         }
+                    }
+                    break :blk LayoutIdx.default_num;
+                },
+                .e_lookup_external => |lookup| {
+                    // For external function calls like List.fold, List.map, etc.
+                    // Try to infer return type from arguments:
+                    // - List.fold(list, state, step) returns same type as state (arg 1)
+                    // - List.map(list, mapper) returns a list
+                    // Check the function name to determine the pattern
+                    const func_name = module_env.getIdent(lookup.ident_idx);
+                    const args = module_env.store.sliceExpr(call.args);
+
+                    if (std.mem.eql(u8, func_name, "fold") or
+                        std.mem.eql(u8, func_name, "foldR") or
+                        std.mem.eql(u8, func_name, "foldL") or
+                        std.mem.eql(u8, func_name, "reduce"))
+                    {
+                        // fold(list, initial, step) -> type of initial
+                        if (args.len >= 2) {
+                            const acc_expr = module_env.store.getExpr(args[1]);
+                            break :blk getExprLayoutWithTypeEnv(allocator, module_env, acc_expr, type_env);
+                        }
+                    } else if (std.mem.eql(u8, func_name, "map") or
+                        std.mem.eql(u8, func_name, "filter") or
+                        std.mem.eql(u8, func_name, "append") or
+                        std.mem.eql(u8, func_name, "prepend"))
+                    {
+                        // These return lists
+                        break :blk .i64; // Lists are represented as pointers
                     }
                     break :blk LayoutIdx.default_num;
                 },

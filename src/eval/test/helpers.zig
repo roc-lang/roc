@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 
+const layout = @import("layout");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
@@ -218,7 +219,26 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             try output.append(']');
             break :blk output.toOwnedSlice();
         },
-        else => error.UnsupportedLayout,
+        else => blk: {
+            // Handle non-scalar layouts (records, tuples, etc.)
+            // Layout indices >= 16 are computed layouts (scalars are 0-15)
+            const layout_idx_val = @intFromEnum(code_result.result_layout);
+            if (layout_idx_val >= 16) {
+                // This is a computed layout (record, tuple, tag union, etc.)
+                // For records, we need to look up the layout from the layout store
+                if (code_result.layout_store) |ls| {
+                    const stored_layout = ls.getLayout(code_result.result_layout);
+                    if (stored_layout.tag == .record) {
+                        // Get record field count from record_data
+                        const record_idx = stored_layout.data.record.idx.int_idx;
+                        const record_data = ls.record_data.items.items[record_idx];
+                        const field_count = record_data.fields.count;
+                        break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                    }
+                }
+            }
+            return error.UnsupportedLayout;
+        },
     };
 }
 
