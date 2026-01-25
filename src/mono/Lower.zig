@@ -193,6 +193,97 @@ fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Id
     return MonoSymbol.none;
 }
 
+/// Lower an external definition using its direct Def.Idx
+/// This is the primary path - uses the target_node_idx from e_lookup_external
+fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) Error!void {
+    // Skip if symbol is invalid
+    if (symbol.module_idx >= self.all_module_envs.len) {
+        return;
+    }
+
+    // Get the external module environment
+    const ext_module_env = self.all_module_envs[symbol.module_idx];
+
+    // Get the definition directly using the index
+    const def_idx: CIR.Def.Idx = @enumFromInt(target_def_idx);
+    const def = ext_module_env.store.getDef(def_idx);
+
+    // Create symbol key for deduplication
+    const symbol_key: u48 = @bitCast(symbol);
+
+    // Avoid infinite recursion - check if already lowered
+    if (self.lowered_symbols.contains(symbol_key)) return;
+
+    // Lower the definition's expression in the context of the external module
+    const old_module = self.current_module_idx;
+    self.current_module_idx = symbol.module_idx;
+    defer self.current_module_idx = old_module;
+
+    const expr_id = self.lowerExprFromIdx(ext_module_env, def.expr) catch {
+        // If lowering fails, don't register - the lookup will fail at codegen time
+        return;
+    };
+
+    // Register the symbol definition
+    try self.store.registerSymbolDef(symbol, expr_id);
+    try self.lowered_symbols.put(symbol_key, expr_id);
+}
+
+/// Lower an external definition by searching by name (fallback path)
+/// This ensures that when we reference an external function, its body is available
+fn lowerExternalDef(self: *Self, symbol: MonoSymbol, ident_idx: Ident.Idx) Error!void {
+    // Skip if symbol is invalid
+    if (symbol.module_idx >= self.all_module_envs.len) {
+        return;
+    }
+
+    // Get the current module (where the lookup originates) and external module
+    const current_module_env = self.all_module_envs[self.current_module_idx];
+    const ext_module_env = self.all_module_envs[symbol.module_idx];
+
+    // Get the identifier NAME from the current module's ident table
+    const lookup_name = current_module_env.getIdent(ident_idx);
+
+    // Find the definition in the external module by matching the ident NAME
+    const defs = ext_module_env.store.sliceDefs(ext_module_env.all_defs);
+    for (defs) |def_idx| {
+        const def = ext_module_env.store.getDef(def_idx);
+        const pattern = ext_module_env.store.getPattern(def.pattern);
+
+        // Get the definition's ident
+        const def_ident = switch (pattern) {
+            .assign => |a| a.ident,
+            .as => |as| as.ident,
+            else => continue,
+        };
+
+        // Compare by NAME, not by index (since ident indices are per-module)
+        const def_name = ext_module_env.getIdent(def_ident);
+        if (std.mem.eql(u8, def_name, lookup_name)) {
+            // Found the definition - lower it
+            const symbol_key: u48 = @bitCast(symbol);
+
+            // Avoid infinite recursion - mark as being lowered
+            if (self.lowered_symbols.contains(symbol_key)) return;
+
+            // Lower the definition's expression in the context of the external module
+            const old_module = self.current_module_idx;
+            self.current_module_idx = symbol.module_idx;
+            defer self.current_module_idx = old_module;
+
+            const expr_id = self.lowerExprFromIdx(ext_module_env, def.expr) catch {
+                // If lowering fails, don't register - the lookup will fail at codegen time
+                return;
+            };
+
+            // Register the symbol definition
+            try self.store.registerSymbolDef(symbol, expr_id);
+            try self.lowered_symbols.put(symbol_key, expr_id);
+            return;
+        }
+    }
+}
+
 /// Compute layout from an expression index using the layout store
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
     const ls = self.layout_store orelse return null;
@@ -374,6 +465,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_lookup_external => |lookup| blk: {
             const symbol = self.externalToSymbol(lookup.module_idx, lookup.ident_idx);
+
+            // Ensure the external definition is lowered using target_node_idx
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                // Lower the external definition using the direct Def.Idx
+                try self.lowerExternalDefByIdx(symbol, lookup.target_node_idx);
+            }
+
             break :blk .{ .lookup = .{
                 .symbol = symbol,
                 .layout_idx = self.getExprLayout(module_env, expr),

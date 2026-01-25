@@ -267,7 +267,7 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -317,7 +317,7 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -348,7 +348,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -394,7 +394,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -440,7 +440,7 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -480,7 +480,7 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -524,7 +524,7 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -567,7 +567,7 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -607,7 +607,7 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -662,7 +662,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -749,7 +749,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -835,7 +835,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -889,7 +889,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -957,7 +957,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
@@ -1192,8 +1192,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass Bool and Try as imported modules
-        const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+        // Pass user module and Builtin as imported modules
+        // Order must match all_module_envs in devEvaluatorStr
+        const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
@@ -1220,7 +1221,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     module_env.all_defs = try module_env.store.defSpanFrom(0);
 
     // Create type checker - pass Builtin as imported module
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+    // IMPORTANT: The order here MUST match all_module_envs in devEvaluatorStr:
+    // index 0 = user module, index 1 = builtin module
+    // This ensures external lookups resolve to the correct module index.
+    const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -1282,7 +1286,7 @@ test "eval tag - already primitive" {
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
     var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
