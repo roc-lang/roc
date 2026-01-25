@@ -438,10 +438,8 @@ pub const Instantiator = struct {
     }
 
     fn instantiateStaticDispatchConstraint(self: *Self, constraint: StaticDispatchConstraint) std.mem.Allocator.Error!StaticDispatchConstraint {
-        return StaticDispatchConstraint{
-            .fn_name = constraint.fn_name,
-            .fn_var = try self.instantiateVar(constraint.fn_var),
-            .origin = constraint.origin,
-        };
+        var result = constraint;
+        result.fn_var = try self.instantiateVar(constraint.fn_var);
+        return result;
     }
 };
