@@ -347,6 +347,39 @@ fn getExprLayout(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr) LayoutIdx 
         // For if-then-else, layout is determined from type info in lowerExprInner
         // This fallback should rarely be used
         .e_if => LayoutIdx.default_num,
+        // For calls, try to compute layout from type var
+        .e_call => blk: {
+            if (self.layout_store) |ls| {
+                // Get the expression index to use as type var
+                // We need to find the expression index, but we only have the expr here
+                // Try to compute from the call's arguments if it's a fold-like function
+                const call = expr.e_call;
+                const func_expr = module_env.store.getExpr(call.func);
+                if (func_expr == .e_lookup_external) {
+                    const lookup = func_expr.e_lookup_external;
+                    const func_name = module_env.getIdent(lookup.ident_idx);
+                    const args = module_env.store.sliceExpr(call.args);
+
+                    // For fold-like functions, return type is same as accumulator
+                    if (std.mem.eql(u8, func_name, "fold") or
+                        std.mem.eql(u8, func_name, "foldR") or
+                        std.mem.eql(u8, func_name, "foldL") or
+                        std.mem.eql(u8, func_name, "reduce"))
+                    {
+                        if (args.len >= 2) {
+                            // Second argument is the accumulator
+                            const acc_type_var = ModuleEnv.varFrom(args[1]);
+                            var type_scope = types.TypeScope.init(self.allocator);
+                            defer type_scope.deinit();
+                            if (ls.addTypeVar(acc_type_var, &type_scope)) |acc_layout| {
+                                break :blk acc_layout;
+                            } else |_| {}
+                        }
+                    }
+                }
+            }
+            break :blk LayoutIdx.default_num;
+        },
         else => LayoutIdx.default_num,
     };
 }
@@ -1165,6 +1198,56 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                     .symbol = self.patternToSymbol(pattern_idx),
                     .layout_idx = .i64, // TODO
                     .inner = inner,
+                },
+            };
+        },
+
+        .list => |l| blk: {
+            // Lower prefix patterns
+            const prefix = try self.lowerPatternSpan(module_env, l.patterns);
+            // Lower rest pattern if present
+            const rest_id = if (l.rest_info) |rest_info|
+                if (rest_info.pattern) |rest_pattern|
+                    try self.lowerPattern(module_env, rest_pattern)
+                else
+                    MonoPatternId.none
+            else
+                MonoPatternId.none;
+
+            // Compute element layout from the list pattern's type
+            const elem_layout = elem_blk: {
+                const ls = self.layout_store orelse break :elem_blk LayoutIdx.i64;
+
+                // Get the type variable from the pattern
+                const pattern_type_var = ModuleEnv.varFrom(pattern_idx);
+                const resolved = module_env.types.resolveVar(pattern_type_var);
+
+                // Check if it's a List (nominal type)
+                switch (resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .nominal_type => |nominal| {
+                                // Get the element type (first type argument of List)
+                                const args = module_env.types.sliceNominalArgs(nominal);
+                                if (args.len > 0) {
+                                    const elem_type_var = args[0];
+                                    // Compute layout for the element type
+                                    break :elem_blk ls.addTypeVar(elem_type_var, &self.type_scope) catch LayoutIdx.i64;
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+                break :elem_blk LayoutIdx.i64;
+            };
+
+            break :blk .{
+                .list = .{
+                    .elem_layout = elem_layout,
+                    .prefix = prefix,
+                    .rest = rest_id,
                 },
             };
         },

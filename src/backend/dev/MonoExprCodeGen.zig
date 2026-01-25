@@ -584,13 +584,43 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const rhs_loc = try self.generateExpr(binop.rhs);
 
             // Check if this is a structural comparison (records/tuples/lists)
+            // We need to check the layout, not the expression type, since the LHS
+            // might be a function call that returns a record/tuple/list
             if (binop.op == .eq or binop.op == .neq) {
                 const lhs_expr = self.store.getExpr(binop.lhs);
+                    // First try expression-based detection for direct literals
                 if (lhs_expr == .record or lhs_expr == .tuple) {
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
                 if (lhs_expr == .list) {
                     return self.generateListComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
+                }
+
+                // For calls/lookups, check the layout to detect composite types
+                if (self.layout_store) |ls| {
+                    const operand_layout: ?layout.Idx = switch (lhs_expr) {
+                        .call => |call| call.ret_layout,
+                        .lookup => |lookup| lookup.layout_idx,
+                        else => null, // not a call/lookup, skip
+                    };
+
+
+                    if (operand_layout) |op_layout| {
+                        const operand_layout_val = @intFromEnum(op_layout);
+                        if (operand_layout_val >= 16) {
+                            // This is a composite type - use layout-based comparison
+                            const stored_layout = ls.getLayout(op_layout);
+                            if (stored_layout.tag == .record) {
+                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
+                            } else if (stored_layout.tag == .tuple) {
+                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
+                            } else if (stored_layout.tag == .list) {
+                                return self.generateListComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
+                            }
+                        }
+                    }
+                } else {
+                    std.debug.print("  no layout_store!\n", .{});
                 }
             }
 
@@ -2018,6 +2048,143 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .general_reg = result_reg };
         }
 
+        /// Generate record comparison using layout information
+        /// Used when we have a call/lookup result that returns a record
+        fn generateRecordComparisonByLayout(
+            self: *Self,
+            lhs_loc: ValueLocation,
+            rhs_loc: ValueLocation,
+            record_layout_idx: layout.Idx,
+            op: MonoExpr.BinOp,
+        ) Error!ValueLocation {
+            const ls = self.layout_store orelse return Error.UnsupportedExpression;
+            const stored_layout = ls.getLayout(record_layout_idx);
+            if (stored_layout.tag != .record) return Error.UnsupportedExpression;
+
+            const record_idx = stored_layout.data.record.idx.int_idx;
+            const record_data = ls.record_data.items.items[record_idx];
+            const field_count = record_data.fields.count;
+
+            const lhs_offset: i32 = switch (lhs_loc) {
+                .stack => |o| o,
+                .stack_str => |o| o,
+                else => -999,
+            };
+            const rhs_offset: i32 = switch (rhs_loc) {
+                .stack => |o| o,
+                .stack_str => |o| o,
+                else => -999,
+            };
+            std.debug.print("generateRecordComparisonByLayout: field_count={d}, lhs_offset={d}, rhs_offset={d}\n", .{
+                field_count,
+                lhs_offset,
+                rhs_offset,
+            });
+
+            if (field_count == 0) {
+                // Empty records are always equal
+                return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
+            }
+
+            const result_reg = try self.codegen.allocGeneralFor(0);
+            try self.codegen.emitLoadImm(result_reg, 1);
+
+            const temp_lhs = try self.codegen.allocGeneralFor(0);
+            const temp_rhs = try self.codegen.allocGeneralFor(0);
+
+            // Compare each field at its offset
+            for (0..field_count) |i| {
+                const field_offset = ls.getRecordFieldOffset(stored_layout.data.record.idx, @intCast(i));
+                const field_size = ls.getRecordFieldSize(stored_layout.data.record.idx, @intCast(i));
+                const offset: i32 = @intCast(field_offset);
+
+                std.debug.print("  field {d}: offset={d}, size={d}\n", .{ i, offset, field_size });
+
+                // For i128/Dec fields (16 bytes), compare both 8-byte halves
+                const num_chunks: usize = if (field_size > 8) 2 else 1;
+
+                for (0..num_chunks) |chunk| {
+                    const chunk_offset = offset + @as(i32, @intCast(chunk)) * 8;
+
+                    // Load LHS chunk
+                    switch (lhs_loc) {
+                        .stack, .stack_str => |base_offset| {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + chunk_offset);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, base_offset + chunk_offset);
+                            }
+                        },
+                        else => return Error.UnsupportedExpression,
+                    }
+
+                    // Load RHS chunk
+                    switch (rhs_loc) {
+                        .stack, .stack_str => |base_offset| {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + chunk_offset);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, base_offset + chunk_offset);
+                            }
+                        },
+                        else => return Error.UnsupportedExpression,
+                    }
+
+                    // Compare
+                    try self.emitCmpRegReg(temp_lhs, temp_rhs);
+
+                    // Update result: result = result AND (lhs == rhs)
+                    const eq_reg = try self.codegen.allocGeneralFor(0);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.cset(.w64, eq_reg, .eq);
+                        try self.codegen.emit.andRegRegReg(.w64, result_reg, result_reg, eq_reg);
+                    } else {
+                        try self.codegen.emit.sete(eq_reg);
+                        try self.codegen.emit.andRegReg(.w64, result_reg, eq_reg);
+                    }
+                    self.codegen.freeGeneral(eq_reg);
+                }
+            }
+
+            self.codegen.freeGeneral(temp_lhs);
+            self.codegen.freeGeneral(temp_rhs);
+
+            // For neq, invert result
+            if (op == .neq) {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.eorRegRegImm(.w64, result_reg, result_reg, 1);
+                } else {
+                    try self.codegen.emit.xorRegImm8(.w64, result_reg, 1);
+                }
+            }
+
+            return .{ .general_reg = result_reg };
+        }
+
+        /// Generate tuple comparison using layout information
+        fn generateTupleComparisonByLayout(
+            _: *Self,
+            _: ValueLocation, // lhs_loc
+            _: ValueLocation, // rhs_loc
+            _: layout.Idx, // tuple_layout_idx
+            _: MonoExpr.BinOp, // op
+        ) Error!ValueLocation {
+            // TODO: Implement tuple comparison by layout
+            return Error.UnsupportedExpression;
+        }
+
+        /// Generate list comparison using layout information
+        fn generateListComparisonByLayout(
+            _: *Self,
+            _: ValueLocation, // lhs_loc
+            _: ValueLocation, // rhs_loc
+            _: layout.Idx, // list_layout_idx
+            _: MonoExpr.BinOp, // op
+        ) Error!ValueLocation {
+            // TODO: Implement list comparison by layout
+            return Error.UnsupportedExpression;
+        }
+
         /// Generate floating-point binary operation
         fn generateFloatBinop(
             self: *Self,
@@ -2481,8 +2648,118 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             }
                         }
                     },
+                    .list => |list_pattern| {
+                        // List pattern matching: check length and bind elements
+                        // List layout: ptr at offset 0, len at offset 8, capacity at offset 16
+                        // Note: Even for list_stack, elements are on the heap accessed via the pointer
+
+                        const prefix_patterns = self.store.getPatternSpan(list_pattern.prefix);
+                        const is_exact_match = list_pattern.rest.isNone();
+
+                        // Get base offset of the list struct (works for both .stack and .list_stack)
+                        const base_offset: i32 = switch (value_loc) {
+                            .stack => |off| off,
+                            .stack_str => |off| off,
+                            .list_stack => |list_info| list_info.struct_offset,
+                            else => return Error.UnsupportedExpression,
+                        };
+
+                        // Load list length from stack (offset 8 from struct base)
+                        const len_reg = try self.codegen.allocGeneralFor(0);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
+                        }
+
+                        // Compare length with expected
+                        const expected_len = @as(i32, @intCast(prefix_patterns.len));
+                        try self.emitCmpImm(len_reg, expected_len);
+                        self.codegen.freeGeneral(len_reg);
+
+                        // Jump to next branch if length doesn't match
+                        const is_last_branch = (i == branches.len - 1);
+                        var next_patch: ?usize = null;
+                        if (!is_last_branch) {
+                            if (is_exact_match) {
+                                // Exact match: jump if len != expected
+                                next_patch = try self.emitJumpIfNotEqual();
+                            } else {
+                                // Rest pattern: jump if len < expected (need at least prefix_len elements)
+                                next_patch = try self.emitJumpIfLessThan();
+                            }
+                        }
+
+                        // Length matched - bind prefix elements
+                        const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                        const elem_layout = ls.getLayout(list_pattern.elem_layout);
+                        const elem_size_align = ls.layoutSizeAlign(elem_layout);
+                        const elem_size = elem_size_align.size;
+
+                        // Load the data pointer from the list struct (at base_offset)
+                        const list_ptr_reg = try self.codegen.allocGeneralFor(0);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, list_ptr_reg, .FP, base_offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, list_ptr_reg, .RBP, base_offset);
+                        }
+
+                        // Bind each prefix element by copying from heap to stack
+                        for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
+                            const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
+                            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+                            const temp_reg = try self.codegen.allocGeneralFor(1);
+
+                            if (elem_size <= 8) {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
+                                }
+                            } else {
+                                // For larger elements, copy 8 bytes at a time
+                                var copied: u32 = 0;
+                                while (copied < elem_size) : (copied += 8) {
+                                    const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
+                                    const dst_off = elem_slot + @as(i32, @intCast(copied));
+                                    if (comptime builtin.cpu.arch == .aarch64) {
+                                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
+                                        try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
+                                    } else {
+                                        try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
+                                        try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
+                                    }
+                                }
+                            }
+
+                            self.codegen.freeGeneral(temp_reg);
+                            try self.bindPattern(elem_pattern_id, .{ .stack = elem_slot });
+                        }
+
+                        self.codegen.freeGeneral(list_ptr_reg);
+
+                        // Generate body
+                        const body_loc = try self.generateExpr(branch.body);
+                        const body_reg = try self.ensureInGeneralReg(body_loc);
+                        try self.emitMovRegReg(result_reg, body_reg);
+                        self.codegen.freeGeneral(body_reg);
+
+                        // Jump to end (unless this is the last branch)
+                        if (!is_last_branch) {
+                            const end_patch = try self.codegen.emitJump();
+                            try end_patches.append(self.allocator, end_patch);
+
+                            // Patch the next branch jump to here
+                            if (next_patch) |patch| {
+                                const current_offset = self.codegen.currentOffset();
+                                self.codegen.patchJump(patch, current_offset);
+                            }
+                        }
+                    },
                     else => {
-                        // Unsupported pattern type (record, tuple, list destructuring)
+                        // Unsupported pattern type (record, tuple destructuring)
                         return Error.UnsupportedExpression;
                     },
                 }
@@ -3586,6 +3863,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const list_base: i32 = switch (list_loc) {
                 .stack => |off| off,
                 .stack_str => |off| off,
+                .list_stack => |list_info| list_info.struct_offset,
                 else => return Error.UnsupportedExpression,
             };
 
@@ -4132,6 +4410,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     const base_offset: i32 = switch (value_loc) {
                         .stack => |off| off,
                         .stack_str => |off| off,
+                        .list_stack => |list_info| list_info.struct_offset,
                         else => return,
                     };
 
@@ -4834,6 +5113,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // The displacement starts at offset +2, so patch_loc = currentOffset + 2
                 const patch_loc = self.codegen.currentOffset() + 2;
                 try self.codegen.emit.jne(@bitCast(@as(i32, 0)));
+                return patch_loc;
+            }
+        }
+
+        /// Emit a conditional jump for unsigned less than (for list length comparisons)
+        fn emitJumpIfLessThan(self: *Self) !usize {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // B.CC (branch if carry clear = unsigned less than) with placeholder offset
+                const patch_loc = self.codegen.currentOffset();
+                try self.codegen.emit.bcond(.cc, 0);
+                return patch_loc;
+            } else {
+                // JB (jump if below = unsigned less than) with placeholder offset
+                const patch_loc = self.codegen.currentOffset() + 2;
+                try self.codegen.emit.jccRel32(.below, @bitCast(@as(i32, 0)));
                 return patch_loc;
             }
         }
