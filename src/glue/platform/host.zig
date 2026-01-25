@@ -338,9 +338,7 @@ fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, _: *anyopaque)
 const RocStr = builtins.str.RocStr;
 const RocList = builtins.list.RocList;
 
-// ============================================================================
 // Roc Type Definitions for Glue Platform
-// ============================================================================
 
 /// TypeId is just a U64 wrapper in Roc
 const TypeId = u64;
