@@ -1867,6 +1867,32 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
                     .expr = value,
                 });
             },
+            .s_for => |for_stmt| {
+                // For loop statement - lower to a for_loop expression
+                const list_expr = try self.lowerExprFromIdx(module_env, for_stmt.expr);
+                const elem_pattern = try self.lowerPattern(module_env, for_stmt.patt);
+                const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
+
+                // Get element layout from the pattern's type variable
+                const elem_layout = try self.getForLoopElementLayout(for_stmt.patt);
+
+                const for_loop_expr = try self.store.addExpr(.{
+                    .for_loop = .{
+                        .list_expr = list_expr,
+                        .elem_layout = elem_layout,
+                        .elem_pattern = elem_pattern,
+                        .body = body,
+                    },
+                }, Region.zero());
+
+                // Create a wildcard pattern to discard the result (for loops return unit)
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = for_loop_expr,
+                });
+            },
             else => {
                 // Skip other statement types (s_import, s_alias_decl, etc.)
             },
