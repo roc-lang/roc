@@ -1621,7 +1621,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         if (tuple_layout.tag == .tuple) {
                             // Use layout store offsets to match generateTuple
                             // For nested tuples, we need to compare all 8-byte slots within each element
-                                            for (0..elem_exprs.len) |i| {
+                            for (0..elem_exprs.len) |i| {
                                 const elem_offset = layout_store.getTupleElementOffset(tuple_layout.data.tuple.idx, @intCast(i));
                                 const elem_size = layout_store.getTupleElementSize(tuple_layout.data.tuple.idx, @intCast(i));
 
@@ -4372,17 +4372,74 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Generate a call to an already-compiled procedure.
         /// This is used for recursive functions that were compiled via compileAllProcs.
-        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, _: layout.Idx) Error!ValueLocation {
+        fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             // Evaluate arguments and place them in argument registers
             const args = self.store.getExprSpan(args_span);
             for (args, 0..) |arg_id, i| {
                 const arg_loc = try self.generateExpr(arg_id);
-                const arg_reg = self.getArgumentRegister(@intCast(i));
-                try self.moveToReg(arg_loc, arg_reg);
+
+                // Handle i128/Dec arguments (need two registers)
+                if (arg_loc == .stack_i128 or arg_loc == .immediate_i128) {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // aarch64: pass i128 in consecutive registers (X0/X1 for arg 0, X2/X3 for arg 1, etc.)
+                        const low_reg = self.getArgumentRegister(@intCast(i * 2));
+                        const high_reg = self.getArgumentRegister(@intCast(i * 2 + 1));
+                        switch (arg_loc) {
+                            .stack_i128 => |offset| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            },
+                            .immediate_i128 => |val| {
+                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                            },
+                            else => unreachable,
+                        }
+                    } else {
+                        // x86_64: similar handling with RDI/RSI, RDX/RCX, etc.
+                        const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
+                        const low_reg = arg_regs[i * 2];
+                        const high_reg = arg_regs[i * 2 + 1];
+                        switch (arg_loc) {
+                            .stack_i128 => |offset| {
+                                try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                                try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                            },
+                            .immediate_i128 => |val| {
+                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                                try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                            },
+                            else => unreachable,
+                        }
+                    }
+                } else {
+                    const arg_reg = self.getArgumentRegister(@intCast(i));
+                    try self.moveToReg(arg_loc, arg_reg);
+                }
             }
 
             // Emit the call instruction
             try self.emitCallToOffset(proc.code_start);
+
+            // Handle i128/Dec return values (returned in two registers)
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                // Save the i128 result to the stack since we can't track two registers
+                const stack_offset = self.codegen.allocStackSlot(16);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    // Result is in X0 (low), X1 (high)
+                    try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
+                } else {
+                    // Result is in RAX (low), RDX (high)
+                    try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+                }
+                return .{ .stack_i128 = stack_offset };
+            }
 
             // Result is in the return register - mark it as allocated so it won't
             // be reused before we're done with it
@@ -5120,19 +5177,73 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Bind procedure parameters to argument registers
         fn bindProcParams(self: *Self, params: mono.MonoPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
-            _ = param_layouts; // Layout info for proper ABI handling
+            const layouts = self.store.getLayoutIdxSpan(param_layouts);
 
-            for (pattern_ids, 0..) |pattern_id, i| {
+            // Track current register index separately from parameter index
+            // because 128-bit parameters consume 2 registers
+            var reg_idx: u8 = 0;
+
+            for (pattern_ids, 0..) |pattern_id, param_idx| {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        const arg_reg = self.getArgumentRegister(@intCast(i));
                         const symbol_key: u48 = @bitCast(bind.symbol);
-                        try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
-                        // IMPORTANT: Mark the register as in use so the allocator won't
-                        // reuse it for other values. Without this, loading a literal
-                        // might clobber the parameter value.
-                        self.codegen.markRegisterInUse(arg_reg);
+
+                        // Check if this parameter is a 128-bit type
+                        const is_128bit = if (param_idx < layouts.len) blk: {
+                            const param_layout = layouts[param_idx];
+                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
+                        } else false;
+
+                        if (is_128bit) {
+                            // 128-bit types need to be spilled to stack
+                            // They arrive in two consecutive registers (e.g., X0+X1)
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                // For aarch64, 128-bit values must be 16-byte aligned
+                                // and use an even-odd register pair
+                                if (reg_idx % 2 != 0) {
+                                    reg_idx += 1; // Skip to even register
+                                }
+
+                                const low_reg = self.getArgumentRegister(reg_idx);
+                                const high_reg = self.getArgumentRegister(reg_idx + 1);
+
+                                // Allocate 16-byte stack slot
+                                const stack_offset = self.codegen.allocStack(16);
+
+                                // Store both registers to stack
+                                try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
+
+                                // Track as stack_i128
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+
+                                // Mark both registers as NOT in use since we spilled them
+                                // (Actually, don't mark them in use since we moved to stack)
+                                reg_idx += 2;
+                            } else {
+                                // x86_64: 128-bit values are typically passed on stack or in RDI+RSI
+                                // For now, handle like aarch64
+                                const low_reg = self.getArgumentRegister(reg_idx);
+                                const high_reg = self.getArgumentRegister(reg_idx + 1);
+
+                                const stack_offset = self.codegen.allocStack(16);
+                                try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
+                                try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
+
+                                try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+                                reg_idx += 2;
+                            }
+                        } else {
+                            // Normal 64-bit or smaller parameter
+                            const arg_reg = self.getArgumentRegister(reg_idx);
+                            try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                            // IMPORTANT: Mark the register as in use so the allocator won't
+                            // reuse it for other values. Without this, loading a literal
+                            // might clobber the parameter value.
+                            self.codegen.markRegisterInUse(arg_reg);
+                            reg_idx += 1;
+                        }
                     },
                     else => {
                         // Complex parameter patterns not yet supported
@@ -5211,11 +5322,47 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .ret => |r| {
                     // Evaluate the return value
                     const value_loc = try self.generateExpr(r.value);
-                    // Move to return register
-                    const return_reg = self.getReturnRegister();
-                    const value_reg = try self.ensureInGeneralReg(value_loc);
-                    if (value_reg != return_reg) {
-                        try self.emitMovRegReg(return_reg, value_reg);
+
+                    // Handle i128/Dec return values specially (need two registers)
+                    if (value_loc == .stack_i128 or value_loc == .immediate_i128) {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            // aarch64: return i128 in X0 (low), X1 (high)
+                            switch (value_loc) {
+                                .stack_i128 => |offset| {
+                                    try self.codegen.emitLoadStack(.w64, .X0, offset);
+                                    try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                                },
+                                .immediate_i128 => |val| {
+                                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                    try self.codegen.emitLoadImm(.X0, @bitCast(low));
+                                    try self.codegen.emitLoadImm(.X1, @bitCast(high));
+                                },
+                                else => unreachable,
+                            }
+                        } else {
+                            // x86_64: return i128 in RAX (low), RDX (high)
+                            switch (value_loc) {
+                                .stack_i128 => |offset| {
+                                    try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                                    try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                                },
+                                .immediate_i128 => |val| {
+                                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                    try self.codegen.emitLoadImm(.RAX, @bitCast(low));
+                                    try self.codegen.emitLoadImm(.RDX, @bitCast(high));
+                                },
+                                else => unreachable,
+                            }
+                        }
+                    } else {
+                        // Move to return register (64-bit values)
+                        const return_reg = self.getReturnRegister();
+                        const value_reg = try self.ensureInGeneralReg(value_loc);
+                        if (value_reg != return_reg) {
+                            try self.emitMovRegReg(return_reg, value_reg);
+                        }
                     }
                     // Emit epilogue (restores frame and returns)
                     try self.emitEpilogue();

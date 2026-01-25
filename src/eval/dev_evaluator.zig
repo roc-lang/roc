@@ -724,7 +724,6 @@ fn getBinopLayout(allocator: Allocator, module_env: *ModuleEnv, binop: CIR.Expr.
     };
 }
 
-
 // Tests
 
 test "dev evaluator initialization" {

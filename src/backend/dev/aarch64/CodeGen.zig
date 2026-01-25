@@ -330,9 +330,21 @@ pub const AArch64CodeGen = struct {
     // Stack management
 
     pub fn allocStack(self: *Self, size: u32) i32 {
-        const aligned_size = (size + 15) & ~@as(u32, 15); // 16-byte align
-        self.stack_offset -= @intCast(aligned_size);
-        return self.stack_offset;
+        const aligned_size: i32 = @intCast((size + 15) & ~@as(u32, 15)); // 16-byte align
+
+        // For aarch64 procedure frames, stack_offset is positive and grows upward.
+        // We return the current offset and increment for the next allocation.
+        // For main expression frames, stack_offset is negative and grows downward.
+        if (self.stack_offset >= 0) {
+            // Procedure frame: return current offset, then increment
+            const offset = self.stack_offset;
+            self.stack_offset += aligned_size;
+            return offset;
+        } else {
+            // Main expression frame: decrement, then return (standard downward growth)
+            self.stack_offset -= aligned_size;
+            return self.stack_offset;
+        }
     }
 
     /// Alias for allocStack - allocate a stack slot of the given size
