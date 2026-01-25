@@ -4190,7 +4190,8 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
         }
     }
 
-    // Run the glue spec with entry point names as arguments
+    // Run the glue spec with platform source path as argument
+    // The glue platform will compile the modules and extract types directly
     {
         var run_argv = std.ArrayList([]const u8).empty;
         defer run_argv.deinit(ctx.gpa);
@@ -4200,7 +4201,13 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
             return;
         };
 
-        // Add entry point names as arguments
+        // Pass platform source file path - the glue platform will do its own compilation
+        run_argv.append(ctx.gpa, args.platform_path) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+
+        // Pass entry point names as additional arguments
         for (platform_info.requires_entries) |entry| {
             run_argv.append(ctx.gpa, entry.name) catch {
                 stderr.print("Error: Out of memory\n", .{}) catch {};

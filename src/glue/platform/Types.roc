@@ -1,5 +1,14 @@
-# Simple Types for glue generation
-# Entry point names and types
+# Types for glue generation
+# Contains type information extracted from the platform module
+
+TypeId := U64
+
+## Entry point information
+EntryPoint : { name : Str, type_id : TypeId }
+
+## Types structure for glue generation
+## This is a simplified version - will be expanded with full type info later
 Types : {
-    entrypoints : List({ name : Str, type_id : U64 }),
+    ## Entry points (platform requires)
+    entrypoints : List(EntryPoint),
 }

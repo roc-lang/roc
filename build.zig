@@ -2379,6 +2379,24 @@ pub fn build(b: *std.Build) void {
         run_roc_subcommands_test.step.dependOn(&install.step);
         run_roc_subcommands_test.step.dependOn(test_platforms_step);
         test_cli_step.dependOn(&run_roc_subcommands_test.step);
+
+        // Glue command integration test
+        const glue_test = b.addTest(.{
+            .name = "glue_test",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/cli/test/glue_test.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+            .filters = test_filters,
+        });
+
+        const run_glue_test = b.addRunArtifact(glue_test);
+        if (run_args.len != 0) {
+            run_glue_test.addArgs(run_args);
+        }
+        run_glue_test.step.dependOn(&install.step);
+        test_cli_step.dependOn(&run_glue_test.step);
     }
 
     // Manual rebuild command: zig build rebuild-builtins
@@ -2986,6 +3004,25 @@ pub fn build(b: *std.Build) void {
             strip,
             omit_frame_pointer,
         );
+
+        // Add compiler modules to glue platform host for type extraction
+        // This allows the glue host to compile Roc source and extract types directly
+        glue_platform_host_lib.root_module.addImport("base", roc_modules.base);
+        glue_platform_host_lib.root_module.addImport("can", roc_modules.can);
+        glue_platform_host_lib.root_module.addImport("types", roc_modules.types);
+        glue_platform_host_lib.root_module.addImport("layout", roc_modules.layout);
+        glue_platform_host_lib.root_module.addImport("eval", roc_modules.eval);
+        glue_platform_host_lib.root_module.addImport("collections", roc_modules.collections);
+
+        // Add type_extractor module
+        const type_extractor_mod = b.addModule("type_extractor", .{
+            .root_source_file = b.path("src/glue/type_extractor.zig"),
+        });
+        type_extractor_mod.addImport("base", roc_modules.base);
+        type_extractor_mod.addImport("can", roc_modules.can);
+        type_extractor_mod.addImport("types", roc_modules.types);
+        type_extractor_mod.addImport("layout", roc_modules.layout);
+        glue_platform_host_lib.root_module.addImport("type_extractor", type_extractor_mod);
 
         // Copy the glue platform host library to the source directory
         const copy_glue_host = b.addUpdateSourceFiles();

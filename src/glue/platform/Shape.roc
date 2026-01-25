@@ -1,4 +1,4 @@
-import TypeId exposing [TypeId]
+TypeId := U64
 
 Shape : [
     RocStr,

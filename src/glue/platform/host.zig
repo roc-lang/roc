@@ -1,8 +1,8 @@
 //! Platform host for the Roc glue generator.
 //!
-//! This host provides the runtime for executing glue specs. It constructs
-//! type information and passes it to the Roc glue spec, then handles the
-//! generated files.
+//! This host provides the runtime for executing glue specs. It compiles
+//! platform source files, extracts type information, and passes it to
+//! the Roc glue spec, which then handles generating glue code.
 //!
 //! Entry point: make_glue : List Types -> Result (List File) Str
 const std = @import("std");
@@ -10,6 +10,13 @@ const builtin = @import("builtin");
 const builtins = @import("builtins");
 const build_options = @import("build_options");
 const posix = if (builtin.os.tag != .windows and builtin.os.tag != .wasi) std.posix else undefined;
+
+// Compiler modules for type extraction
+const base = @import("base");
+const can = @import("can");
+const types_mod = @import("types");
+const layout_mod = @import("layout");
+const type_extractor = @import("type_extractor");
 
 const trace_refcount = build_options.trace_refcount;
 
@@ -304,23 +311,20 @@ fn rocReallocFn(roc_realloc: *builtins.host_abi.RocRealloc, env: *anyopaque) cal
 }
 
 /// Roc debug function
-fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, env: *anyopaque) callconv(.c) void {
-    _ = env;
+fn rocDbgFn(roc_dbg: *const builtins.host_abi.RocDbg, _: *anyopaque) callconv(.c) void {
     const message = roc_dbg.utf8_bytes[0..roc_dbg.len];
     std.debug.print("ROC DBG: {s}\n", .{message});
 }
 
 /// Roc expect failed function
-fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, env: *anyopaque) callconv(.c) void {
-    _ = env;
+fn rocExpectFailedFn(roc_expect: *const builtins.host_abi.RocExpectFailed, _: *anyopaque) callconv(.c) void {
     const source_bytes = roc_expect.utf8_bytes[0..roc_expect.len];
     const trimmed = std.mem.trim(u8, source_bytes, " \t\n\r");
     std.debug.print("Expect failed: {s}\n", .{trimmed});
 }
 
 /// Roc crashed function
-fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, env: *anyopaque) callconv(.c) noreturn {
-    _ = env;
+fn rocCrashedFn(roc_crashed: *const builtins.host_abi.RocCrashed, _: *anyopaque) callconv(.c) noreturn {
     const message = roc_crashed.utf8_bytes[0..roc_crashed.len];
     const stderr: std.fs.File = .stderr();
     var buf: [256]u8 = undefined;
@@ -461,21 +465,17 @@ fn __main() callconv(.c) void {}
 fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
     const stderr_file: std.fs.File = .stderr();
 
-    // Collect command line arguments (entry point names)
-    var entry_points = std.ArrayListUnmanaged([]const u8){};
-    defer entry_points.deinit(std.heap.page_allocator);
-
-    var i: usize = 1;
+    // Expect platform source path as first argument
     const arg_count: usize = @intCast(argc);
-    while (i < arg_count) : (i += 1) {
-        const arg = std.mem.span(argv[i]);
-        entry_points.append(std.heap.page_allocator, arg) catch {
-            stderr_file.writeAll("HOST ERROR: Out of memory\n") catch {};
-            return 1;
-        };
+    if (arg_count < 2) {
+        stderr_file.writeAll("HOST ERROR: Expected platform source path as argument\n") catch {};
+        return 1;
     }
 
-    const exit_code = platform_main(entry_points.items) catch |err| {
+    // Convert argv to slice, skipping program name (argv[0])
+    const args = argv[1..arg_count];
+
+    const exit_code = platform_main(args) catch |err| {
         stderr_file.writeAll("HOST ERROR: ") catch {};
         stderr_file.writeAll(@errorName(err)) catch {};
         stderr_file.writeAll("\n") catch {};
@@ -488,7 +488,14 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
 
 /// Platform host entrypoint
-fn platform_main(entry_point_names: []const []const u8) !c_int {
+/// Receives args: [platform_path, entry_point_names...]
+/// If no entry point names are provided, defaults to ["main"].
+fn platform_main(args: [][*:0]u8) !c_int {
+    if (args.len < 1) {
+        return error.MissingPlatformPath;
+    }
+
+    const platform_path = std.mem.span(args[0]);
     // Install signal handlers
     _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
 
@@ -543,12 +550,54 @@ fn platform_main(entry_point_names: []const []const u8) !c_int {
         },
     };
 
-    // Build entrypoints list from command line arguments
+    // Build entrypoints list
+    // For now, create a single entry point with the platform path as the name
+    // TODO: Extract actual entry points from compiled platform module
     const allocator = host_env.gpa.allocator();
 
-    // Allocate array for EntryPoint entries
+    // Print platform path for debugging
+    const stdout: std.fs.File = .stdout();
+    stdout.writeAll("Glue host received platform path: ") catch {};
+    stdout.writeAll(platform_path) catch {};
+    stdout.writeAll("\n") catch {};
+
+    // Create target info for type extraction
+    const target_info = type_extractor.Target.native();
+    stdout.writeAll("Target: ") catch {};
+    switch (target_info.architecture) {
+        .Aarch32 => stdout.writeAll("aarch32") catch {},
+        .Aarch64 => stdout.writeAll("aarch64") catch {},
+        .Wasm32 => stdout.writeAll("wasm32") catch {},
+        .X86x32 => stdout.writeAll("x86") catch {},
+        .X86x64 => stdout.writeAll("x86_64") catch {},
+    }
+    stdout.writeAll("-") catch {};
+    switch (target_info.operating_system) {
+        .Freestanding => stdout.writeAll("freestanding") catch {},
+        .Linux => stdout.writeAll("linux") catch {},
+        .Mac => stdout.writeAll("macos") catch {},
+        .Windows => stdout.writeAll("windows") catch {},
+    }
+    stdout.writeAll("\n") catch {};
+
+    // Entry point names from args[1..], or default to ["main"] if none provided
+    const default_entry_points = [_][]const u8{"main"};
+    const entry_point_names: []const []const u8 = if (args.len > 1) blk: {
+        const names = allocator.alloc([]const u8, args.len - 1) catch return error.OutOfMemory;
+        for (args[1..], 0..) |arg, i| {
+            names[i] = std.mem.span(arg);
+        }
+        break :blk names;
+    } else &default_entry_points;
+    defer if (args.len > 1) allocator.free(entry_point_names);
+
+    // Allocate array for EntryPoint entries with proper alignment
     const tuple1_size = @sizeOf(EntryPoint);
-    const entrypoints_bytes = allocator.alloc(u8, entry_point_names.len * tuple1_size) catch {
+    const entrypoints_bytes = allocator.alignedAlloc(
+        u8,
+        std.mem.Alignment.fromByteUnits(@alignOf(EntryPoint)),
+        entry_point_names.len * tuple1_size,
+    ) catch {
         return error.OutOfMemory;
     };
     defer allocator.free(entrypoints_bytes);
@@ -557,11 +606,35 @@ fn platform_main(entry_point_names: []const []const u8) !c_int {
 
     // Build EntryPoint for each entry point
     for (entry_point_names, 0..) |name, idx| {
-        // Use RocStr.fromSlice to create the string (handles allocation)
-        const roc_name = RocStr.fromSlice(name, &roc_ops);
+        // Force big string creation to avoid small string encoding mismatch.
+        // Roc's compiled code reads the length field directly, which is 0 for small strings
+        // (small strings store length in byte[23] with high bit set).
+        // By always allocating >= 24 bytes, we ensure the string is treated as a big string.
+        const SMALL_STRING_SIZE = @sizeOf(RocStr);
+        const roc_name = if (name.len < SMALL_STRING_SIZE) blk: {
+            // Force big string allocation by allocating at least 24 bytes
+            const first_element = builtins.utils.allocateWithRefcount(
+                SMALL_STRING_SIZE,
+                @sizeOf(usize),
+                false,
+                &roc_ops,
+            );
+            @memcpy(first_element[0..name.len], name);
+            @memset(first_element[name.len..SMALL_STRING_SIZE], 0);
+
+            break :blk RocStr{
+                .bytes = first_element,
+                .length = name.len,
+                .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
+            };
+        } else blk: {
+            // For strings >= 24 bytes, fromSlice already creates a big string
+            break :blk RocStr.fromSlice(name, &roc_ops);
+        };
+
         entrypoints_ptr[idx] = EntryPoint{
             .name = roc_name,
-            .type_id = 0, // TypeId 0 for now - we don't have type info yet
+            .type_id = 0, // TypeId 0 for now - will be populated by type extraction
         };
     }
 
@@ -572,14 +645,18 @@ fn platform_main(entry_point_names: []const []const u8) !c_int {
         .capacity_or_alloc_ptr = entry_point_names.len,
     };
 
-    // Create Types structure
-    var types_inner = TypesInner{
+    // Heap-allocate TypesInner with proper alignment
+    const types_inner_bytes = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(TypesInner)), @sizeOf(TypesInner));
+    defer allocator.free(types_inner_bytes);
+
+    const types_inner_ptr: *TypesInner = @ptrCast(@alignCast(types_inner_bytes.ptr));
+    types_inner_ptr.* = TypesInner{
         .entrypoints = entrypoints_list,
     };
 
     // Create a List Types with one element (the Types structure)
     var types_list = RocList{
-        .bytes = @ptrCast(&types_inner),
+        .bytes = types_inner_bytes.ptr,
         .length = 1,
         .capacity_or_alloc_ptr = 1,
     };
@@ -595,7 +672,6 @@ fn platform_main(entry_point_names: []const []const u8) !c_int {
     entrypoints_list = RocList.empty();
 
     // Handle the result
-    const stdout: std.fs.File = .stdout();
     const stderr: std.fs.File = .stderr();
 
     switch (result.tag) {
