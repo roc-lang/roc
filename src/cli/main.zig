@@ -3963,24 +3963,29 @@ fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
 /// Print platform glue information for a platform's main.roc file using full compilation path.
 /// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
 fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
-    const stdout = ctx.io.stdout();
     const stderr = ctx.io.stderr();
 
+    // 0. Validate glue spec file exists
+    std.fs.cwd().access(args.glue_spec, .{}) catch {
+        stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}) catch {};
+        return;
+    };
+
     // 1. Parse platform header to get requires entries and verify it's a platform file
-    const platform_info = parsePlatformHeader(ctx, args.path) catch |err| {
+    const platform_info = parsePlatformHeader(ctx, args.platform_path) catch |err| {
         switch (err) {
             error.NotPlatformFile => {
-                stderr.print("Error: '{s}' is not a platform file.\n", .{args.path}) catch {};
+                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
                 stderr.print("The glue command only works with platform files.\n", .{}) catch {};
             },
             error.FileNotFound => {
-                stderr.print("Error: File not found: '{s}'\n", .{args.path}) catch {};
+                stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}) catch {};
             },
             error.ParseFailed => {
-                stderr.print("Error: Failed to parse '{s}'\n", .{args.path}) catch {};
+                stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}) catch {};
             },
             else => {
-                stderr.print("Error: Failed to process '{s}': {}\n", .{ args.path, err }) catch {};
+                stderr.print("Error: Failed to process '{s}': {}\n", .{ args.platform_path, err }) catch {};
             },
         }
         return;
@@ -3991,13 +3996,13 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     var exposed_modules = std.ArrayList([]const u8).empty;
     defer exposed_modules.deinit(ctx.gpa);
 
-    extractExposedModulesFromPlatform(ctx, args.path, &exposed_modules) catch |err| {
+    extractExposedModulesFromPlatform(ctx, args.platform_path, &exposed_modules) catch |err| {
         stderr.print("Error: Failed to extract exposed modules: {}\n", .{err}) catch {};
         return;
     };
 
     // 3. Get platform directory for module resolution
-    const platform_dir = std.fs.path.dirname(args.path) orelse ".";
+    const platform_dir = std.fs.path.dirname(args.platform_path) orelse ".";
 
     // 4. Sort modules by dependency order
     const sorted_modules = sortPlatformModulesByDependency(
@@ -4110,42 +4115,128 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
-    // 8. Print output
-    stdout.print("Platform Glue Information\n", .{}) catch {};
-    stdout.print("========================\n\n", .{}) catch {};
+    // 8. Build and run the glue spec
+    // Get path to current roc executable
+    const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
+        stderr.print("Error: Could not determine roc executable path\n", .{}) catch {};
+        return;
+    };
+    defer ctx.gpa.free(roc_exe_path);
 
-    // Print requires (entry points)
-    stdout.print("Requires (Entry Points):\n", .{}) catch {};
-    stdout.print("------------------------\n", .{}) catch {};
+    // Create temp directory for the glue spec executable
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        stderr.print("Error: Could not create temp directory: {}\n", .{err}) catch {};
+        return;
+    };
+    const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
+        stderr.print("Error: Out of memory\n", .{}) catch {};
+        return;
+    };
+    defer ctx.gpa.free(glue_exe_path);
 
-    for (platform_info.requires_entries) |entry| {
-        stdout.print("  {s} : {s}\n", .{ entry.name, entry.type_str }) catch {};
+    // Build the glue spec using roc build
+    {
+        var build_argv = std.ArrayList([]const u8).empty;
+        defer build_argv.deinit(ctx.gpa);
+
+        build_argv.append(ctx.gpa, roc_exe_path) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        build_argv.append(ctx.gpa, "build") catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        build_argv.append(ctx.gpa, args.glue_spec) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        // Use --output=path format (CLI expects = not space)
+        const output_arg = std.fmt.allocPrint(ctx.gpa, "--output={s}", .{glue_exe_path}) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        defer ctx.gpa.free(output_arg);
+        build_argv.append(ctx.gpa, output_arg) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+
+        var build_child = std.process.Child.init(build_argv.items, ctx.gpa);
+        build_child.stdout_behavior = .Inherit;
+        build_child.stderr_behavior = .Inherit;
+
+        build_child.spawn() catch |err| {
+            stderr.print("Error: Could not spawn roc build: {}\n", .{err}) catch {};
+            return;
+        };
+
+        const term = build_child.wait() catch |err| {
+            stderr.print("Error: Could not wait for roc build: {}\n", .{err}) catch {};
+            return;
+        };
+
+        switch (term) {
+            .Exited => |exit_code| {
+                if (exit_code != 0) {
+                    stderr.print("Error: roc build failed with exit code {}\n", .{exit_code}) catch {};
+                    return;
+                }
+            },
+            else => {
+                stderr.print("Error: roc build terminated abnormally\n", .{}) catch {};
+                return;
+            },
+        }
     }
 
-    // Print exposes (modules) with resolved types
-    stdout.print("\nExposes (Modules):\n", .{}) catch {};
-    stdout.print("------------------\n", .{}) catch {};
+    // Run the glue spec with entry point names as arguments
+    {
+        var run_argv = std.ArrayList([]const u8).empty;
+        defer run_argv.deinit(ctx.gpa);
 
-    for (compiled_modules.items) |*m| {
-        // Get base module name (strip .roc if present)
-        var mod_name = m.module_name;
-        if (std.mem.endsWith(u8, mod_name, ".roc")) {
-            mod_name = mod_name[0 .. mod_name.len - 4];
+        run_argv.append(ctx.gpa, glue_exe_path) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+
+        // Add entry point names as arguments
+        for (platform_info.requires_entries) |entry| {
+            run_argv.append(ctx.gpa, entry.name) catch {
+                stderr.print("Error: Out of memory\n", .{}) catch {};
+                return;
+            };
         }
 
-        stdout.print("  {s}\n", .{mod_name}) catch {};
+        var run_child = std.process.Child.init(run_argv.items, ctx.gpa);
+        run_child.stdout_behavior = .Inherit;
+        run_child.stderr_behavior = .Inherit;
 
-        // Print type info using TypeWriter for resolved types
-        printCompiledModuleTypes(ctx, m, mod_name, stdout, &all_hosted_fns);
+        run_child.spawn() catch |err| {
+            stderr.print("Error: Could not spawn glue spec: {}\n", .{err}) catch {};
+            return;
+        };
+
+        const term = run_child.wait() catch |err| {
+            stderr.print("Error: Could not wait for glue spec: {}\n", .{err}) catch {};
+            return;
+        };
+
+        switch (term) {
+            .Exited => |exit_code| {
+                if (exit_code != 0) {
+                    stderr.print("Glue spec exited with code {}\n", .{exit_code}) catch {};
+                }
+            },
+            else => {
+                stderr.print("Glue spec terminated abnormally\n", .{}) catch {};
+            },
+        }
     }
 
-    // Print hosted function summary
-    stdout.print("\nHosted Function Summary:\n", .{}) catch {};
-    stdout.print("------------------------\n", .{}) catch {};
-    stdout.print("Total: {} hosted functions\n", .{all_hosted_fns.items.len}) catch {};
-
-    for (all_hosted_fns.items, 0..) |fn_info, idx| {
-        stdout.print("  [{d}] {s}!\n", .{ idx, fn_info.name_text }) catch {};
+    // Clean up temp directory
+    if (std.fs.path.dirname(glue_exe_path)) |dir| {
+        compile.CacheCleanup.deleteTempDir(ctx.arena, dir);
     }
 }
 
