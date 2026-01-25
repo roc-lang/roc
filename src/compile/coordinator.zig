@@ -2177,7 +2177,22 @@ pub const Coordinator = struct {
             task.path,
             task.imported_envs,
             &checker.import_mapping,
-        );
+        ) catch {
+            // On allocation failure, return result with empty reports
+            self.gpa.free(task.imported_envs);
+            return .{
+                .type_checked = .{
+                    .package_name = task.package_name,
+                    .module_id = task.module_id,
+                    .module_name = task.module_name,
+                    .path = task.path,
+                    .module_env = env,
+                    .reports = reports,
+                    .type_check_ns = 0,
+                    .check_diagnostics_ns = 0,
+                },
+            };
+        };
         defer rb.deinit();
 
         for (checker.problems.problems.items) |prob| {

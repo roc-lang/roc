@@ -1760,7 +1760,7 @@ fn compileModule(
             source_path,
             imported_envs.items,
             &checker.import_mapping,
-        );
+        ) catch return 1;
         defer report_builder.deinit();
 
         for (0..checker.problems.len()) |i| {

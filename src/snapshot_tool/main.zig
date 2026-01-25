@@ -409,7 +409,7 @@ fn generateAllReports(
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
-        );
+        ) catch continue;
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {

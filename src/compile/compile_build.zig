@@ -771,7 +771,7 @@ pub const BuildEnv = struct {
         if (checker.problems.problems.items.len > 0) {
             const app_root_module = app_sched.getRootModule() orelse return;
 
-            var rb = ReportBuilder.init(
+            var rb = try ReportBuilder.init(
                 self.gpa,
                 app_root_env,
                 app_root_env,

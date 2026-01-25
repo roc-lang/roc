@@ -11,6 +11,7 @@ const can = @import("can");
 const reporting = @import("reporting");
 
 const snapshot = @import("snapshot.zig");
+const diff = @import("diff.zig");
 
 // Import problem types from the problem/ submodule
 const problem_mod = @import("problem.zig");
@@ -104,6 +105,7 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     bytes_buf: std.array_list.Managed(u8),
+    diff_scratch: diff.Scratch,
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -124,10 +126,11 @@ pub const ReportBuilder = struct {
         filename: []const u8,
         other_modules: []const *const ModuleEnv,
         import_mapping: *const @import("types").import_mapping.ImportMapping,
-    ) Self {
+    ) !Self {
         return .{
             .gpa = gpa,
             .bytes_buf = std.array_list.Managed(u8).init(gpa),
+            .diff_scratch = try diff.Scratch.init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -140,9 +143,10 @@ pub const ReportBuilder = struct {
     }
 
     /// Deinit report builder
-    /// Only owned field is `buf`
+    /// Owned fields are `bytes_buf` and `diff_scratch`
     pub fn deinit(self: *Self) void {
         self.bytes_buf.deinit();
+        self.diff_scratch.deinit();
     }
 
     // Helpers
@@ -369,12 +373,22 @@ pub const ReportBuilder = struct {
         const expected_type_str = try report.addOwnedString(self.getFormattedString(expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
-        // Print hints
+        // Print static hints
         for (hints, 0..) |hint, i| {
             if (i == 0) try report.document.addLineBreak();
             try report.document.addLineBreak();
             try D.renderSlice(hint, self, &report);
         }
+
+        // Generate and print type comparison hints
+        const diff_hints = diff.compareTypes(
+            self.snapshots,
+            self.module_env.getIdentStoreConst(),
+            expected_snapshot,
+            actual_snapshot,
+            &self.diff_scratch,
+        );
+        try self.renderDiffHints(&report, diff_hints, hints.len > 0);
 
         return report;
     }
@@ -420,6 +434,76 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Render type comparison hints (arity mismatch, missing fields, typos, effect mismatch)
+    fn renderDiffHints(self: *Self, report: *Report, hints: diff.HintList, had_static_hints: bool) !void {
+        const ident_store = self.module_env.getIdentStoreConst();
+
+        for (hints.slice(), 0..) |hint, i| {
+            // Add spacing before first hint
+            if (i == 0 and !had_static_hints) {
+                try report.document.addLineBreak();
+            }
+            try report.document.addLineBreak();
+
+            switch (hint) {
+                .arity_mismatch => |am| {
+                    try report.document.addAnnotated("Hint: ", .emphasized);
+                    try report.document.addText("This function expects ");
+                    try report.document.addText(try self.numToString(am.expected));
+                    try report.document.addText(if (am.expected == 1) " argument" else " arguments");
+                    try report.document.addText(" but got ");
+                    try report.document.addText(try self.numToString(am.actual));
+                    try report.document.addText(".");
+                },
+                .fields_missing => |fm| {
+                    try report.document.addAnnotated("Hint: ", .emphasized);
+                    if (fm.fields.len == 1) {
+                        try report.document.addText("This record is missing the field: ");
+                        try report.document.addInlineCode(ident_store.getText(fm.fields[0]));
+                    } else {
+                        try report.document.addText("This record is missing these fields:");
+                        for (fm.fields) |field| {
+                            try report.document.addLineBreak();
+                            try report.document.addText("  - ");
+                            try report.document.addInlineCode(ident_store.getText(field));
+                        }
+                    }
+                },
+                .field_typo => |ft| {
+                    try report.document.addAnnotated("Hint: ", .emphasized);
+                    try report.document.addText("Maybe ");
+                    try report.document.addInlineCode(ident_store.getText(ft.typo));
+                    try report.document.addText(" should be ");
+                    try report.document.addInlineCode(ident_store.getText(ft.suggestion));
+                    try report.document.addText("?");
+                },
+                .tag_typo => |tt| {
+                    try report.document.addAnnotated("Hint: ", .emphasized);
+                    try report.document.addText("Maybe ");
+                    try report.document.addInlineCode(ident_store.getText(tt.typo));
+                    try report.document.addText(" should be ");
+                    try report.document.addInlineCode(ident_store.getText(tt.suggestion));
+                    try report.document.addText("?");
+                },
+                .effect_mismatch => |em| {
+                    try report.document.addAnnotated("Hint: ", .emphasized);
+                    if (em.expected_pure) {
+                        try report.document.addText("This function is effectful, but a pure function is expected.");
+                    } else {
+                        try report.document.addText("This function is pure, but an effectful function is expected.");
+                    }
+                },
+            }
+        }
+    }
+
+    /// Convert a number to string using the bytes buffer
+    fn numToString(self: *Self, num: u32) ![]const u8 {
+        const start = self.bytes_buf.items.len;
+        try self.bytes_buf.writer().print("{d}", .{num});
+        return self.bytes_buf.items[start..];
+    }
+
     ////////////////////////////////////////////////////////////////////////////
     // Build reports
 
@@ -430,6 +514,8 @@ pub const ReportBuilder = struct {
     ) !Report {
         const trace = tracy.trace(@src());
         defer trace.end();
+
+        self.diff_scratch.reset();
 
         switch (problem) {
             .type_mismatch => |mismatch| {

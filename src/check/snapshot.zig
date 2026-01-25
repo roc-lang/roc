@@ -14,8 +14,8 @@ pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
-const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
-const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
+pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
+pub const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
