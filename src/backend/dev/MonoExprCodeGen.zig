@@ -88,6 +88,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Map from MonoSymbol to value location (register or stack slot)
         symbol_locations: std.AutoHashMap(u48, ValueLocation),
 
+        /// Map from mutable variable symbol to fixed stack slot info
+        /// Mutable variables need fixed slots so re-bindings can update the value at runtime
+        mutable_var_slots: std.AutoHashMap(u48, MutableVarInfo),
+
         /// Map from MonoSymbol to lambda/closure expression ID (for callable bindings)
         lambda_bindings: std.AutoHashMap(u48, MonoExprId),
 
@@ -114,6 +118,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
+
+        /// Info about a mutable variable's fixed stack slot
+        pub const MutableVarInfo = struct {
+            /// The fixed stack slot offset (from frame pointer)
+            slot: i32,
+            /// The size of the variable in bytes
+            size: u32,
+        };
 
         /// Compiled procedure information for two-pass compilation.
         /// After a procedure is fully compiled (including RET), it's registered here.
@@ -208,6 +220,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .layout_store = layout_store_opt,
                 .static_interner = static_interner,
                 .symbol_locations = std.AutoHashMap(u48, ValueLocation).init(allocator),
+                .mutable_var_slots = std.AutoHashMap(u48, MutableVarInfo).init(allocator),
                 .lambda_bindings = std.AutoHashMap(u48, MonoExprId).init(allocator),
                 .join_points = std.AutoHashMap(u32, usize).init(allocator),
                 .current_recursive_symbol = null,
@@ -223,6 +236,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         pub fn deinit(self: *Self) void {
             self.codegen.deinit();
             self.symbol_locations.deinit();
+            self.mutable_var_slots.deinit();
             self.lambda_bindings.deinit();
             self.join_points.deinit();
             self.proc_registry.deinit();
@@ -239,6 +253,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         pub fn reset(self: *Self) void {
             self.codegen.reset();
             self.symbol_locations.clearRetainingCapacity();
+            self.mutable_var_slots.clearRetainingCapacity();
             self.lambda_bindings.clearRetainingCapacity();
             self.join_points.clearRetainingCapacity();
             self.current_recursive_symbol = null;
@@ -3415,14 +3430,29 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return;
                 },
                 .immediate_i128 => |val| {
-                    std.debug.assert(size == 16); // Layout and value type must agree
                     const low: u64 = @truncate(@as(u128, @bitCast(val)));
                     const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
                     const reg = try self.codegen.allocGeneralFor(0);
-                    try self.codegen.emitLoadImm(reg, @bitCast(low));
-                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
-                    try self.codegen.emitLoadImm(reg, @bitCast(high));
-                    try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+
+                    if (size == 16) {
+                        // Full i128 copy
+                        try self.codegen.emitLoadImm(reg, @bitCast(low));
+                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                        try self.codegen.emitLoadImm(reg, @bitCast(high));
+                        try self.codegen.emitStoreStack(.w64, dest_offset + 8, reg);
+                    } else if (size == 8) {
+                        // Truncate to i64 - just store the low 64 bits
+                        try self.codegen.emitLoadImm(reg, @bitCast(low));
+                        try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    } else if (size == 4) {
+                        // Truncate to i32
+                        const low32: u32 = @truncate(low);
+                        try self.codegen.emitLoadImm(reg, @as(i64, @bitCast(@as(u64, low32))));
+                        try self.codegen.emitStoreStack(.w32, dest_offset, reg);
+                    } else {
+                        unreachable; // Unsupported size for i128 truncation
+                    }
+
                     self.codegen.freeGeneral(reg);
                     return;
                 },
@@ -4163,9 +4193,38 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             switch (pattern) {
                 .bind => |bind| {
-                    // Simple binding - just record the location
                     const symbol_key: u48 = @bitCast(bind.symbol);
-                    try self.symbol_locations.put(symbol_key, value_loc);
+
+                    // Check if this is a reassignable (mutable) variable
+                    if (bind.symbol.ident_idx.attributes.reassignable) {
+                        // Mutable variables need fixed stack slots for runtime updates
+                        if (self.mutable_var_slots.get(symbol_key)) |var_info| {
+                            // Re-binding: copy new value to the fixed slot at runtime
+                            try self.copyBytesToStackOffset(var_info.slot, value_loc, var_info.size);
+                            // symbol_locations already points to the fixed slot, don't change it
+                        } else {
+                            // First binding: allocate a fixed slot and copy value there
+                            const ls = self.layout_store orelse unreachable;
+                            const layout_val = ls.getLayout(bind.layout_idx);
+                            const size_align = ls.layoutSizeAlign(layout_val);
+                            const size: u32 = size_align.size;
+
+                            // Allocate a fixed stack slot for this mutable variable
+                            const fixed_slot = self.codegen.allocStackSlot(size);
+
+                            // Copy the initial value to the fixed slot
+                            try self.copyBytesToStackOffset(fixed_slot, value_loc, size);
+
+                            // Record the fixed slot info for future re-bindings
+                            try self.mutable_var_slots.put(symbol_key, .{ .slot = fixed_slot, .size = size });
+
+                            // Point symbol_locations to the fixed slot
+                            try self.symbol_locations.put(symbol_key, .{ .stack = fixed_slot });
+                        }
+                    } else {
+                        // Non-mutable: just record the location as before
+                        try self.symbol_locations.put(symbol_key, value_loc);
+                    }
                 },
                 .wildcard => {
                     // Ignore the value
