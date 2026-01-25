@@ -142,6 +142,18 @@ pub const Expr = union(enum) {
         ident_idx: Ident.Idx,
         region: Region,
     },
+    /// Deferred external module lookup - member name stored but target_node_idx not yet resolved.
+    /// Used during independent canonicalization when the target module hasn't been canonicalized yet.
+    /// Gets resolved to e_lookup_external before type-checking.
+    /// ```roc
+    /// import Message  # Message not yet canonicalized
+    /// foo = Message.msg()  # Creates e_lookup_pending until resolved
+    /// ```
+    e_lookup_pending: struct {
+        module_idx: CIR.Import.Idx,
+        ident_idx: Ident.Idx,
+        region: Region,
+    },
     /// Lookup of a required identifier from the platform's `requires` clause.
     /// This represents a value that the app provides to the platform.
     /// ```roc
@@ -1519,6 +1531,23 @@ pub const Expr = union(enum) {
                 } else {
                     try tree.pushStringPair("external-module", module_name);
                 }
+
+                try tree.endNode(begin, attrs);
+            },
+            .e_lookup_pending => |e| {
+                const begin = tree.beginNode();
+                try tree.pushStaticAtom("e-lookup-pending");
+                try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
+                const attrs = tree.beginNode();
+
+                const module_idx_int = @intFromEnum(e.module_idx);
+                std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
+                const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
+                const module_name = ir.common.strings.get(string_lit_idx);
+                try tree.pushStringPair("pending-module", module_name);
+
+                const ident_name = ir.getIdent(e.ident_idx);
+                try tree.pushStringPair("pending-member", ident_name);
 
                 try tree.endNode(begin, attrs);
             },

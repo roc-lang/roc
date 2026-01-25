@@ -10,13 +10,13 @@
 //! - Compiles Roc source to ModuleEnv in shared memory
 //! - Spawns interpreter host as child process that maps the shared memory
 //! - Fast startup, same-architecture only
-//! - See: `setupSharedMemoryWithModuleEnv`, `rocRun`
+//! - See: `setupSharedMemoryWithCoordinator`, `rocRun`
 //!
 //! ### Embedded Mode (`roc build path/to/app.roc`)
 //! - Serializes ModuleEnv to portable binary format
 //! - Embeds serialized data directly into output binary
 //! - Cross-architecture support, standalone executables
-//! - See: `compileAndSerializeModulesForEmbedding`, `rocBuild`
+//! - See: `serialize_modules.zig`, `rocBuild`
 //!
 //! For detailed documentation, see `src/interpreter_shim/README.md`.
 
@@ -30,11 +30,7 @@ pub const std_options: std.Options = .{
 };
 const build_options = @import("build_options");
 const builtin = @import("builtin");
-
-// Compile-time flag for module tracing - enabled via `zig build -Dtrace-modules`
-const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
 const base = @import("base");
-const collections = @import("collections");
 const reporting = @import("reporting");
 const parse = @import("parse");
 const tracy = @import("tracy");
@@ -60,7 +56,6 @@ const platform_validation = @import("platform_validation.zig");
 const cli_context = @import("CliContext.zig");
 const cli_problem = @import("CliProblem.zig");
 
-const CliProblem = cli_problem.CliProblem;
 const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
 const Command = cli_context.Command;
@@ -90,17 +85,14 @@ const SharedMemoryAllocator = ipc.SharedMemoryAllocator;
 const Filesystem = fs_mod.Filesystem;
 const ModuleEnv = can.ModuleEnv;
 const BuildEnv = compile.BuildEnv;
+const Coordinator = compile.coordinator.Coordinator;
+const Mode = compile.package.Mode;
 const TimingInfo = compile.package.TimingInfo;
 const CacheManager = compile.CacheManager;
 const CacheConfig = compile.CacheConfig;
+const serialize_modules = compile.serialize_modules;
 const TestRunner = eval.TestRunner;
 const Allocators = base.Allocators;
-const CompactWriter = collections.CompactWriter;
-
-// Import serialization types from the shared module
-const SERIALIZED_FORMAT_MAGIC = collections.SERIALIZED_FORMAT_MAGIC;
-const SerializedHeader = collections.SerializedHeader;
-const SerializedModuleInfo = collections.SerializedModuleInfo;
 
 /// Embedded interpreter shim libraries for different targets.
 /// The native shim is used for roc run and native builds.
@@ -285,89 +277,6 @@ const ColorPalette = reporting.ColorPalette;
 const ReportBuilder = check.ReportBuilder;
 
 const legalDetailsFileContent = @embedFile("legal_details");
-
-/// Counts of errors and warnings from type checking.
-const ProblemCounts = struct {
-    error_count: usize,
-    warning_count: usize,
-};
-
-/// Render type checking problems as diagnostic reports to stderr.
-/// Returns counts of errors and warnings.
-/// This is shared between rocCheck and rocRun to ensure consistent error reporting.
-fn renderTypeProblems(
-    ctx: *CliContext,
-    checker: *Check,
-    module_env: *ModuleEnv,
-    filename: []const u8,
-) ProblemCounts {
-    const stderr = ctx.io.stderr();
-
-    var rb = ReportBuilder.init(
-        ctx.gpa,
-        module_env,
-        module_env,
-        &checker.snapshots,
-        &checker.problems,
-        filename,
-        &.{},
-        &checker.import_mapping,
-    );
-    defer rb.deinit();
-
-    var error_count: usize = 0;
-    var warning_count: usize = 0;
-
-    // Render canonicalization diagnostics (unused variables, etc.)
-    // Note: getDiagnostics allocates with module_env.gpa, so we must free with that allocator
-    const diags = module_env.getDiagnostics() catch &.{};
-    defer module_env.gpa.free(diags);
-    for (diags) |d| {
-        var report = module_env.diagnosticToReport(d, module_env.gpa, filename) catch continue;
-        defer report.deinit();
-
-        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-
-        if (report.severity == .fatal or report.severity == .runtime_error) {
-            error_count += 1;
-        } else if (report.severity == .warning) {
-            warning_count += 1;
-        }
-    }
-
-    // Render type checking problems
-    for (checker.problems.problems.items) |prob| {
-        var report = rb.build(prob) catch continue;
-        defer report.deinit();
-
-        // Render the diagnostic report to stderr
-        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-
-        if (report.severity == .fatal or report.severity == .runtime_error) {
-            error_count += 1;
-        } else if (report.severity == .warning) {
-            warning_count += 1;
-        }
-    }
-
-    // Print summary if there were any problems
-    if (error_count > 0 or warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
-            error_count,
-            warning_count,
-            filename,
-        }) catch {};
-    }
-
-    // Flush stderr to ensure all error output is visible
-    ctx.io.flush();
-
-    return ProblemCounts{
-        .error_count = error_count,
-        .warning_count = warning_count,
-    };
-}
 
 /// Preferred size for shared memory allocator: 2TB on 64-bit, 256MB on 32-bit.
 ///
@@ -1239,10 +1148,8 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
         };
     }
 
-    // Set up shared memory with ModuleEnv
-    std.log.debug("Setting up shared memory for Roc file: {s}", .{args.path});
-    const shm_result = try setupSharedMemoryWithModuleEnv(ctx, args.path, args.allow_errors);
-    std.log.debug("Shared memory setup complete, size: {} bytes", .{shm_result.handle.size});
+    // Set up shared memory with ModuleEnv using the Coordinator
+    const shm_result = try setupSharedMemoryWithCoordinator(ctx, args.path, args.allow_errors);
 
     // Check for errors - abort unless --allow-errors flag is set
     if (shm_result.error_count > 0 and !args.allow_errors) {
@@ -1668,10 +1575,14 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
 }
 
 /// Set up shared memory with compiled ModuleEnvs from a Roc file and its platform modules.
-/// This parses, canonicalizes, and type-checks all modules, with the resulting ModuleEnvs
-/// ending up in shared memory because all allocations were done into shared memory.
-/// Platform type modules have their e_anno_only expressions converted to e_hosted_lambda.
-pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
+/// This parses, canonicalizes, and type-checks all modules using the Coordinator actor model,
+/// with the resulting ModuleEnvs ending up in shared memory.
+///
+/// Features:
+/// - Uses the Coordinator for compilation (same infrastructure as `roc check` and `roc build`)
+/// - Supports multi-threaded compilation (SharedMemoryAllocator is thread-safe)
+/// - Platform type modules have their e_anno_only expressions converted to e_hosted_lambda
+pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const u8, allow_errors: bool) !SharedMemoryResult {
     // Create shared memory with SharedMemoryAllocator, trying progressively smaller
     // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
     const page_size = try SharedMemoryAllocator.getSystemPageSize();
@@ -1680,7 +1591,7 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
 
     const shm_allocator = shm.allocator();
 
-    // Load builtin modules
+    // Load builtin modules using gpa (not shared memory - builtins are shared read-only)
     var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
     defer builtin_modules.deinit();
 
@@ -1692,15 +1603,10 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     // Check for absolute paths and reject them early
     try validatePlatformSpec(ctx, platform_spec);
 
-    // Resolve platform path based on type:
-    // - Relative paths (./...) -> join with app directory
-    // - URL paths (http/https) -> resolve to cached package main.roc
-    // - Other paths -> null (not supported)
-    // Note: All paths use arena allocator so no manual freeing is needed.
+    // Resolve platform path based on type
     const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
         try std.fs.path.join(ctx.arena, &[_][]const u8{ app_dir, platform_spec })
     else if (base.url.isSafeUrl(platform_spec)) blk: {
-        // URL platform - resolve to cached package path
         const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
             error.CliError => break :blk null,
             error.OutOfMemory => return error.OutOfMemory,
@@ -1722,24 +1628,19 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     if (platform_main_path) |pmp| {
         has_platform = true;
         extractExposedModulesFromPlatform(ctx, pmp, &exposed_modules) catch {
-            // Platform file not found or couldn't be parsed - continue without platform modules
             has_platform = false;
         };
     }
 
     // IMPORTANT: Create header FIRST before any module compilation.
     // The interpreter_shim expects the Header to be at FIRST_ALLOC_OFFSET (504).
-    // If we compile modules first, they would occupy that offset and break
-    // shared memory layout assumptions.
     const Header = struct {
         parent_base_addr: u64,
         module_count: u32,
         entry_count: u32,
         def_indices_offset: u64,
         module_envs_offset: u64,
-        /// Offset to platform's main.roc env (0 if no platform, entry points are in app)
         platform_main_env_offset: u64,
-        /// Offset to app env (always present, used for e_lookup_required resolution)
         app_env_offset: u64,
     };
 
@@ -1747,109 +1648,403 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
     const shm_base_addr = @intFromPtr(shm.base_ptr);
     header_ptr.parent_base_addr = shm_base_addr;
 
-    // Module count = 1 (app) + number of platform modules + number of sibling modules + package modules
-    // We over-allocate module_env_offsets_ptr with a max size since we discover sibling/package
-    // imports AFTER parsing the app (to avoid parsing twice). The actual count is set later.
+    // Allocate module env offsets array (over-allocated, actual count set later)
     const platform_module_count: u32 = @intCast(exposed_modules.items.len);
-    const max_sibling_modules: u32 = 64; // Reasonable max for sibling modules
-    const max_package_modules: u32 = 64; // Reasonable max for package modules
+    const max_sibling_modules: u32 = 64;
+    const max_package_modules: u32 = 64;
     const max_module_count: u32 = 1 + platform_module_count + max_sibling_modules + max_package_modules;
 
-    // Allocate array for module env offsets (over-allocated, actual count set later)
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
-    const module_envs_offset_location = @intFromPtr(module_env_offsets_ptr.ptr) - @intFromPtr(shm.base_ptr);
-    header_ptr.module_envs_offset = module_envs_offset_location;
+    header_ptr.module_envs_offset = @intFromPtr(module_env_offsets_ptr.ptr) - shm_base_addr;
 
-    // Track actual sibling count (discovered after app parsing)
-    var actual_sibling_count: u32 = 0;
+    // Initialize Coordinator - use single-threaded mode for debugging
+    // TODO: Switch back to multi-threaded once issues are resolved
+    var coord = try Coordinator.init(
+        ctx.gpa, // Use regular allocator for Coordinator internals
+        .single_threaded,
+        1,
+        &builtin_modules,
+        build_options.compiler_version,
+        null, // no cache for IPC
+    );
+    defer coord.deinit();
 
-    // Compile platform sibling modules FIRST (Stdout, Stderr, Stdin, etc.)
-    // This must happen before platform main.roc so that when main.roc is canonicalized,
-    // we can pass the sibling modules to module_envs and validate imports correctly.
-    //
-    // Modules are automatically sorted by their import dependencies using topological sort.
-    // If module A imports module B, B will be compiled before A regardless of the order
-    // in the platform's exposes list.
-    // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
-    // because we only populate exposed_modules when platform_main_path is non-null
-    const plat_dir = platform_dir orelse unreachable;
-    const sorted_modules = sortPlatformModulesByDependency(
-        ctx,
-        exposed_modules.items,
-        plat_dir,
-    ) catch |err| {
-        switch (err) {
-            error.CyclicDependency => std.log.err("Circular dependency detected in platform modules", .{}),
-            else => {},
+    // Inject shared memory allocator for module data (ModuleEnv, source)
+    coord.setModuleAllocator(shm_allocator);
+    coord.owns_module_data = false; // Don't free - shared memory will be unmapped
+    coord.enable_hosted_transform = true; // Enable hosted lambda conversion for platform modules
+
+    // Start worker threads
+    try coord.start();
+
+    // Set up app package
+    const app_pkg = try coord.ensurePackage("app", app_dir);
+    const app_basename = std.fs.path.basename(roc_file_path);
+    const app_module_name = if (std.mem.endsWith(u8, app_basename, ".roc"))
+        app_basename[0 .. app_basename.len - 4]
+    else
+        app_basename;
+    const app_module_id = try app_pkg.ensureModule(ctx.gpa, app_module_name, roc_file_path);
+    app_pkg.root_module_id = app_module_id;
+    app_pkg.modules.items[app_module_id].depth = 0;
+    app_pkg.remaining_modules += 1;
+    coord.total_remaining += 1;
+
+    // Extract the platform qualifier from the app header (e.g., "fx" from { fx: platform "..." })
+    const platform_qualifier = try extractPlatformQualifier(ctx, roc_file_path);
+
+    // Set up platform package and shorthands
+    if (platform_dir) |pf_dir| {
+        const pf_pkg = try coord.ensurePackage("pf", pf_dir);
+
+        // Add platform shorthand to app package
+        if (platform_qualifier) |qual| {
+            try app_pkg.shorthands.put(
+                try ctx.gpa.dupe(u8, qual),
+                try ctx.gpa.dupe(u8, "pf"),
+            );
         }
+
+        // Queue platform main module only
+        // Don't pre-queue exposed modules - let the coordinator discover them
+        // through import resolution (like roc check does)
+        if (platform_main_path) |pmp| {
+            const pf_module_id = try pf_pkg.ensureModule(ctx.gpa, "main", pmp);
+            pf_pkg.root_module_id = pf_module_id;
+            pf_pkg.modules.items[pf_module_id].depth = 1;
+            pf_pkg.remaining_modules += 1;
+            coord.total_remaining += 1;
+            try coord.enqueueParseTask("pf", pf_module_id);
+        }
+    }
+
+    // Set up non-platform packages (e.g., { hlp: "./helper_pkg/main.roc" })
+    var non_platform_packages = try extractNonPlatformPackages(ctx, roc_file_path, platform_qualifier);
+    defer {
+        var iter = non_platform_packages.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
+        }
+        non_platform_packages.deinit();
+    }
+
+    var pkg_iter = non_platform_packages.iterator();
+    while (pkg_iter.next()) |entry| {
+        const shorthand = entry.key_ptr.*;
+        const pkg_main_path = entry.value_ptr.*;
+
+        // Get the package directory from the main file path
+        const pkg_dir = std.fs.path.dirname(pkg_main_path) orelse ".";
+
+        // Create an internal package name (use shorthand as the package name)
+        const pkg_name = try ctx.gpa.dupe(u8, shorthand);
+        defer ctx.gpa.free(pkg_name);
+
+        _ = try coord.ensurePackage(pkg_name, pkg_dir);
+
+        // Add shorthand mapping to app package
+        // The coordinator will automatically discover and queue modules from this package
+        // when the app imports them via scheduleExternalImport
+        try app_pkg.shorthands.put(
+            try ctx.gpa.dupe(u8, shorthand),
+            try ctx.gpa.dupe(u8, pkg_name),
+        );
+    }
+
+    // Queue app module
+    try coord.enqueueParseTask("app", app_module_id);
+
+    // Run coordinator loop
+    try coord.coordinatorLoop();
+
+    // Check that app exports match platform requirements
+    // This must happen after all modules are type-checked
+    try checkPlatformRequirementsFromCoordinator(&coord, ctx, &builtin_modules);
+
+    // Process hosted functions and assign global indices
+    // Note: The hosted lambda conversion is done automatically by the Coordinator
+    // when enable_hosted_transform is true (done in handleCanonicalized)
+    try processHostedFunctionsFromCoordinator(&coord, ctx);
+
+    // Populate header with module offsets from coordinator
+    var module_idx: u32 = 0;
+    var app_env_offset: u64 = 0;
+    var platform_main_env_offset: u64 = 0;
+
+    // Collect platform modules first (excluding platform main, which goes in platform_main_env_offset)
+    // The interpreter expects module_env_offsets to contain only exposed platform modules,
+    // not the platform main module which is accessed separately.
+    if (coord.getPackage("pf")) |pf_pkg| {
+        for (pf_pkg.modules.items) |*mod| {
+            if (mod.env) |env| {
+                const env_offset = @intFromPtr(env) - shm_base_addr;
+
+                // Platform main goes in platform_main_env_offset, NOT in the array
+                if (std.mem.eql(u8, mod.name, "main") or std.mem.eql(u8, mod.name, "main.roc")) {
+                    platform_main_env_offset = env_offset;
+                } else {
+                    // Exposed platform modules go in the array
+                    module_env_offsets_ptr[module_idx] = env_offset;
+                    module_idx += 1;
+                }
+            }
+        }
+    }
+
+    // Collect modules from non-platform packages (e.g., hlp)
+    var all_pkg_iter = coord.packages.iterator();
+    while (all_pkg_iter.next()) |entry| {
+        const pkg_name = entry.key_ptr.*;
+        // Skip platform and app packages (already handled above/below)
+        if (std.mem.eql(u8, pkg_name, "pf") or std.mem.eql(u8, pkg_name, "app")) {
+            continue;
+        }
+        const pkg = entry.value_ptr.*;
+        for (pkg.modules.items) |*mod| {
+            if (mod.env) |env| {
+                const env_offset = @intFromPtr(env) - shm_base_addr;
+                module_env_offsets_ptr[module_idx] = env_offset;
+                module_idx += 1;
+            }
+        }
+    }
+
+    // Collect app package modules (sibling modules first, then the root app at the end)
+    // The interpreter expects the app module at the last index (module_count - 1)
+    if (coord.getPackage("app")) |app_pkg_result| {
+        const root_id = app_pkg_result.root_module_id;
+
+        // First pass: add sibling modules (non-root modules)
+        for (app_pkg_result.modules.items, 0..) |*mod, mod_idx| {
+            // Skip root app module - it goes at the end
+            if (root_id != null and mod_idx == root_id.?) {
+                continue;
+            }
+            if (mod.env) |env| {
+                const env_offset = @intFromPtr(env) - shm_base_addr;
+                module_env_offsets_ptr[module_idx] = env_offset;
+                module_idx += 1;
+            }
+        }
+
+        // Second pass: add root app module at the end
+        if (root_id) |rid| {
+            const root_mod = &app_pkg_result.modules.items[rid];
+            if (root_mod.env) |env| {
+                const env_offset = @intFromPtr(env) - shm_base_addr;
+                module_env_offsets_ptr[module_idx] = env_offset;
+                app_env_offset = env_offset;
+                module_idx += 1;
+            }
+        }
+    }
+
+    header_ptr.module_count = module_idx;
+    header_ptr.app_env_offset = app_env_offset;
+    header_ptr.platform_main_env_offset = platform_main_env_offset;
+
+    // Set up entry points from platform exports
+    var entry_count: u32 = 0;
+    var def_indices_offset: u64 = 0;
+    if (platform_main_env_offset != 0) {
+        const platform_env: *ModuleEnv = @ptrFromInt(@as(usize, @intCast(platform_main_env_offset + shm_base_addr)));
+        const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
+        entry_count = @intCast(exports_slice.len);
+
+        if (entry_count > 0) {
+            const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
+            def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - shm_base_addr;
+            for (exports_slice, 0..) |def_idx, i| {
+                def_indices_ptr[i] = @intFromEnum(def_idx);
+            }
+        }
+    }
+
+    header_ptr.entry_count = entry_count;
+    header_ptr.def_indices_offset = def_indices_offset;
+
+    // Count errors from all modules
+    var error_count: usize = 0;
+    var warning_count: usize = 0;
+
+    var pkg_it = coord.packages.iterator();
+    while (pkg_it.next()) |entry| {
+        const pkg = entry.value_ptr.*;
+        for (pkg.modules.items) |*mod| {
+            for (mod.reports.items) |*rep| {
+                if (rep.severity == .fatal or rep.severity == .runtime_error) {
+                    error_count += 1;
+                    // Render error to stderr
+                    if (!builtin.is_test) {
+                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    }
+                } else if (rep.severity == .warning) {
+                    warning_count += 1;
+                    // Render warning to stderr
+                    if (!builtin.is_test) {
+                        reporting.renderReportToTerminal(rep, ctx.io.stderr(), ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch {};
+                    }
+                }
+            }
+        }
+    }
+
+    // Print summary if there were any problems
+    if (error_count > 0 or warning_count > 0) {
+        const stderr = ctx.io.stderr();
+        stderr.writeAll("\n") catch {};
+        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
+            error_count,
+            warning_count,
+            roc_file_path,
+        }) catch {};
+    }
+
+    // Flush stderr buffer to ensure errors are visible before execution
+    ctx.io.flush();
+
+    // Abort if errors and not allowed
+    if (error_count > 0 and !allow_errors) {
+        return SharedMemoryResult{
+            .handle = SharedMemoryHandle{
+                .fd = shm.handle,
+                .ptr = shm.base_ptr,
+                .size = shm.getUsedSize(),
+            },
+            .error_count = error_count,
+            .warning_count = warning_count,
+        };
+    }
+
+    shm.updateHeader();
+
+    return SharedMemoryResult{
+        .handle = SharedMemoryHandle{
+            .fd = shm.handle,
+            .ptr = shm.base_ptr,
+            .size = shm.getUsedSize(),
+        },
+        .error_count = error_count,
+        .warning_count = warning_count,
+    };
+}
+
+/// Extract the platform qualifier from an app header (e.g., "rr" from { rr: platform "..." })
+fn extractPlatformQualifier(ctx: *CliContext, roc_file_path: []const u8) !?[]const u8 {
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return null;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
         return err;
     };
-    defer ctx.gpa.free(sorted_modules);
+    defer ctx.gpa.free(source);
 
-    var platform_env_ptrs = try ctx.gpa.alloc(*ModuleEnv, sorted_modules.len);
-    defer ctx.gpa.free(platform_env_ptrs);
+    var env = ModuleEnv.init(ctx.gpa, source) catch return null;
+    defer env.deinit();
+    env.common.source = source;
 
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] === IPC Mode: Compiling Platform Modules ===\n", .{});
+    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return null;
+    defer parse_ast.deinit(ctx.gpa);
+
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    if (header == .app) {
+        const platform_field = parse_ast.store.getRecordField(header.app.platform_idx);
+        const key_region = parse_ast.tokens.resolve(platform_field.name);
+        const qualifier = source[key_region.start.offset..key_region.end.offset];
+        return try ctx.arena.dupe(u8, qualifier);
     }
 
-    for (sorted_modules, 0..) |module_name, i| {
-        const module_filename = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
-        defer ctx.gpa.free(module_filename);
+    return null;
+}
 
-        const module_path = try std.fs.path.join(ctx.gpa, &[_][]const u8{ plat_dir, module_filename });
-        defer ctx.gpa.free(module_path);
-
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES] Compiling platform module {d}: \"{s}\" at {s}\n", .{ i, module_name, module_path });
+/// Extract non-platform package shorthands from app header.
+/// Returns a map of shorthand name -> absolute package path.
+/// e.g., for `{ fx: platform "./platform/main.roc", hlp: "./helper_pkg/main.roc" }`,
+/// this would return { "hlp" -> "/absolute/path/to/helper_pkg/main.roc" }.
+fn extractNonPlatformPackages(
+    ctx: *CliContext,
+    roc_file_path: []const u8,
+    platform_qualifier: ?[]const u8,
+) !std.StringHashMap([]const u8) {
+    var packages = std.StringHashMap([]const u8).init(ctx.gpa);
+    errdefer {
+        var iter = packages.iterator();
+        while (iter.next()) |entry| {
+            ctx.gpa.free(entry.key_ptr.*);
+            ctx.gpa.free(entry.value_ptr.*);
         }
-
-        // Pass previously compiled sibling modules so this module can resolve imports to them.
-        // This enables transitive module calls (e.g., a module `Helper` imports `Core`, then calls `Core.wrap`).
-        const sibling_modules = platform_env_ptrs[0..i];
-        const module_env_ptr = try compileModuleToSharedMemory(
-            ctx,
-            module_path,
-            module_name, // Use just "Stdout" (not "Stdout.roc") so type-module detection works
-            shm_allocator,
-            &builtin_modules,
-            sibling_modules,
-        );
-
-        // Store platform modules at indices 0..N-2, app will be at N-1
-        module_env_offsets_ptr[i] = @intFromPtr(module_env_ptr) - @intFromPtr(shm.base_ptr);
-        platform_env_ptrs[i] = module_env_ptr;
+        packages.deinit();
     }
 
-    // NOW compile platform main.roc AFTER sibling modules so we can pass them to module_envs.
-    // This allows the canonicalizer to validate that imports of Stdout, Stderr, etc. are valid.
-    var platform_main_env: ?*ModuleEnv = null;
-    if (has_platform) {
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES] Compiling platform main: {s}\n", .{platform_main_path.?});
+    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
+
+    var source = std.fs.cwd().readFileAlloc(ctx.gpa, roc_file_path, std.math.maxInt(usize)) catch return packages;
+    source = base.source_utils.normalizeLineEndingsRealloc(ctx.gpa, source) catch |err| {
+        ctx.gpa.free(source);
+        return err;
+    };
+    defer ctx.gpa.free(source);
+
+    var env = ModuleEnv.init(ctx.gpa, source) catch return packages;
+    defer env.deinit();
+    env.common.source = source;
+
+    var parse_ast = parse.parse(&env.common, ctx.gpa) catch return packages;
+    defer parse_ast.deinit(ctx.gpa);
+
+    const file_node = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file_node.header);
+
+    if (header == .app) {
+        const packages_coll = parse_ast.store.getCollection(header.app.packages);
+        const packages_fields = parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
+        for (packages_fields) |field_idx| {
+            const field = parse_ast.store.getRecordField(field_idx);
+            const key_region = parse_ast.tokens.resolve(field.name);
+            const shorthand = source[key_region.start.offset..key_region.end.offset];
+
+            // Skip if this is the platform field
+            if (platform_qualifier) |qual| {
+                if (std.mem.eql(u8, shorthand, qual)) continue;
+            }
+
+            // Get the package path from the field value
+            if (field.value) |value_idx| {
+                const value_node = parse_ast.store.getExpr(value_idx);
+                switch (value_node) {
+                    .string => |str| {
+                        // Use the region to get the full string
+                        const str_region = parse_ast.tokenizedRegionToRegion(str.region);
+                        const raw_path = source[str_region.start.offset..str_region.end.offset];
+                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
+                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
+                            // Make absolute path relative to app directory
+                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
+                            try packages.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
+                        }
+                    },
+                    else => {},
+                }
+            }
         }
-
-        // Cast []*ModuleEnv to []const *ModuleEnv for the function parameter
-        const const_platform_env_ptrs: []const *ModuleEnv = platform_env_ptrs;
-        // platform_main_path is guaranteed non-null when has_platform is true
-        platform_main_env = compileModuleToSharedMemory(
-            ctx,
-            platform_main_path.?,
-            "main.roc",
-            shm_allocator,
-            &builtin_modules,
-            const_platform_env_ptrs,
-        ) catch null;
     }
 
-    // Collect and sort all hosted functions globally, then assign indices
-    if (platform_env_ptrs.len > 0) {
-        const HostedCompiler = can.HostedCompiler;
-        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-        defer all_hosted_fns.deinit(ctx.gpa);
+    return packages;
+}
 
-        // Collect from all platform modules
-        for (platform_env_ptrs) |platform_env| {
+/// Process hosted functions from coordinator modules and assign global indices.
+fn processHostedFunctionsFromCoordinator(coord: *Coordinator, ctx: *CliContext) !void {
+    const HostedCompiler = can.HostedCompiler;
+    var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
+    defer all_hosted_fns.deinit(ctx.gpa);
+
+    // Collect from all platform modules
+    const pf_pkg = coord.getPackage("pf") orelse return;
+
+    for (pf_pkg.modules.items) |*mod| {
+        if (mod.env) |platform_env| {
             var module_fns = try HostedCompiler.collectAndSortHostedFunctions(platform_env);
             defer module_fns.deinit(platform_env.gpa);
 
@@ -1857,31 +2052,35 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
                 try all_hosted_fns.append(ctx.gpa, fn_info);
             }
         }
+    }
 
-        // Sort globally
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-            }
-        };
-        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
+    if (all_hosted_fns.items.len == 0) return;
 
-        // Deduplicate
-        var write_idx: usize = 0;
-        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                if (write_idx != read_idx) {
-                    all_hosted_fns.items[write_idx] = fn_info;
-                }
-                write_idx += 1;
-            } else {
-                ctx.gpa.free(fn_info.name_text);
-            }
+    // Sort globally
+    const SortContext = struct {
+        pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
+            return std.mem.order(u8, a.name_text, b.name_text) == .lt;
         }
-        all_hosted_fns.shrinkRetainingCapacity(write_idx);
+    };
+    std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
-        // Reassign global indices
-        for (platform_env_ptrs) |platform_env| {
+    // Deduplicate
+    var write_idx: usize = 0;
+    for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
+        if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
+            if (write_idx != read_idx) {
+                all_hosted_fns.items[write_idx] = fn_info;
+            }
+            write_idx += 1;
+        } else {
+            ctx.gpa.free(fn_info.name_text);
+        }
+    }
+    all_hosted_fns.shrinkRetainingCapacity(write_idx);
+
+    // Reassign global indices
+    for (pf_pkg.modules.items) |*mod| {
+        if (mod.env) |platform_env| {
             const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
             for (all_defs) |def_idx| {
                 const def = platform_env.store.getDef(def_idx);
@@ -1918,577 +2117,126 @@ pub fn setupSharedMemoryWithModuleEnv(ctx: *CliContext, roc_file_path: []const u
             }
         }
     }
+}
 
-    // Now compile the app module
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] Compiling app: {s}\n", .{roc_file_path});
+/// Check that app exports match platform requirements.
+/// This is called after all modules are compiled and type-checked.
+/// This mirrors the logic in compile_build.zig's BuildEnv.checkPlatformRequirements.
+fn checkPlatformRequirementsFromCoordinator(
+    coord: *Coordinator,
+    ctx: *CliContext,
+    builtin_modules: *eval.BuiltinModules,
+) !void {
+    // Find app and platform packages
+    const app_pkg = coord.getPackage("app") orelse return;
+    const pf_pkg = coord.getPackage("pf") orelse return;
+
+    // Get the app's root module env
+    const app_root_id = app_pkg.root_module_id orelse return;
+    const app_root_env: *ModuleEnv = app_pkg.modules.items[app_root_id].env orelse return;
+
+    // Get the platform's root module env (the "main" module containing the requires clause)
+    var platform_root_env: ?*ModuleEnv = null;
+    for (pf_pkg.modules.items) |*mod| {
+        if (std.mem.eql(u8, mod.name, "main") or std.mem.eql(u8, mod.name, "main.roc")) {
+            if (mod.env) |env| {
+                platform_root_env = env;
+                break;
+            }
+        }
+    }
+    const pf_root_env = platform_root_env orelse return;
+
+    // If the platform has no requires_types, nothing to check
+    if (pf_root_env.requires_types.items.items.len == 0) {
+        return;
     }
 
-    const app_env_ptr = try shm_allocator.create(ModuleEnv);
+    // Get builtin indices and module
+    const builtin_indices = builtin_modules.builtin_indices;
+    const builtin_module_env = builtin_modules.builtin_module.env;
 
-    const app_file = std.fs.cwd().openFile(roc_file_path, .{}) catch |err| {
-        const problem: CliProblem = switch (err) {
-            error.FileNotFound => .{ .file_not_found = .{
-                .path = roc_file_path,
-                .context = .source_file,
-            } },
-            else => .{ .file_read_failed = .{
-                .path = roc_file_path,
-                .err = err,
-            } },
-        };
-        renderProblem(ctx.gpa, ctx.io.stderr(), problem);
-        return error.FileNotFound;
+    // Build module_envs_map for type resolution
+    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
+    defer module_envs_map.deinit();
+
+    // Use the shared populateModuleEnvs function to set up auto-imported types
+    try Can.populateModuleEnvs(&module_envs_map, app_root_env, builtin_module_env, builtin_indices);
+
+    // Build builtin context for the type checker
+    const builtin_ctx = Check.BuiltinContext{
+        .module_name = app_root_env.module_name_idx,
+        .bool_stmt = builtin_indices.bool_type,
+        .try_stmt = builtin_indices.try_type,
+        .str_stmt = builtin_indices.str_type,
+        .builtin_module = builtin_module_env,
+        .builtin_indices = builtin_indices,
     };
-    defer app_file.close();
 
-    const app_file_size = try app_file.getEndPos();
-    var app_source = try shm_allocator.alloc(u8, @intCast(app_file_size));
-    _ = try app_file.read(app_source);
-    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
-    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
-    app_source = base.source_utils.normalizeLineEndings(app_source);
-
-    const app_basename = std.fs.path.basename(roc_file_path);
-    const app_module_name = try shm_allocator.dupe(u8, app_basename);
-
-    var app_env = try ModuleEnv.init(shm_allocator, app_source);
-    app_env.common.source = app_source;
-    app_env.module_name = app_module_name;
-    try app_env.common.calcLineStarts(shm_allocator);
-
-    var error_count: usize = 0;
-    var warning_count: usize = 0;
-
-    var app_parse_ast = try parse.parse(&app_env.common, ctx.gpa);
-    defer app_parse_ast.deinit(ctx.gpa);
-    if (app_parse_ast.hasErrors()) {
-        const stderr = ctx.io.stderr();
-        for (app_parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            error_count += 1;
-            var report = app_parse_ast.tokenizeDiagnosticToReport(diagnostic, ctx.gpa, roc_file_path) catch continue;
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        }
-        for (app_parse_ast.parse_diagnostics.items) |diagnostic| {
-            error_count += 1;
-            var report = app_parse_ast.parseDiagnosticToReport(&app_env.common, diagnostic, ctx.gpa, roc_file_path) catch continue;
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        }
-        // If errors are not allowed then we should not move past parsing. return early and let caller handle error/exit
-        if (!allow_errors) {
-            return SharedMemoryResult{
-                .handle = SharedMemoryHandle{
-                    .fd = shm.handle,
-                    .ptr = shm.base_ptr,
-                    .size = shm.getUsedSize(),
-                },
-                .error_count = error_count,
-                .warning_count = warning_count,
-            };
-        }
-    }
-
-    app_parse_ast.store.emptyScratch();
-    try app_env.initCIRFields(app_module_name);
-
-    var app_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer app_module_envs_map.deinit();
-
-    try Can.populateModuleEnvs(
-        &app_module_envs_map,
-        &app_env,
-        builtin_modules.builtin_module.env,
-        builtin_modules.builtin_indices,
+    // Create type checker for the app module
+    var checker = try Check.init(
+        ctx.gpa,
+        &app_root_env.types,
+        app_root_env,
+        &.{}, // No imported modules needed for checking exports
+        &module_envs_map,
+        &app_root_env.store.regions,
+        builtin_ctx,
     );
+    defer checker.deinit();
 
-    for (platform_env_ptrs) |mod_env| {
-        const name = try app_env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        // For user/platform modules, the qualified name is just the module name itself
-        const qualified_ident = try app_env.insertIdent(base.Ident.for_text(mod_env.module_name));
-        try app_module_envs_map.put(name, .{ .env = mod_env, .qualified_type_ident = qualified_ident });
-    }
+    // Build the platform-to-app ident translation map
+    // This translates platform requirement idents to app idents by name
+    var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(ctx.gpa);
+    defer platform_to_app_idents.deinit();
 
-    // Extract platform qualifier from app header (e.g., "rr" from { rr: platform "..." })
-    // This is needed to register modules with the correct qualified name for import validation
-    const parsed_file = app_parse_ast.store.getFile();
-    const app_header = app_parse_ast.store.getHeader(parsed_file.header);
-    const platform_qualifier: []const u8 = blk: {
-        if (app_header == .app) {
-            const platform_field = app_parse_ast.store.getRecordField(app_header.app.platform_idx);
-            const key_region = app_parse_ast.tokens.resolve(platform_field.name);
-            break :blk app_source[key_region.start.offset..key_region.end.offset];
+    for (pf_root_env.requires_types.items.items) |required_type| {
+        const platform_ident_text = pf_root_env.getIdent(required_type.ident);
+        if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
+            try platform_to_app_idents.put(required_type.ident, app_ident);
         }
-        // Not an app header - report error
-        return ctx.fail(.{ .invalid_app_header = .{ .app_path = roc_file_path } });
-    };
 
-    // Extract non-platform package shorthands from app header (e.g., { fx: platform "...", hlp: "./helper_pkg/main.roc" })
-    // These are packages that can be imported via qualified imports like "import hlp.Helper"
-    var package_shorthands = std.StringHashMap([]const u8).init(ctx.gpa);
-    defer {
-        var iter = package_shorthands.iterator();
-        while (iter.next()) |entry| {
-            ctx.gpa.free(entry.key_ptr.*);
-            ctx.gpa.free(entry.value_ptr.*);
-        }
-        package_shorthands.deinit();
-    }
+        // Also add for-clause type alias names (Model, model) to the translation map
+        const all_aliases = pf_root_env.for_clause_aliases.items.items;
+        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
+        for (type_aliases_slice) |alias| {
+            // Add alias name (e.g., "Model")
+            const alias_name_text = pf_root_env.getIdentText(alias.alias_name);
+            const alias_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
+            try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
 
-    if (app_header == .app) {
-        const packages_coll = app_parse_ast.store.getCollection(app_header.app.packages);
-        const packages_fields = app_parse_ast.store.recordFieldSlice(.{ .span = packages_coll.span });
-        for (packages_fields) |field_idx| {
-            const field = app_parse_ast.store.getRecordField(field_idx);
-            const key_region = app_parse_ast.tokens.resolve(field.name);
-            const shorthand = app_source[key_region.start.offset..key_region.end.offset];
-
-            // Skip if this is the platform field
-            if (std.mem.eql(u8, shorthand, platform_qualifier)) continue;
-
-            // Get the package path from the field value
-            if (field.value) |value_idx| {
-                const value_node = app_parse_ast.store.getExpr(value_idx);
-                switch (value_node) {
-                    .string => |str| {
-                        // Use the region to get the full string (token points only to opening quote)
-                        const str_region = app_parse_ast.tokenizedRegionToRegion(str.region);
-                        // Remove quotes from the string
-                        const raw_path = app_source[str_region.start.offset..str_region.end.offset];
-                        if (raw_path.len >= 2 and raw_path[0] == '"' and raw_path[raw_path.len - 1] == '"') {
-                            const pkg_rel_path = raw_path[1 .. raw_path.len - 1];
-                            // Make absolute path relative to app directory
-                            const pkg_abs_path = try std.fs.path.join(ctx.gpa, &.{ app_dir, pkg_rel_path });
-                            try package_shorthands.put(try ctx.gpa.dupe(u8, shorthand), pkg_abs_path);
-                        }
-                    },
-                    else => {},
-                }
-            }
+            // Add rigid name (e.g., "model")
+            const rigid_name_text = pf_root_env.getIdentText(alias.rigid_name);
+            const rigid_app_ident = try app_root_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
+            try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
         }
     }
 
-    // Add platform modules to the module envs map for canonicalization
-    // Two keys are needed for each platform module:
-    // 1. "{qualifier}.Stdout" - used during import validation (import rr.Stdout)
-    // 2. "Stdout" - used during expression canonicalization (Stdout.line!)
-    // Also set statement_idx to the actual type node index, which is needed for
-    // creating e_nominal_external and e_lookup_external expressions.
-    // Note: We iterate over sorted_modules to match the order in platform_env_ptrs
-    for (sorted_modules, 0..) |module_name, i| {
-        const platform_env = platform_env_ptrs[i];
-        // For platform modules (type modules), the qualified type name is just the type name.
-        // Type modules like Stdout.roc store associated items as "Stdout.line!" (not "Stdout.roc.Stdout.line!")
-        // because processTypeDeclFirstPass uses parent_name=null for top-level types.
-        // Insert into app_env (calling module) since Ident.Idx values are not transferable between stores.
-        const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
+    // Check platform requirements against app exports
+    try checker.checkPlatformRequirements(pf_root_env, &platform_to_app_idents);
 
-        // Look up the type in the platform module's exposed_items to get the actual node index
-        const type_ident_in_platform = platform_env.common.findIdent(module_name) orelse {
-            return ctx.fail(.{ .missing_type_in_module = .{
-                .module_name = module_name,
-                .type_name = module_name,
-            } });
-        };
-        const type_node_idx = platform_env.getExposedNodeIndexById(type_ident_in_platform) orelse {
-            return ctx.fail(.{ .missing_type_in_module = .{
-                .module_name = module_name,
-                .type_name = module_name,
-            } });
-        };
+    // If there are type problems, convert them to reports and add to app module
+    if (checker.problems.problems.items.len > 0) {
+        const app_module = &app_pkg.modules.items[app_root_id];
+        const app_path = app_module.path;
 
-        const auto_type = Can.AutoImportedType{
-            .env = platform_env,
-            .statement_idx = @enumFromInt(type_node_idx), // actual type node index for e_lookup_external
-            .qualified_type_ident = type_qualified_ident,
-        };
+        var rb = check.ReportBuilder.init(
+            ctx.gpa,
+            app_root_env,
+            app_root_env,
+            &checker.snapshots,
+            &checker.problems,
+            app_path,
+            &.{},
+            &checker.import_mapping,
+        );
+        defer rb.deinit();
 
-        // Add with qualified name key (for import validation: e.g., "rr.Stdout")
-        const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ platform_qualifier, module_name });
-        defer ctx.gpa.free(qualified_name);
-        const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
-        try app_module_envs_map.put(qualified_ident, auto_type);
-
-        // Add with unaliased name key (for expression canonicalization: "Stdout")
-        const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
-        try app_module_envs_map.put(module_ident, auto_type);
-
-        // Add with resolved module name key (for after alias resolution: "Stdout.roc")
-        // The import system resolves "{qualifier}.Stdout" to "Stdout.roc", so scopeLookupModule
-        // returns "Stdout.roc" which is then used to look up in module_envs
-        const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
-        defer ctx.gpa.free(module_name_with_roc);
-        const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
-        try app_module_envs_map.put(resolved_ident, auto_type);
-    }
-
-    // Load package modules from non-platform packages declared in app header
-    // For each qualified import like "import hlp.Helper", we need to:
-    // 1. Check if the qualifier matches a package shorthand
-    // 2. Find the module file within that package
-    // 3. Compile it and register in app_module_envs_map
-    var package_env_ptrs = std.ArrayList(*ModuleEnv).empty;
-    defer package_env_ptrs.deinit(ctx.gpa);
-
-    if (package_shorthands.count() > 0) {
-        // Extract qualified imports from app AST (imports with qualifier_tok set)
-        const file_stmts = app_parse_ast.store.statementSlice(parsed_file.statements);
-        for (file_stmts) |stmt_idx| {
-            const stmt = app_parse_ast.store.getStatement(stmt_idx);
-            switch (stmt) {
-                .import => |import_stmt| {
-                    // Only process qualified imports (e.g., "import hlp.Helper")
-                    if (import_stmt.qualifier_tok) |qual_tok| {
-                        const qualifier = app_parse_ast.resolve(qual_tok);
-                        const module_name_raw = app_parse_ast.resolve(import_stmt.module_name_tok);
-
-                        // Strip leading dot if present
-                        const module_name = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                            module_name_raw[1..]
-                        else
-                            module_name_raw;
-
-                        // Skip platform imports
-                        if (std.mem.eql(u8, qualifier, platform_qualifier)) continue;
-
-                        // Check if qualifier matches a package shorthand
-                        if (package_shorthands.get(qualifier)) |pkg_path| {
-                            // Determine the package directory (dirname of main.roc)
-                            const pkg_dir = std.fs.path.dirname(pkg_path) orelse ".";
-
-                            // Find the module file within the package
-                            const module_file_path = try moduleNameToFilePath(module_name, pkg_dir, ctx.gpa) orelse {
-                                // Module file not found in package
-                                std.log.warn("Package module not found: {s}.{s}", .{ qualifier, module_name });
-                                continue;
-                            };
-                            defer ctx.gpa.free(module_file_path);
-
-                            // Compile the package module
-                            const pkg_module_env = try compileModuleToSharedMemory(
-                                ctx,
-                                module_file_path,
-                                module_name,
-                                shm_allocator,
-                                &builtin_modules,
-                                package_env_ptrs.items,
-                            );
-                            try package_env_ptrs.append(ctx.gpa, pkg_module_env);
-
-                            // Register with qualified name (e.g., "hlp.Helper")
-                            const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ qualifier, module_name });
-                            defer ctx.gpa.free(qualified_name);
-                            const qualified_ident = try app_env.insertIdent(base.Ident.for_text(qualified_name));
-
-                            // Check if this module exposes a type with the same name
-                            const type_ident_in_module = pkg_module_env.common.findIdent(module_name);
-                            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
-                                pkg_module_env.getExposedNodeIndexById(ident)
-                            else
-                                null;
-
-                            const type_qualified_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
-
-                            if (type_node_idx) |node_idx| {
-                                try app_module_envs_map.put(qualified_ident, .{
-                                    .env = pkg_module_env,
-                                    .statement_idx = @enumFromInt(node_idx),
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            } else {
-                                try app_module_envs_map.put(qualified_ident, .{
-                                    .env = pkg_module_env,
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            }
-
-                            // Also register with resolved name (e.g., "Helper" without qualifier)
-                            // This is needed for expression canonicalization after import resolution
-                            const module_ident = try app_env.insertIdent(base.Ident.for_text(module_name));
-                            if (type_node_idx) |node_idx| {
-                                try app_module_envs_map.put(module_ident, .{
-                                    .env = pkg_module_env,
-                                    .statement_idx = @enumFromInt(node_idx),
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            } else {
-                                try app_module_envs_map.put(module_ident, .{
-                                    .env = pkg_module_env,
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            }
-
-                            // Also register with ".roc" suffix (e.g., "Helper.roc")
-                            // The import system resolves to this format after alias resolution
-                            const module_name_with_roc = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
-                            defer ctx.gpa.free(module_name_with_roc);
-                            const resolved_ident = try app_env.insertIdent(base.Ident.for_text(module_name_with_roc));
-                            if (type_node_idx) |node_idx| {
-                                try app_module_envs_map.put(resolved_ident, .{
-                                    .env = pkg_module_env,
-                                    .statement_idx = @enumFromInt(node_idx),
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            } else {
-                                try app_module_envs_map.put(resolved_ident, .{
-                                    .env = pkg_module_env,
-                                    .qualified_type_ident = type_qualified_ident,
-                                });
-                            }
-                        }
-                    }
-                },
-                else => {},
-            }
+        for (checker.problems.problems.items) |prob| {
+            const rep = rb.build(prob) catch continue;
+            try app_module.reports.append(ctx.gpa, rep);
         }
     }
-
-    // Compile sibling .roc files BEFORE app canonicalization.
-    // This ensures that when the app references `Hello.say`, the sibling module is fully
-    // compiled and its exports are available for lookup.
-    //
-    // LAZY LOADING: We extract imports from the already-parsed app_parse_ast to avoid
-    // parsing the app file twice. Only sibling modules that are actually imported are compiled.
-    var sibling_env_ptrs = std.ArrayList(*ModuleEnv).empty;
-    defer sibling_env_ptrs.deinit(ctx.gpa);
-
-    // Extract sibling imports from the already-parsed app AST
-    const sibling_imports = try compile.module_discovery.extractImportsFromAST(&app_parse_ast, ctx.gpa);
-    defer {
-        for (sibling_imports) |imp| ctx.gpa.free(imp);
-        ctx.gpa.free(sibling_imports);
-    }
-
-    // Filter to only imports that have corresponding files and aren't the app itself
-    var sibling_names = std.ArrayList([]const u8).empty;
-    defer sibling_names.deinit(ctx.gpa);
-    // Note: we don't free the strings in sibling_names since they point to sibling_imports
-
-    // Use app_basename already defined at line 1874
-    const app_name_no_ext = if (std.mem.endsWith(u8, app_basename, ".roc"))
-        app_basename[0 .. app_basename.len - 4]
-    else
-        app_basename;
-
-    for (sibling_imports) |import_name| {
-        // Skip self-import and "main"
-        if (std.mem.eql(u8, import_name, app_name_no_ext)) continue;
-        if (std.mem.eql(u8, import_name, "main")) continue;
-
-        // Check if file exists
-        if (try moduleNameToFilePath(import_name, app_dir, ctx.gpa)) |path| {
-            ctx.gpa.free(path); // Just checking existence
-            try sibling_names.append(ctx.gpa, import_name); // Points to sibling_imports memory
-        }
-    }
-
-    if (sibling_names.items.len > 0) {
-        // Sort sibling modules by dependency order
-        const sorted_siblings = try sortPlatformModulesByDependency(ctx, sibling_names.items, app_dir);
-        defer ctx.gpa.free(sorted_siblings);
-
-        // Compile each sibling module in dependency order
-        for (sorted_siblings, 0..) |sibling_name, i| {
-            // Handle nested modules: "Foo.Bar" -> "Foo/Bar.roc"
-            const sibling_path = try moduleNameToFilePath(sibling_name, app_dir, ctx.gpa) orelse {
-                // File doesn't exist - this shouldn't happen since we checked earlier
-                std.log.warn("Sibling module file not found: {s}", .{sibling_name});
-                continue;
-            };
-            defer ctx.gpa.free(sibling_path);
-
-            // Pass previously compiled siblings for transitive imports
-            const prev_siblings = sibling_env_ptrs.items[0..i];
-            const sibling_env = try compileModuleToSharedMemory(
-                ctx,
-                sibling_path,
-                sibling_name,
-                shm_allocator,
-                &builtin_modules,
-                prev_siblings,
-            );
-            try sibling_env_ptrs.append(ctx.gpa, sibling_env);
-
-            // Store sibling offset at index [platform_module_count + i]
-            const sibling_offset_idx = platform_module_count + @as(u32, @intCast(i));
-            module_env_offsets_ptr[sibling_offset_idx] = @intFromPtr(sibling_env) - @intFromPtr(shm.base_ptr);
-
-            // Add to app's module_envs_map with real sibling env
-            const sibling_ident = try app_env.insertIdent(base.Ident.for_text(sibling_name));
-
-            // Check if this module is a "type module" (defines a type with the same name)
-            const type_ident_in_module = sibling_env.common.findIdent(sibling_name);
-            const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
-                sibling_env.getExposedNodeIndexById(ident)
-            else
-                null;
-
-            if (type_node_idx) |node_idx| {
-                try app_module_envs_map.put(sibling_ident, .{
-                    .env = sibling_env,
-                    .statement_idx = @enumFromInt(node_idx),
-                    .qualified_type_ident = sibling_ident,
-                });
-            } else {
-                try app_module_envs_map.put(sibling_ident, .{
-                    .env = sibling_env,
-                    .qualified_type_ident = sibling_ident,
-                });
-            }
-        }
-        actual_sibling_count = @intCast(sorted_siblings.len);
-    }
-
-    // Store package module offsets (after sibling modules)
-    const package_count: u32 = @intCast(package_env_ptrs.items.len);
-    for (package_env_ptrs.items, 0..) |pkg_env, i| {
-        const pkg_offset_idx = platform_module_count + actual_sibling_count + @as(u32, @intCast(i));
-        module_env_offsets_ptr[pkg_offset_idx] = @intFromPtr(pkg_env) - @intFromPtr(shm.base_ptr);
-    }
-
-    // Set the actual module count now that we know how many siblings and packages were compiled
-    const total_module_count: u32 = 1 + platform_module_count + actual_sibling_count + package_count;
-    header_ptr.module_count = total_module_count;
-
-    var app_canonicalizer = try Can.init(&app_env, &app_parse_ast, &app_module_envs_map);
-    defer app_canonicalizer.deinit();
-
-    try app_canonicalizer.canonicalizeFile();
-    try app_canonicalizer.validateForExecution();
-
-    if (app_env.exports.span.len == 0) {
-        return ctx.fail(.{ .no_exports_found = .{ .path = roc_file_path } });
-    }
-
-    // Store app env at the last index (N-1, after platform modules at 0..N-2)
-    module_env_offsets_ptr[total_module_count - 1] = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
-
-    // Store app env offset for e_lookup_required resolution
-    header_ptr.app_env_offset = @intFromPtr(app_env_ptr) - @intFromPtr(shm.base_ptr);
-
-    // Entry points are defined in the platform's `provides` section.
-    // The platform wraps app-provided functions (from `requires`) and exports them for the host.
-    // For example: `provides { main_for_host!: "main" }` where `main_for_host! = main!`
-    const platform_env = platform_main_env orelse {
-        const result = platform_validation.targets_validator.ValidationResult{
-            .no_platform_found = .{ .app_path = roc_file_path },
-        };
-        _ = platform_validation.renderValidationError(ctx.gpa, result, ctx.io.stderr());
-        return error.NoPlatformFound;
-    };
-    const exports_slice = platform_env.store.sliceDefs(platform_env.exports);
-    if (exports_slice.len == 0) {
-        return ctx.fail(.{ .no_exports_found = .{ .path = platform_env.module_name } });
-    }
-
-    // Store platform env offset for entry point lookups
-    header_ptr.platform_main_env_offset = @intFromPtr(platform_env) - @intFromPtr(shm.base_ptr);
-    header_ptr.entry_count = @intCast(exports_slice.len);
-
-    const def_indices_ptr = try shm_allocator.alloc(u32, exports_slice.len);
-    header_ptr.def_indices_offset = @intFromPtr(def_indices_ptr.ptr) - @intFromPtr(shm.base_ptr);
-
-    for (exports_slice, 0..) |def_idx, i| {
-        def_indices_ptr[i] = @intFromEnum(def_idx);
-    }
-
-    // Type check with all imported modules
-    // Use the env's module_name_idx so that nominal types' origin_module matches
-    // the env's identity for method resolution at runtime
-    const app_builtin_ctx: Check.BuiltinContext = .{
-        .module_name = app_env.module_name_idx,
-        .bool_stmt = builtin_modules.builtin_indices.bool_type,
-        .try_stmt = builtin_modules.builtin_indices.try_type,
-        .str_stmt = builtin_modules.builtin_indices.str_type,
-        .builtin_module = builtin_modules.builtin_module.env,
-        .builtin_indices = builtin_modules.builtin_indices,
-    };
-
-    var app_imported_envs = std.ArrayList(*const ModuleEnv).empty;
-    defer app_imported_envs.deinit(ctx.gpa);
-    try app_imported_envs.append(ctx.gpa, builtin_modules.builtin_module.env);
-    for (platform_env_ptrs) |penv| {
-        try app_imported_envs.append(ctx.gpa, penv);
-    }
-    // Add sibling modules for type checking
-    for (sibling_env_ptrs.items) |senv| {
-        try app_imported_envs.append(ctx.gpa, senv);
-    }
-    // Add package modules for type checking
-    for (package_env_ptrs.items) |penv| {
-        try app_imported_envs.append(ctx.gpa, penv);
-    }
-
-    // Resolve imports - map each import to its index in app_imported_envs
-    app_env.imports.resolveImports(&app_env, app_imported_envs.items);
-
-    // Use ctx.gpa for the checker's working memory, not shm_allocator.
-    // The checker needs a real allocator that can free temporary allocations
-    // (scratch arrays, hashmaps, etc). SharedMemoryAllocator is a bump allocator
-    // that never frees, which causes OOM on large files.
-    var app_checker = try Check.init(ctx.gpa, &app_env.types, &app_env, app_imported_envs.items, &app_module_envs_map, &app_env.store.regions, app_builtin_ctx);
-    defer app_checker.deinit();
-
-    try app_checker.checkFile();
-
-    // Check that app exports match platform requirements (if platform exists)
-    if (platform_main_env) |penv| {
-        // Build the platform-to-app ident translation map
-        var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(ctx.gpa);
-        defer platform_to_app_idents.deinit();
-
-        for (penv.requires_types.items.items) |required_type| {
-            const platform_ident_text = penv.getIdent(required_type.ident);
-            if (app_env.common.findIdent(platform_ident_text)) |app_ident| {
-                try platform_to_app_idents.put(required_type.ident, app_ident);
-            }
-
-            // Also add for-clause type alias names (Model, model) to the translation map
-            const all_aliases = penv.for_clause_aliases.items.items;
-            const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-            for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
-                // the mapping can be created even if canonicalization hasn't added it yet.
-                // The app will provide the actual type alias definition which will be checked later.
-                const alias_name_text = penv.getIdent(alias.alias_name);
-                const alias_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(alias_name_text));
-                try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
-
-                // Add rigid name (e.g., "model") - insert it into app's ident store since
-                // the rigid name is a platform concept that gets copied during type processing.
-                // Using insert (not find) ensures the app's ident store has this name for later lookups.
-                const rigid_name_text = penv.getIdent(alias.rigid_name);
-                const rigid_app_ident = try app_env.common.insertIdent(ctx.gpa, base.Ident.for_text(rigid_name_text));
-                try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
-            }
-        }
-
-        try app_checker.checkPlatformRequirements(penv, &platform_to_app_idents);
-    }
-
-    // Render all type problems (errors and warnings) exactly as roc check would
-    // Count errors so the caller can decide whether to proceed with execution
-    // Skip rendering in test mode to avoid polluting test output
-    if (!builtin.is_test) {
-        const problem_counts = renderTypeProblems(ctx, &app_checker, &app_env, roc_file_path);
-        error_count += problem_counts.error_count;
-        warning_count += problem_counts.warning_count;
-    }
-
-    app_env_ptr.* = app_env;
-
-    shm.updateHeader();
-
-    return SharedMemoryResult{
-        .handle = SharedMemoryHandle{
-            .fd = shm.handle,
-            .ptr = shm.base_ptr,
-            .size = shm.getUsedSize(),
-        },
-        .error_count = error_count,
-        .warning_count = warning_count,
-    };
 }
 
 /// Extract exposed modules from a platform's main.roc file
@@ -2574,1110 +2322,6 @@ fn validatePlatformHeader(ctx: *CliContext, parse_ast: *const parse.AST, platfor
             return false;
         },
     }
-}
-
-/// Convert a module name to its corresponding file path.
-/// Supports nested modules: "Foo.Bar" -> "Foo/Bar.roc"
-///
-/// Parameters:
-///   module_name: The module name (e.g., "Hello" or "Foo.Bar")
-///   base_dir: The directory containing the modules
-///   gpa: Allocator for the returned path
-///
-/// Returns: The file path (caller owns memory), or null if file doesn't exist
-fn moduleNameToFilePath(
-    module_name: []const u8,
-    base_dir: []const u8,
-    gpa: std.mem.Allocator,
-) !?[]const u8 {
-    // Replace dots with path separators for nested modules
-    // "Foo.Bar" -> "Foo/Bar"
-    var path_parts = std.ArrayList(u8).empty;
-    defer path_parts.deinit(gpa);
-
-    for (module_name) |ch| {
-        if (ch == '.') {
-            try path_parts.append(gpa, std.fs.path.sep);
-        } else {
-            try path_parts.append(gpa, ch);
-        }
-    }
-    try path_parts.appendSlice(gpa, ".roc");
-
-    const relative_path = try path_parts.toOwnedSlice(gpa);
-    defer gpa.free(relative_path);
-
-    const full_path = try std.fs.path.join(gpa, &.{ base_dir, relative_path });
-
-    // Check if file exists
-    std.fs.cwd().access(full_path, .{}) catch {
-        gpa.free(full_path);
-        return null;
-    };
-
-    return full_path;
-}
-
-/// Extract the names of local modules that a given module file imports.
-/// Only returns unqualified imports (e.g., "Core"), not qualified ones (e.g., "pf.Stdout").
-/// This is used to determine dependency ordering for platform modules.
-///
-/// Parameters:
-///   allocs: Allocator bundle for temporary allocations
-///   module_path: Absolute path to the .roc module file
-///   available_modules: Set of module names to filter against (only return imports that are in this set)
-///
-/// Returns: Slice of imported module names that are in the available_modules set
-/// Caller owns the returned memory (allocated with ctx.gpa).
-fn extractModuleImports(
-    ctx: *CliContext,
-    module_path: []const u8,
-    available_modules: []const []const u8,
-) ![][]const u8 {
-    // Read source file
-    const source = std.fs.cwd().readFileAlloc(ctx.gpa, module_path, std.math.maxInt(usize)) catch |err| {
-        std.log.warn("Failed to read module file {s}: {}", .{ module_path, err });
-        return &[_][]const u8{};
-    };
-    defer ctx.gpa.free(source);
-
-    // Extract module name from the file path
-    const basename = std.fs.path.basename(module_path);
-    const module_name = basename[0 .. basename.len - 4]; // Remove .roc
-
-    // Create ModuleEnv and parse
-    var env = ModuleEnv.init(ctx.gpa, source) catch {
-        return &[_][]const u8{};
-    };
-    defer env.deinit();
-
-    env.common.source = source;
-    env.module_name = module_name;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse the source
-    var parse_ast = parse.parse(&env.common, ctx.gpa) catch {
-        return &[_][]const u8{};
-    };
-    defer parse_ast.deinit(ctx.gpa);
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR fields (needed for canonicalization)
-    try env.initCIRFields(module_name);
-
-    // Create a minimal module_envs map (just builtins would go here, but for import extraction we don't need them)
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs_map.deinit();
-
-    // Canonicalize to discover imports
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
-    defer canonicalizer.deinit();
-    canonicalizer.canonicalizeFile() catch {
-        // Even if canonicalization fails, we might have discovered some imports
-    };
-
-    // Extract imports from env.imports.imports
-    const import_count = env.imports.imports.items.items.len;
-    var result = std.ArrayList([]const u8).empty;
-    errdefer {
-        for (result.items) |item| ctx.gpa.free(item);
-        result.deinit(ctx.gpa);
-    }
-
-    for (env.imports.imports.items.items[0..import_count]) |str_idx| {
-        const import_name = env.common.getString(str_idx);
-
-        // Skip qualified imports (e.g., "pf.Stdout") - we only care about local imports
-        if (std.mem.indexOfScalar(u8, import_name, '.') != null) {
-            continue;
-        }
-
-        // Skip "Builtin" - it's always available
-        if (std.mem.eql(u8, import_name, "Builtin")) {
-            continue;
-        }
-
-        // Only include imports that are in the available_modules set
-        var found = false;
-        for (available_modules) |avail| {
-            if (std.mem.eql(u8, import_name, avail)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) continue;
-
-        // Add to result (duplicate the string since env will be freed)
-        try result.append(ctx.gpa, try ctx.gpa.dupe(u8, import_name));
-    }
-
-    return result.toOwnedSlice(ctx.gpa);
-}
-
-/// Sort platform modules by their import dependencies using topological sort (Kahn's algorithm).
-/// Returns modules in compilation order (dependencies first, dependents last).
-/// Returns error.CyclicDependency if modules have circular imports.
-///
-/// Parameters:
-///   allocs: Allocator bundle
-///   module_names: List of module names from the platform's exposes list
-///   platform_dir: Directory containing the platform modules
-///
-/// Returns: Sorted list of module names
-/// Caller owns the returned memory (allocated with ctx.gpa).
-fn sortPlatformModulesByDependency(
-    ctx: *CliContext,
-    module_names: []const []const u8,
-    platform_dir: []const u8,
-) ![][]const u8 {
-    const n = module_names.len;
-
-    // Early return for trivial cases
-    if (n <= 1) {
-        var result = try ctx.gpa.alloc([]const u8, n);
-        for (module_names, 0..) |name, i| {
-            result[i] = name;
-        }
-        return result;
-    }
-
-    // Build a name -> index map for O(1) lookups
-    var name_to_idx = std.StringHashMap(usize).init(ctx.gpa);
-    defer name_to_idx.deinit();
-    for (module_names, 0..) |name, i| {
-        try name_to_idx.put(name, i);
-    }
-
-    // Build adjacency list: adj[i] = list of modules that module i depends on (imports)
-    // And compute in-degree: how many modules depend on each module
-    var adjacency = try ctx.gpa.alloc(std.ArrayList(usize), n);
-    defer {
-        for (adjacency) |*list| list.deinit(ctx.gpa);
-        ctx.gpa.free(adjacency);
-    }
-    for (adjacency) |*list| {
-        list.* = std.ArrayList(usize).empty;
-    }
-
-    var in_degree = try ctx.gpa.alloc(usize, n);
-    defer ctx.gpa.free(in_degree);
-    @memset(in_degree, 0);
-
-    // For each module, extract its imports and build the graph
-    for (module_names, 0..) |name, i| {
-        const module_filename = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{name});
-        defer ctx.gpa.free(module_filename);
-
-        const module_path = try std.fs.path.join(ctx.gpa, &[_][]const u8{ platform_dir, module_filename });
-        defer ctx.gpa.free(module_path);
-
-        const imports = try extractModuleImports(ctx, module_path, module_names);
-        defer {
-            for (imports) |imp| ctx.gpa.free(imp);
-            ctx.gpa.free(imports);
-        }
-
-        // For each import, add an edge: this module depends on the imported module
-        for (imports) |imp| {
-            if (name_to_idx.get(imp)) |dep_idx| {
-                // Module i imports module dep_idx, so dep_idx must come before i
-                // Edge: dep_idx -> i (dep_idx is depended upon by i)
-                try adjacency[dep_idx].append(ctx.gpa, i);
-                in_degree[i] += 1;
-
-                if (comptime trace_modules) {
-                    std.debug.print("[TRACE-MODULES] Dependency: {s} imports {s}\n", .{ name, imp });
-                }
-            }
-        }
-    }
-
-    // Kahn's algorithm: start with modules that have no dependencies (in_degree == 0)
-    var queue = std.ArrayList(usize).empty;
-    defer queue.deinit(ctx.gpa);
-
-    for (0..n) |i| {
-        if (in_degree[i] == 0) {
-            try queue.append(ctx.gpa, i);
-        }
-    }
-
-    var result = try ctx.gpa.alloc([]const u8, n);
-    errdefer ctx.gpa.free(result);
-    var result_count: usize = 0;
-
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
-        result[result_count] = module_names[current];
-        result_count += 1;
-
-        // For each module that depends on current, decrement its in-degree
-        for (adjacency[current].items) |dependent| {
-            in_degree[dependent] -= 1;
-            if (in_degree[dependent] == 0) {
-                try queue.append(ctx.gpa, dependent);
-            }
-        }
-    }
-
-    // Log the sorted order
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] Sorted compilation order: ", .{});
-        for (result[0..result_count], 0..) |mod, idx| {
-            if (idx > 0) std.debug.print(", ", .{});
-            std.debug.print("{s}", .{mod});
-        }
-        std.debug.print("\n", .{});
-    }
-
-    // If we didn't process all modules, there's a cycle
-    if (result_count != n) {
-        // Find modules in the cycle (those with in_degree > 0)
-        var cycle_modules = std.ArrayList([]const u8).empty;
-        defer cycle_modules.deinit(ctx.gpa);
-
-        for (0..n) |i| {
-            if (in_degree[i] > 0) {
-                try cycle_modules.append(ctx.gpa, module_names[i]);
-            }
-        }
-
-        // Log the cycle for debugging
-        std.log.err("Circular dependency detected in platform modules:", .{});
-        for (cycle_modules.items) |mod| {
-            std.log.err("  - {s}", .{mod});
-        }
-
-        ctx.gpa.free(result);
-        return error.CyclicDependency;
-    }
-
-    return result;
-}
-
-/// Compile a single module to shared memory (for platform modules)
-fn compileModuleToSharedMemory(
-    ctx: *CliContext,
-    file_path: []const u8,
-    module_name_arg: []const u8,
-    shm_allocator: std.mem.Allocator,
-    builtin_modules: *eval.BuiltinModules,
-    additional_modules: []const *ModuleEnv,
-) !*ModuleEnv {
-    // Read file
-    const file = try std.fs.cwd().openFile(file_path, .{});
-    defer file.close();
-
-    const file_size = try file.getEndPos();
-    var source = try shm_allocator.alloc(u8, @intCast(file_size));
-    _ = try file.read(source);
-    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
-    // SharedMemoryAllocator is a bump allocator, so normalize in-place and keep any trailing bytes unused.
-    source = base.source_utils.normalizeLineEndings(source);
-
-    const module_name_copy = try shm_allocator.dupe(u8, module_name_arg);
-
-    // Initialize ModuleEnv
-    var env = try ModuleEnv.init(shm_allocator, source);
-    env.common.source = source;
-    env.module_name = module_name_copy;
-    try env.common.calcLineStarts(shm_allocator);
-
-    // Parse
-    var parse_ast = try parse.parse(&env.common, ctx.gpa);
-    defer parse_ast.deinit(ctx.gpa);
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR
-    try env.initCIRFields(module_name_copy);
-
-    // Create module_envs map
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs_map.deinit();
-
-    try Can.populateModuleEnvs(
-        &module_envs_map,
-        &env,
-        builtin_modules.builtin_module.env,
-        builtin_modules.builtin_indices,
-    );
-
-    for (additional_modules) |mod_env| {
-        // Get the base module name (without .roc extension if present)
-        var base_module_name = mod_env.module_name;
-        if (std.mem.endsWith(u8, base_module_name, ".roc")) {
-            base_module_name = base_module_name[0 .. base_module_name.len - 4];
-        }
-
-        // Check if this module is a "type module" (defines a type with the same name as the module).
-        // For type modules like Core (which uses `Core := [].{ wrap = ... }`), functions are exposed
-        // as qualified names like "Core.wrap", so we need to set statement_idx for proper lookup.
-        const type_ident_in_module = mod_env.common.findIdent(base_module_name);
-        const type_node_idx: ?u16 = if (type_ident_in_module) |ident|
-            mod_env.getExposedNodeIndexById(ident)
-        else
-            null;
-
-        const name = try env.insertIdent(base.Ident.for_text(base_module_name));
-        const qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
-
-        if (type_node_idx) |node_idx| {
-            // This is a type module - set statement_idx for proper qualified lookup
-            try module_envs_map.put(name, .{
-                .env = mod_env,
-                .statement_idx = @enumFromInt(node_idx),
-                .qualified_type_ident = qualified_ident,
-            });
-        } else {
-            // Regular module - no statement_idx needed
-            try module_envs_map.put(name, .{
-                .env = mod_env,
-                .qualified_type_ident = qualified_ident,
-            });
-        }
-
-        // Also add with full .roc suffix if different
-        if (!std.mem.eql(u8, mod_env.module_name, base_module_name)) {
-            const full_name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
-            if (type_node_idx) |node_idx| {
-                try module_envs_map.put(full_name, .{
-                    .env = mod_env,
-                    .statement_idx = @enumFromInt(node_idx),
-                    .qualified_type_ident = qualified_ident,
-                });
-            } else {
-                try module_envs_map.put(full_name, .{
-                    .env = mod_env,
-                    .qualified_type_ident = qualified_ident,
-                });
-            }
-        }
-    }
-
-    // Canonicalize (without root_is_platform - we'll run HostedCompiler separately)
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
-    defer canonicalizer.deinit();
-
-    try canonicalizer.canonicalizeFile();
-
-    // Run HostedCompiler to convert e_anno_only to e_hosted_lambda
-    // This is the key step for platform type modules
-    const HostedCompiler = can.HostedCompiler;
-    _ = try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
-
-    // Type check
-    var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer check_module_envs_map.deinit();
-
-    const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
-        .bool_stmt = builtin_modules.builtin_indices.bool_type,
-        .try_stmt = builtin_modules.builtin_indices.try_type,
-        .str_stmt = builtin_modules.builtin_indices.str_type,
-        .builtin_module = builtin_modules.builtin_module.env,
-        .builtin_indices = builtin_modules.builtin_indices,
-    };
-
-    // Build imported_envs array: builtins + additional modules
-    // This is needed for resolveImports to properly map external lookups
-    // (e.g., when Helper imports Core, Core must be in imported_envs)
-    var imported_envs_list = try std.ArrayList(*const ModuleEnv).initCapacity(ctx.gpa, 1 + additional_modules.len);
-    defer imported_envs_list.deinit(ctx.gpa);
-    imported_envs_list.appendAssumeCapacity(builtin_modules.builtin_module.env);
-    for (additional_modules) |mod| {
-        imported_envs_list.appendAssumeCapacity(mod);
-    }
-    const imported_envs = imported_envs_list.items;
-
-    // Resolve imports - map each import to its index in imported_envs
-    env.imports.resolveImports(&env, imported_envs);
-
-    // Use ctx.gpa for the checker's working memory, not shm_allocator.
-    // The checker needs a real allocator that can free temporary allocations.
-    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
-    defer checker.deinit();
-
-    try checker.checkFile();
-
-    // Allocate and return
-    const env_ptr = try shm_allocator.create(ModuleEnv);
-    env_ptr.* = env;
-    return env_ptr;
-}
-
-/// Compiled module data ready for serialization.
-/// Holds the ModuleEnv, source bytes, and module name needed for serialization.
-const CompiledModule = struct {
-    env: ModuleEnv,
-    source: []const u8,
-    module_name: []const u8,
-    is_platform_main: bool,
-    is_app: bool,
-    /// Number of errors found during compilation (from parsing, canonicalization, type checking)
-    error_count: usize,
-    /// Number of warnings found during compilation
-    warning_count: usize,
-};
-
-/// Result of compiling and serializing modules for embedding.
-const SerializedModulesResult = struct {
-    /// Serialized bytes (owned by arena allocator)
-    bytes: []align(16) u8,
-    /// Entry point definition indices
-    entry_def_indices: []const u32,
-    /// Number of compilation errors encountered
-    error_count: usize,
-    /// Number of compilation warnings encountered
-    warning_count: usize,
-};
-
-/// Compile a single module to a ModuleEnv using a regular allocator.
-/// Unlike compileModuleToSharedMemory, this uses the gpa and keeps source separate.
-///
-/// exposed_type_module_names: Optional list of module names that are "type modules" (e.g., "Stdout", "Stderr").
-///     When provided, modules in additional_modules whose names match these will have their
-///     statement_idx set correctly, enabling proper function lookup (e.g., Stdout.line!).
-///     The order must match: exposed_type_module_names[i] corresponds to additional_modules[i].
-fn compileModuleForSerialization(
-    ctx: *CliContext,
-    file_path: []const u8,
-    module_name_arg: []const u8,
-    builtin_modules: *eval.BuiltinModules,
-    additional_modules: []*ModuleEnv,
-    exposed_type_module_names: ?[]const []const u8,
-) !CompiledModule {
-    // Read file into arena (so it lives until serialization)
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
-        error.FileNotFound => return ctx.fail(.{ .file_not_found = .{ .path = file_path } }),
-        else => return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } }),
-    };
-    defer file.close();
-
-    const file_size = file.getEndPos() catch |err| {
-        return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
-    };
-    var source = try ctx.arena.alloc(u8, @intCast(file_size));
-    _ = file.read(source) catch |err| {
-        return ctx.fail(.{ .file_read_failed = .{ .path = file_path, .err = err } });
-    };
-    // Normalize line endings (CRLF -> LF) for consistent cross-platform parsing.
-    // The arena keeps the original allocation; trailing bytes (if any) are harmless.
-    source = base.source_utils.normalizeLineEndings(source);
-
-    const module_name_copy = try ctx.arena.dupe(u8, module_name_arg);
-
-    // Initialize ModuleEnv with gpa
-    var env = try ModuleEnv.init(ctx.gpa, source);
-    env.common.source = source;
-    env.module_name = module_name_copy;
-    try env.common.calcLineStarts(ctx.gpa);
-
-    // Parse
-    var parse_ast = try parse.parse(&env.common, ctx.gpa);
-    defer parse_ast.deinit(ctx.gpa);
-    parse_ast.store.emptyScratch();
-
-    // Initialize CIR
-    try env.initCIRFields(module_name_copy);
-
-    // Create module_envs map
-    var module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer module_envs_map.deinit();
-
-    try Can.populateModuleEnvs(
-        &module_envs_map,
-        &env,
-        builtin_modules.builtin_module.env,
-        builtin_modules.builtin_indices,
-    );
-
-    // Extract platform qualifier from app header (e.g., "pf" from { pf: platform "..." })
-    // This is needed to register modules with both base name and qualified name
-    const platform_qualifier: ?[]const u8 = blk: {
-        const parsed_file = parse_ast.store.getFile();
-        const header = parse_ast.store.getHeader(parsed_file.header);
-        if (header == .app) {
-            const platform_field = parse_ast.store.getRecordField(header.app.platform_idx);
-            const key_region = parse_ast.tokens.resolve(platform_field.name);
-            break :blk source[key_region.start.offset..key_region.end.offset];
-        }
-        break :blk null;
-    };
-
-    for (additional_modules, 0..) |mod_env, mod_idx| {
-        // Get the base module name (without .roc extension if present)
-        var base_module_name = mod_env.module_name;
-        if (std.mem.endsWith(u8, base_module_name, ".roc")) {
-            base_module_name = base_module_name[0 .. base_module_name.len - 4];
-        }
-
-        // Check if this module is a "type module" (platform module like Stdout that exposes a type).
-        // For type modules, we need to set statement_idx to enable proper function lookup.
-        const is_type_module = if (exposed_type_module_names) |type_names|
-            mod_idx < type_names.len and std.mem.eql(u8, type_names[mod_idx], base_module_name)
-        else
-            false;
-
-        // Build the AutoImportedType entry
-        const auto_type: Can.AutoImportedType = if (is_type_module) blk: {
-            // For type modules, look up the type's node index
-            const type_qualified_ident = try env.insertIdent(base.Ident.for_text(base_module_name));
-            const type_ident_in_module = mod_env.common.findIdent(base_module_name) orelse {
-                return ctx.fail(.{ .missing_type_in_module = .{
-                    .module_name = mod_env.module_name,
-                    .type_name = base_module_name,
-                } });
-            };
-            const type_node_idx = mod_env.getExposedNodeIndexById(type_ident_in_module) orelse {
-                return ctx.fail(.{ .missing_type_in_module = .{
-                    .module_name = mod_env.module_name,
-                    .type_name = base_module_name,
-                } });
-            };
-            break :blk .{
-                .env = mod_env,
-                .statement_idx = @enumFromInt(type_node_idx),
-                .qualified_type_ident = type_qualified_ident,
-            };
-        } else blk: {
-            // For regular modules (like platform main.roc), no statement_idx needed
-            const qualified_ident = try mod_env.common.insertIdent(mod_env.gpa, base.Ident.for_text(mod_env.module_name));
-            break :blk .{
-                .env = mod_env,
-                .statement_idx = null,
-                .qualified_type_ident = qualified_ident,
-            };
-        };
-
-        // Register with base module name (e.g., "Stdout")
-        const name = try env.insertIdent(base.Ident.for_text(base_module_name));
-        try module_envs_map.put(name, auto_type);
-
-        // Register with full module name if different (e.g., "Stdout.roc")
-        if (!std.mem.eql(u8, mod_env.module_name, base_module_name)) {
-            const full_name = try env.insertIdent(base.Ident.for_text(mod_env.module_name));
-            try module_envs_map.put(full_name, auto_type);
-        }
-
-        // Register with platform-qualified name (e.g., "pf.Stdout" for apps)
-        if (platform_qualifier) |pf| {
-            const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ pf, base_module_name });
-            defer ctx.gpa.free(qualified_name);
-            const pf_name = try env.insertIdent(base.Ident.for_text(qualified_name));
-            try module_envs_map.put(pf_name, auto_type);
-        }
-    }
-
-    // Canonicalize
-    var canonicalizer = try Can.init(&env, &parse_ast, &module_envs_map);
-    defer canonicalizer.deinit();
-
-    try canonicalizer.canonicalizeFile();
-
-    // Run HostedCompiler to convert e_anno_only to e_hosted_lambda
-    const HostedCompiler = can.HostedCompiler;
-    var modified_def_indices = try HostedCompiler.replaceAnnoOnlyWithHosted(&env);
-    defer modified_def_indices.deinit(ctx.gpa);
-
-    // Type check
-    var check_module_envs_map = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(ctx.gpa);
-    defer check_module_envs_map.deinit();
-
-    const builtin_ctx: Check.BuiltinContext = .{
-        .module_name = try env.insertIdent(base.Ident.for_text(module_name_arg)),
-        .bool_stmt = builtin_modules.builtin_indices.bool_type,
-        .try_stmt = builtin_modules.builtin_indices.try_type,
-        .str_stmt = builtin_modules.builtin_indices.str_type,
-        .builtin_module = builtin_modules.builtin_module.env,
-        .builtin_indices = builtin_modules.builtin_indices,
-    };
-
-    // Build imported_envs array: builtins + additional modules
-    // This is needed for resolveImports to properly map external lookups
-    var imported_envs_list = try std.ArrayList(*const ModuleEnv).initCapacity(ctx.gpa, 1 + additional_modules.len);
-    defer imported_envs_list.deinit(ctx.gpa);
-    imported_envs_list.appendAssumeCapacity(builtin_modules.builtin_module.env);
-    for (additional_modules) |mod| {
-        imported_envs_list.appendAssumeCapacity(mod);
-    }
-    const imported_envs = imported_envs_list.items;
-
-    env.imports.resolveImports(&env, imported_envs);
-
-    var checker = try Check.init(ctx.gpa, &env.types, &env, imported_envs, &check_module_envs_map, &env.store.regions, builtin_ctx);
-    defer checker.deinit();
-
-    try checker.checkFile();
-
-    // Count and render errors from parsing, canonicalization, and type checking
-    var error_count: usize = 0;
-    var warning_count: usize = 0;
-
-    const stderr = ctx.io.stderr();
-
-    // Render parse errors (tokenize and parse diagnostics)
-    if (parse_ast.hasErrors()) {
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            error_count += 1;
-            var report = parse_ast.tokenizeDiagnosticToReport(diagnostic, ctx.gpa, file_path) catch continue;
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        }
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            error_count += 1;
-            var report = parse_ast.parseDiagnosticToReport(&env.common, diagnostic, ctx.gpa, file_path) catch continue;
-            defer report.deinit();
-            reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        }
-    }
-
-    // Render canonicalization diagnostics (unused variables, etc.)
-    const diags = env.getDiagnostics() catch &.{};
-    defer env.gpa.free(diags);
-    for (diags) |d| {
-        var report = env.diagnosticToReport(d, env.gpa, file_path) catch continue;
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        if (report.severity == .fatal or report.severity == .runtime_error) {
-            error_count += 1;
-        } else if (report.severity == .warning) {
-            warning_count += 1;
-        }
-    }
-
-    // Render type checking problems
-    var rb = ReportBuilder.init(
-        ctx.gpa,
-        &env,
-        &env,
-        &checker.snapshots,
-        &checker.problems,
-        file_path,
-        &.{},
-        &checker.import_mapping,
-    );
-    defer rb.deinit();
-
-    for (checker.problems.problems.items) |prob| {
-        var report = rb.build(prob) catch continue;
-        defer report.deinit();
-        reporting.renderReportToTerminal(&report, stderr, ColorPalette.ANSI, reporting.ReportingConfig.initColorTerminal()) catch continue;
-        if (report.severity == .fatal or report.severity == .runtime_error) {
-            error_count += 1;
-        } else if (report.severity == .warning) {
-            warning_count += 1;
-        }
-    }
-
-    // Print summary if there were any problems
-    if (error_count > 0 or warning_count > 0) {
-        stderr.writeAll("\n") catch {};
-        stderr.print("Found {} error(s) and {} warning(s) for {s}.\n", .{
-            error_count,
-            warning_count,
-            file_path,
-        }) catch {};
-    }
-
-    // Flush stderr to ensure all error output is visible
-    // Note: ctx.io.stderr() is typically unbuffered, so explicit flush is not needed
-
-    return CompiledModule{
-        .env = env,
-        .source = source,
-        .module_name = module_name_copy,
-        .is_platform_main = false,
-        .is_app = false,
-        .error_count = error_count,
-        .warning_count = warning_count,
-    };
-}
-
-/// Compile all modules and serialize them to a single buffer for embedding.
-/// Returns the serialized bytes and entry point def indices.
-fn compileAndSerializeModulesForEmbedding(
-    ctx: *CliContext,
-    roc_file_path: []const u8,
-    allow_errors: bool,
-) !SerializedModulesResult {
-    // Track total errors and warnings across all modules
-    var total_error_count: usize = 0;
-    var total_warning_count: usize = 0;
-
-    // Load builtin modules
-    var builtin_modules = try eval.BuiltinModules.init(ctx.gpa);
-    defer builtin_modules.deinit();
-
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    const platform_spec = try extractPlatformSpecFromApp(ctx, roc_file_path);
-    try validatePlatformSpec(ctx, platform_spec);
-
-    // Resolve platform path
-    const platform_main_path: ?[]const u8 = if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../"))
-        try std.fs.path.join(ctx.gpa, &[_][]const u8{ app_dir, platform_spec })
-    else if (base.url.isSafeUrl(platform_spec)) blk: {
-        const platform_paths = resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
-            error.CliError => break :blk null,
-            error.OutOfMemory => return error.OutOfMemory,
-        };
-        break :blk platform_paths.platform_source_path;
-    } else null;
-    defer if (platform_main_path) |p| {
-        if (std.mem.startsWith(u8, platform_spec, "./") or std.mem.startsWith(u8, platform_spec, "../")) {
-            ctx.gpa.free(p);
-        }
-    };
-
-    const platform_dir: ?[]const u8 = if (platform_main_path) |p|
-        std.fs.path.dirname(p) orelse return error.InvalidPlatformPath
-    else
-        null;
-
-    // Extract exposed modules from platform
-    var exposed_modules = std.ArrayList([]const u8).empty;
-    defer exposed_modules.deinit(ctx.gpa);
-
-    var has_platform = false;
-    if (platform_main_path) |pmp| {
-        has_platform = true;
-        extractExposedModulesFromPlatform(ctx, pmp, &exposed_modules) catch {
-            has_platform = false;
-        };
-    }
-
-    // Compile all modules
-    var compiled_modules = std.array_list.Managed(CompiledModule).init(ctx.gpa);
-    defer {
-        for (compiled_modules.items) |*m| {
-            m.env.deinit();
-        }
-        compiled_modules.deinit();
-    }
-
-    // Track indices
-    var primary_env_index: u32 = 0;
-    var app_env_index: u32 = 0;
-
-    // Compile platform sibling modules first
-    // We need to track pointers to already-compiled modules so later modules can import from earlier ones.
-    //
-    // Modules are automatically sorted by their import dependencies using topological sort.
-    // If module A imports module B, B will be compiled before A regardless of the order
-    // in the platform's exposes list.
-    //
-    // Pre-allocate compiled_modules to avoid reallocation invalidating pointers in sibling_env_ptrs.
-    // platform_dir is guaranteed to be non-null if exposed_modules is non-empty
-    const plat_dir = platform_dir orelse unreachable;
-    const sorted_modules = sortPlatformModulesByDependency(
-        ctx,
-        exposed_modules.items,
-        plat_dir,
-    ) catch |err| {
-        switch (err) {
-            error.CyclicDependency => std.log.err("Circular dependency detected in platform modules", .{}),
-            else => {},
-        }
-        return err;
-    };
-    defer ctx.gpa.free(sorted_modules);
-
-    try compiled_modules.ensureTotalCapacity(sorted_modules.len + 2); // +2 for platform main and app
-
-    var sibling_env_ptrs = try ctx.gpa.alloc(*ModuleEnv, sorted_modules.len);
-    defer ctx.gpa.free(sibling_env_ptrs);
-
-    if (comptime trace_modules) {
-        std.debug.print("[TRACE-MODULES] === Build Mode: Compiling Platform Modules ===\n", .{});
-    }
-
-    for (sorted_modules, 0..) |module_name, i| {
-        const module_filename = try std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name});
-        defer ctx.gpa.free(module_filename);
-
-        const module_path = try std.fs.path.join(ctx.gpa, &[_][]const u8{ plat_dir, module_filename });
-        defer ctx.gpa.free(module_path);
-
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES] Compiling platform module {d}: \"{s}\" at {s}\n", .{ i, module_name, module_path });
-        }
-
-        // Pass previously compiled sibling modules so this module can resolve imports to them.
-        // This enables transitive module calls (e.g., Helper imports Core, then calls Core.wrap).
-        // Also pass sorted_modules[0..i] as type module names so opaque type methods can be resolved.
-        const compiled = try compileModuleForSerialization(
-            ctx,
-            module_path,
-            module_name,
-            &builtin_modules,
-            sibling_env_ptrs[0..i],
-            sorted_modules[0..i], // Pass type module names for previously compiled siblings
-        );
-        total_error_count += compiled.error_count;
-        total_warning_count += compiled.warning_count;
-        compiled_modules.appendAssumeCapacity(compiled);
-        // Store pointer to the env we just appended (safe because we pre-allocated)
-        sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
-    }
-
-    // Compile platform main.roc if present
-    if (has_platform) {
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES] Compiling platform main: {s}\n", .{platform_main_path.?});
-        }
-
-        // Get pointers to already compiled platform modules
-        var platform_env_ptrs = try ctx.gpa.alloc(*ModuleEnv, compiled_modules.items.len);
-        defer ctx.gpa.free(platform_env_ptrs);
-        for (compiled_modules.items, 0..) |*m, i| {
-            platform_env_ptrs[i] = &m.env;
-        }
-
-        var compiled = try compileModuleForSerialization(
-            ctx,
-            platform_main_path.?,
-            "main",
-            &builtin_modules,
-            platform_env_ptrs,
-            sorted_modules, // Pass type module names so platform main can resolve opaque type methods
-        );
-        compiled.is_platform_main = true;
-        total_error_count += compiled.error_count;
-        total_warning_count += compiled.warning_count;
-        primary_env_index = @intCast(compiled_modules.items.len);
-        try compiled_modules.append(compiled);
-    }
-
-    // Compile app module
-    {
-        if (comptime trace_modules) {
-            std.debug.print("[TRACE-MODULES] Compiling app: {s}\n", .{roc_file_path});
-        }
-
-        var all_env_ptrs = try ctx.gpa.alloc(*ModuleEnv, compiled_modules.items.len);
-        defer ctx.gpa.free(all_env_ptrs);
-        for (compiled_modules.items, 0..) |*m, i| {
-            all_env_ptrs[i] = &m.env;
-        }
-
-        var compiled = try compileModuleForSerialization(
-            ctx,
-            roc_file_path,
-            "app",
-            &builtin_modules,
-            all_env_ptrs,
-            sorted_modules, // Pass type module names in same order as all_env_ptrs
-        );
-        compiled.is_app = true;
-        total_error_count += compiled.error_count;
-        total_warning_count += compiled.warning_count;
-        app_env_index = @intCast(compiled_modules.items.len);
-        if (!has_platform) {
-            primary_env_index = app_env_index;
-        }
-        try compiled_modules.append(compiled);
-    }
-
-    // Collect and sort all hosted functions globally, then assign indices
-    // This must happen before serialization so hosted_idx values are correct
-    {
-        const HostedCompiler = can.HostedCompiler;
-        var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
-        defer all_hosted_fns.deinit(ctx.gpa);
-
-        // Collect from platform sibling modules only (not app, not platform main.roc)
-        for (compiled_modules.items, 0..) |*m, i| {
-            // Skip app module and platform main.roc
-            if (i == app_env_index or i == primary_env_index) continue;
-            var module_fns = try HostedCompiler.collectAndSortHostedFunctions(&m.env);
-            defer module_fns.deinit(m.env.gpa);
-
-            for (module_fns.items) |fn_info| {
-                try all_hosted_fns.append(ctx.gpa, fn_info);
-            }
-        }
-
-        // Sort globally
-        const SortContext = struct {
-            pub fn lessThan(_: void, a: HostedCompiler.HostedFunctionInfo, b: HostedCompiler.HostedFunctionInfo) bool {
-                return std.mem.order(u8, a.name_text, b.name_text) == .lt;
-            }
-        };
-        std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
-
-        // Deduplicate
-        var write_idx: usize = 0;
-        for (all_hosted_fns.items, 0..) |fn_info, read_idx| {
-            if (write_idx == 0 or !std.mem.eql(u8, all_hosted_fns.items[write_idx - 1].name_text, fn_info.name_text)) {
-                if (write_idx != read_idx) {
-                    all_hosted_fns.items[write_idx] = fn_info;
-                }
-                write_idx += 1;
-            } else {
-                ctx.gpa.free(fn_info.name_text);
-            }
-        }
-        all_hosted_fns.shrinkRetainingCapacity(write_idx);
-
-        // Reassign global indices for platform sibling modules only
-        // (not app, not platform main.roc - only exposed modules like Stdout, Stderr, Stdin)
-        for (compiled_modules.items, 0..) |*m, module_idx| {
-            // Skip app module and platform main.roc
-            if (module_idx == app_env_index or module_idx == primary_env_index) continue;
-            const platform_env = &m.env;
-
-            const all_defs = platform_env.store.sliceDefs(platform_env.all_defs);
-            for (all_defs) |def_idx| {
-                const def = platform_env.store.getDef(def_idx);
-                const expr = platform_env.store.getExpr(def.expr);
-
-                if (expr == .e_hosted_lambda) {
-                    const hosted = expr.e_hosted_lambda;
-                    const local_name = platform_env.getIdent(hosted.symbol_name);
-
-                    var plat_module_name = platform_env.module_name;
-                    if (std.mem.endsWith(u8, plat_module_name, ".roc")) {
-                        plat_module_name = plat_module_name[0 .. plat_module_name.len - 4];
-                    }
-                    const qualified_name = try std.fmt.allocPrint(ctx.gpa, "{s}.{s}", .{ plat_module_name, local_name });
-                    defer ctx.gpa.free(qualified_name);
-
-                    const stripped_name = if (std.mem.endsWith(u8, qualified_name, "!"))
-                        qualified_name[0 .. qualified_name.len - 1]
-                    else
-                        qualified_name;
-
-                    for (all_hosted_fns.items, 0..) |fn_info, idx| {
-                        if (std.mem.eql(u8, fn_info.name_text, stripped_name)) {
-                            const expr_node_idx = @as(@TypeOf(platform_env.store.nodes).Idx, @enumFromInt(@intFromEnum(def.expr)));
-                            var expr_node = platform_env.store.nodes.get(expr_node_idx);
-                            var payload = expr_node.getPayload().expr_hosted_lambda;
-                            payload.index = @intCast(idx);
-                            expr_node.setPayload(.{ .expr_hosted_lambda = payload });
-                            platform_env.store.nodes.set(expr_node_idx, expr_node);
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        // Free name_text strings
-        for (all_hosted_fns.items) |fn_info| {
-            ctx.gpa.free(fn_info.name_text);
-        }
-    }
-
-    // Check for errors - abort unless --allow-errors flag is set
-    if (total_error_count > 0 and !allow_errors) {
-        return error.CompilationErrors;
-    }
-
-    // Get entry points from primary environment
-    // Use exports (not all_defs) to only include exported definitions as entry points.
-    // all_defs includes method definitions from associated blocks which should not be entry points.
-    const primary_env = &compiled_modules.items[primary_env_index].env;
-    const entry_defs = primary_env.exports;
-    const entry_count: u32 = entry_defs.span.len;
-
-    // Build entry def indices - use sliceDefs to get actual Def.Idx values
-    // (all_defs.span indexes into extra_data which contains Def.Idx values)
-    const entry_def_indices = try ctx.arena.alloc(u32, entry_count);
-    const defs_slice = primary_env.store.sliceDefs(entry_defs);
-    for (defs_slice, 0..) |def_idx, i| {
-        entry_def_indices[i] = @intFromEnum(def_idx);
-    }
-
-    // Now serialize everything using CompactWriter
-    var writer = CompactWriter.init();
-    defer writer.deinit(ctx.gpa);
-
-    const module_count: u32 = @intCast(compiled_modules.items.len);
-
-    // 1. Allocate and fill header
-    const header = try writer.appendAlloc(ctx.gpa, SerializedHeader);
-    header.magic = SERIALIZED_FORMAT_MAGIC;
-    header.format_version = 1;
-    header.module_count = module_count;
-    header.entry_count = entry_count;
-    header.primary_env_index = primary_env_index;
-    header.app_env_index = app_env_index;
-    // def_indices_offset and module_infos_offset will be set later
-
-    // 2. Allocate module info array
-    try writer.padToAlignment(ctx.gpa, @alignOf(SerializedModuleInfo));
-    header.module_infos_offset = writer.total_bytes;
-    const module_infos = try ctx.gpa.alloc(SerializedModuleInfo, module_count);
-    defer ctx.gpa.free(module_infos);
-
-    // Add module infos to writer (we'll fill in offsets as we serialize)
-    try writer.iovecs.append(ctx.gpa, .{
-        .iov_base = @ptrCast(module_infos.ptr),
-        .iov_len = module_count * @sizeOf(SerializedModuleInfo),
-    });
-    writer.total_bytes += module_count * @sizeOf(SerializedModuleInfo);
-
-    // 3. Serialize source bytes and module names for each module
-    for (compiled_modules.items, 0..) |*m, i| {
-        // Source bytes
-        try writer.padToAlignment(ctx.gpa, 1);
-        module_infos[i].source_offset = writer.total_bytes;
-        module_infos[i].source_len = m.source.len;
-        if (m.source.len > 0) {
-            try writer.iovecs.append(ctx.gpa, .{
-                .iov_base = m.source.ptr,
-                .iov_len = m.source.len,
-            });
-            writer.total_bytes += m.source.len;
-        }
-
-        // Module name
-        try writer.padToAlignment(ctx.gpa, 1);
-        module_infos[i].module_name_offset = writer.total_bytes;
-        module_infos[i].module_name_len = m.module_name.len;
-        if (m.module_name.len > 0) {
-            try writer.iovecs.append(ctx.gpa, .{
-                .iov_base = m.module_name.ptr,
-                .iov_len = m.module_name.len,
-            });
-            writer.total_bytes += m.module_name.len;
-        }
-    }
-
-    // 4. Serialize each ModuleEnv
-    for (compiled_modules.items, 0..) |*m, i| {
-        // Ensure 8-byte alignment for ModuleEnv.Serialized (it contains u64/i64 fields)
-        // This is critical for cross-architecture builds (e.g., wasm32)
-        try writer.padToAlignment(ctx.gpa, 8);
-
-        // Record the offset before allocating - this is where the serialized env will be
-        const env_offset_before = writer.total_bytes;
-        const serialized_env = try writer.appendAlloc(ctx.gpa, ModuleEnv.Serialized);
-        module_infos[i].env_serialized_offset = env_offset_before;
-
-        try serialized_env.serialize(&m.env, ctx.gpa, &writer);
-    }
-
-    // 5. Serialize entry point def indices
-    try writer.padToAlignment(ctx.gpa, @alignOf(u32));
-    header.def_indices_offset = writer.total_bytes;
-    if (entry_count > 0) {
-        try writer.iovecs.append(ctx.gpa, .{
-            .iov_base = @ptrCast(entry_def_indices.ptr),
-            .iov_len = entry_count * @sizeOf(u32),
-        });
-        writer.total_bytes += entry_count * @sizeOf(u32);
-    }
-
-    // 6. Write all to buffer
-    const buffer = try ctx.arena.alignedAlloc(u8, CompactWriter.SERIALIZATION_ALIGNMENT, writer.total_bytes);
-    _ = try writer.writeToBuffer(buffer);
-
-    return SerializedModulesResult{
-        .bytes = buffer,
-        .entry_def_indices = entry_def_indices,
-        .error_count = total_error_count,
-        .warning_count = total_warning_count,
-    };
 }
 
 fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHandle {
@@ -4505,6 +3149,8 @@ fn rocBuild(ctx: *CliContext, args: cli_args.BuildArgs) !void {
 fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const target_mod = @import("target.zig");
 
+    var timer = try std.time.Timer.start();
+
     std.log.info("Building {s} with embedded interpreter", .{args.path});
 
     // Determine output path
@@ -4654,43 +3300,99 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     // when data is embedded in a binary at arbitrary addresses
     const target_ptr_width = target.ptrBitWidth();
 
-    // Compile and serialize the module data using portable format
-    // This handles unaligned embedded data and cross-architecture builds correctly
+    // Compile using BuildEnv/Coordinator (unified pipeline with roc check)
     std.log.debug("Compiling Roc file: {s}", .{args.path});
-    const SerializedData = struct {
-        bytes: []const u8,
-        cleanup: ?ShmCleanup,
-
-        const ShmCleanup = struct {
-            fd: if (is_windows) *anyopaque else c_int,
-            ptr: *anyopaque,
-            size: usize,
-        };
-    };
-
     std.log.debug("Using portable serialization ({d}-bit host -> {d}-bit target)", .{ host_ptr_width, target_ptr_width });
 
-    // Compile - errors are already reported by the compilation functions
-    const compile_result = try compileAndSerializeModulesForEmbedding(ctx, args.path, args.allow_errors);
-    std.log.debug("Portable serialization complete, {} bytes", .{compile_result.bytes.len});
+    // Set up BuildEnv with threading and caching
+    const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    const serialized_data: SerializedData = .{
-        .bytes = compile_result.bytes,
-        .cleanup = null, // Arena-allocated, no cleanup needed
-    };
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
+    build_env.compiler_version = build_options.compiler_version;
+    defer build_env.deinit();
 
-    // Clean up shared memory when done (only if we used it)
-    defer if (serialized_data.cleanup) |cleanup| {
-        if (comptime is_windows) {
-            _ = ipc.platform.windows.UnmapViewOfFile(cleanup.ptr);
-            _ = ipc.platform.windows.CloseHandle(cleanup.fd);
-        } else {
-            _ = posix.munmap(cleanup.ptr, cleanup.size);
-            _ = c.close(cleanup.fd);
+    // Set up cache manager for compilation caching
+    if (!args.no_cache) {
+        const build_cache_manager = try ctx.gpa.create(CacheManager);
+        build_cache_manager.* = CacheManager.init(ctx.gpa, .{
+            .enabled = true,
+            .verbose = args.verbose,
+        }, Filesystem.default());
+        build_env.setCacheManager(build_cache_manager);
+    }
+
+    // Build all modules
+    build_env.build(args.path) catch |err| {
+        // Drain and display error reports
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
+            }
         }
+        return err;
     };
 
-    const serialized_module = serialized_data.bytes;
+    // Drain reports and count errors/warnings
+    const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+    defer build_env.gpa.free(drained);
+
+    var total_error_count: usize = 0;
+    var total_warning_count: usize = 0;
+
+    for (drained) |mod| {
+        for (mod.reports) |*report| {
+            switch (report.severity) {
+                .info => {},
+                .runtime_error, .fatal => total_error_count += 1,
+                .warning => total_warning_count += 1,
+            }
+            // Render all reports
+            const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+            const config = reporting.ReportingConfig.initColorTerminal();
+            reporting.renderReportToTerminal(report, ctx.io.stderr(), palette, config) catch {};
+        }
+    }
+
+    // Check if we should stop due to errors
+    if (total_error_count > 0 and !args.allow_errors) {
+        return error.CompilationFailed;
+    }
+
+    // Get compiled modules in serialization order
+    const modules = build_env.getModulesInSerializationOrder(ctx.arena) catch |err| {
+        std.log.err("Failed to get compiled modules: {}", .{err});
+        return err;
+    };
+
+    if (modules.len == 0) {
+        std.log.err("No modules were compiled", .{});
+        return error.NoModulesCompiled;
+    }
+
+    // Find primary and app module indices
+    const primary_idx = BuildEnv.findPrimaryModuleIndex(modules) orelse 0;
+    const app_idx = BuildEnv.findAppModuleIndex(modules) orelse modules.len - 1;
+
+    // Serialize modules
+    const compile_result = serialize_modules.serializeModules(
+        ctx.arena,
+        modules,
+        primary_idx,
+        app_idx,
+    ) catch |err| {
+        std.log.err("Failed to serialize modules: {}", .{err});
+        return err;
+    };
+
+    std.log.debug("Portable serialization complete, {} bytes, {} modules", .{ compile_result.bytes.len, modules.len });
+
+    const serialized_module = compile_result.bytes;
 
     // glibc targets require a full libc for linking, which is only available on Linux hosts
     if (target.isDynamic() and host_os != .linux) {
@@ -4846,10 +3548,37 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     else
         try std.fmt.allocPrint(ctx.arena, "./{s}", .{final_output_path});
 
-    try ctx.io.stdout().print("Successfully built {s}\n", .{display_path});
+    // Get cache stats for summary
+    const cache_stats = build_env.getCacheStats();
+    const cache_percent = if (cache_stats.modules_total > 0)
+        @as(u32, @intCast((cache_stats.cache_hits * 100) / cache_stats.modules_total))
+    else
+        0;
+
+    const elapsed = timer.read();
+    const stdout = ctx.io.stdout();
+
+    // Print success with timing and cache info
+    try stdout.print("Successfully built {s} in ", .{display_path});
+    try formatElapsedTimeMs(stdout, elapsed);
+    if (cache_stats.modules_total > 0 and cache_stats.cache_hits > 0) {
+        try stdout.print(" with {}% cache hit\n", .{cache_percent});
+    } else {
+        try stdout.writeAll("\n");
+    }
+
+    // Print verbose stats if requested
+    if (args.verbose) {
+        try stdout.print("\n    Modules: {} total, {} cached, {} built\n", .{
+            cache_stats.modules_total,
+            cache_stats.cache_hits,
+            cache_stats.modules_compiled,
+        });
+        try stdout.print("    Cache Hit: {}%\n", .{cache_percent});
+    }
 
     // Exit with code 2 if there were warnings (but no errors)
-    if (compile_result.warning_count > 0) {
+    if (total_warning_count > 0) {
         ctx.io.flush();
         std.process.exit(2);
     }
@@ -5305,6 +4034,30 @@ fn formatElapsedTime(writer: anytype, elapsed_ns: u64) !void {
     try writer.print("{d:.1} ms", .{elapsed_ms_float});
 }
 
+/// Helper function to format elapsed time as rounded integer milliseconds (no decimals)
+fn formatElapsedTimeMs(writer: anytype, elapsed_ns: u64) !void {
+    const elapsed_ms: u64 = (elapsed_ns + 500_000) / 1_000_000; // Round to nearest ms
+    try writer.print("{}ms", .{elapsed_ms});
+}
+
+/// Compute cache hit percentage as an integer (0-100), rounded to nearest
+fn cacheHitPercent(cache_hits: u32, cache_misses: u32) u32 {
+    const total = cache_hits + cache_misses;
+    if (total == 0) return 0;
+    return @intCast((@as(u64, cache_hits) * 100 + total / 2) / total);
+}
+
+/// Compute average module time in nanoseconds
+fn moduleTimeAvgNs(sum_ns: u64, count: u32) u64 {
+    if (count == 0) return 0;
+    return sum_ns / count;
+}
+
+/// Convert nanoseconds to rounded milliseconds
+fn nsToMs(ns: u64) u32 {
+    return @intCast((ns + 500_000) / 1_000_000);
+}
+
 fn handleProcessFileError(err: anytype, stderr: anytype, path: []const u8) !void {
     stderr.print("Failed to check {s}: ", .{path}) catch {};
     switch (err) {
@@ -5339,6 +4092,15 @@ const CheckResult = struct {
     was_cached: bool = false,
     error_count: u32 = 0,
     warning_count: u32 = 0,
+    /// Build statistics
+    modules_total: u32 = 0,
+    cache_hits: u32 = 0,
+    cache_misses: u32 = 0,
+    modules_compiled: u32 = 0,
+    /// Module compile time tracking (in nanoseconds)
+    module_time_min_ns: u64 = 0,
+    module_time_max_ns: u64 = 0,
+    module_time_sum_ns: u64 = 0,
 
     /// Free allocated memory
     pub fn deinit(self: *CheckResult, gpa: Allocator) void {
@@ -5436,13 +4198,18 @@ fn checkFileWithBuildEnvPreserved(
     filepath: []const u8,
     collect_timing: bool,
     cache_config: CacheConfig,
+    max_threads: ?usize,
 ) BuildAppError!CheckResultWithBuildEnv {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1);
+    // Determine threading mode and thread count
+    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
+    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -5538,13 +4305,18 @@ fn checkFileWithBuildEnv(
     filepath: []const u8,
     collect_timing: bool,
     cache_config: CacheConfig,
+    max_threads: ?usize,
 ) BuildAppError!CheckResult {
     _ = collect_timing; // Timing is always collected by BuildEnv
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    // Initialize BuildEnv in single-threaded mode for checking
-    var build_env = try BuildEnv.init(ctx.gpa, .single_threaded, 1);
+    // Determine threading mode and thread count
+    // Default to multi-threaded with auto-detected CPU count; use -j1 for single-threaded
+    const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
+    const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
+
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -5554,6 +4326,10 @@ fn checkFileWithBuildEnv(
         cache_manager.* = CacheManager.init(ctx.gpa, cache_config, Filesystem.default());
         build_env.setCacheManager(cache_manager);
         // Note: BuildEnv.deinit() will clean up the cache manager
+    }
+
+    if (comptime build_options.trace_build) {
+        std.debug.print("[CLI] Starting build for {s}\n", .{filepath});
     }
 
     // Build the file (works for both app and module files)
@@ -5586,15 +4362,33 @@ fn checkFileWithBuildEnv(
             };
         }
 
+        // Get cache stats even on error
+        const cache_stats = build_env.getCacheStats();
+
         return CheckResult{
             .reports = reports,
             .error_count = error_count,
             .warning_count = warning_count,
+            .modules_total = cache_stats.modules_total,
+            .cache_hits = cache_stats.cache_hits,
+            .cache_misses = cache_stats.cache_misses,
+            .modules_compiled = cache_stats.modules_compiled,
+            .module_time_min_ns = cache_stats.module_time_min_ns,
+            .module_time_max_ns = cache_stats.module_time_max_ns,
+            .module_time_sum_ns = cache_stats.module_time_sum_ns,
         };
     };
 
+    if (comptime build_options.trace_build) {
+        std.debug.print("[CLI] Build complete, draining reports...\n", .{});
+    }
+
     // Drain all reports
     const drained = try build_env.drainReports();
+
+    if (comptime build_options.trace_build) {
+        std.debug.print("[CLI] Reports drained: {} modules\n", .{drained.len});
+    }
 
     // Count errors and warnings
     var error_count: u32 = 0;
@@ -5629,12 +4423,26 @@ fn checkFileWithBuildEnv(
     else
         build_env.getTimingInfo();
 
+    // Get cache stats from coordinator
+    const cache_stats = build_env.getCacheStats();
+
+    if (comptime build_options.trace_build) {
+        std.debug.print("[CLI] checkFileWithBuildEnv returning (defer deinit will run)\n", .{});
+    }
+
     return CheckResult{
         .reports = reports,
         .timing = timing,
-        .was_cached = false, // BuildEnv doesn't currently expose cache info
+        .was_cached = false, // TODO: Set based on cache stats
         .error_count = error_count,
         .warning_count = warning_count,
+        .modules_total = cache_stats.modules_total,
+        .cache_hits = cache_stats.cache_hits,
+        .cache_misses = cache_stats.cache_misses,
+        .modules_compiled = cache_stats.modules_compiled,
+        .module_time_min_ns = cache_stats.module_time_min_ns,
+        .module_time_max_ns = cache_stats.module_time_max_ns,
+        .module_time_sum_ns = cache_stats.module_time_sum_ns,
     };
 }
 
@@ -5659,6 +4467,7 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         args.path,
         args.time,
         cache_config,
+        args.max_threads,
     ) catch |err| {
         try handleProcessFileError(err, stderr, args.path);
         return;
@@ -5678,13 +4487,14 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
                 total_errors,
                 total_warnings,
             }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
-            stderr.print(" for {s} (note module loaded from cache, use --no-cache to display Errors and Warnings.).", .{args.path}) catch {};
+            formatElapsedTimeMs(stderr, elapsed) catch {};
+            stderr.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
+            stderr.print("(note: module loaded from cache, use --no-cache to display errors and warnings)\n", .{}) catch {};
             return error.CheckFailed;
         } else {
             stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
-            stdout.print(" for {s} (loaded from cache)", .{args.path}) catch {};
+            formatElapsedTimeMs(stdout, elapsed) catch {};
+            stdout.print(" with 100% cache hit for {s}\n", .{args.path}) catch {};
         }
     } else {
         // For fresh compilation, process and display reports normally
@@ -5706,14 +4516,26 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
         // Flush stderr to ensure all error output is visible
         ctx.io.flush();
 
+        // Compute cache hit percentage
+        const cache_percent = cacheHitPercent(check_result.cache_hits, check_result.cache_misses);
+
         if (check_result.error_count > 0 or check_result.warning_count > 0) {
             stderr.writeAll("\n") catch {};
             stderr.print("Found {} error(s) and {} warning(s) in ", .{
                 check_result.error_count,
                 check_result.warning_count,
             }) catch {};
-            formatElapsedTime(stderr, elapsed) catch {};
+            formatElapsedTimeMs(stderr, elapsed) catch {};
+            // Include inline cache stats summary
+            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+                stderr.print(" with {}% cache hit", .{cache_percent}) catch {};
+            }
             stderr.print(" for {s}.\n", .{args.path}) catch {};
+
+            // Print verbose stats if requested
+            if (args.verbose) {
+                printVerboseStats(stderr, &check_result);
+            }
 
             // Flush before exit
             ctx.io.flush();
@@ -5726,8 +4548,18 @@ fn rocCheck(ctx: *CliContext, args: cli_args.CheckArgs) !void {
             }
         } else {
             stdout.print("No errors found in ", .{}) catch {};
-            formatElapsedTime(stdout, elapsed) catch {};
+            formatElapsedTimeMs(stdout, elapsed) catch {};
+            // Include inline cache stats summary
+            if (check_result.modules_total > 0 and check_result.cache_hits > 0) {
+                stdout.print(" with {}% cache hit", .{cache_percent}) catch {};
+            }
             stdout.print(" for {s}\n", .{args.path}) catch {};
+
+            // Print verbose stats if requested
+            if (args.verbose) {
+                printVerboseStats(stdout, &check_result);
+            }
+
             ctx.io.flush();
         }
     }
@@ -5756,6 +4588,40 @@ fn printTimingBreakdown(writer: anytype, timing: ?CheckTimingInfo) void {
         writer.print("  type checking diagnostics:    ", .{}) catch {};
         formatElapsedTime(writer, t.check_diagnostics_ns) catch {};
         writer.print("  ({} ns)", .{t.check_diagnostics_ns}) catch {};
+    }
+}
+
+/// Print verbose build statistics when --verbose flag is passed
+/// Format:
+///     Modules: 6 total, 4 cached, 2 built
+///     Cache Hit: 67%
+///     Build: 8ms / 14ms / 25ms (min / avg / max)
+fn printVerboseStats(writer: anytype, result: *const CheckResult) void {
+    const total = result.modules_total;
+    if (total == 0) return;
+
+    const cache_percent = cacheHitPercent(result.cache_hits, result.cache_misses);
+
+    // Print modules breakdown
+    writer.print("\n    Modules: {} total, {} cached, {} built\n", .{
+        total,
+        result.cache_hits,
+        result.modules_compiled,
+    }) catch {};
+
+    // Print cache hit percentage
+    writer.print("    Cache Hit: {}%\n", .{cache_percent}) catch {};
+
+    // Print build time breakdown (only if we have compiled modules)
+    if (result.modules_compiled > 0) {
+        const min_ms = nsToMs(result.module_time_min_ns);
+        const avg_ms = nsToMs(moduleTimeAvgNs(result.module_time_sum_ns, result.modules_compiled));
+        const max_ms = nsToMs(result.module_time_max_ns);
+        writer.print("    Build: {}ms / {}ms / {}ms (min / avg / max)\n", .{
+            min_ms,
+            avg_ms,
+            max_ms,
+        }) catch {};
     }
 }
 
@@ -5921,6 +4787,7 @@ fn rocDocs(ctx: *CliContext, args: cli_args.DocsArgs) !void {
         args.path,
         args.time,
         cache_config,
+        null, // max_threads: use default (single-threaded for now)
     ) catch |err| {
         return handleProcessFileError(err, stderr, args.path);
     };

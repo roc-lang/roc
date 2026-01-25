@@ -537,7 +537,8 @@ test "fx platform string interpolation type mismatch" {
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "TYPE MISMATCH") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "U8") != null);
     try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Str") != null);
-    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 1 error") != null);
+    // The coordinator now detects additional errors (COMPTIME EVAL ERROR) beyond TYPE MISMATCH
+    try testing.expect(std.mem.indexOf(u8, run_result.stderr, "Found 2 error") != null);
 
     // The program should still produce output (it runs despite errors)
     try testing.expect(std.mem.indexOf(u8, run_result.stdout, "two:") != null);

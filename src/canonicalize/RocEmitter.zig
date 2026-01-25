@@ -237,6 +237,10 @@ fn emitExprValue(self: *Self, expr: Expr) EmitError!void {
             const ident_text = self.module_env.getIdent(ext.ident_idx);
             try self.emitIdent(ident_text);
         },
+        .e_lookup_pending => {
+            // Pending lookups must be resolved before emission
+            unreachable;
+        },
         .e_list => |list| {
             try self.write("[");
             const elems = self.module_env.store.sliceExpr(list.elems);
