@@ -1064,7 +1064,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
                 // Unify with Bool (expects must be bool expressions)
                 const bool_var = try self.freshBool(&env, stmt_region);
-                _ = try self.unify(bool_var, body_var, &env);
+                _ = try self.unifyInContext(bool_var, body_var, &env, .expect);
 
                 // Unify statement var with body var
                 _ = try self.unify(stmt_var, body_var, &env);
@@ -3908,6 +3908,11 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         .e_expect => |expect| {
             does_fx = try self.checkExpr(expect.body, env, expected) or does_fx;
+            const body_var = ModuleEnv.varFrom(expect.body);
+
+            const bool_var = try self.freshBool(env, expr_region);
+            _ = try self.unifyInContext(bool_var, body_var, env, .expect);
+
             try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
         },
         .e_for => |for_expr| {
@@ -4290,9 +4295,9 @@ fn checkBlockStatements(self: *Self, statements: []const CIR.Statement.Idx, env:
                 const body_var: Var = ModuleEnv.varFrom(expr_stmt.body);
 
                 const bool_var = try self.freshBool(env, stmt_region);
-                _ = try self.unify(bool_var, body_var, env);
+                _ = try self.unifyInContext(bool_var, body_var, env, .expect);
 
-                _ = try self.unify(stmt_var, body_var, env);
+                try self.unifyWith(stmt_var, .{ .structure = .empty_record }, env);
             },
             .s_crash => |_| {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);

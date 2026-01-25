@@ -82,6 +82,8 @@ pub const Context = union(enum) {
     platform_requirement: PlatformRequirementContext,
     /// Method type mismatch (where clause)
     method_type: MethodTypeContext,
+    /// `expect` statements
+    expect,
 
     /// Context for function call
     pub const FnCallArityContext = struct {

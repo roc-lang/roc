@@ -456,6 +456,7 @@ pub const ReportBuilder = struct {
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
+                    .expect => self.buildExpect(mismatch.types),
                     else => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way:")},
@@ -531,9 +532,7 @@ pub const ReportBuilder = struct {
             types.actual_snapshot,
             &.{
                 &.{
-                    D.bytes("But I need this"),
-                    D.bytes("if").withAnnotation(.inline_code),
-                    D.bytes("to be a"),
+                    D.bytes("But I need this to be a"),
                     D.bytes("Bool").withAnnotation(.inline_code),
                     D.bytes("value."),
                 },
@@ -1753,6 +1752,38 @@ pub const ReportBuilder = struct {
             types.actual_snapshot,
             &.{
                 // TODO: Once we have nicer type diff hints, use them here
+            },
+        );
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildExpect(
+        self: *Self,
+        types: TypePair,
+    ) !Report {
+        // Note: The unifier's actual/expected are opposite to display order.
+        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
+        return try self.makeBadTypeReport(
+            .{ .simple = regionIdxFrom(types.actual_var) },
+            &.{
+                D.bytes("This"),
+                D.bytes("expect").withAnnotation(.inline_code),
+                D.bytes("statement must evaluate to a"),
+                D.bytes("Bool").withAnnotation(.inline_code),
+                D.bytes("–either").withNoPrecedingSpace(),
+                D.bytes("True").withAnnotation(.inline_code),
+                D.bytes("or"),
+                D.bytes("False").withAnnotation(.inline_code),
+                D.bytes(":").withNoPrecedingSpace(),
+            },
+            &.{D.bytes("It is:")},
+            types.actual_snapshot,
+            &.{
+                &.{
+                    D.bytes("But I need this to be a"),
+                    D.bytes("Bool").withAnnotation(.inline_code),
+                    D.bytes("value."),
+                },
             },
         );
     }

@@ -1361,7 +1361,7 @@ test "check type - if else - invalid condition 1" {
         \\
         \\    I64
         \\
-        \\But I need this `if` to be a `Bool` value.
+        \\But I need this to be a `Bool` value.
         \\
         \\
         ,
@@ -1949,13 +1949,32 @@ test "check type - expect" {
 test "check type - expect not bool" {
     const source =
         \\main = {
-        \\  x = 1
+        \\  x = 1.U8
         \\  expect x
         \\  x
         \\}
     ;
     // Number literal used where Bool is expected
-    try checkTypesModule(source, .fail, "TYPE MISMATCH");
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\This `expect` statement must evaluate to a `Bool`–either `True` or `False`:
+        \\**test:3:10:3:11:**
+        \\```roc
+        \\  expect x
+        \\```
+        \\         ^
+        \\
+        \\It is:
+        \\
+        \\    U8
+        \\
+        \\But I need this to be a `Bool` value.
+        \\
+        \\
+        ,
+    );
 }
 
 // crash //
