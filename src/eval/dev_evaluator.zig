@@ -371,19 +371,18 @@ pub const DevEvaluator = struct {
         const cir_expr = module_env.store.getExpr(expr_idx);
         var result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
 
-        // For composite types (tuples, records), try to compute proper layout from type var
-        if (result_layout == .i64) {
-            switch (cir_expr) {
-                .e_tuple, .e_record => {
-                    const type_var = can.ModuleEnv.varFrom(expr_idx);
-                    var type_scope = types.TypeScope.init(self.allocator);
-                    defer type_scope.deinit();
-                    if (layout_store.addTypeVar(type_var, &type_scope)) |computed_layout| {
-                        result_layout = computed_layout;
-                    } else |_| {}
-                },
-                else => {},
-            }
+        // For composite types (tuples, records), always compute proper layout from type var
+        // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of tuple)
+        switch (cir_expr) {
+            .e_tuple, .e_record => {
+                const type_var = can.ModuleEnv.varFrom(expr_idx);
+                var type_scope = types.TypeScope.init(self.allocator);
+                defer type_scope.deinit();
+                if (layout_store.addTypeVar(type_var, &type_scope)) |computed_layout| {
+                    result_layout = computed_layout;
+                } else |_| {}
+            },
+            else => {},
         }
 
         // Detect tuple expressions to set tuple_len
