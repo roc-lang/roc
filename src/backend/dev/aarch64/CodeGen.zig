@@ -699,6 +699,14 @@ pub const AArch64CodeGen = struct {
         std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
     }
 
+    /// Patch a BL (branch with link) instruction to target a specific offset
+    pub fn patchBL(self: *Self, patch_loc: usize, offset_words: i32) void {
+        // BL uses imm26 encoding: 1 00101 imm26
+        const imm26: u26 = @bitCast(@as(i26, @truncate(offset_words)));
+        const inst: u32 = (@as(u32, 0b100101) << 26) | imm26;
+        std.mem.writeInt(u32, self.emit.buf.items[patch_loc..][0..4], inst, .little);
+    }
+
     /// Emit function call with relocation
     pub fn emitCall(self: *Self, name: []const u8) !void {
         const offset = self.currentOffset();

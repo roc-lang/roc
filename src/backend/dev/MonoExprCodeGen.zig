@@ -310,6 +310,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Emit epilogue to restore callee-saved registers and return
             try self.emitMainEpilogue();
 
+            // Patch all pending calls now that all procedures are compiled
+            try self.patchPendingCalls();
+
             // Get ALL the generated code (including procedures at the start)
             // Execution will start at main_code_start via entry_offset
             const all_code = self.codegen.getCode();
@@ -943,15 +946,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // arg2: X2 (low), X3 (high)
                 // return: X0 (low), X1 (high)
 
+                // Load function address FIRST, before setting up arguments
+                // This avoids allocating a register that might conflict with X0-X3
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+
                 // Move arguments to correct registers
                 try self.codegen.emit.movRegReg(.w64, .X0, lhs_parts.low);
                 try self.codegen.emit.movRegReg(.w64, .X1, lhs_parts.high);
                 try self.codegen.emit.movRegReg(.w64, .X2, rhs_parts.low);
                 try self.codegen.emit.movRegReg(.w64, .X3, rhs_parts.high);
 
-                // Load function address and call
-                const addr_reg = try self.codegen.allocGeneralFor(4);
-                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                // Call the function
                 try self.codegen.emit.blrReg(addr_reg);
                 self.codegen.freeGeneral(addr_reg);
 
@@ -4929,11 +4935,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Generates prologue, body, and epilogue (including RET).
         fn compileProc(self: *Self, proc: MonoProc) Error!void {
             const code_start = self.codegen.currentOffset();
+            const key: u48 = @bitCast(proc.name);
 
             // CRITICAL: Register the procedure BEFORE generating the body
             // so that recursive calls within the body can find this procedure.
             // We'll update code_end after generation is complete.
-            const key: u48 = @bitCast(proc.name);
             try self.proc_registry.put(key, .{
                 .code_start = code_start,
                 .code_end = 0, // Placeholder, updated below
