@@ -26,11 +26,11 @@ y = 5 -> call(|i| {i + 1})
     ^
 
 The type was determined to be non-numeric here:
-**issue_9075.md:4:16:4:17:**
+**issue_9075.md:6:11:6:12:**
 ```roc
-y = 5 -> call(|i| {i + 1})
+main = "${y}"
 ```
-               ^
+          ^
 
 Other code expects this to have the type:
 
