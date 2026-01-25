@@ -2769,27 +2769,44 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Generate code for the record expression
             const record_loc = try self.generateExpr(access.record_expr);
 
-            // Get the record layout to find field offset
+            // Get the record layout to find field offset and size
             const record_layout = ls.getLayout(access.record_layout);
             if (record_layout.tag != .record) {
                 return Error.UnsupportedExpression;
             }
 
             const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, access.field_idx);
+            const field_size = ls.getRecordFieldSize(record_layout.data.record.idx, access.field_idx);
 
             // Return location pointing to the field within the record
             return switch (record_loc) {
-                .stack, .stack_str => |s| .{ .stack = s + @as(i32, @intCast(field_offset)) },
+                .stack, .stack_str => |s| {
+                    const field_base = s + @as(i32, @intCast(field_offset));
+                    // Return stack_i128 for 16-byte fields (Dec/i128/u128)
+                    if (field_size == 16) {
+                        return .{ .stack_i128 = field_base };
+                    }
+                    return .{ .stack = field_base };
+                },
+                .stack_i128 => |s| {
+                    // Record itself is i128-sized, field access within it
+                    const field_base = s + @as(i32, @intCast(field_offset));
+                    if (field_size == 16) {
+                        return .{ .stack_i128 = field_base };
+                    }
+                    return .{ .stack = field_base };
+                },
                 .general_reg => |reg| {
-                    // Record in register - need to extract field
-                    // For small records, this works; for larger ones we'd need to spill
+                    // Record in register - only valid for small records (<=8 bytes)
+                    // A record with a 16-byte field cannot fit in a register
+                    if (field_size > 8) {
+                        return Error.UnsupportedExpression;
+                    }
                     if (field_offset == 0) {
                         return .{ .general_reg = reg };
                     } else {
-                        // Shift or mask to get the field - simplified version
                         const result_reg = try self.codegen.allocGeneralFor(0);
                         if (comptime builtin.cpu.arch == .aarch64) {
-                            // LSR to shift right by field_offset * 8 bits
                             try self.codegen.emit.lsrRegRegImm(.w64, result_reg, reg, @intCast(field_offset * 8));
                         } else {
                             try self.codegen.emit.movRegReg(.w64, result_reg, reg);
@@ -2800,7 +2817,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .immediate_i64 => |val| {
-                    // Immediate value - shift to get field
+                    if (field_size > 8) {
+                        return Error.UnsupportedExpression;
+                    }
                     const shifted = val >> @intCast(field_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },
@@ -2852,18 +2871,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Generate code for the tuple expression
             const tuple_loc = try self.generateExpr(access.tuple_expr);
 
-            // Get the tuple layout to find element offset
+            // Get the tuple layout to find element offset and size
             const tuple_layout = ls.getLayout(access.tuple_layout);
             if (tuple_layout.tag != .tuple) {
                 return Error.UnsupportedExpression;
             }
 
             const elem_offset = ls.getTupleElementOffset(tuple_layout.data.tuple.idx, access.elem_idx);
+            const elem_size = ls.getTupleElementSize(tuple_layout.data.tuple.idx, access.elem_idx);
 
             // Return location pointing to the element within the tuple
             return switch (tuple_loc) {
-                .stack, .stack_str => |s| .{ .stack = s + @as(i32, @intCast(elem_offset)) },
+                .stack, .stack_str => |s| {
+                    const elem_base = s + @as(i32, @intCast(elem_offset));
+                    // Return stack_i128 for 16-byte elements (Dec/i128/u128)
+                    if (elem_size == 16) {
+                        return .{ .stack_i128 = elem_base };
+                    }
+                    return .{ .stack = elem_base };
+                },
+                .stack_i128 => |s| {
+                    // Tuple itself is i128-sized, element access within it
+                    const elem_base = s + @as(i32, @intCast(elem_offset));
+                    if (elem_size == 16) {
+                        return .{ .stack_i128 = elem_base };
+                    }
+                    return .{ .stack = elem_base };
+                },
                 .general_reg => |reg| {
+                    // Tuple in register - only valid for small tuples (<=8 bytes)
+                    // A tuple with a 16-byte element cannot fit in a register
+                    if (elem_size > 8) {
+                        return Error.UnsupportedExpression;
+                    }
                     if (elem_offset == 0) {
                         return .{ .general_reg = reg };
                     } else {
@@ -2879,6 +2919,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 .immediate_i64 => |val| {
+                    if (elem_size > 8) {
+                        return Error.UnsupportedExpression;
+                    }
                     const shifted = val >> @intCast(elem_offset * 8);
                     return .{ .immediate_i64 = shifted };
                 },

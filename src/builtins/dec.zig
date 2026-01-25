@@ -256,8 +256,8 @@ pub const RocDec = extern struct {
 
     pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
         var buf: [max_str_length]u8 = undefined;
-        const slice = self.format_to_buf(&buf);
-        return RocStr.init(slice.ptr, slice.len, roc_ops);
+        const len = self.format_to_buf(&buf).len;
+        return RocStr.init(&buf, len, roc_ops);
     }
 
     pub fn toI128(self: RocDec) i128 {
