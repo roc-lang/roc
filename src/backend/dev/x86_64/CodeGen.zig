@@ -154,6 +154,17 @@ pub const SystemVCodeGen = struct {
         }
     }
 
+    /// Mark a register as in use so it won't be allocated.
+    /// Used for return values from function calls that need to persist.
+    pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
+        const idx = @intFromEnum(reg);
+        // Remove from free pool (it's now in use)
+        self.free_general &= ~(@as(u16, 1) << @intCast(idx));
+        self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
+        // Set ownership to a sentinel value (0 = temporary)
+        self.general_owners[idx] = 0;
+    }
+
     /// Spill a register to make room and allocate it for the given local.
     fn spillAndAllocGeneral(self: *Self, local: u32) !GeneralReg {
         // Find a register to spill - prefer lowest-numbered for consistency
@@ -319,9 +330,22 @@ pub const SystemVCodeGen = struct {
         return self.stack_offset;
     }
 
+    /// Alias for allocStack - allocate a stack slot of the given size
+    pub fn allocStackSlot(self: *Self, size: u32) i32 {
+        return self.allocStack(size);
+    }
+
     pub fn getStackSize(self: *Self) u32 {
         const size: u32 = @intCast(-self.stack_offset);
         return (size + 15) & ~@as(u32, 15);
+    }
+
+    /// Spill a register to the stack and return the stack slot offset.
+    /// This is used to save caller-saved registers before function calls.
+    pub fn spillToStack(self: *Self, reg: GeneralReg) !i32 {
+        const slot = self.allocStack(8);
+        try self.emitStoreStack(.w64, slot, reg);
+        return slot;
     }
 
     // Function prologue/epilogue
@@ -400,6 +424,104 @@ pub const SystemVCodeGen = struct {
         try self.emit.imulRegReg(width, dst, b);
     }
 
+    /// Emit signed integer division: dst = a / b
+    /// Uses IDIV which requires dividend in RDX:RAX, result in RAX
+    pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // IDIV uses RAX for dividend/quotient and RDX for high bits/remainder
+        // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+        const divisor_reg = if (b == .RAX or b == .RDX) blk: {
+            try self.emit.movRegReg(width, .R11, b);
+            break :blk .R11;
+        } else b;
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Sign-extend RAX into RDX:RAX
+        if (width == .w64) {
+            try self.emit.cqo();
+        } else {
+            try self.emit.cdq();
+        }
+        // 3. Perform IDIV
+        try self.emit.idivReg(width, divisor_reg);
+        // 4. Quotient is in RAX, move to dst
+        if (dst != .RAX) {
+            try self.emit.movRegReg(width, dst, .RAX);
+        }
+    }
+
+    /// Emit unsigned integer division: dst = a / b
+    /// Uses DIV which requires dividend in RDX:RAX, result in RAX
+    pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // DIV uses RAX for dividend/quotient and RDX for high bits/remainder
+        // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+        const divisor_reg = if (b == .RAX or b == .RDX) blk: {
+            try self.emit.movRegReg(width, .R11, b);
+            break :blk .R11;
+        } else b;
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Zero-extend: set RDX to 0
+        try self.emit.xorRegReg(width, .RDX, .RDX);
+        // 3. Perform DIV
+        try self.emit.divReg(width, divisor_reg);
+        // 4. Quotient is in RAX, move to dst
+        if (dst != .RAX) {
+            try self.emit.movRegReg(width, dst, .RAX);
+        }
+    }
+
+    /// Emit signed integer modulo: dst = a % b
+    /// Uses IDIV which puts remainder in RDX
+    pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+        const divisor_reg = if (b == .RAX or b == .RDX) blk: {
+            try self.emit.movRegReg(width, .R11, b);
+            break :blk .R11;
+        } else b;
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Sign-extend RAX into RDX:RAX
+        if (width == .w64) {
+            try self.emit.cqo();
+        } else {
+            try self.emit.cdq();
+        }
+        // 3. Perform IDIV
+        try self.emit.idivReg(width, divisor_reg);
+        // Remainder is in RDX
+        if (dst != .RDX) {
+            try self.emit.movRegReg(width, dst, .RDX);
+        }
+    }
+
+    /// Emit unsigned integer modulo: dst = a % b
+    /// Uses DIV which puts remainder in RDX
+    pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+        const divisor_reg = if (b == .RAX or b == .RDX) blk: {
+            try self.emit.movRegReg(width, .R11, b);
+            break :blk .R11;
+        } else b;
+        // 1. Move dividend to RAX
+        if (a != .RAX) {
+            try self.emit.movRegReg(width, .RAX, a);
+        }
+        // 2. Zero-extend: set RDX to 0
+        try self.emit.xorRegReg(width, .RDX, .RDX);
+        // 3. Perform DIV
+        try self.emit.divReg(width, divisor_reg);
+        // Remainder is in RDX
+        if (dst != .RDX) {
+            try self.emit.movRegReg(width, dst, .RDX);
+        }
+    }
+
     /// Emit integer negation: dst = -src
     pub fn emitNeg(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
         if (dst != src) {
@@ -408,14 +530,39 @@ pub const SystemVCodeGen = struct {
         try self.emit.negReg(width, dst);
     }
 
+    /// Emit bitwise AND: dst = a & b
+    pub fn emitAnd(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.andRegReg(width, dst, b);
+    }
+
+    /// Emit bitwise OR: dst = a | b
+    pub fn emitOr(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) !void {
+        if (dst != a) {
+            try self.emit.movRegReg(width, dst, a);
+        }
+        try self.emit.orRegReg(width, dst, b);
+    }
+
+    /// Emit bitwise XOR with immediate: dst = src ^ imm
+    pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) !void {
+        if (dst != src) {
+            try self.emit.movRegReg(width, dst, src);
+        }
+        try self.emit.xorRegImm8(width, dst, imm);
+    }
+
     // Comparison operations
 
     /// Emit comparison and set condition: dst = (a op b) ? 1 : 0
     pub fn emitCmp(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg, cond: Emit.Condition) !void {
         try self.emit.cmpRegReg(width, a, b);
         try self.emit.setcc(cond, dst);
-        // Zero-extend the byte result to full register width
-        try self.emit.movRegReg(.w32, dst, dst); // movzx is implied for 32-bit moves
+        // SETCC only sets the low byte; AND with 1 to mask the result
+        // (matches the approach used by the Rust backend)
+        try self.emit.andRegImm8(dst, 1);
     }
 
     // Floating-point operations
@@ -450,6 +597,64 @@ pub const SystemVCodeGen = struct {
             try self.emit.movsdRegReg(dst, a);
         }
         try self.emit.divsdRegReg(dst, b);
+    }
+
+    /// Emit float64 negation: dst = -src
+    /// Uses XOR with sign bit mask to properly handle -0.0
+    pub fn emitNegF64(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        // Load sign bit mask (0x8000_0000_0000_0000) into dst
+        // Then XOR with src to flip the sign bit
+        const sign_bit_mask: i64 = @bitCast(@as(u64, 0x8000_0000_0000_0000));
+        const stack_offset: i32 = -16; // Temporary stack location
+        try self.emit.movRegImm64(.R11, sign_bit_mask);
+        try self.emit.movMemReg(.w64, .RBP, stack_offset, .R11);
+        try self.emit.movsdRegMem(dst, .RBP, stack_offset);
+        try self.emit.xorpdRegReg(dst, src);
+    }
+
+    /// Emit float32 addition: dst = a + b
+    pub fn emitAddF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.addssRegReg(dst, b);
+    }
+
+    /// Emit float32 subtraction: dst = a - b
+    pub fn emitSubF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.subssRegReg(dst, b);
+    }
+
+    /// Emit float32 multiplication: dst = a * b
+    pub fn emitMulF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.mulssRegReg(dst, b);
+    }
+
+    /// Emit float32 division: dst = a / b
+    pub fn emitDivF32(self: *Self, dst: FloatReg, a: FloatReg, b: FloatReg) !void {
+        if (dst != a) {
+            try self.emit.movssRegReg(dst, a);
+        }
+        try self.emit.divssRegReg(dst, b);
+    }
+
+    /// Emit float32 negation: dst = -src
+    /// Uses XOR with sign bit mask to properly handle -0.0
+    pub fn emitNegF32(self: *Self, dst: FloatReg, src: FloatReg) !void {
+        // Load sign bit mask (0x80000000) into dst
+        // Then XOR with src to flip the sign bit
+        const sign_bit_mask: i32 = @bitCast(@as(u32, 0x80000000));
+        const stack_offset: i32 = -16; // Temporary stack location
+        try self.emit.movRegImm32(.w32, .R11, sign_bit_mask);
+        try self.emit.movMemReg(.w32, .RBP, stack_offset, .R11);
+        try self.emit.movssRegMem(dst, .RBP, stack_offset);
+        try self.emit.xorpsRegReg(dst, src);
     }
 
     // Memory operations
@@ -506,6 +711,16 @@ pub const SystemVCodeGen = struct {
         const offset: i32 = @intCast(@as(i64, @intCast(target)) - @as(i64, @intCast(patch_loc + 4)));
         const bytes: [4]u8 = @bitCast(offset);
         @memcpy(self.emit.buf.items[patch_loc..][0..4], &bytes);
+    }
+
+    /// Patch a CALL rel32 instruction's target offset.
+    /// The call_site is the offset where the CALL instruction starts (E8 opcode).
+    /// The rel_offset is the already-adjusted relative offset to patch in.
+    pub fn patchCall(self: *Self, call_site: usize, rel_offset: i32) void {
+        // CALL rel32 is: E8 xx xx xx xx
+        // The rel32 starts at call_site + 1
+        const bytes: [4]u8 = @bitCast(rel_offset);
+        @memcpy(self.emit.buf.items[call_site + 1 ..][0..4], &bytes);
     }
 
     /// Emit function call with relocation

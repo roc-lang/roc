@@ -21,8 +21,8 @@ pub const RocDec = extern struct {
 
     pub const decimal_places: u5 = 18;
     pub const whole_number_places: u5 = 21;
-    const max_digits: u6 = 39;
-    const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
+    pub const max_digits: u6 = 39;
+    pub const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
 
     pub const min: RocDec = .{ .num = math.minInt(i128) };
     pub const max: RocDec = .{ .num = math.maxInt(i128) };
@@ -172,11 +172,16 @@ pub const RocDec = extern struct {
         return (c -% 48) <= 9;
     }
 
-    pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
-
+    /// Format this Dec value into the provided buffer, returning the slice containing the result.
+    /// The buffer must be at least `max_str_length` bytes.
+    /// This is the allocation-free version; use `to_str` if you need a RocStr.
+    pub fn format_to_buf(self: RocDec, buf: *[max_str_length]u8) []const u8 {
         // Special case
         if (self.num == 0) {
-            return RocStr.init("0.0", 3, roc_ops);
+            buf[0] = '0';
+            buf[1] = '.';
+            buf[2] = '0';
+            return buf[0..3];
         }
 
         const num = self.num;
@@ -187,13 +192,11 @@ pub const RocDec = extern struct {
         var num_digits = std.fmt.printInt(digit_bytes_storage[0..], num, 10, .lower, .{});
         var digit_bytes: [*]u8 = digit_bytes_storage[0..];
 
-        // space where we assemble all the characters that make up the final string
-        var str_bytes: [max_str_length]u8 = undefined;
         var position: usize = 0;
 
         // if negative, the first character is a negating minus
         if (is_negative) {
-            str_bytes[position] = '-';
+            buf[position] = '-';
             position += 1;
 
             // but also, we have one fewer digit than we have characters
@@ -211,24 +214,24 @@ pub const RocDec = extern struct {
             before_digits_offset = num_digits - decimal_places;
 
             for (digit_bytes[0..before_digits_offset]) |c| {
-                str_bytes[position] = c;
+                buf[position] = c;
                 position += 1;
             }
         } else {
             // otherwise there are no actual digits before the decimal point
             // but we format it with a '0'
-            str_bytes[position] = '0';
+            buf[position] = '0';
             position += 1;
         }
 
         // we've done everything before the decimal point, so now we can put the decimal point in
-        str_bytes[position] = '.';
+        buf[position] = '.';
         position += 1;
 
         const trailing_zeros: u6 = count_trailing_zeros_base10(num);
         if (trailing_zeros >= decimal_places) {
             // add just a single zero if all decimal digits are zero
-            str_bytes[position] = '0';
+            buf[position] = '0';
             position += 1;
         } else {
             // Figure out if we need to prepend any zeros to the after decimal point
@@ -237,18 +240,24 @@ pub const RocDec = extern struct {
 
             var i: usize = 0;
             while (i < after_zeros_num) : (i += 1) {
-                str_bytes[position] = '0';
+                buf[position] = '0';
                 position += 1;
             }
 
             // otherwise append the decimal digits except the trailing zeros
             for (digit_bytes[before_digits_offset .. num_digits - trailing_zeros]) |c| {
-                str_bytes[position] = c;
+                buf[position] = c;
                 position += 1;
             }
         }
 
-        return RocStr.init(&str_bytes, position, roc_ops);
+        return buf[0..position];
+    }
+
+    pub fn to_str(self: RocDec, roc_ops: *RocOps) RocStr {
+        var buf: [max_str_length]u8 = undefined;
+        const len = self.format_to_buf(&buf).len;
+        return RocStr.init(&buf, len, roc_ops);
     }
 
     pub fn toI128(self: RocDec) i128 {
@@ -1213,6 +1222,16 @@ pub fn divC(
     roc_ops: *RocOps,
 ) callconv(.c) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops }).num;
+}
+
+/// Truncating division: divide and truncate to the nearest integer toward zero.
+pub fn divTruncC(
+    arg1: RocDec,
+    arg2: RocDec,
+    roc_ops: *RocOps,
+) callconv(.c) i128 {
+    const quotient = @call(.always_inline, RocDec.div, .{ arg1, arg2, roc_ops });
+    return @call(.always_inline, RocDec.trunc, .{ quotient, roc_ops }).num;
 }
 
 /// TODO: Document logC.

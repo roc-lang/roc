@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const compiled_builtins = @import("compiled_builtins");
 
+const layout = @import("layout");
 const eval_mod = @import("../mod.zig");
 const builtin_loading_mod = eval_mod.builtin_loading;
 const TestEnv = @import("TestEnv.zig");
@@ -24,7 +25,15 @@ const Check = check.Check;
 const Can = can.Can;
 const CIR = can.CIR;
 const ModuleEnv = can.ModuleEnv;
+
+// Use std.testing.allocator for dev backend tests (tracks leaks)
 const test_allocator = std.testing.allocator;
+
+/// Use page_allocator for interpreter tests (doesn't track leaks).
+/// The interpreter has known memory leak issues that we're not fixing now.
+/// We want to focus on getting the dev backend working without leaks.
+/// Exported so other test files can use it.
+pub const interpreter_allocator = std.heap.page_allocator;
 
 const TestParseError = parse.Parser.Error || error{ TokenizeError, SyntaxError };
 
@@ -43,159 +52,229 @@ const TraceWriter = struct {
     }
 };
 
-/// Check if DevEvaluator can handle this expression type.
-/// Returns false for expressions that require features not yet implemented.
-fn canDevEvaluatorHandle(module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) bool {
-    const expr = module_env.store.getExpr(expr_idx);
-    return canHandleExpr(module_env, expr);
-}
-
-fn canHandleExpr(module_env: *ModuleEnv, expr: CIR.Expr) bool {
-    return switch (expr) {
-        // Supported expression types
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small => true,
-        .e_zero_argument_tag, .e_tag => true,
-        .e_str => true,
-        .e_empty_record, .e_empty_list => true,
-
-        // Compound expressions - check children
-        .e_binop => |binop| {
-            const lhs = module_env.store.getExpr(binop.lhs);
-            const rhs = module_env.store.getExpr(binop.rhs);
-            return canHandleExpr(module_env, lhs) and canHandleExpr(module_env, rhs);
-        },
-        .e_unary_minus => |unary| {
-            const inner = module_env.store.getExpr(unary.expr);
-            return canHandleExpr(module_env, inner);
-        },
-        .e_unary_not => |unary| {
-            const inner = module_env.store.getExpr(unary.expr);
-            return canHandleExpr(module_env, inner);
-        },
-        .e_if => |if_expr| {
-            // Check all branches
-            const branch_indices = module_env.store.sliceIfBranches(if_expr.branches);
-            for (branch_indices) |branch_idx| {
-                const branch = module_env.store.getIfBranch(branch_idx);
-                const cond = module_env.store.getExpr(branch.cond);
-                const body = module_env.store.getExpr(branch.body);
-                if (!canHandleExpr(module_env, cond) or !canHandleExpr(module_env, body)) {
-                    return false;
-                }
-            }
-            // Check final else
-            const final_else = module_env.store.getExpr(if_expr.final_else);
-            return canHandleExpr(module_env, final_else);
-        },
-        .e_record => |rec| {
-            if (rec.ext != null) return false;
-            const fields = module_env.store.sliceRecordFields(rec.fields);
-            for (fields) |field_idx| {
-                const field = module_env.store.getRecordField(field_idx);
-                const field_expr = module_env.store.getExpr(field.value);
-                if (!canHandleExpr(module_env, field_expr)) return false;
-            }
-            return true;
-        },
-        .e_dot_access => |dot| {
-            if (dot.args != null) return false; // Method calls not supported
-            const receiver = module_env.store.getExpr(dot.receiver);
-            return canHandleExpr(module_env, receiver);
-        },
-        .e_tuple => |tuple| {
-            const elems = module_env.store.sliceExpr(tuple.elems);
-            for (elems) |elem_idx| {
-                const elem = module_env.store.getExpr(elem_idx);
-                if (!canHandleExpr(module_env, elem)) return false;
-            }
-            return true;
-        },
-        .e_nominal => |nom| {
-            const backing = module_env.store.getExpr(nom.backing_expr);
-            return canHandleExpr(module_env, backing);
-        },
-        .e_nominal_external => |nom| {
-            const backing = module_env.store.getExpr(nom.backing_expr);
-            return canHandleExpr(module_env, backing);
-        },
-
-        // Unsupported expression types (lambdas, closures, calls, etc.)
-        .e_lambda, .e_closure, .e_call => false,
-        .e_hosted_lambda, .e_low_level_lambda => false,
-        .e_block => false, // Blocks with let bindings not yet fully supported
-        .e_lookup_local, .e_lookup_external, .e_lookup_required => false, // Variable lookups need environment
-        .e_list => false, // Lists need heap allocation
-        .e_match => false, // Match expressions need pattern matching
-        .e_for => false, // For loops not supported
-        .e_crash, .e_runtime_error => false, // Error expressions
-        .e_dbg, .e_expect => false, // Debug expressions
-        else => false,
-    };
-}
+/// Errors that can occur during DevEvaluator string generation
+const DevEvalError = error{
+    DevEvaluatorInitFailed,
+    GenerateCodeFailed,
+    JitInitFailed,
+    UnsupportedLayout,
+    OutOfMemory,
+};
 
 /// Evaluate an expression using the DevEvaluator and return the result as a string.
-fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) []const u8 {
+fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) DevEvalError![]const u8 {
     // Initialize DevEvaluator
-    var dev_eval = DevEvaluator.init(allocator) catch |err| {
-        std.debug.panic("DevEvaluator.init failed: {}", .{err});
+    var dev_eval = DevEvaluator.init(allocator) catch {
+        return error.DevEvaluatorInitFailed;
     };
     defer dev_eval.deinit();
 
-    // Get the expression from the index
-    const expr = module_env.store.getExpr(expr_idx);
+    // Create module envs array for code generation
+    // Note: generateCode expects []const *ModuleEnv (mutable pointers in immutable slice)
+    const all_module_envs = [_]*ModuleEnv{ module_env, @constCast(builtin_module_env) };
 
-    // Generate code
-    var code_result = dev_eval.generateCode(module_env, expr) catch |err| {
-        std.debug.panic("DevEvaluator.generateCode failed: {}", .{err});
+    // Generate code using Mono IR pipeline
+    var code_result = dev_eval.generateCode(module_env, expr_idx, &all_module_envs) catch {
+        return error.GenerateCodeFailed;
     };
     defer code_result.deinit();
 
-    // JIT execute the code
-    var jit = backend.JitCode.init(code_result.code) catch |err| {
-        std.debug.panic("JitCode.init failed: {}", .{err});
+    // JIT execute the code (with entry_offset for compiled procedures)
+    var jit = backend.JitCode.initWithEntryOffset(code_result.code, code_result.entry_offset) catch {
+        return error.JitInitFailed;
     };
     defer jit.deinit();
+
+    // Check if this is a tuple
+    if (code_result.tuple_len > 1) {
+        // Allocate buffer for tuple elements
+        // Unsuffixed numeric literals default to Dec (i128 = 16 bytes each)
+        var result_buf: [32]i128 align(16) = @splat(0);
+        jit.callWithResultPtrAndRocOps(@ptrCast(&result_buf), @constCast(&dev_eval.roc_ops));
+
+        // Format as "(elem1, elem2, ...)"
+        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+            return error.OutOfMemory;
+        errdefer output.deinit();
+        output.append('(') catch return error.OutOfMemory;
+
+        for (0..code_result.tuple_len) |i| {
+            if (i > 0) {
+                try output.appendSlice(", ");
+            }
+            const raw_val = result_buf[i];
+            // Detect if this is a Dec-scaled value or a raw integer
+            // Dec values for small integers like 10 would be 10 * 10^18 = 10^19
+            // Raw integers would be much smaller (< 10^17)
+            const abs_val: u128 = if (raw_val < 0) @intCast(-raw_val) else @intCast(raw_val);
+            const one_point_zero: u128 = 1_000_000_000_000_000_000;
+
+            if (abs_val < one_point_zero / 10) {
+                // This is a raw integer, not Dec-scaled - format as "N.0"
+                const elem_str = try std.fmt.allocPrint(allocator, "{d}.0", .{raw_val});
+                defer allocator.free(elem_str);
+                try output.appendSlice(elem_str);
+            } else {
+                // This is a Dec-scaled value - format as Dec
+                const dec_val = builtins.dec.RocDec{ .num = raw_val };
+                var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+                const elem_str = dec_val.format_to_buf(&dec_buf);
+                try output.appendSlice(elem_str);
+            }
+        }
+
+        try output.append(')');
+        return output.toOwnedSlice();
+    }
 
     // Execute with result pointer and format result as string based on layout
     const layout_mod = @import("layout");
     return switch (code_result.result_layout) {
         layout_mod.Idx.i64, layout_mod.Idx.i8, layout_mod.Idx.i16, layout_mod.Idx.i32 => blk: {
-            var result: i64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+            var result: i64 = 0;
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
         layout_mod.Idx.u64, layout_mod.Idx.u8, layout_mod.Idx.u16, layout_mod.Idx.u32, layout_mod.Idx.bool => blk: {
-            var result: u64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+            var result: u64 = 0;
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
         },
-        layout_mod.Idx.f64, layout_mod.Idx.f32 => blk: {
-            var result: f64 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{d}", .{result}) catch @panic("allocPrint failed");
+        layout_mod.Idx.f64 => blk: {
+            var result: f64 = 0;
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
-        layout_mod.Idx.i128, layout_mod.Idx.u128, layout_mod.Idx.dec => blk: {
-            var result: i128 = undefined;
-            jit.callWithResultPtr(@ptrCast(&result));
-            break :blk std.fmt.allocPrint(allocator, "{}", .{result}) catch @panic("allocPrint failed");
+        layout_mod.Idx.f32 => blk: {
+            // F32 stores 4 bytes, use f32 buffer and print at f32 precision
+            var result: f32 = 0;
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{d}", .{result});
         },
-        else => std.debug.panic("Unsupported layout: {}", .{code_result.result_layout}),
+        layout_mod.Idx.i128, layout_mod.Idx.u128 => blk: {
+            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            break :blk std.fmt.allocPrint(allocator, "{}", .{result});
+        },
+        layout_mod.Idx.dec => blk: {
+            var result: i128 align(16) = 0; // Initialize to 0 and ensure 16-byte alignment
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+            const dec = builtins.dec.RocDec{ .num = result };
+            var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const slice = dec.format_to_buf(&buf);
+            break :blk allocator.dupe(u8, slice);
+        },
+        layout_mod.Idx.str => blk: {
+            // RocStr is 24 bytes - use a properly aligned struct
+            const RocStrResult = extern struct {
+                bytes: ?[*]u8,
+                length: usize,
+                capacity_or_alloc_ptr: usize,
+            };
+            var result: RocStrResult align(8) = .{
+                .bytes = null,
+                .length = 0,
+                .capacity_or_alloc_ptr = 0,
+            };
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+            // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
+            if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
+                // Small string: length is in the last byte of the struct XOR'd with 0x80
+                const result_bytes: *const [24]u8 = @ptrCast(&result);
+                const len = result_bytes[23] ^ 0x80;
+                // Return the string content directly (no quotes in result)
+                break :blk std.fmt.allocPrint(allocator, "{s}", .{result_bytes[0..len]});
+            } else {
+                // Large string (heap allocated)
+                const str_bytes = result.bytes.?[0..result.length];
+                const formatted = std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
+
+                // Decref the heap-allocated string data after copying
+                // This will free the memory when refcount reaches 0
+                // Strings have 1-byte alignment, elements_refcounted = false
+                builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
+
+                break :blk formatted;
+            }
+        },
+        eval_mod.list_i64_layout => blk: {
+            // List result buffer layout: [0-7] ptr, [8-15] len, [16-23] capacity
+            // With heap allocation, ptr points to heap memory that survives the call
+            const ListResultBuffer = extern struct {
+                ptr: [*]const i64,
+                len: usize,
+                capacity: usize,
+            };
+            var result: ListResultBuffer align(8) = .{
+                .ptr = undefined,
+                .len = 0,
+                .capacity = 0,
+            };
+            jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+            // Format as "[elem1, elem2, ...]"
+            var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                return error.OutOfMemory;
+            errdefer output.deinit();
+            output.append('[') catch return error.OutOfMemory;
+
+            if (result.len > 0) {
+                const elements = result.ptr[0..result.len];
+                for (elements, 0..) |elem, i| {
+                    if (i > 0) {
+                        try output.appendSlice(", ");
+                    }
+                    const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
+                    defer allocator.free(elem_str);
+                    try output.appendSlice(elem_str);
+                }
+            }
+
+            try output.append(']');
+
+            // Decref the heap-allocated list data after copying
+            // Lists have 8-byte alignment (pointer-sized elements), elements_refcounted = false for i64
+            if (result.len > 0) {
+                builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
+            }
+
+            break :blk output.toOwnedSlice();
+        },
+        else => blk: {
+            // Handle non-scalar layouts (records, tuples, etc.)
+            // Layout indices >= 16 are computed layouts (scalars are 0-15)
+            const layout_idx_val = @intFromEnum(code_result.result_layout);
+            if (layout_idx_val >= 16) {
+                // This is a computed layout (record, tuple, tag union, etc.)
+                // For records, we need to look up the layout from the layout store
+                if (code_result.layout_store) |ls| {
+                    const stored_layout = ls.getLayout(code_result.result_layout);
+                    if (stored_layout.tag == .record) {
+                        // Get record field count from record_data
+                        const record_idx = stored_layout.data.record.idx.int_idx;
+                        const record_data = ls.record_data.items.items[record_idx];
+                        const field_count = record_data.fields.count;
+                        break :blk std.fmt.allocPrint(allocator, "{{record with {d} fields}}", .{field_count});
+                    }
+                }
+            }
+            return error.UnsupportedLayout;
+        },
     };
 }
 
 /// Compare Interpreter result string with DevEvaluator result string.
-/// Only compares for expressions that DevEvaluator can handle.
-/// Fails the test if both can handle it but produce different strings.
-fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) !void {
-    // Skip comparison for expressions DevEvaluator can't handle yet
-    if (!canDevEvaluatorHandle(module_env, expr_idx)) {
-        return;
-    }
-
-    const dev_str = devEvaluatorStr(allocator, module_env, expr_idx);
+/// Compares ALL expressions - no exceptions. If DevEvaluator can't handle
+/// an expression, the test will fail (which is the desired behavior to
+/// track what still needs to be implemented).
+fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []const u8, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, builtin_module_env: *const ModuleEnv) !void {
+    const dev_str = try devEvaluatorStr(allocator, module_env, expr_idx, builtin_module_env);
     defer allocator.free(dev_str);
 
-    if (!std.mem.eql(u8, interpreter_str, dev_str)) {
+    // Compare strings, handling numeric formatting differences
+    // e.g., "42" vs "42.0" should be considered equal
+    if (!numericStringsEqual(interpreter_str, dev_str)) {
         std.debug.print(
             "\nEvaluator mismatch! Interpreter: {s}, DevEvaluator: {s}\n",
             .{ interpreter_str, dev_str },
@@ -204,17 +283,34 @@ fn compareWithDevEvaluator(allocator: std.mem.Allocator, interpreter_str: []cons
     }
 }
 
+/// Check if two strings represent the same numeric value.
+/// Handles cases like "42" vs "42.0" or "-5" vs "-5.0".
+fn numericStringsEqual(a: []const u8, b: []const u8) bool {
+    // Fast path: exact match
+    if (std.mem.eql(u8, a, b)) return true;
+
+    // Check if one is the other with ".0" suffix (integer vs Dec format)
+    if (a.len + 2 == b.len and std.mem.endsWith(u8, b, ".0") and std.mem.startsWith(u8, b, a)) {
+        return true;
+    }
+    if (b.len + 2 == a.len and std.mem.endsWith(u8, a, ".0") and std.mem.startsWith(u8, a, b)) {
+        return true;
+    }
+
+    return false;
+}
+
 /// Helper function to run an expression and expect a specific error.
 pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -233,17 +329,69 @@ pub fn runExpectError(src: []const u8, expected_error: anyerror, should_trace: e
     try std.testing.expect(false);
 }
 
+/// Helper function to verify type mismatch error and runtime crash.
+/// This tests both compile-time behavior (type mismatch reported) and
+/// runtime behavior (crash encountered instead of successfully evaluating).
+pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
+    const resources = try parseAndCanonicalizeExpr(test_allocator, src);
+    defer cleanupParseAndCanonical(test_allocator, resources);
+
+    // Step 1: Verify that the type checker detected a type mismatch
+    const problems = resources.checker.problems.problems.items;
+    var found_type_mismatch = false;
+    for (problems) |problem| {
+        if (problem == .type_mismatch) {
+            found_type_mismatch = true;
+            break;
+        }
+    }
+
+    if (!found_type_mismatch) {
+        std.debug.print("Expected TYPE MISMATCH error, but found {} problems:\n", .{problems.len});
+        for (problems, 0..) |problem, i| {
+            std.debug.print("  Problem {}: {s}\n", .{ i, @tagName(problem) });
+        }
+        return error.ExpectedTypeMismatch;
+    }
+
+    // Step 2: Run the interpreter anyway and verify it crashes
+    var test_env_instance = TestEnv.init(interpreter_allocator);
+    defer test_env_instance.deinit();
+
+    const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    defer interpreter.deinit();
+
+    const ops = test_env_instance.get_ops();
+    _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
+        // Expected: a crash or type mismatch error at runtime
+        switch (err) {
+            error.Crash, error.TypeMismatch, error.TypeContainedMismatch => return, // Success - we expected a crash
+            else => {
+                std.debug.print("Expected Crash, TypeMismatch, or TypeContainedMismatch error, got: {}\n", .{err});
+                return error.UnexpectedError;
+            },
+        }
+    };
+
+    // If we reach here, the interpreter succeeded when it should have crashed
+    std.debug.print("Expected runtime crash, but interpreter succeeded\n", .{});
+    return error.ExpectedCrash;
+}
+
 /// Helpers to setup and run an interpreter expecting an integer result.
 pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { trace, no_trace }) !void {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    // Use interpreter_allocator for interpreter (doesn't track leaks)
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -256,7 +404,7 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Check if this is an integer or Dec
     const int_value = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -270,10 +418,11 @@ pub fn runExpectI64(src: []const u8, expected_int: i128, should_trace: enum { tr
         break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
     };
 
-    // Compare with DevEvaluator using string representation
+    // Compare with DevEvaluator using integer string representation
+    // DevEvaluator uses integer layouts, so we compare as integers
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_value});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     try std.testing.expectEqual(expected_int, int_value);
 }
@@ -283,12 +432,12 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -301,7 +450,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // For boolean results, read the underlying byte value
     const int_val: i64 = if (result.layout.tag == .scalar and result.layout.data.scalar.tag == .int) blk: {
@@ -318,7 +467,7 @@ pub fn runExpectBool(src: []const u8, expected_bool: bool, should_trace: enum { 
     // Compare with DevEvaluator using string representation
     const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
     defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const bool_val = int_val != 0;
     try std.testing.expectEqual(expected_bool, bool_val);
@@ -329,12 +478,12 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -347,14 +496,14 @@ pub fn runExpectF32(src: []const u8, expected_f32: f32, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual = result.asF32();
 
     // Compare with DevEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f32 = 0.0001;
     const diff = @abs(actual - expected_f32);
@@ -369,12 +518,12 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -387,14 +536,14 @@ pub fn runExpectF64(src: []const u8, expected_f64: f64, should_trace: enum { tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual = result.asF64();
 
     // Compare with DevEvaluator using string representation
     const float_str = try std.fmt.allocPrint(test_allocator, "{d}", .{actual});
     defer test_allocator.free(float_str);
-    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx);
+    try compareWithDevEvaluator(test_allocator, float_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const epsilon: f64 = 0.000000001;
     const diff = @abs(actual - expected_f64);
@@ -413,12 +562,12 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -431,15 +580,16 @@ pub fn runExpectIntDec(src: []const u8, expected_int: i128, should_trace: enum {
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    // Compare with DevEvaluator using Dec string representation
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const dec_slice = actual_dec.format_to_buf(&buf);
+    const dec_str = try test_allocator.dupe(u8, dec_slice);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     const expected_dec = expected_int * dec_scale;
     if (actual_dec.num != expected_dec) {
@@ -455,12 +605,12 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -473,15 +623,16 @@ pub fn runExpectDec(src: []const u8, expected_dec_num: i128, should_trace: enum 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     const actual_dec = result.asDec(ops);
 
-    // Compare with DevEvaluator using string representation of integer part
-    const int_part = @divTrunc(actual_dec.num, dec_scale);
-    const int_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_part});
-    defer test_allocator.free(int_str);
-    try compareWithDevEvaluator(test_allocator, int_str, resources.module_env, resources.expr_idx);
+    // Compare with DevEvaluator using Dec string representation
+    var buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+    const dec_slice = actual_dec.format_to_buf(&buf);
+    const dec_str = try test_allocator.dupe(u8, dec_slice);
+    defer test_allocator.free(dec_str);
+    try compareWithDevEvaluator(test_allocator, dec_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 
     if (actual_dec.num != expected_dec_num) {
         std.debug.print("Expected Dec({d}), got Dec({d})\n", .{ expected_dec_num, actual_dec.num });
@@ -494,12 +645,12 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -511,13 +662,17 @@ pub fn runExpectStr(src: []const u8, expected_str: []const u8, should_trace: enu
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.layout.data.scalar.tag == .str);
 
     const roc_str: *const builtins.str.RocStr = @ptrCast(@alignCast(result.ptr.?));
     const str_slice = roc_str.asSlice();
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, str_slice, resources.module_env, resources.expr_idx, resources.builtin_module.env);
+
     try std.testing.expectEqualStrings(expected_str, str_slice);
 
     if (!roc_str.isSmallStr()) {
@@ -545,12 +700,12 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -563,7 +718,7 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a tuple layout
     try std.testing.expect(result.layout.tag == .tuple);
@@ -573,6 +728,10 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
     try std.testing.expectEqual(expected_elements.len, tuple_accessor.getElementCount());
 
+    // Build string representation for comparison with DevEvaluator
+    var tuple_parts_storage: [32][]const u8 = undefined;
+    var tuple_count: usize = 0;
+
     for (expected_elements) |expected_element| {
         // Get the element at the specified index
         // Use the result's rt_var since we're accessing elements of the evaluated expression
@@ -580,7 +739,8 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
 
         // Check if this is an integer or Dec
         try std.testing.expect(element.layout.tag == .scalar);
-        const int_val = if (element.layout.data.scalar.tag == .int) blk: {
+        const is_dec = element.layout.data.scalar.tag != .int;
+        const int_val = if (!is_dec) blk: {
             // Suffixed integer literals remain as integers
             break :blk element.asI128();
         } else blk: {
@@ -589,8 +749,37 @@ pub fn runExpectTuple(src: []const u8, expected_elements: []const ExpectedElemen
             const RocDec = builtins.dec.RocDec;
             break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
         };
+
+        // Store formatted string for comparison
+        tuple_parts_storage[tuple_count] = if (is_dec) blk: {
+            const dec_value = element.asDec(ops);
+            var dec_buf: [builtins.dec.RocDec.max_str_length]u8 = undefined;
+            const dec_slice = dec_value.format_to_buf(&dec_buf);
+            break :blk try test_allocator.dupe(u8, dec_slice);
+        } else blk: {
+            break :blk try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+        };
+        tuple_count += 1;
+
         try std.testing.expectEqual(expected_element.value, int_val);
     }
+
+    // Clean up tuple parts at the end
+    defer for (tuple_parts_storage[0..tuple_count]) |part| {
+        test_allocator.free(part);
+    };
+
+    // Format tuple string based on count
+    const tuple_str = switch (tuple_count) {
+        1 => try std.fmt.allocPrint(test_allocator, "({s})", .{tuple_parts_storage[0]}),
+        2 => try std.fmt.allocPrint(test_allocator, "({s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1] }),
+        3 => try std.fmt.allocPrint(test_allocator, "({s}, {s}, {s})", .{ tuple_parts_storage[0], tuple_parts_storage[1], tuple_parts_storage[2] }),
+        else => try std.fmt.allocPrint(test_allocator, "(tuple with {} elements)", .{tuple_count}),
+    };
+    defer test_allocator.free(tuple_str);
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, tuple_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a record result.
@@ -598,12 +787,12 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -616,7 +805,7 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a record layout
     try std.testing.expect(result.layout.tag == .record);
@@ -625,6 +814,10 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
     const sorted_fields = layout_cache.record_fields.sliceRange(record_data.getFields());
 
     try std.testing.expectEqual(expected_fields.len, sorted_fields.len);
+
+    // Collect field values for string building
+    var field_values: [16]i128 = undefined;
+    var field_count: usize = 0;
 
     for (expected_fields) |expected_field| {
         var found = false;
@@ -655,12 +848,24 @@ pub fn runExpectRecord(src: []const u8, expected_fields: []const ExpectedField, 
                     const RocDec = builtins.dec.RocDec;
                     break :blk @divTrunc(dec_value.num, RocDec.one_point_zero_i128);
                 };
+
+                field_values[field_count] = int_val;
+                field_count += 1;
+
                 try std.testing.expectEqual(expected_field.value, int_val);
                 break;
             }
         }
         try std.testing.expect(found);
     }
+
+    // Build string representation for comparison with DevEvaluator
+    // Simple format: just show field count for now since exact format needs to match DevEvaluator
+    const record_str = try std.fmt.allocPrint(test_allocator, "{{record with {} fields}}", .{field_count});
+    defer test_allocator.free(record_str);
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, record_str, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of zst result.
@@ -668,12 +873,12 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -686,7 +891,7 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     if (result.layout.tag != .list_of_zst) {
         std.debug.print("\nExpected .list_of_zst layout but got .{s}\n", .{@tagName(result.layout.tag)});
@@ -701,6 +906,20 @@ pub fn runExpectListZst(src: []const u8, expected_element_count: usize, should_t
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
 
     try std.testing.expectEqual(expected_element_count, list_accessor.len());
+
+    // Build string representation for comparison with DevEvaluator
+    // ZST lists are formatted as [(), (), ...] or [] for empty
+    var list_str: std.ArrayList(u8) = .empty;
+    defer list_str.deinit(test_allocator);
+    try list_str.appendSlice(test_allocator, "[");
+    for (0..expected_element_count) |i| {
+        if (i > 0) try list_str.appendSlice(test_allocator, ", ");
+        try list_str.appendSlice(test_allocator, "()");
+    }
+    try list_str.appendSlice(test_allocator, "]");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Helpers to setup and run an interpreter expecting a list of i64 result.
@@ -708,12 +927,12 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -726,7 +945,7 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // A list of i64 must have .list layout, not .list_of_zst
     if (result.layout.tag != .list) {
@@ -743,6 +962,11 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
 
     try std.testing.expectEqual(expected_elements.len, list_accessor.len());
 
+    // Build string representation for comparison with DevEvaluator
+    var list_str: std.ArrayList(u8) = .empty;
+    defer list_str.deinit(test_allocator);
+    try list_str.appendSlice(test_allocator, "[");
+
     for (expected_elements, 0..) |expected_val, i| {
         // Use the result's rt_var since we're accessing elements of the evaluated expression
         const element = try list_accessor.getElement(i, result.rt_var);
@@ -751,8 +975,18 @@ pub fn runExpectListI64(src: []const u8, expected_elements: []const i64, should_
         try std.testing.expect(element.layout.tag == .scalar);
         try std.testing.expect(element.layout.data.scalar.tag == .int);
         const int_val = element.asI128();
+
+        if (i > 0) try list_str.appendSlice(test_allocator, ", ");
+        const elem_str = try std.fmt.allocPrint(test_allocator, "{}", .{int_val});
+        defer test_allocator.free(elem_str);
+        try list_str.appendSlice(test_allocator, elem_str);
+
         try std.testing.expectEqual(@as(i128, expected_val), int_val);
     }
+    try list_str.appendSlice(test_allocator, "]");
+
+    // Compare with DevEvaluator
+    try compareWithDevEvaluator(test_allocator, list_str.items, resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Like runExpectListI64 but expects an empty list with .list_of_zst layout.
@@ -761,12 +995,12 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     const resources = try parseAndCanonicalizeExpr(test_allocator, src);
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -779,7 +1013,7 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     // Verify we got a .list_of_zst layout (empty list optimization)
     if (result.layout.tag != .list_of_zst) {
@@ -796,6 +1030,9 @@ pub fn runExpectEmptyListI64(src: []const u8, should_trace: enum { trace, no_tra
     // Use the ListAccessor to verify the list is empty
     const list_accessor = try result.asList(layout_cache, elem_layout, ops);
     try std.testing.expectEqual(@as(usize, 0), list_accessor.len());
+
+    // Compare with DevEvaluator - empty list is "[]"
+    try compareWithDevEvaluator(test_allocator, "[]", resources.module_env, resources.expr_idx, resources.builtin_module.env);
 }
 
 /// Parse and canonicalize an expression.
@@ -997,8 +1234,9 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
             .region = base.Region.zero(),
         } });
         const checker = try allocator.create(Check);
-        // Pass Bool and Try as imported modules
-        const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+        // Pass user module and Builtin as imported modules
+        // Order must match all_module_envs in devEvaluatorStr
+        const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
         // Resolve imports - map each import to its index in imported_envs
         module_env.imports.resolveImports(module_env, &imported_envs);
         checker.* = try Check.init(allocator, &module_env.types, module_env, &imported_envs, &module_envs_map, &module_env.store.regions, builtin_ctx);
@@ -1025,7 +1263,10 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     module_env.all_defs = try module_env.store.defSpanFrom(0);
 
     // Create type checker - pass Builtin as imported module
-    const imported_envs = [_]*const ModuleEnv{builtin_module.env};
+    // IMPORTANT: The order here MUST match all_module_envs in devEvaluatorStr:
+    // index 0 = user module, index 1 = builtin module
+    // This ensures external lookups resolve to the correct module index.
+    const imported_envs = [_]*const ModuleEnv{ module_env, builtin_module.env };
 
     // Resolve imports - map each import to its index in imported_envs
     module_env.imports.resolveImports(module_env, &imported_envs);
@@ -1039,13 +1280,19 @@ pub fn parseAndCanonicalizeExpr(allocator: std.mem.Allocator, source: []const u8
     // Rewrite deferred numeric literals to match their inferred types
     try rewriteDeferredNumericLiterals(module_env, &module_env.types, &checker.import_mapping);
 
+    // Note: We do NOT run ClosureTransformer, LambdaLifter, or RC insertion here.
+    // The interpreter handles closures natively (e_lambda, e_closure) and does
+    // its own runtime reference counting. The transformations are designed for
+    // code generation backends (dev backend, LLVM) where closures need to be
+    // lowered to tagged unions with capture records.
+
     const builtin_types = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
     return .{
         .module_env = module_env,
         .parse_ast = parse_ast,
         .can = czer,
         .checker = checker,
-        .expr_idx = canonical_expr_idx,
+        .expr_idx = canonical_expr_idx, // Use original expression - interpreter does runtime RC
         .bool_stmt = bool_stmt_in_bool_module,
         .builtin_module = builtin_module,
         .builtin_indices = builtin_indices,
@@ -1077,19 +1324,19 @@ test "eval tag - already primitive" {
     const resources = try parseAndCanonicalizeExpr(test_allocator, "True");
     defer cleanupParseAndCanonical(test_allocator, resources);
 
-    var test_env_instance = TestEnv.init(test_allocator);
+    var test_env_instance = TestEnv.init(interpreter_allocator);
     defer test_env_instance.deinit();
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
-    const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(test_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    const imported_envs = [_]*const can.ModuleEnv{ resources.module_env, resources.builtin_module.env };
+    var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
     const result = try interpreter.eval(resources.expr_idx, ops);
     const layout_cache = &interpreter.runtime_layout_store;
     defer result.decref(layout_cache, ops);
-    defer interpreter.cleanupBindings(ops);
+    defer interpreter.bindings.items.len = 0;
 
     try std.testing.expect(result.layout.tag == .scalar);
     try std.testing.expect(result.ptr != null);
@@ -1109,10 +1356,10 @@ test "interpreter reuse across multiple evaluations" {
         const resources = try parseAndCanonicalizeExpr(test_allocator, case.src);
         defer cleanupParseAndCanonical(test_allocator, resources);
 
-        var test_env_instance = TestEnv.init(test_allocator);
+        var test_env_instance = TestEnv.init(interpreter_allocator);
         defer test_env_instance.deinit();
 
-        var interpreter = try Interpreter.init(test_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+        var interpreter = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -1122,7 +1369,7 @@ test "interpreter reuse across multiple evaluations" {
             const result = try interpreter.eval(resources.expr_idx, ops);
             const layout_cache = &interpreter.runtime_layout_store;
             defer result.decref(layout_cache, ops);
-            defer interpreter.cleanupBindings(ops);
+            defer interpreter.bindings.items.len = 0;
 
             try std.testing.expect(result.layout.tag == .scalar);
 

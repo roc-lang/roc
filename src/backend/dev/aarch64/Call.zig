@@ -150,9 +150,9 @@ pub const CALLER_SAVED_GENERAL_MASK: u32 =
     (1 << @intFromEnum(GeneralReg.X12)) |
     (1 << @intFromEnum(GeneralReg.X13)) |
     (1 << @intFromEnum(GeneralReg.X14)) |
-    (1 << @intFromEnum(GeneralReg.X15)) |
-    (1 << @intFromEnum(GeneralReg.IP0)) |
-    (1 << @intFromEnum(GeneralReg.IP1));
+    (1 << @intFromEnum(GeneralReg.X15));
+// NOTE: IP0 (X16) and IP1 (X17) are NOT included here because they are used
+// as scratch registers by ldrRegMemSoff/strRegMemSoff for large offsets.
 
 /// Bitmask of caller-saved float registers
 /// V0-V7 and V16-V31 are caller-saved

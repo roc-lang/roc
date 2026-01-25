@@ -40,12 +40,11 @@
 const std = @import("std");
 const base = @import("base");
 const types = @import("types");
-const can = @import("can");
 
-const ModuleEnv = can.ModuleEnv;
-const CIR = can.CIR;
+const ModuleEnv = @import("ModuleEnv.zig");
+const CIR = @import("CIR.zig");
 const Expr = CIR.Expr;
-const Pattern = can.CIR.Pattern;
+const Pattern = @import("Pattern.zig").Pattern;
 
 const Self = @This();
 
@@ -173,7 +172,7 @@ pub fn liftClosure(
 }
 
 /// Import ClosureInfo from ClosureTransformer
-const ClosureTransformer = can.ClosureTransformer;
+const ClosureTransformer = @import("ClosureTransformer.zig");
 const ClosureInfo = ClosureTransformer.ClosureInfo;
 
 /// Lift a closure from ClosureInfo directly.
@@ -591,6 +590,10 @@ fn transformBodyWithCaptures(
         .e_hosted_lambda,
         .e_low_level_lambda,
         .e_crash,
+        // RC expressions are inserted after canonicalization
+        .e_incref,
+        .e_decref,
+        .e_free,
         => return body_idx,
 
         .e_match => |match| {

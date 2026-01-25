@@ -108,12 +108,42 @@ pub fn subRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
 }
 
+/// ADC reg, reg (add with carry)
+pub fn adcRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+    try self.emitRex(width, src, dst);
+    try self.buf.append(self.allocator, 0x11); // ADC r/m, r
+    try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
+/// SBB reg, reg (subtract with borrow)
+pub fn sbbRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
+    try self.emitRex(width, src, dst);
+    try self.buf.append(self.allocator, 0x19); // SBB r/m, r
+    try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
 /// IMUL reg, reg (signed multiply, result in first reg)
 pub fn imulRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     try self.emitRex(width, dst, src);
     try self.buf.append(self.allocator, 0x0F);
     try self.buf.append(self.allocator, 0xAF); // IMUL r, r/m
     try self.buf.append(self.allocator, modRM(0b11, dst.enc(), src.enc()));
+}
+
+/// MUL r64 - unsigned widening multiply: RDX:RAX = RAX * src
+/// Result: low 64 bits in RAX, high 64 bits in RDX
+pub fn mulReg(self: *Emit, width: RegisterWidth, src: GeneralReg) !void {
+    try self.emitRex(width, null, src);
+    try self.buf.append(self.allocator, 0xF7); // MUL r/m
+    try self.buf.append(self.allocator, modRM(0b11, 4, src.enc())); // /4 = MUL
+}
+
+/// IMUL r64 - signed widening multiply: RDX:RAX = RAX * src (single operand form)
+/// Result: low 64 bits in RAX, high 64 bits in RDX
+pub fn imulRegWidening(self: *Emit, width: RegisterWidth, src: GeneralReg) !void {
+    try self.emitRex(width, null, src);
+    try self.buf.append(self.allocator, 0xF7); // IMUL r/m
+    try self.buf.append(self.allocator, modRM(0b11, 5, src.enc())); // /5 = IMUL
 }
 
 /// ADD reg, imm32 (sign-extended)
@@ -204,6 +234,37 @@ pub fn notReg(self: *Emit, width: RegisterWidth, reg: GeneralReg) !void {
     try self.buf.append(self.allocator, modRM(0b11, 2, reg.enc()));
 }
 
+/// IDIV reg (signed divide RDX:RAX by reg, quotient in RAX, remainder in RDX)
+pub fn idivReg(self: *Emit, width: RegisterWidth, reg: GeneralReg) !void {
+    if (width.requiresSizeOverride()) {
+        try self.buf.append(self.allocator, 0x66);
+    }
+    try self.emitRex(width, null, reg);
+    try self.buf.append(self.allocator, 0xF7);
+    try self.buf.append(self.allocator, modRM(0b11, 7, reg.enc())); // /7 = IDIV
+}
+
+/// DIV reg (unsigned divide RDX:RAX by reg, quotient in RAX, remainder in RDX)
+pub fn divReg(self: *Emit, width: RegisterWidth, reg: GeneralReg) !void {
+    if (width.requiresSizeOverride()) {
+        try self.buf.append(self.allocator, 0x66);
+    }
+    try self.emitRex(width, null, reg);
+    try self.buf.append(self.allocator, 0xF7);
+    try self.buf.append(self.allocator, modRM(0b11, 6, reg.enc())); // /6 = DIV
+}
+
+/// CQO (sign-extend RAX into RDX:RAX for 64-bit division)
+pub fn cqo(self: *Emit) !void {
+    try self.buf.append(self.allocator, 0x48); // REX.W
+    try self.buf.append(self.allocator, 0x99); // CQO
+}
+
+/// CDQ (sign-extend EAX into EDX:EAX for 32-bit division)
+pub fn cdq(self: *Emit) !void {
+    try self.buf.append(self.allocator, 0x99); // CDQ
+}
+
 /// AND reg, reg
 pub fn andRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) !void {
     if (width.requiresSizeOverride()) {
@@ -212,6 +273,17 @@ pub fn andRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.emitRex(width, src, dst);
     try self.buf.append(self.allocator, 0x21); // AND r/m, r
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
+/// AND r64, imm8 - AND register with sign-extended immediate byte
+/// Used after SETCC to mask the result to just the lowest bit.
+pub fn andRegImm8(self: *Emit, dst: GeneralReg, imm: i8) !void {
+    // REX.W prefix (0x48) + REX.B if dst is R8-R15
+    try self.buf.append(self.allocator, rex(1, 0, 0, dst.rexB()));
+    try self.buf.append(self.allocator, 0x83); // AND r/m64, imm8
+    // ModRM: mod=11 (register), reg=4 (/4 for AND), rm=dst
+    try self.buf.append(self.allocator, modRM(0b11, 4, dst.enc()));
+    try self.buf.append(self.allocator, @bitCast(imm));
 }
 
 /// OR reg, reg
@@ -232,6 +304,17 @@ pub fn xorRegReg(self: *Emit, width: RegisterWidth, dst: GeneralReg, src: Genera
     try self.emitRex(width, src, dst);
     try self.buf.append(self.allocator, 0x31); // XOR r/m, r
     try self.buf.append(self.allocator, modRM(0b11, src.enc(), dst.enc()));
+}
+
+/// XOR reg, imm8 (XOR with sign-extended 8-bit immediate)
+pub fn xorRegImm8(self: *Emit, width: RegisterWidth, reg: GeneralReg, imm: i8) !void {
+    if (width.requiresSizeOverride()) {
+        try self.buf.append(self.allocator, 0x66);
+    }
+    try self.emitRex(width, null, reg);
+    try self.buf.append(self.allocator, 0x83); // XOR r/m, imm8
+    try self.buf.append(self.allocator, modRM(0b11, 6, reg.enc())); // /6 = XOR
+    try self.buf.append(self.allocator, @bitCast(imm));
 }
 
 /// SHL reg, imm8 (shift left)
@@ -289,6 +372,30 @@ pub fn ret(self: *Emit) !void {
     try self.buf.append(self.allocator, 0xC3);
 }
 
+/// PUSH r64 (push register onto stack)
+pub fn push(self: *Emit, reg: GeneralReg) !void {
+    // PUSH r64: 50+rd (or REX.B 50+rd for R8-R15)
+    if (reg.requiresRex()) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0x50 + @as(u8, reg.enc()));
+}
+
+/// POP r64 (pop register from stack)
+pub fn pop(self: *Emit, reg: GeneralReg) !void {
+    // POP r64: 58+rd (or REX.B 58+rd for R8-R15)
+    if (reg.requiresRex()) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0x58 + @as(u8, reg.enc()));
+}
+
+/// JMP rel32 (unconditional jump with 32-bit offset)
+/// This is an alias for jmpRel32 for code compatibility
+pub fn jmp(self: *Emit, rel: i32) !void {
+    try self.jmpRel32(rel);
+}
+
 /// CALL rel32 (relative call)
 pub fn callRel32(self: *Emit, rel: i32) !void {
     try self.buf.append(self.allocator, 0xE8);
@@ -306,6 +413,22 @@ pub fn callRelocated(self: *Emit, name: []const u8) !void {
             .name = name,
         },
     });
+}
+
+/// CALL r64 (call to address in register)
+pub fn callReg(self: *Emit, reg: GeneralReg) !void {
+    // CALL r64: FF /2
+    // REX prefix needed for R8-R15
+    if (reg.requiresRex()) {
+        try self.buf.append(self.allocator, 0x41); // REX.B
+    }
+    try self.buf.append(self.allocator, 0xFF);
+    try self.buf.append(self.allocator, modRM(0b11, 2, reg.enc())); // /2 = CALL
+}
+
+/// CALL rel32 (relative call)
+pub fn call(self: *Emit, rel: i32) !void {
+    try self.callRel32(rel);
 }
 
 /// JMP rel32 (relative jump)
@@ -355,6 +478,11 @@ pub fn jccRel32(self: *Emit, cond: Condition, rel: i32) !void {
 pub fn jccRel8(self: *Emit, cond: Condition, rel: i8) !void {
     try self.buf.append(self.allocator, 0x70 + @as(u8, @intFromEnum(cond)));
     try self.buf.append(self.allocator, @bitCast(rel));
+}
+
+/// JNE rel32 (jump if not equal)
+pub fn jne(self: *Emit, rel: i32) !void {
+    try self.jccRel32(.not_equal, rel);
 }
 
 /// CMOVcc reg, reg (conditional move)
@@ -521,6 +649,27 @@ pub fn movsdRegMem(self: *Emit, dst: FloatReg, base: GeneralReg, disp: i32) !voi
     try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
 }
 
+/// MOVSS xmm, [base + disp32] (load scalar single from memory)
+pub fn movssRegMem(self: *Emit, dst: FloatReg, base: GeneralReg, disp: i32) !void {
+    try self.buf.append(self.allocator, 0xF3);
+    const r: u1 = dst.rexB();
+    const b: u1 = base.rexB();
+    if (r == 1 or b == 1) {
+        try self.buf.append(self.allocator, rex(0, r, 0, b));
+    }
+    try self.buf.append(self.allocator, 0x0F);
+    try self.buf.append(self.allocator, 0x10);
+
+    const base_enc = base.enc();
+    if (base_enc == 4) {
+        try self.buf.append(self.allocator, modRM(0b10, dst.enc(), 0b100));
+        try self.buf.append(self.allocator, 0x24);
+    } else {
+        try self.buf.append(self.allocator, modRM(0b10, dst.enc(), base_enc));
+    }
+    try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+}
+
 /// MOVSD [base + disp32], xmm (store scalar double to memory)
 pub fn movsdMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !void {
     try self.buf.append(self.allocator, 0xF2);
@@ -531,6 +680,27 @@ pub fn movsdMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !voi
     }
     try self.buf.append(self.allocator, 0x0F);
     try self.buf.append(self.allocator, 0x11); // MOVSD m64, xmm
+
+    const base_enc = base.enc();
+    if (base_enc == 4) {
+        try self.buf.append(self.allocator, modRM(0b10, src.enc(), 0b100));
+        try self.buf.append(self.allocator, 0x24);
+    } else {
+        try self.buf.append(self.allocator, modRM(0b10, src.enc(), base_enc));
+    }
+    try self.buf.appendSlice(self.allocator, &@as([4]u8, @bitCast(disp)));
+}
+
+/// MOVSS [base + disp32], xmm (store scalar single to memory)
+pub fn movssMemReg(self: *Emit, base: GeneralReg, disp: i32, src: FloatReg) !void {
+    try self.buf.append(self.allocator, 0xF3);
+    const r: u1 = src.rexB();
+    const b: u1 = base.rexB();
+    if (r == 1 or b == 1) {
+        try self.buf.append(self.allocator, rex(0, r, 0, b));
+    }
+    try self.buf.append(self.allocator, 0x0F);
+    try self.buf.append(self.allocator, 0x11); // MOVSS m32, xmm
 
     const base_enc = base.enc();
     if (base_enc == 4) {

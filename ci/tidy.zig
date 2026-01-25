@@ -597,6 +597,8 @@ const DeadFilesDetector = struct {
             "watch.zig", // File watcher entry point
             "fx_platform_test.zig", // FX platform tests
             "roc_subcommands.zig", // CLI subcommand tests
+            "test_runner.zig", // Test runner executable
+            "llvm_evaluator.zig", // LLVM evaluator executable
         };
         for (entry_points) |entry_point| {
             if (std.mem.startsWith(u8, &file, entry_point)) return true;

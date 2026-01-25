@@ -611,11 +611,9 @@ pub const Repl = struct {
         // Use DevEvaluator if backend is .dev and we have a DevEvaluator instance
         if (self.backend == .dev) {
             if (self.dev_evaluator) |*dev_eval| {
-                // Get the expression from the index
-                const expr = module_env.store.getExpr(final_expr_idx);
-
                 // Generate and execute native code
-                var code_result = dev_eval.generateCode(module_env, expr) catch {
+                const all_module_envs = &.{module_env};
+                var code_result = dev_eval.generateCode(module_env, final_expr_idx, all_module_envs) catch {
                     // Fall back to interpreter on unsupported expressions
                     return self.evaluateWithInterpreter(module_env, final_expr_idx, &imported_modules, &checker);
                 };
@@ -673,7 +671,7 @@ pub const Repl = struct {
             try self.generateAndStoreDebugHtml(module_env, final_expr_idx);
         }
 
-        const output = try interpreter.renderValueRocWithType(result, result.rt_var, self.roc_ops);
+        const output = try interpreter.renderValueRocForRepl(result, result.rt_var, self.roc_ops);
 
         result.decref(&interpreter.runtime_layout_store, self.roc_ops);
         interpreter.cleanupBindings(self.roc_ops);

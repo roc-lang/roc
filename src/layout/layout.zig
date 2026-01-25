@@ -110,6 +110,10 @@ pub const Idx = enum(@Type(.{
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
     pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+
+    /// Default numeric type for unbound/polymorphic numbers.
+    /// Dec is the default in the new Roc compiler.
+    pub const default_num: Idx = .dec;
 };
 
 /// Represents a closure with its captured environment

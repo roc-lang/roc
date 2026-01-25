@@ -4,6 +4,8 @@
 
 const std = @import("std");
 const helpers = @import("helpers.zig");
+// Use interpreter_allocator for interpreter tests (doesn't track leaks)
+const interpreter_allocator = helpers.interpreter_allocator;
 const Interpreter = @import("../interpreter.zig").Interpreter;
 const can = @import("can");
 const RocOps = @import("builtins").host_abi.RocOps;
@@ -86,20 +88,20 @@ test "interpreter poly: return a function then call (int)" {
         \\(|_| (|x| x))(0)(42)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter poly: return a function then call (string)" {
@@ -107,19 +109,19 @@ test "interpreter poly: return a function then call (string)" {
         \\(|_| (|x| x))(0)("hi")
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     const expected =
         \\"hi"
     ;
@@ -131,20 +133,20 @@ test "interpreter captures (monomorphic): adder" {
         \\(|n| (|x| n + x))(1)(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 test "interpreter captures (monomorphic): constant function" {
@@ -152,19 +154,19 @@ test "interpreter captures (monomorphic): constant function" {
         \\(|x| (|_| x))("hi")(0)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     const expected =
         \\"hi"
     ;
@@ -176,20 +178,20 @@ test "interpreter captures (polymorphic): capture id and apply to int" {
         \\((|id| (|x| id(x)))(|y| y))(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_ok = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_ok = try interp2.translateTypeVar(resources.module_env, ct_var_ok);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_ok, &ops);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("41", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("41.0", rendered);
 }
 
 test "interpreter captures (polymorphic): capture id and apply to string" {
@@ -197,19 +199,19 @@ test "interpreter captures (polymorphic): capture id and apply to string" {
         \\((|id| (|x| id(x)))(|y| y))("ok")
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var_point = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var_point = try interp2.translateTypeVar(resources.module_env, ct_var_point);
     const rendered = try interp2.renderValueRocWithType(result, rt_var_point, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     const expected =
         \\"ok"
     ;
@@ -222,18 +224,18 @@ test "interpreter higher-order: apply f then call with 41" {
         \\((|f| (|x| f(x)))(|n| n + 1))(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: double apply f inside a function
@@ -242,18 +244,18 @@ test "interpreter higher-order: apply f twice" {
         \\((|f| (|x| f(f(x))))(|n| n + 1))(40)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: pass a constructed closure as an argument, then apply with an int
@@ -262,18 +264,18 @@ test "interpreter higher-order: pass constructed closure and apply" {
         \\(|g| g(41))((|f| (|x| f(x)))(|y| y))
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("41", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("41.0", rendered);
 }
 
 // Higher-order: construct a function then pass it to a consumer and evaluate
@@ -282,18 +284,18 @@ test "interpreter higher-order: construct then pass then call" {
         \\((|make| (|z| (make(|n| n + 1))(z)))(|f| (|x| f(x))))(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order: compose = \f -> \g -> \x -> f(g(x)) and apply
@@ -302,18 +304,18 @@ test "interpreter higher-order: compose id with +1" {
         \\(((|f| (|g| (|x| f(g(x)))))(|n| n + 1))(|y| y))(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Higher-order + capture: returns polymorphic function that uses a captured increment
@@ -322,18 +324,18 @@ test "interpreter higher-order: return poly fn using captured +n" {
         \\(((|n| (|id| (|x| id(x + n))))(1))(|y| y))(41)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("42", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("42.0", rendered);
 }
 
 // Recursion via block let-binding using a named recursive closure
@@ -342,18 +344,18 @@ test "interpreter recursion: simple countdown" {
     //         \\{ rec = (|n| if n == 0 { 0 } else { rec(n - 1) + 1 }) rec(2) }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("2", rendered);
+    //     defer interpreter_allocator.free(rendered);
+    //     try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter if: else-if chain selects middle branch" {
@@ -361,17 +363,17 @@ test "interpreter if: else-if chain selects middle branch" {
     //         \\{ n = 1 if n == 0 { "zero" } else if n == 1 { "one" } else { "other" } }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
+    //     defer interpreter_allocator.free(rendered);
     //     const expected =
     //         \\"one"
     //     ;
@@ -383,18 +385,18 @@ test "interpreter var and reassign" {
         \\{ var x = 1 x = x + 1 x }
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const rendered = try interp2.renderValueRoc(result);
-    defer std.testing.allocator.free(rendered);
-    try std.testing.expectEqualStrings("2", rendered);
+    defer interpreter_allocator.free(rendered);
+    try std.testing.expectEqualStrings("2.0", rendered);
 }
 
 test "interpreter logical or is short-circuiting" {
@@ -402,17 +404,17 @@ test "interpreter logical or is short-circuiting" {
     //         \\if ((1 == 1) or { crash "nope" }) { "ok" } else { "bad" }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
+    //     defer interpreter_allocator.free(rendered);
     //     const expected =
     //         \\"ok"
     //     ;
@@ -424,17 +426,17 @@ test "interpreter logical and is short-circuiting" {
     //         \\if ((1 == 0) and { crash "nope" }) { "bad" } else { "ok" }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
+    //     defer interpreter_allocator.free(rendered);
     //     const expected =
     //         \\"ok"
     //     ;
@@ -446,18 +448,18 @@ test "interpreter recursion: factorial 5 -> 120" {
     //         \\{ fact = (|n| if n == 0 { 1 } else { n * fact(n - 1) }) fact(5) }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("120", rendered);
+    //     defer interpreter_allocator.free(rendered);
+    //     try std.testing.expectEqualStrings("120.0", rendered);
 }
 
 // Additional complex recursion tests (mutual recursion, nested tuple builders)
@@ -469,66 +471,66 @@ test "interpreter recursion: fibonacci 5 -> 5" {
     //         \\{ fib = (|n| if n == 0 { 0 } else if n == 1 { 1 } else { fib(n - 1) + fib(n - 2) }) fib(5) }
     //     ;
 
-    //     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    //     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    //     const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    //     defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    //     var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    //     var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     //     defer interp2.deinit();
 
-    //     var host = TestHost{ .allocator = std.testing.allocator };
+    //     var host = TestHost{ .allocator = interpreter_allocator };
     //     var ops = makeOps(&host);
     //     const result = try interp2.eval(resources.expr_idx, &ops);
     //     const rendered = try interp2.renderValueRoc(result);
-    //     defer std.testing.allocator.free(rendered);
-    //     try std.testing.expectEqualStrings("5", rendered);
+    //     defer interpreter_allocator.free(rendered);
+    //     try std.testing.expectEqualStrings("5.0", rendered);
 }
 
 // Tag union tests (anonymous, non-recursive) — RED first
 
 test "interpreter tag union: one-arg tag Ok(42)" {
     const roc_src =
-        \\Ok(42)
+        \\Ok(42.0)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     const expected =
-        \\Ok(42)
+        \\Ok(42.0)
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
 
 test "interpreter tag union: multi-arg tag Point(1, 2)" {
     const roc_src =
-        \\Point(1, 2)
+        \\Point(1.0, 2.0)
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     const expected =
-        \\Point(1, 2)
+        \\Point(1.0, 2.0)
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
@@ -542,24 +544,24 @@ test "interpreter tag union: nested tag in tuple in tag (issue #8750)" {
         \\Ok((Name("hello"), 5))
     ;
 
-    const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, roc_src);
-    defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
+    const resources = try helpers.parseAndCanonicalizeExpr(interpreter_allocator, roc_src);
+    defer helpers.cleanupParseAndCanonical(interpreter_allocator, resources);
 
-    var interp2 = try Interpreter.init(std.testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interp2 = try Interpreter.init(interpreter_allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
     defer interp2.deinit();
 
-    var host = TestHost{ .allocator = std.testing.allocator };
+    var host = TestHost{ .allocator = interpreter_allocator };
     var ops = makeOps(&host);
     const result = try interp2.eval(resources.expr_idx, &ops);
     const ct_var = can.ModuleEnv.varFrom(resources.expr_idx);
     const rt_var = try interp2.translateTypeVar(resources.module_env, ct_var);
     const rendered = try interp2.renderValueRocWithType(result, rt_var, &ops);
-    defer std.testing.allocator.free(rendered);
+    defer interpreter_allocator.free(rendered);
     // The nested tag union renders with variant index since the renderer doesn't
     // have full type info for the inner tag. The key is that we get here without
     // stack overflow.
     const expected =
-        \\Ok((<tag_union variant=0>, 5))
+        \\Ok((<tag_union variant=0>, 5.0))
     ;
     try std.testing.expectEqualStrings(expected, rendered);
 }
