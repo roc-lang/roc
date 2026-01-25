@@ -2278,103 +2278,88 @@ pub const Serialized = extern struct {
         try self.method_idents.serialize(&env.method_idents, allocator, writer);
     }
 
-    /// Deserialize a ModuleEnv from the buffer, updating the ModuleEnv in place
+    /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(
-        self: *Serialized,
+    /// WARNING: The returned ModuleEnv has data pointing into the cache buffer (read-only).
+    /// Use deserializeWithMutableTypes() if types/store need to be mutable.
+    pub fn deserializeInto(
+        self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
     ) std.mem.Allocator.Error!*Self {
-        // Verify that Serialized is at least as large as the runtime struct.
-        // This is required because we're reusing the same memory location.
-        // On 32-bit platforms, Serialized may be larger due to using fixed-size types for platform-independent serialization.
-        // In Debug builds, Self may be larger due to debug-only store tracking fields, so skip this check.
-        comptime {
-            if (builtin.mode != .Debug) {
-                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
-            }
-        }
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
-
-        // Deserialize common env first so we can look up identifiers
-        const common = self.common.deserialize(base_addr, source).*;
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
 
         env.* = Self{
             .gpa = gpa,
-            .common = common,
-            .types = self.types.deserialize(base_addr, gpa).*,
+            .common = self.common.deserializeInto(base_addr, source),
+            .types = self.types.deserializeInto(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(base_addr).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(base_addr).*,
-            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
-            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules (only needed during fresh canonicalization)
+            .module_name_idx = Ident.Idx.NONE, // Not used for deserialized modules
             .diagnostics = self.diagnostics,
-            .store = self.store.deserialize(base_addr, gpa).*,
+            .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null, // Not serialized, will be recomputed if needed
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(base_addr).*,
+            .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 
         return env;
     }
 
-    /// Deserialize with mutable type store for cache modules.
-    /// Unlike deserialize(), this allocates fresh memory for the type store arrays,
-    /// allowing the type store to be mutated (e.g., during type checking).
+    /// Deserialize with mutable type store and node store for cache modules.
+    /// Allocates fresh memory for the type store and node store arrays,
+    /// allowing them to be mutated (e.g., during type checking).
     /// Use this for disk cache modules that may need to add new types.
     pub fn deserializeWithMutableTypes(
-        self: *Serialized,
+        self: *const Serialized,
         base_addr: usize,
         gpa: std.mem.Allocator,
         source: []const u8,
         module_name: []const u8,
     ) std.mem.Allocator.Error!*Self {
-        comptime {
-            if (builtin.mode != .Debug) {
-                std.debug.assert(@sizeOf(@This()) >= @sizeOf(Self));
-            }
-        }
-
-        const env = @as(*Self, @ptrFromInt(@intFromPtr(self)));
-        const common = self.common.deserialize(base_addr, source).*;
+        // Allocate a fresh ModuleEnv on the heap
+        const env = try gpa.create(Self);
+        errdefer gpa.destroy(env);
 
         env.* = Self{
             .gpa = gpa,
-            .common = common,
+            .common = self.common.deserializeInto(base_addr, source),
             // Use deserializeWithCopy to get mutable type store
-            .types = (try self.types.deserializeWithCopy(base_addr, gpa)).*,
+            .types = try self.types.deserializeWithCopy(base_addr, gpa),
             .module_kind = self.module_kind.decode(),
             .all_defs = self.all_defs,
             .all_statements = self.all_statements,
             .exports = self.exports,
-            .requires_types = self.requires_types.deserialize(base_addr).*,
-            .for_clause_aliases = self.for_clause_aliases.deserialize(base_addr).*,
+            .requires_types = self.requires_types.deserializeInto(base_addr),
+            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
             .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserialize(base_addr).*,
-            .imports = (try self.imports.deserialize(base_addr, gpa)).*,
+            .external_decls = self.external_decls.deserializeInto(base_addr),
+            .imports = try self.imports.deserializeInto(base_addr, gpa),
             .module_name = module_name,
             .module_name_idx = Ident.Idx.NONE,
             .diagnostics = self.diagnostics,
             // Use deserializeWithCopy for NodeStore so regions can be extended
-            .store = (try self.store.deserializeWithCopy(base_addr, gpa)).*,
+            .store = try self.store.deserializeWithCopy(base_addr, gpa),
             .evaluation_order = null,
             .idents = self.idents,
-            .deferred_numeric_literals = self.deferred_numeric_literals.deserialize(base_addr).*,
+            .deferred_numeric_literals = self.deferred_numeric_literals.deserializeInto(base_addr),
             .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserialize(base_addr).*,
+            .method_idents = self.method_idents.deserializeInto(base_addr),
             .rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, TypeVar){},
         };
 

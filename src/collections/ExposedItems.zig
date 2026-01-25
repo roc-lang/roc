@@ -120,18 +120,12 @@ pub const ExposedItems = struct {
             try self.items.serialize(&exposed_items.items, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into an ExposedItems
+        /// Deserialize into an ExposedItems value (no in-place modification of cache buffer).
         /// The base_addr parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize) *ExposedItems {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const exposed_items = @as(*ExposedItems, @ptrFromInt(@intFromPtr(self)));
-
-            exposed_items.* = ExposedItems{
-                .items = self.items.deserialize(base_addr).*,
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) ExposedItems {
+            return ExposedItems{
+                .items = self.items.deserializeInto(base_addr),
             };
-
-            return exposed_items;
         }
     };
 
@@ -326,7 +320,7 @@ test "ExposedItems basic CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify the items are accessible
     try testing.expectEqual(@as(usize, 3), deserialized.count());
@@ -383,7 +377,7 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     // The serialized ExposedItems.Serialized struct is at the beginning of the buffer
     // (appendAlloc is called first in serialize)
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // After deduplication, should have only 2 items
     try testing.expectEqual(@as(usize, 2), deserialized.count());
@@ -449,7 +443,7 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
 
     // Cast to Serialized type and deserialize
     const serialized_ptr: *ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify all items
     try testing.expectEqual(@as(usize, test_items.len), deserialized.count());
@@ -479,7 +473,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try writer.writeToBuffer(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 0), deserialized.count());
     }
@@ -516,7 +510,7 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         _ = try file.read(buffer);
 
         const serialized_ptr = @as(*ExposedItems.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-        const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr));
+        const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
         try testing.expectEqual(@as(usize, 1), deserialized.count());
         try testing.expectEqual(@as(?u16, 42), deserialized.getNodeIndexById(allocator, 100));

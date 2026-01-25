@@ -11,9 +11,11 @@ const can = @import("can");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const cache_module = @import("cache_module.zig");
+const cache_manager = @import("cache_manager.zig");
 
 const ModuleEnv = can.ModuleEnv;
 const CacheData = cache_module.CacheModule.CacheData;
+const ImportInfo = cache_manager.ImportInfo;
 const Report = reporting.Report;
 const AST = parse.AST;
 const Allocator = std.mem.Allocator;
@@ -252,6 +254,8 @@ pub const CacheHitResult = struct {
     warning_count: u32,
     /// Cache data buffer - must be kept alive for the lifetime of module_env
     cache_data: CacheData,
+    /// Imports from cached metadata - these need to be recursively loaded (owned slice)
+    imports: []ImportInfo,
 };
 
 /// Result sent from workers - contains ALL outputs from the operation

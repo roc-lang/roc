@@ -4061,99 +4061,53 @@ pub const Serialized = extern struct {
         try self.index_data.serialize(&store.index_data, allocator, writer);
     }
 
-    /// Deserialize this Serialized struct into a NodeStore
+    /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *NodeStore {
-        // Note: Serialized may be smaller than the runtime struct.
-        // On 32-bit platforms, deserializing nodes in-place corrupts the adjacent
-        // fields. We must deserialize in REVERSE order (last to first)
-        // so that each deserialization doesn't corrupt fields that haven't been deserialized yet.
-
-        // Deserialize in reverse order (last serialized to first serialized)
-        // int128_values is serialized FIRST (for alignment), so it's deserialized LAST
-        const deserialized_index_data = self.index_data.deserialize(base_addr).*;
-        const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
-        const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
-        const deserialized_import_data = self.import_data.deserialize(base_addr).*;
-        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
-        const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
-        const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
-        const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
-        const deserialized_match_data = self.match_data.deserialize(base_addr).*;
-        const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
-        const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
-        const deserialized_regions = self.regions.deserialize(base_addr).*;
-        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
-        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to NodeStore
-        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
-
-        store.* = NodeStore{
+    /// WARNING: The returned NodeStore points into the cache buffer and is read-only.
+    /// Use deserializeWithCopy() if the store needs to be mutable.
+    pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
+        return NodeStore{
             .gpa = gpa,
-            .nodes = deserialized_nodes,
-            .regions = deserialized_regions,
-            .int128_values = deserialized_int128_values,
-            .span2_data = deserialized_span2_data,
-            .span_with_node_data = deserialized_span_with_node_data,
-            .match_data = deserialized_match_data,
-            .match_branch_data = deserialized_match_branch_data,
-            .closure_data = deserialized_closure_data,
-            .zero_arg_tag_data = deserialized_zero_arg_tag_data,
-            .def_data = deserialized_def_data,
-            .import_data = deserialized_import_data,
-            .type_apply_data = deserialized_type_apply_data,
-            .pattern_list_data = deserialized_pattern_list_data,
-            .index_data = deserialized_index_data,
+            .nodes = self.nodes.deserializeInto(base_addr),
+            .regions = self.regions.deserializeInto(base_addr),
+            .int128_values = self.int128_values.deserializeInto(base_addr),
+            .span2_data = self.span2_data.deserializeInto(base_addr),
+            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .match_data = self.match_data.deserializeInto(base_addr),
+            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
+            .closure_data = self.closure_data.deserializeInto(base_addr),
+            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
+            .def_data = self.def_data.deserializeInto(base_addr),
+            .import_data = self.import_data.deserializeInto(base_addr),
+            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
+            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
         };
-
-        return store;
     }
 
-    /// Deserialize with fresh memory allocation for SafeLists that may need to grow.
+    /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
     /// Use this for cache modules where regions may need to be extended during type checking.
-    pub fn deserializeWithCopy(self: *Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!*NodeStore {
-        // Deserialize in reverse order (last serialized to first serialized)
-        // Fields that need to grow use deserializeWithCopy, others use regular deserialize
-        const deserialized_index_data = self.index_data.deserialize(base_addr).*;
-        const deserialized_pattern_list_data = self.pattern_list_data.deserialize(base_addr).*;
-        const deserialized_type_apply_data = self.type_apply_data.deserialize(base_addr).*;
-        const deserialized_import_data = self.import_data.deserialize(base_addr).*;
-        const deserialized_def_data = self.def_data.deserialize(base_addr).*;
-        const deserialized_zero_arg_tag_data = self.zero_arg_tag_data.deserialize(base_addr).*;
-        const deserialized_closure_data = self.closure_data.deserialize(base_addr).*;
-        const deserialized_match_branch_data = self.match_branch_data.deserialize(base_addr).*;
-        const deserialized_match_data = self.match_data.deserialize(base_addr).*;
-        const deserialized_span_with_node_data = self.span_with_node_data.deserialize(base_addr).*;
-        const deserialized_span2_data = self.span2_data.deserialize(base_addr).*;
-        // Regions needs to be mutable (grown during type checking)
-        const deserialized_regions = (try self.regions.deserializeWithCopy(base_addr, gpa)).*;
-        const deserialized_nodes = self.nodes.deserialize(base_addr).*;
-        const deserialized_int128_values = self.int128_values.deserialize(base_addr).*;
-
-        const store = @as(*NodeStore, @ptrFromInt(@intFromPtr(self)));
-
-        store.* = NodeStore{
+    pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
+        return NodeStore{
             .gpa = gpa,
-            .nodes = deserialized_nodes,
-            .regions = deserialized_regions,
-            .int128_values = deserialized_int128_values,
-            .span2_data = deserialized_span2_data,
-            .span_with_node_data = deserialized_span_with_node_data,
-            .match_data = deserialized_match_data,
-            .match_branch_data = deserialized_match_branch_data,
-            .closure_data = deserialized_closure_data,
-            .zero_arg_tag_data = deserialized_zero_arg_tag_data,
-            .def_data = deserialized_def_data,
-            .import_data = deserialized_import_data,
-            .type_apply_data = deserialized_type_apply_data,
-            .pattern_list_data = deserialized_pattern_list_data,
-            .index_data = deserialized_index_data,
+            .nodes = self.nodes.deserializeInto(base_addr),
+            // Regions needs to be mutable (grown during type checking)
+            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
+            .int128_values = self.int128_values.deserializeInto(base_addr),
+            .span2_data = self.span2_data.deserializeInto(base_addr),
+            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
+            .match_data = self.match_data.deserializeInto(base_addr),
+            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
+            .closure_data = self.closure_data.deserializeInto(base_addr),
+            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
+            .def_data = self.def_data.deserializeInto(base_addr),
+            .import_data = self.import_data.deserializeInto(base_addr),
+            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
+            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
+            .index_data = self.index_data.deserializeInto(base_addr),
             .scratch = null,
         };
-
-        return store;
     }
 };
 
@@ -4460,7 +4414,7 @@ test "NodeStore empty CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.nodes.len());
@@ -4525,7 +4479,7 @@ test "NodeStore basic CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 1), deserialized.nodes.len());
@@ -4616,7 +4570,7 @@ test "NodeStore multiple nodes CompactWriter roundtrip" {
 
     // Cast and deserialize
     const serialized_ptr: *NodeStore.Serialized = @ptrCast(@alignCast(buffer.ptr));
-    const deserialized = serialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = serialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify nodes
     try testing.expectEqual(@as(usize, 3), deserialized.nodes.len());

@@ -535,12 +535,10 @@ pub const BuildEnv = struct {
                         // Transfer the cache flag so scheduler knows not to deinit cached envs
                         sched_mod.was_from_cache = coord_mod.was_cache_hit;
 
-                        // Only free the heap-allocated struct wrapper if it was NOT a cache hit.
-                        // Cache hit envs are deserialized in-place into the cache buffer and
-                        // are NOT heap-allocated - freeing them would cause "Invalid free".
-                        if (!coord_mod.was_cache_hit) {
-                            self.gpa.destroy(env);
-                        }
+                        // Free the heap-allocated struct wrapper.
+                        // With Option F deserialization, both cached and non-cached envs
+                        // have their ModuleEnv struct heap-allocated via gpa.create().
+                        self.gpa.destroy(env);
                         // Clear coordinator's pointer to prevent double-free during deinit
                         coord_mod.env = null;
                     }
@@ -1860,6 +1858,179 @@ pub const BuildEnv = struct {
     pub const BuildCacheStats = BuildStats;
     pub fn getCacheStats(self: *BuildEnv) BuildStats {
         return self.getBuildStats();
+    }
+
+    /// Information about a compiled module, ready for serialization.
+    /// All pointers reference data owned by the BuildEnv/Coordinator.
+    pub const CompiledModuleInfo = struct {
+        /// Module name (e.g., "Main", "Stdout")
+        name: []const u8,
+        /// Pointer to the compiled ModuleEnv
+        env: *ModuleEnv,
+        /// Source code of the module
+        source: []const u8,
+        /// Package name this module belongs to
+        package_name: []const u8,
+        /// True if this is the platform's main.roc
+        is_platform_main: bool,
+        /// True if this is the app module
+        is_app: bool,
+        /// True if this is a platform sibling module (e.g., Stdout, Stderr)
+        is_platform_sibling: bool,
+        /// Dependency depth from root
+        depth: u32,
+    };
+
+    /// Get all compiled modules from the schedulers (after build completes).
+    /// Returns modules in arbitrary order - use getModulesInSerializationOrder() for sorted order.
+    ///
+    /// IMPORTANT: This reads from schedulers, not the coordinator, because
+    /// transferCoordinatorResults() moves env ownership to schedulers.
+    pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+        // Assert we have a coordinator (build was called)
+        std.debug.assert(self.coordinator != null);
+
+        var modules = std.ArrayList(CompiledModuleInfo).empty;
+        errdefer modules.deinit(allocator);
+
+        // Read from schedulers since transferCoordinatorResults moved data there
+        var sched_it = self.schedulers.iterator();
+        while (sched_it.next()) |sched_entry| {
+            const pkg_name = sched_entry.key_ptr.*;
+            const sched = sched_entry.value_ptr.*;
+
+            // Determine package kind
+            const pkg_info = self.packages.get(pkg_name);
+            const is_platform_pkg = pkg_info != null and pkg_info.?.kind == .platform;
+            const is_app_pkg = pkg_info != null and (pkg_info.?.kind == .app or pkg_info.?.kind == .default_app);
+
+            for (sched.modules.items, 0..) |*sched_mod, mod_idx| {
+                // Skip modules without env (not compiled or failed)
+                if (sched_mod.env == null) continue;
+                const env_ptr: *ModuleEnv = &sched_mod.env.?;
+
+                const source = env_ptr.common.source;
+
+                // Determine if this is platform main or sibling
+                const is_root = sched.root_module_id != null and sched.root_module_id.? == mod_idx;
+                const is_platform_main = is_platform_pkg and is_root;
+                const is_platform_sibling = is_platform_pkg and !is_root;
+                const is_app = is_app_pkg and is_root;
+
+                try modules.append(allocator, .{
+                    .name = sched_mod.name,
+                    .env = env_ptr,
+                    .source = source,
+                    .package_name = pkg_name,
+                    .is_platform_main = is_platform_main,
+                    .is_app = is_app,
+                    .is_platform_sibling = is_platform_sibling,
+                    .depth = sched_mod.depth,
+                });
+            }
+        }
+
+        return modules.toOwnedSlice(allocator);
+    }
+
+    /// Get modules in serialization order: platform siblings → platform main → app siblings → app.
+    /// This order ensures dependencies are serialized before dependents.
+    pub fn getModulesInSerializationOrder(self: *BuildEnv, allocator: Allocator) ![]CompiledModuleInfo {
+        const all_modules = try self.getCompiledModules(allocator);
+        errdefer allocator.free(all_modules);
+
+        if (all_modules.len == 0) return all_modules;
+
+        // Separate into categories
+        var platform_siblings = std.ArrayList(CompiledModuleInfo).empty;
+        defer platform_siblings.deinit(allocator);
+        var platform_main: ?CompiledModuleInfo = null;
+        var app_siblings = std.ArrayList(CompiledModuleInfo).empty;
+        defer app_siblings.deinit(allocator);
+        var app_main: ?CompiledModuleInfo = null;
+
+        for (all_modules) |mod| {
+            if (mod.is_platform_sibling) {
+                try platform_siblings.append(allocator, mod);
+            } else if (mod.is_platform_main) {
+                platform_main = mod;
+            } else if (mod.is_app) {
+                app_main = mod;
+            } else {
+                // App sibling module
+                try app_siblings.append(allocator, mod);
+            }
+        }
+
+        // Sort platform siblings by depth then name
+        const SortContext = struct {
+            pub fn lessThan(_: void, a: CompiledModuleInfo, b: CompiledModuleInfo) bool {
+                if (a.depth != b.depth) return a.depth < b.depth;
+                return std.mem.order(u8, a.name, b.name) == .lt;
+            }
+        };
+        std.mem.sort(CompiledModuleInfo, platform_siblings.items, {}, SortContext.lessThan);
+        std.mem.sort(CompiledModuleInfo, app_siblings.items, {}, SortContext.lessThan);
+
+        // Build result in order: platform siblings → platform main → app siblings → app
+        var result = std.ArrayList(CompiledModuleInfo).empty;
+        errdefer result.deinit(allocator);
+
+        for (platform_siblings.items) |mod| {
+            try result.append(allocator, mod);
+        }
+        if (platform_main) |mod| {
+            try result.append(allocator, mod);
+        }
+        for (app_siblings.items) |mod| {
+            try result.append(allocator, mod);
+        }
+        if (app_main) |mod| {
+            try result.append(allocator, mod);
+        }
+
+        allocator.free(all_modules);
+        return result.toOwnedSlice(allocator);
+    }
+
+    /// Find the index of the primary module (platform main if present, otherwise app) in a module list.
+    pub fn findPrimaryModuleIndex(modules: []const CompiledModuleInfo) ?usize {
+        // First look for platform main
+        for (modules, 0..) |mod, i| {
+            if (mod.is_platform_main) return i;
+        }
+        // Fall back to app
+        for (modules, 0..) |mod, i| {
+            if (mod.is_app) return i;
+        }
+        return null;
+    }
+
+    /// Find the index of the app module in a module list.
+    pub fn findAppModuleIndex(modules: []const CompiledModuleInfo) ?usize {
+        for (modules, 0..) |mod, i| {
+            if (mod.is_app) return i;
+        }
+        return null;
+    }
+
+    /// Get the root module env for the app package (convenience method).
+    pub fn getAppEnv(self: *BuildEnv) ?*ModuleEnv {
+        const sched = self.schedulers.get("app") orelse return null;
+        return sched.getRootEnv();
+    }
+
+    /// Get the root module env for the platform package (convenience method).
+    pub fn getPlatformEnv(self: *BuildEnv) ?*ModuleEnv {
+        // Find platform package name
+        var pkg_it = self.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (entry.value_ptr.kind == .platform) {
+                const sched = self.schedulers.get(entry.key_ptr.*) orelse continue;
+                return sched.getRootEnv();
+            }
+        }
+        return null;
     }
 };
 

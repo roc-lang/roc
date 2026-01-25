@@ -287,38 +287,16 @@ pub const Serialized = extern struct {
         self._padding = 0;
     }
 
-    /// Deserialize this Serialized struct into a SmallStringInterner
+    /// Deserialize into a SmallStringInterner value (no in-place modification of cache buffer).
     /// The base parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(self: *Serialized, base: usize) *SmallStringInterner {
-        // Verify that Serialized is at least as large as the runtime struct.
-        comptime {
-            if (@sizeOf(Serialized) < @sizeOf(SmallStringInterner)) {
-                @compileError(std.fmt.comptimePrint(
-                    "SmallStringInterner.Serialized ({d} bytes) is smaller than SmallStringInterner ({d} bytes)",
-                    .{ @sizeOf(Serialized), @sizeOf(SmallStringInterner) },
-                ));
-            }
-        }
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const interner = @as(*SmallStringInterner, @ptrCast(self));
-
-        // Read values from Serialized BEFORE any writes (required for in-place deserialization)
-        const saved_entry_count = self.entry_count;
-
-        // Now deserialize (which does in-place writes)
-        const bytes_val = self.bytes.deserialize(base).*;
-        const hash_table_val = self.hash_table.deserialize(base).*;
-
-        interner.* = .{
-            .bytes = bytes_val,
-            .hash_table = hash_table_val,
-            .entry_count = saved_entry_count,
+    pub fn deserializeInto(self: *const Serialized, base: usize) SmallStringInterner {
+        return SmallStringInterner{
+            .bytes = self.bytes.deserializeInto(base),
+            .hash_table = self.hash_table.deserializeInto(base),
+            .entry_count = self.entry_count,
             // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
             .supports_inserts = if (std.debug.runtime_safety) false else {},
         };
-
-        return interner;
     }
 };
 

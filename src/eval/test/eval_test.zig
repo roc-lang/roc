@@ -822,9 +822,12 @@ test "ModuleEnv serialization and interpreter evaluation" {
 
         // Deserialize the ModuleEnv
         const deserialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(buffer.ptr + env_start_offset)));
-        var deserialized_env = try deserialized_ptr.deserialize(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
-        // Free the imports map that was allocated during deserialization
-        defer deserialized_env.imports.map.deinit(gpa);
+        const deserialized_env = try deserialized_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa, source, "TestModule");
+        // Free the heap-allocated ModuleEnv and its imports map
+        defer {
+            deserialized_env.imports.map.deinit(gpa);
+            gpa.destroy(deserialized_env);
+        }
 
         // Verify basic deserialization worked
         try testing.expectEqualStrings("TestModule", deserialized_env.module_name);

@@ -70,30 +70,30 @@ fn loadCompiledModule(gpa: std.mem.Allocator, bin_data: []const u8, module_name:
     const base_ptr = @intFromPtr(buffer.ptr);
 
     // Deserialize common env first so we can look up identifiers
-    const common = serialized_ptr.common.deserialize(base_ptr, source).*;
+    const common = serialized_ptr.common.deserializeInto(base_ptr, source);
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = serialized_ptr.types.deserialize(base_ptr, gpa).*, // Pass gpa to types deserialize
+        .types = serialized_ptr.types.deserializeInto(base_ptr, gpa), // Pass gpa to types deserialize
         .module_kind = serialized_ptr.module_kind.decode(),
         .all_defs = serialized_ptr.all_defs,
         .all_statements = serialized_ptr.all_statements,
         .exports = serialized_ptr.exports,
-        .requires_types = serialized_ptr.requires_types.deserialize(base_ptr).*,
-        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserialize(base_ptr).*,
+        .requires_types = serialized_ptr.requires_types.deserializeInto(base_ptr),
+        .for_clause_aliases = serialized_ptr.for_clause_aliases.deserializeInto(base_ptr),
         .builtin_statements = serialized_ptr.builtin_statements,
-        .external_decls = serialized_ptr.external_decls.deserialize(base_ptr).*,
-        .imports = (try serialized_ptr.imports.deserialize(base_ptr, gpa)).*,
+        .external_decls = serialized_ptr.external_decls.deserializeInto(base_ptr),
+        .imports = try serialized_ptr.imports.deserializeInto(base_ptr, gpa),
         .module_name = module_name,
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = serialized_ptr.diagnostics,
-        .store = serialized_ptr.store.deserialize(base_ptr, gpa).*,
+        .store = serialized_ptr.store.deserializeInto(base_ptr, gpa),
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(gpa, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(gpa),
-        .method_idents = serialized_ptr.method_idents.deserialize(base_ptr).*,
+        .method_idents = serialized_ptr.method_idents.deserializeInto(base_ptr),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 

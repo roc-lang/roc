@@ -171,24 +171,25 @@ pub const ModuleState = struct {
         // Free module env if present (only if we own module data)
         if (owns_module_data) {
             if (self.env) |env| {
-                // For cached modules, the env struct is deserialized into the cache buffer (don't free it),
-                // but the source is heap-allocated separately and MUST be freed.
+                const source = env.common.source;
                 if (self.was_cache_hit) {
+                    // For cached modules, the env is heap-allocated but some fields
+                    // point into the cache buffer. Use deinitCachedModule() which only
+                    // frees heap-allocated parts (types, store.regions, imports map).
                     if (comptime trace_build) {
-                        std.debug.print("[MOD DEINIT] {s}: skipping env.deinit (cached module), but freeing source\n", .{self.name});
+                        std.debug.print("[MOD DEINIT] {s}: deinit cached module env\n", .{self.name});
                     }
-                    // Free the heap-allocated source (it's NOT part of the cache buffer)
-                    const source = env.common.source;
-                    if (source.len > 0) gpa.free(source);
+                    env.deinitCachedModule();
+                    gpa.destroy(env);
                 } else {
                     if (comptime trace_build) {
                         std.debug.print("[MOD DEINIT] {s}: freeing env\n", .{self.name});
                     }
-                    const source = env.common.source;
                     env.deinit();
                     gpa.destroy(env);
-                    if (source.len > 0) gpa.free(source);
                 }
+                // Free the heap-allocated source (it's NOT part of the cache buffer)
+                if (source.len > 0) gpa.free(source);
             }
         }
 
@@ -807,7 +808,13 @@ pub const Coordinator = struct {
                 // Only run for platform modules (packages other than "app")
                 // The app package doesn't need hosted lambdas
                 if (!std.mem.eql(u8, result.package_name, "app")) {
-                    _ = can.HostedCompiler.replaceAnnoOnlyWithHosted(env) catch {};
+                    // Perform hosted transform and free the returned list of modified defs
+                    // (we don't need the list, just the side effect of the transform)
+                    // Note: the ArrayList uses env.gpa, not self.gpa
+                    if (can.HostedCompiler.replaceAnnoOnlyWithHosted(env)) |modified_defs| {
+                        var defs = modified_defs;
+                        defs.deinit(env.gpa);
+                    } else |_| {}
                 }
             }
         }
@@ -1137,9 +1144,10 @@ pub const Coordinator = struct {
     /// Handle a cache hit result (fast path)
     fn handleCacheHit(self: *Coordinator, result: *CacheHitResult) !void {
         if (comptime trace_build) {
-            std.debug.print("[COORD] CACHE HIT (fast path): pkg={s} module={s}\n", .{
+            std.debug.print("[COORD] CACHE HIT (fast path): pkg={s} module={s} imports={}\n", .{
                 result.package_name,
                 result.module_name,
+                result.imports.len,
             });
         }
 
@@ -1150,21 +1158,70 @@ pub const Coordinator = struct {
         // It will be freed when the coordinator is deinitialized
         try self.cache_buffers.append(self.gpa, result.cache_data);
 
-        // Set module from cache
+        // Set module from cache - mark as Done immediately since env is complete
         mod.env = result.module_env;
-        mod.was_cache_hit = true; // Mark as cache hit for dependent checks
+        mod.was_cache_hit = true;
         mod.phase = .Done;
         mod.visit_color = 2; // Black
 
         // Update cache stats
         self.cache_hits += 1;
 
-        // Decrement counters
+        // Decrement counters for this module (it's done)
         if (pkg.remaining_modules > 0) pkg.remaining_modules -= 1;
         if (self.total_remaining > 0) self.total_remaining -= 1;
 
+        // Process cached imports - ensure they get loaded too for serialization
+        // This is similar to processCanonicalizedResult but uses cached import info.
+        // The cached module is already Done, we just need its imports to be present
+        // in the coordinator so they can be serialized.
+        for (result.imports) |imp| {
+            // Skip Builtin - it's always available
+            if (std.mem.eql(u8, imp.module, "Builtin")) continue;
+
+            if (imp.package.len == 0) {
+                // Local import - same package
+                const path = self.resolveModulePath(pkg.root_dir, imp.module) catch continue;
+                defer self.gpa.free(path);
+
+                const child_id = try pkg.ensureModule(self.gpa, imp.module, path);
+                const child = pkg.getModule(child_id).?;
+
+                // Queue parse for new modules (will go through their own cache check)
+                if (child.phase == .Parse) {
+                    pkg.remaining_modules += 1;
+                    self.total_remaining += 1;
+                    try self.enqueueParseTask(result.package_name, child_id);
+                }
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] CACHE HIT queued local import: {s}\n", .{imp.module});
+                }
+            } else {
+                // External import - resolve shorthand to package
+                const import_name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ imp.package, imp.module });
+                defer self.gpa.free(import_name);
+
+                try self.scheduleExternalImport(result.package_name, import_name);
+
+                if (comptime trace_build) {
+                    std.debug.print("[COORD] CACHE HIT queued external import: {s}.{s}\n", .{ imp.package, imp.module });
+                }
+            }
+        }
+
+        // Free the imports slice now that we've processed them
+        for (result.imports) |*imp| {
+            var import_info = imp.*;
+            import_info.deinit(self.gpa);
+        }
+        self.gpa.free(result.imports);
+
+        // Refresh mod pointer after potential resizes from ensureModule calls
+        const mod_after_imports = pkg.getModule(result.module_id) orelse return;
+
         // Wake dependents (they may now be able to use fast path too)
-        for (mod.dependents.items) |dep_id| {
+        for (mod_after_imports.dependents.items) |dep_id| {
             try self.tryUnblock(pkg, dep_id);
         }
         try self.wakeCrossPackageDependents(result.package_name, result.module_id);
@@ -1547,18 +1604,15 @@ pub const Coordinator = struct {
 
             // Look up metadata by source hash
             if (cache.getMetadata(source_hash)) |metadata| {
-                defer {
-                    var meta = metadata;
-                    meta.deinit(self.gpa);
-                }
+                var meta = metadata;
 
                 // Check if ALL imports were cache hits in this build
-                const all_deps_cached = self.checkAllImportsCached(task.package_name, metadata.imports);
+                const all_deps_cached = self.checkAllImportsCached(task.package_name, meta.imports);
 
                 if (all_deps_cached) {
                     // Try to load from full cache using the key from metadata
                     const cache_result = cache.loadFromCacheByKey(
-                        metadata.full_cache_key,
+                        meta.full_cache_key,
                         src,
                         task.module_name,
                     );
@@ -1571,6 +1625,10 @@ pub const Coordinator = struct {
                             });
                         }
 
+                        // Transfer ownership of imports to the result - don't call meta.deinit()
+                        // since that would free the imports we're transferring.
+                        // full_cache_key is a [32]u8 array so doesn't need freeing.
+
                         return .{
                             .cache_hit = .{
                                 .package_name = task.package_name,
@@ -1582,10 +1640,14 @@ pub const Coordinator = struct {
                                 .error_count = cache_result.hit.error_count,
                                 .warning_count = cache_result.hit.warning_count,
                                 .cache_data = cache_result.hit.cache_data,
+                                .imports = meta.imports,
                             },
                         };
                     }
                 }
+
+                // If we get here, we're not taking the cache hit path, so free metadata
+                meta.deinit(self.gpa);
 
                 if (comptime trace_build) {
                     std.debug.print("[COORD] FAST PATH MISS (deps not cached): pkg={s} module={s}\n", .{
