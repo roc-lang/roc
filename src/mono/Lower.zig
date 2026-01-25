@@ -289,6 +289,18 @@ fn getExprLayoutFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.
     return self.getExprLayout(module_env, expr);
 }
 
+/// Get the element layout from the for-loop pattern's type variable
+fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
+    // Get the type variable from the pattern (the element pattern in the for loop)
+    const patt_type_var = ModuleEnv.varFrom(pattern_idx);
+
+    // Must have a layout store to compute element layout
+    const ls = self.layout_store orelse return error.LayoutError;
+
+    // Compute the layout from the pattern's type variable
+    return ls.addTypeVar(patt_type_var, &self.type_scope) catch return error.LayoutError;
+}
+
 /// Lower a single expression
 pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
     const old_module = self.current_module_idx;
@@ -630,7 +642,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             break :blk .{
                 .tag = .{
                     .discriminant = discriminant,
-                    .union_layout = .i64, // TODO
+                    .union_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num,
                     .args = args,
                 },
             };
@@ -846,6 +858,29 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 .free = .{
                     .value = lookup_id,
                     .layout_idx = .i64, // TODO: get actual layout
+                },
+            };
+        },
+
+        .e_for => |for_expr| blk: {
+            // Lower the list expression
+            const list_expr = try self.lowerExprFromIdx(module_env, for_expr.expr);
+
+            // Lower the element pattern
+            const elem_pattern = try self.lowerPattern(module_env, for_expr.patt);
+
+            // Lower the body expression
+            const body = try self.lowerExprFromIdx(module_env, for_expr.body);
+
+            // Get element layout from the pattern's type variable
+            const elem_layout = try self.getForLoopElementLayout(for_expr.patt);
+
+            break :blk .{
+                .for_loop = .{
+                    .list_expr = list_expr,
+                    .elem_layout = elem_layout,
+                    .elem_pattern = elem_pattern,
+                    .body = body,
                 },
             };
         },
@@ -1609,7 +1644,50 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
                     .expr = value,
                 });
             },
-            else => {}, // Skip non-decl statements for now
+            .s_var => |var_stmt| {
+                // Mutable variable declaration - treated like s_decl for lowering
+                // The mutation semantics are handled by s_reassign creating new bindings
+                const pattern = try self.lowerPattern(module_env, var_stmt.pattern_idx);
+                const binding_symbol = self.patternToSymbol(var_stmt.pattern_idx);
+                const value = try self.lowerExprFromIdx(module_env, var_stmt.expr);
+
+                // Register the symbol definition for lookups
+                try self.store.registerSymbolDef(binding_symbol, value);
+
+                try lowered.append(self.allocator, .{
+                    .pattern = pattern,
+                    .expr = value,
+                });
+            },
+            .s_reassign => |reassign| {
+                // Reassignment - create a new binding that shadows the old one
+                // This is functional semantics: each reassignment creates a new binding
+                const pattern = try self.lowerPattern(module_env, reassign.pattern_idx);
+                const binding_symbol = self.patternToSymbol(reassign.pattern_idx);
+                const value = try self.lowerExprFromIdx(module_env, reassign.expr);
+
+                // Update the symbol definition to point to the new value
+                try self.store.registerSymbolDef(binding_symbol, value);
+
+                try lowered.append(self.allocator, .{
+                    .pattern = pattern,
+                    .expr = value,
+                });
+            },
+            .s_expr => |expr_stmt| {
+                // Expression statement - evaluate for side effects
+                // Create a wildcard pattern to discard the result
+                const value = try self.lowerExprFromIdx(module_env, expr_stmt.expr);
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = value,
+                });
+            },
+            else => {
+                // Skip other statement types (s_import, s_alias_decl, etc.)
+            },
         }
     }
 

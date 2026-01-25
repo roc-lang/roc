@@ -1744,7 +1744,11 @@ pub const InsertPass = struct {
 
             // Create the return expression with possibly transformed inner expression
             const return_expr = try self.module_env.store.addExpr(
-                .{ .e_return = .{ .expr = new_expr } },
+                .{ .e_return = .{
+                    .expr = new_expr,
+                    .lambda = ret.lambda,
+                    .context = ret.context,
+                } },
                 region,
             );
 
@@ -1761,7 +1765,11 @@ pub const InsertPass = struct {
         // No decrefs needed, just transform the return expression if needed
         if (new_expr != ret.expr) {
             return try self.module_env.store.addExpr(
-                .{ .e_return = .{ .expr = new_expr } },
+                .{ .e_return = .{
+                    .expr = new_expr,
+                    .lambda = ret.lambda,
+                    .context = ret.context,
+                } },
                 region,
             );
         }

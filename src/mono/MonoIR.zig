@@ -583,6 +583,20 @@ pub const MonoExpr = union(enum) {
         branches: MonoExprSpan,
     },
 
+    /// For loop over a list
+    /// Iterates over each element in the list, binding it to the pattern and executing the body
+    /// Returns empty record (unit) after all iterations
+    for_loop: struct {
+        /// The list to iterate over
+        list_expr: MonoExprId,
+        /// Layout of list elements
+        elem_layout: layout.Idx,
+        /// Pattern to bind each element to
+        elem_pattern: MonoPatternId,
+        /// Body expression to execute for each element
+        body: MonoExprId,
+    },
+
     /// Increment reference count of a refcounted value
     /// If the value has static refcount (isize::MIN), this is a no-op
     incref: struct {

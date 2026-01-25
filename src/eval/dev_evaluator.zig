@@ -19,6 +19,7 @@ const layout = @import("layout");
 const types = @import("types");
 const backend = @import("backend");
 const mono = @import("mono");
+const rc = @import("rc");
 const builtin_loading = @import("builtin_loading.zig");
 const builtins = @import("builtins");
 
@@ -356,12 +357,19 @@ pub const DevEvaluator = struct {
         };
         defer layout_store.deinit();
 
+        // Run RC insertion pass to add incref/decref operations
+        var rc_pass = rc.InsertPass.init(self.allocator, module_env) catch {
+            return error.OutOfMemory;
+        };
+        defer rc_pass.deinit();
+        const rc_expr_idx = rc_pass.runOnExpr(expr_idx) catch expr_idx;
+
         // Create the lowerer with the layout store
         var lowerer = MonoLower.init(self.allocator, &mono_store, all_module_envs, null, &layout_store);
         defer lowerer.deinit();
 
-        // Lower the CIR expression to Mono IR
-        const mono_expr_id = lowerer.lowerExpr(module_idx, expr_idx) catch {
+        // Lower the RC-transformed CIR expression to Mono IR
+        const mono_expr_id = lowerer.lowerExpr(module_idx, rc_expr_idx) catch {
             return error.UnsupportedExpression;
         };
 
@@ -661,6 +669,16 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                         }
                     }
                 },
+                .e_lookup_local => |lookup| {
+                    // Receiver is a variable - look up field layout using compound key
+                    const pattern_key = @intFromEnum(lookup.pattern_idx);
+                    const field_name_key = @as(u32, @bitCast(dot.field_name));
+                    // Use XOR to combine pattern and field name into a unique key
+                    const compound_key = (pattern_key << 16) ^ field_name_key;
+                    if (type_env.get(compound_key)) |field_layout| {
+                        break :blk field_layout;
+                    }
+                },
                 else => {},
             }
             break :blk LayoutIdx.default_num;
@@ -681,6 +699,24 @@ fn getBlockLayout(allocator: Allocator, module_env: *ModuleEnv, block: anytype, 
             .s_decl => |decl| {
                 const pattern_key = @intFromEnum(decl.pattern);
                 const decl_expr = module_env.store.getExpr(decl.expr);
+
+                // For records, store field layouts with compound keys
+                switch (decl_expr) {
+                    .e_record => |rec| {
+                        const fields = module_env.store.sliceRecordFields(rec.fields);
+                        for (fields) |field_idx| {
+                            const field = module_env.store.getRecordField(field_idx);
+                            const field_expr = module_env.store.getExpr(field.value);
+                            const field_layout = getExprLayoutWithTypeEnv(allocator, module_env, field_expr, type_env);
+                            const field_name_key = @as(u32, @bitCast(field.name));
+                            // Use XOR to combine pattern and field name into a unique key
+                            const compound_key = (pattern_key << 16) ^ field_name_key;
+                            type_env.put(compound_key, field_layout) catch {};
+                        }
+                    },
+                    else => {},
+                }
+
                 const inferred_layout = getExprLayoutWithTypeEnv(allocator, module_env, decl_expr, type_env);
                 type_env.put(pattern_key, inferred_layout) catch {};
             },
