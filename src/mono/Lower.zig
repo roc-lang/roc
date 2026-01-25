@@ -943,53 +943,68 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         // These are inserted by the RC insertion pass after canonicalization
 
         .e_incref => |rc_op| blk: {
+            // Compute the layout from the pattern's type variable
+            const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
+            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
             const lookup_id = try self.store.addExpr(.{
                 .lookup = .{
                     .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                    .layout_idx = patt_layout,
                 },
             }, region);
             break :blk .{
                 .incref = .{
                     .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
+                    .layout_idx = patt_layout,
                     .count = rc_op.count,
                 },
             };
         },
 
         .e_decref => |rc_op| blk: {
+            // Compute the layout from the pattern's type variable
+            const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
+            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
             const lookup_id = try self.store.addExpr(.{
                 .lookup = .{
                     .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                    .layout_idx = patt_layout,
                 },
             }, region);
             break :blk .{
                 .decref = .{
                     .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
+                    .layout_idx = patt_layout,
                 },
             };
         },
 
         .e_free => |rc_op| blk: {
+            // Compute the layout from the pattern's type variable
+            const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
+            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
             const lookup_id = try self.store.addExpr(.{
                 .lookup = .{
                     .symbol = symbol,
-                    .layout_idx = .i64, // TODO: get actual layout from pattern
+                    .layout_idx = patt_layout,
                 },
             }, region);
             break :blk .{
                 .free = .{
                     .value = lookup_id,
-                    .layout_idx = .i64, // TODO: get actual layout
+                    .layout_idx = patt_layout,
                 },
             };
         },

@@ -165,22 +165,37 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             break :blk allocator.dupe(u8, slice);
         },
         layout_mod.Idx.str => blk: {
-            // RocStr is 24 bytes
-            var result: [24]u8 = @splat(0);
+            // RocStr is 24 bytes - use a properly aligned struct
+            const RocStrResult = extern struct {
+                bytes: ?[*]u8,
+                length: usize,
+                capacity_or_alloc_ptr: usize,
+            };
+            var result: RocStrResult align(8) = .{
+                .bytes = null,
+                .length = 0,
+                .capacity_or_alloc_ptr = 0,
+            };
             jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
 
-            // Check if small string (last byte has high bit set)
-            if (result[23] & 0x80 != 0) {
-                const len = result[23] & 0x7F;
+            // Check if small string (capacity_or_alloc_ptr is negative when cast to signed)
+            if (@as(isize, @bitCast(result.capacity_or_alloc_ptr)) < 0) {
+                // Small string: length is in the last byte of the struct XOR'd with 0x80
+                const result_bytes: *const [24]u8 = @ptrCast(&result);
+                const len = result_bytes[23] ^ 0x80;
                 // Return the string content directly (no quotes in result)
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{result[0..len]});
+                break :blk std.fmt.allocPrint(allocator, "{s}", .{result_bytes[0..len]});
             } else {
                 // Large string (heap allocated)
-                // Layout: bytes pointer (8), length (8), capacity (8)
-                const bytes_ptr: *const [*]const u8 = @ptrCast(@alignCast(&result[0]));
-                const length_ptr: *const usize = @ptrCast(@alignCast(&result[8]));
-                const str_bytes = bytes_ptr.*[0..length_ptr.*];
-                break :blk std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
+                const str_bytes = result.bytes.?[0..result.length];
+                const formatted = std.fmt.allocPrint(allocator, "{s}", .{str_bytes});
+
+                // Decref the heap-allocated string data after copying
+                // This will free the memory when refcount reaches 0
+                // Strings have 1-byte alignment, elements_refcounted = false
+                builtins.utils.decrefDataPtrC(result.bytes, 1, false, @constCast(&dev_eval.roc_ops));
+
+                break :blk formatted;
             }
         },
         eval_mod.list_i64_layout => blk: {
@@ -217,6 +232,13 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             }
 
             try output.append(']');
+
+            // Decref the heap-allocated list data after copying
+            // Lists have 8-byte alignment (pointer-sized elements), elements_refcounted = false for i64
+            if (result.len > 0) {
+                builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
+            }
+
             break :blk output.toOwnedSlice();
         },
         else => blk: {

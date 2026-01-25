@@ -55,9 +55,23 @@ pub const list_i64_layout: LayoutIdx = @enumFromInt(100);
 /// while arenas handle actual memory deallocation.
 const DevRocEnv = struct {
     allocator: Allocator,
+    /// Track allocations to know their sizes for deallocation
+    allocations: std.AutoHashMap(usize, AllocInfo),
+
+    const AllocInfo = struct {
+        len: usize,
+        alignment: usize,
+    };
 
     fn init(allocator: Allocator) DevRocEnv {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .allocations = std.AutoHashMap(usize, AllocInfo).init(allocator),
+        };
+    }
+
+    fn deinit(self: *DevRocEnv) void {
+        self.allocations.deinit();
     }
 
     /// Allocation function for RocOps.
@@ -76,15 +90,41 @@ const DevRocEnv = struct {
             @panic("DevRocEnv: Allocation failed");
         };
 
+        // Track the allocation so we can free it later
+        self.allocations.put(@intFromPtr(ptr.ptr), .{
+            .len = roc_alloc.length,
+            .alignment = roc_alloc.alignment,
+        }) catch {
+            @panic("DevRocEnv: Failed to track allocation");
+        };
+
         roc_alloc.answer = @ptrCast(ptr.ptr);
     }
 
     /// Deallocation function for RocOps.
-    /// This is a NO-OP because arenas manage actual memory deallocation.
-    /// RC operations still work to track uniqueness for in-place mutation.
-    fn rocDeallocFn(_: *RocDealloc, _: *anyopaque) callconv(.c) void {
-        // Intentional no-op: arena manages actual deallocation
-        // This allows RC to track uniqueness while arena handles cleanup
+    /// Frees memory allocated by rocAllocFn.
+    fn rocDeallocFn(roc_dealloc: *RocDealloc, env: *anyopaque) callconv(.c) void {
+        const self: *DevRocEnv = @ptrCast(@alignCast(env));
+
+        // Get the pointer from the dealloc request
+        const ptr_addr = @intFromPtr(roc_dealloc.ptr);
+
+        // Look up the allocation info
+        const alloc_info = self.allocations.get(ptr_addr) orelse return;
+        _ = self.allocations.remove(ptr_addr);
+
+        // Create a slice from the pointer for freeing
+        const slice_ptr: [*]u8 = @ptrCast(roc_dealloc.ptr);
+
+        // Free with the appropriate alignment
+        switch (alloc_info.alignment) {
+            1 => self.allocator.free(@as([*]align(1) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+            2 => self.allocator.free(@as([*]align(2) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+            4 => self.allocator.free(@as([*]align(4) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+            8 => self.allocator.free(@as([*]align(8) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+            16 => self.allocator.free(@as([*]align(16) u8, @alignCast(slice_ptr))[0..alloc_info.len]),
+            else => {}, // Silently ignore unsupported alignments
+        }
     }
 
     /// Reallocation function for RocOps.
@@ -254,6 +294,7 @@ pub const DevEvaluator = struct {
         self.static_interner.deinit();
         self.jit_backend.deinit();
         self.allocator.destroy(self.jit_backend);
+        self.roc_env.deinit();
         self.allocator.destroy(self.roc_env);
         self.builtin_module.deinit();
     }

@@ -418,12 +418,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .str_literal => |str_idx| try self.generateStrLiteral(str_idx),
 
                 // Reference counting operations
-                // Note: Currently disabled - RC operations require heap-allocated data pointers
-                // but we sometimes get stack locations or invalid pointers
-                // TODO: Fix RC by checking if layout is heap-allocated before calling builtins
-                .incref => |rc_op| try self.generateExpr(rc_op.value),
-                .decref => |rc_op| try self.generateExpr(rc_op.value),
-                .free => |rc_op| try self.generateExpr(rc_op.value),
+                .incref => |rc_op| try self.generateIncref(rc_op),
+                .decref => |rc_op| try self.generateDecref(rc_op),
+                .free => |rc_op| try self.generateFree(rc_op),
 
                 // For loop over a list
                 .for_loop => |for_loop| try self.generateForLoop(for_loop),
@@ -3665,161 +3662,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .stack_str = base_offset };
         }
 
-        /// Generate code for an incref operation
-        /// Calls increfDataPtrC(ptr, count, roc_ops)
-        fn generateIncref(self: *Self, rc_op: anytype) Error!ValueLocation {
-            // Generate the value expression to get the pointer
-            const value_loc = try self.generateExpr(rc_op.value);
-
-            // Skip if immediate (null pointer or non-heap value)
-            switch (value_loc) {
-                .immediate_i64 => return value_loc,
-                else => {},
-            }
-
-            // Get the roc_ops register
-            const roc_ops_reg = self.roc_ops_reg orelse return value_loc;
-
-            // Load the pointer to a temporary register
-            const ptr_reg = try self.loadValueToReg(value_loc);
-
-            // Get function address
-            const fn_addr: usize = @intFromPtr(&increfDataPtrC);
-
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // aarch64 calling convention: X0=ptr, X1=count, X2=roc_ops
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, @as(u64, rc_op.count));
-                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
-
-                // Load function address and call
-                const addr_reg = try self.codegen.allocGeneralFor(3);
-                try self.codegen.emit.movRegImm64(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
-            } else {
-                // x86_64 calling convention: RDI=ptr, RSI=count, RDX=roc_ops
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, @as(u64, rc_op.count));
-                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-            }
-
-            self.codegen.freeGeneral(ptr_reg);
-            return value_loc;
-        }
-
-        /// Generate code for a decref operation
-        /// Calls decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-        fn generateDecref(self: *Self, rc_op: anytype) Error!ValueLocation {
-            // Generate the value expression to get the pointer
-            const value_loc = try self.generateExpr(rc_op.value);
-
-            // Skip if immediate (null pointer or non-heap value)
-            switch (value_loc) {
-                .immediate_i64 => return value_loc,
-                else => {},
-            }
-
-            // Get the roc_ops register
-            const roc_ops_reg = self.roc_ops_reg orelse return value_loc;
-
-            // Load the pointer to a temporary register
-            const ptr_reg = try self.loadValueToReg(value_loc);
-
-            // Get alignment from layout (default to 8 for pointer-aligned data)
-            const alignment: u32 = if (self.layout_store) |ls| blk: {
-                const the_layout = ls.getLayout(rc_op.layout_idx);
-                // Get alignment as a power of 2 byte count
-                const align_val = the_layout.alignment(.u64);
-                break :blk @as(u32, 1) << @as(u5, @intCast(@intFromEnum(align_val)));
-            } else 8;
-
-            // Get function address
-            const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
-
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // aarch64 calling convention: X0=ptr, X1=alignment, X2=elements_refcounted, X3=roc_ops
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, alignment);
-                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                // Load function address and call
-                const addr_reg = try self.codegen.allocGeneralFor(4);
-                try self.codegen.emit.movRegImm64(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
-            } else {
-                // x86_64 calling convention: RDI=ptr, RSI=alignment, RDX=elements_refcounted, RCX=roc_ops
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, alignment);
-                try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-            }
-
-            self.codegen.freeGeneral(ptr_reg);
-            return value_loc;
-        }
-
-        /// Generate code for a free operation
-        /// Calls freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
-        fn generateFree(self: *Self, rc_op: anytype) Error!ValueLocation {
-            // Generate the value expression to get the pointer
-            const value_loc = try self.generateExpr(rc_op.value);
-
-            // Skip if immediate (null pointer or non-heap value)
-            switch (value_loc) {
-                .immediate_i64 => return value_loc,
-                else => {},
-            }
-
-            // Get the roc_ops register
-            const roc_ops_reg = self.roc_ops_reg orelse return value_loc;
-
-            // Load the pointer to a temporary register
-            const ptr_reg = try self.loadValueToReg(value_loc);
-
-            // Get alignment from layout (default to 8 for pointer-aligned data)
-            const alignment: u32 = if (self.layout_store) |ls| blk: {
-                const the_layout = ls.getLayout(rc_op.layout_idx);
-                // Get alignment as a power of 2 byte count
-                const align_val = the_layout.alignment(.u64);
-                break :blk @as(u32, 1) << @as(u5, @intCast(@intFromEnum(align_val)));
-            } else 8;
-
-            // Get function address
-            const fn_addr: usize = @intFromPtr(&freeDataPtrC);
-
-            if (comptime builtin.cpu.arch == .aarch64) {
-                // aarch64 calling convention: X0=ptr, X1=alignment, X2=elements_refcounted, X3=roc_ops
-                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
-                try self.codegen.emit.movRegImm64(.X1, alignment);
-                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
-
-                // Load function address and call
-                const addr_reg = try self.codegen.allocGeneralFor(4);
-                try self.codegen.emit.movRegImm64(addr_reg, @intCast(fn_addr));
-                try self.codegen.emit.blrReg(addr_reg);
-                self.codegen.freeGeneral(addr_reg);
-            } else {
-                // x86_64 calling convention: RDI=ptr, RSI=alignment, RDX=elements_refcounted, RCX=roc_ops
-                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
-                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
-                try self.codegen.emit.movRegImm64(.RSI, alignment);
-                try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted = false
-                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
-                try self.codegen.emit.callReg(.R11);
-            }
-
-            self.codegen.freeGeneral(ptr_reg);
-            return value_loc;
-        }
-
         /// Load a value to a general-purpose register
         fn loadValueToReg(self: *Self, value_loc: ValueLocation) Error!GeneralReg {
             const reg = try self.codegen.allocGeneralFor(0);
@@ -6620,6 +6462,607 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Patch all pending calls after all procedures are compiled
+        /// Generate code for incref operation
+        /// Increments the reference count of a heap-allocated value
+        fn generateIncref(self: *Self, rc_op: anytype) Error!ValueLocation {
+            // First generate the value expression
+            const value_loc = try self.generateExpr(rc_op.value);
+
+            // Check if we have a layout store to determine the type
+            const ls = self.layout_store orelse return value_loc;
+
+            // Get the layout to check if it's a heap-allocated type
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+
+            // Only incref heap-allocated types: list, str (large), box
+            switch (layout_val.tag) {
+                .list, .list_of_zst => {
+                    // Lists always have heap-allocated data
+                    try self.emitListIncref(value_loc, rc_op.count);
+                },
+                .scalar => {
+                    // Check if it's a string
+                    if (layout_val.data.scalar.tag == .str) {
+                        // Strings use SSO - only incref if large string
+                        try self.emitStrIncref(value_loc, rc_op.count);
+                    }
+                    // Other scalars don't need incref
+                },
+                .box, .box_of_zst => {
+                    // Boxes are always heap-allocated
+                    try self.emitBoxIncref(value_loc, rc_op.count);
+                },
+                else => {
+                    // Records, tuples, tag unions, closures, zst don't need RC at the top level
+                    // (their heap-allocated fields are handled separately)
+                },
+            }
+
+            return value_loc;
+        }
+
+        /// Generate code for decref operation
+        /// Decrements the reference count and frees if it reaches zero
+        fn generateDecref(self: *Self, rc_op: anytype) Error!ValueLocation {
+            // First generate the value expression
+            const value_loc = try self.generateExpr(rc_op.value);
+
+            // Check if we have a layout store to determine the type
+            const ls = self.layout_store orelse return value_loc;
+
+            // Get the layout to check if it's a heap-allocated type
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+
+            // Only decref heap-allocated types: list, str (large), box
+            switch (layout_val.tag) {
+                .list, .list_of_zst => {
+                    // Lists always have heap-allocated data
+                    try self.emitListDecref(value_loc);
+                },
+                .scalar => {
+                    // Check if it's a string
+                    if (layout_val.data.scalar.tag == .str) {
+                        // Strings use SSO - only decref if large string
+                        try self.emitStrDecref(value_loc);
+                    }
+                    // Other scalars don't need decref
+                },
+                .box, .box_of_zst => {
+                    // Boxes are always heap-allocated
+                    try self.emitBoxDecref(value_loc);
+                },
+                else => {
+                    // Records, tuples, tag unions, closures, zst don't need RC at the top level
+                },
+            }
+
+            return value_loc;
+        }
+
+        /// Generate code for free operation
+        /// Directly frees memory without checking refcount
+        fn generateFree(self: *Self, rc_op: anytype) Error!ValueLocation {
+            // First generate the value expression
+            const value_loc = try self.generateExpr(rc_op.value);
+
+            // Check if we have a layout store to determine the type
+            const ls = self.layout_store orelse return value_loc;
+
+            // Get the layout to check if it's a heap-allocated type
+            const layout_val = ls.getLayout(rc_op.layout_idx);
+
+            // Only free heap-allocated types: list, str (large), box
+            switch (layout_val.tag) {
+                .list, .list_of_zst => {
+                    try self.emitListFree(value_loc);
+                },
+                .scalar => {
+                    if (layout_val.data.scalar.tag == .str) {
+                        try self.emitStrFree(value_loc);
+                    }
+                },
+                .box, .box_of_zst => {
+                    try self.emitBoxFree(value_loc);
+                },
+                else => {},
+            }
+
+            return value_loc;
+        }
+
+        /// Emit incref for a list value
+        fn emitListIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&increfDataPtrC);
+
+            // Get the data pointer from the list struct (offset 0)
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .list_stack => |info| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
+                    }
+                },
+                else => return, // Can't incref non-stack values
+            }
+
+            // Call increfDataPtrC(ptr, count, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(3);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
+        /// Emit decref for a list value
+        fn emitListDecref(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
+
+            // Get the data pointer from the list struct (offset 0)
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .list_stack => |info| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
+                    }
+                },
+                else => return,
+            }
+
+            // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            // Lists have 8-byte alignment by default
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 8); // alignment
+                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 8); // alignment
+                try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
+        /// Emit free for a list value
+        fn emitListFree(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&freeDataPtrC);
+
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .list_stack => |info| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, info.struct_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, info.struct_offset);
+                    }
+                },
+                else => return,
+            }
+
+            // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 8);
+                try self.codegen.emit.movRegImm64(.X2, 0);
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 8);
+                try self.codegen.emit.movRegImm64(.RDX, 0);
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
+        /// Emit incref for a string value
+        /// Strings use SSO, so we need to check if it's a large string first
+        fn emitStrIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&increfDataPtrC);
+
+            // String struct: bytes (offset 0), length (offset 8), capacity_or_alloc_ptr (offset 16)
+            // Small string detection: capacity_or_alloc_ptr has high bit set (negative when signed)
+
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |offset| offset,
+                .stack_str => |offset| offset,
+                else => return,
+            };
+
+            // Load capacity_or_alloc_ptr to check for small string
+            const cap_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(cap_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
+            }
+
+            // Check if small string (high bit set = negative)
+            // If negative, skip the incref
+            const skip_patch = blk: {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    // Compare with 0 and branch if negative (mi = minus/negative)
+                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.mi, 0);
+                    break :blk patch_loc;
+                } else {
+                    // Test the sign bit and jump if sign flag set (negative)
+                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
+                    break :blk try self.codegen.emitCondJump(.sign);
+                }
+            };
+
+            // Not a small string - load the bytes pointer and call incref
+            const ptr_reg = try self.codegen.allocGeneralFor(1);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
+            }
+
+            // Call increfDataPtrC(ptr, count, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(3);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            // Patch the skip jump to here
+            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+        }
+
+        /// Emit decref for a string value
+        fn emitStrDecref(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
+
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |offset| offset,
+                .stack_str => |offset| offset,
+                else => return,
+            };
+
+            // Load capacity_or_alloc_ptr to check for small string
+            const cap_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(cap_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
+            }
+
+            // Check if small string (high bit set = negative)
+            const skip_patch = blk: {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.mi, 0);
+                    break :blk patch_loc;
+                } else {
+                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
+                    break :blk try self.codegen.emitCondJump(.sign);
+                }
+            };
+
+            // Not a small string - load the bytes pointer and call decref
+            const ptr_reg = try self.codegen.allocGeneralFor(1);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
+            }
+
+            // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            // Strings have 1-byte alignment for the data
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 1); // alignment
+                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 1);
+                try self.codegen.emit.movRegImm64(.RDX, 0);
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            // Patch the skip jump to here
+            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+        }
+
+        /// Emit free for a string value
+        fn emitStrFree(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&freeDataPtrC);
+
+            const base_offset: i32 = switch (value_loc) {
+                .stack => |offset| offset,
+                .stack_str => |offset| offset,
+                else => return,
+            };
+
+            // Load capacity_or_alloc_ptr to check for small string
+            const cap_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(cap_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, cap_reg, .FP, base_offset + 16);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, cap_reg, .RBP, base_offset + 16);
+            }
+
+            // Check if small string (high bit set = negative)
+            const skip_patch = blk: {
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.cmpRegImm12(.w64, cap_reg, 0);
+                    const patch_loc = self.codegen.currentOffset();
+                    try self.codegen.emit.bcond(.mi, 0);
+                    break :blk patch_loc;
+                } else {
+                    try self.codegen.emit.testRegReg(.w64, cap_reg, cap_reg);
+                    break :blk try self.codegen.emitCondJump(.sign);
+                }
+            };
+
+            // Not a small string - load the bytes pointer and call free
+            const ptr_reg = try self.codegen.allocGeneralFor(1);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, base_offset);
+            } else {
+                try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, base_offset);
+            }
+
+            // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 1);
+                try self.codegen.emit.movRegImm64(.X2, 0);
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 1);
+                try self.codegen.emit.movRegImm64(.RDX, 0);
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+
+            // Patch the skip jump to here
+            self.codegen.patchJump(skip_patch, self.codegen.currentOffset());
+        }
+
+        /// Emit incref for a box value
+        fn emitBoxIncref(self: *Self, value_loc: ValueLocation, count: u16) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&increfDataPtrC);
+
+            // Box is just a pointer
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .general_reg => |r| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    }
+                },
+                else => return,
+            }
+
+            // Call increfDataPtrC(ptr, count, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .X2, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(3);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, @intCast(count));
+                try self.codegen.emit.movRegReg(.w64, .RDX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
+        /// Emit decref for a box value
+        fn emitBoxDecref(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&decrefDataPtrC);
+
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .general_reg => |r| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    }
+                },
+                else => return,
+            }
+
+            // Call decrefDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            // Boxes use 8-byte alignment
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 8);
+                try self.codegen.emit.movRegImm64(.X2, 0);
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 8);
+                try self.codegen.emit.movRegImm64(.RDX, 0);
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
+        /// Emit free for a box value
+        fn emitBoxFree(self: *Self, value_loc: ValueLocation) Error!void {
+            const roc_ops_reg = self.roc_ops_reg orelse return;
+            const fn_addr: usize = @intFromPtr(&freeDataPtrC);
+
+            const ptr_reg = try self.codegen.allocGeneralFor(0);
+            defer self.codegen.freeGeneral(ptr_reg);
+
+            switch (value_loc) {
+                .stack => |offset| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, ptr_reg, .FP, offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, ptr_reg, .RBP, offset);
+                    }
+                },
+                .general_reg => |r| {
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    } else {
+                        try self.codegen.emit.movRegReg(.w64, ptr_reg, r);
+                    }
+                },
+                else => return,
+            }
+
+            // Call freeDataPtrC(ptr, alignment, elements_refcounted, roc_ops)
+            if (comptime builtin.cpu.arch == .aarch64) {
+                try self.codegen.emit.movRegReg(.w64, .X0, ptr_reg);
+                try self.codegen.emit.movRegImm64(.X1, 8);
+                try self.codegen.emit.movRegImm64(.X2, 0);
+                try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
+
+                const addr_reg = try self.codegen.allocGeneralFor(4);
+                try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                try self.codegen.emit.blrReg(addr_reg);
+                self.codegen.freeGeneral(addr_reg);
+            } else {
+                try self.codegen.emit.movRegImm64(.R11, @intCast(fn_addr));
+                try self.codegen.emit.movRegReg(.w64, .RDI, ptr_reg);
+                try self.codegen.emit.movRegImm64(.RSI, 8);
+                try self.codegen.emit.movRegImm64(.RDX, 0);
+                try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
+                try self.codegen.emit.callReg(.R11);
+            }
+        }
+
         pub fn patchPendingCalls(self: *Self) Error!void {
             for (self.pending_calls.items) |pending| {
                 const key: u48 = @bitCast(pending.target_symbol);
