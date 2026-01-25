@@ -3067,6 +3067,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn generateRecord(self: *Self, rec: anytype) Error!ValueLocation {
             const ls = self.layout_store orelse return Error.UnsupportedExpression;
 
+            // Validate layout index before use
+            if (@intFromEnum(rec.record_layout) >= ls.layouts.len()) {
+                std.debug.print("ERROR generateRecord: record_layout={} out of bounds (len={})\n", .{ @intFromEnum(rec.record_layout), ls.layouts.len() });
+                return Error.UnsupportedExpression;
+            }
+
             // Get the record layout
             const record_layout = ls.getLayout(rec.record_layout);
             if (record_layout.tag != .record) {
@@ -3703,39 +3709,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             return .{ .stack_str = base_offset };
-        }
-
-        /// Load a value to a general-purpose register
-        fn loadValueToReg(self: *Self, value_loc: ValueLocation) Error!GeneralReg {
-            const reg = try self.codegen.allocGeneralFor(0);
-            switch (value_loc) {
-                .general_reg => |src_reg| {
-                    try self.codegen.emit.movRegReg(.w64, reg, src_reg);
-                },
-                .stack => |offset| {
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, reg, .RBP, offset);
-                    }
-                },
-                .stack_str => |offset| {
-                    // For strings, load the pointer (first 8 bytes of the struct)
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, offset);
-                    } else {
-                        try self.codegen.emit.movRegMem(.w64, reg, .RBP, offset);
-                    }
-                },
-                .immediate_i64 => |val| {
-                    try self.codegen.emitLoadImm(reg, @bitCast(val));
-                },
-                else => {
-                    // For other cases, try to load from the first slot
-                    return Error.UnsupportedExpression;
-                },
-            }
-            return reg;
         }
 
         /// Generate code for a for loop over a list
