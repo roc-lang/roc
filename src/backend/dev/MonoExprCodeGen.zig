@@ -116,6 +116,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// Map from JoinPointId to list of jumps that target it (for patching)
         join_point_jumps: std.AutoHashMap(u32, std.ArrayList(JumpRecord)),
 
+        /// Map from JoinPointId to parameter layouts (for i128 handling in rebind)
+        join_point_param_layouts: std.AutoHashMap(u32, LayoutIdxSpan),
+
         /// Register where RocOps pointer is saved (for calling builtins that need it)
         roc_ops_reg: ?GeneralReg = null,
 
@@ -234,6 +237,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .proc_registry = std.AutoHashMap(u48, CompiledProc).init(allocator),
                 .pending_calls = std.ArrayList(PendingCall).empty,
                 .join_point_jumps = std.AutoHashMap(u32, std.ArrayList(JumpRecord)).init(allocator),
+                .join_point_param_layouts = std.AutoHashMap(u32, LayoutIdxSpan).init(allocator),
             };
         }
 
@@ -252,6 +256,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 list.deinit(self.allocator);
             }
             self.join_point_jumps.deinit();
+            self.join_point_param_layouts.deinit();
         }
 
         /// Reset the code generator for generating a new expression
@@ -272,6 +277,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 list.clearRetainingCapacity();
             }
             self.join_point_jumps.clearRetainingCapacity();
+            self.join_point_param_layouts.clearRetainingCapacity();
         }
 
         /// Generate code for a Mono IR expression
@@ -4163,6 +4169,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
         /// Bind a lambda/closure expression ID to a pattern (for later invocation)
         fn bindLambdaPattern(self: *Self, pattern_id: MonoPatternId, expr_id: MonoExprId) Error!void {
+            // Debug assertion: verify expression is callable
+            if (std.debug.runtime_safety) {
+                const expr = self.store.getExpr(expr_id);
+                std.debug.assert(expr == .lambda or expr == .closure or expr == .block);
+            }
+
             const pattern = self.store.getPattern(pattern_id);
 
             switch (pattern) {
@@ -4173,6 +4185,34 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 else => {
                     // Non-simple bindings for lambdas not supported
                 },
+            }
+        }
+
+        /// Bind a captured value for closure inlining.
+        /// This propagates both symbol locations AND lambda bindings for captured values.
+        fn bindCapturedValue(self: *Self, cap: anytype) Error!void {
+            const symbol_key: u48 = @bitCast(cap.symbol);
+
+            // First, propagate any lambda binding for this captured symbol
+            // This is critical for closures that capture function parameters
+            if (self.lambda_bindings.get(symbol_key) == null) {
+                if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                    const def_expr = self.store.getExpr(def_expr_id);
+                    switch (def_expr) {
+                        .lambda, .closure, .block => {
+                            try self.lambda_bindings.put(symbol_key, def_expr_id);
+                        },
+                        else => {},
+                    }
+                }
+            }
+
+            // Then, bind the symbol location if not already bound
+            if (self.symbol_locations.get(symbol_key) == null) {
+                if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
+                    const loc = try self.generateExpr(def_expr_id);
+                    try self.symbol_locations.put(symbol_key, loc);
+                }
             }
         }
 
@@ -4651,6 +4691,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         const arg_loc = try self.generateExpr(arg_id);
                         try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
+                    .lookup => |lookup| {
+                        // Lookup of a symbol - check if it's bound to a lambda/closure
+                        const lookup_symbol_key: u48 = @bitCast(lookup.symbol);
+
+                        // Check lambda_bindings for the looked-up symbol
+                        if (self.lambda_bindings.get(lookup_symbol_key)) |lambda_expr_id| {
+                            // Propagate the lambda binding to the parameter
+                            try self.bindLambdaPattern(param_id, lambda_expr_id);
+                        } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+                            // Check if the definition is a lambda/closure/block
+                            const def_expr = self.store.getExpr(def_expr_id);
+                            switch (def_expr) {
+                                .lambda, .closure, .block => {
+                                    try self.bindLambdaPattern(param_id, def_expr_id);
+                                },
+                                else => {},
+                            }
+                        }
+                        // Evaluate and bind the value
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
+                    },
                     else => {
                         // Normal argument - just evaluate and bind
                         const arg_loc = try self.generateExpr(arg_id);
@@ -4682,41 +4744,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Single capture - the closure value IS the captured value
                     const captures = self.store.getCaptures(closure.captures);
                     if (captures.len > 0) {
-                        const cap = captures[0];
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key) == null) {
-                            // Try to look up the captured value from outer scope
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(symbol_key, loc);
-                            }
-                        }
+                        try self.bindCapturedValue(captures[0]);
                     }
                 },
                 .struct_captures => |repr| {
                     // Multiple captures - unpack from struct
                     const captures = self.store.getCaptures(repr.captures);
                     for (captures) |cap| {
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(symbol_key, loc);
-                            }
-                        }
+                        try self.bindCapturedValue(cap);
                     }
                 },
                 .enum_dispatch, .union_repr => {
                     // Bind captures from scope for inline evaluation
                     const captures = self.store.getCaptures(closure.captures);
                     for (captures) |cap| {
-                        const symbol_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(symbol_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(symbol_key, loc);
-                            }
-                        }
+                        try self.bindCapturedValue(cap);
                     }
                 },
             }
@@ -4758,26 +4800,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .unwrapped_capture => {
                     const captures = self.store.getCaptures(closure.captures);
                     if (captures.len > 0) {
-                        const cap = captures[0];
-                        const sym_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(sym_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(sym_key, loc);
-                            }
-                        }
+                        try self.bindCapturedValue(captures[0]);
                     }
                 },
                 .struct_captures => |repr| {
                     const captures = self.store.getCaptures(repr.captures);
                     for (captures) |cap| {
-                        const sym_key: u48 = @bitCast(cap.symbol);
-                        if (self.symbol_locations.get(sym_key) == null) {
-                            if (self.store.getSymbolDef(cap.symbol)) |def_expr_id| {
-                                const loc = try self.generateExpr(def_expr_id);
-                                try self.symbol_locations.put(sym_key, loc);
-                            }
-                        }
+                        try self.bindCapturedValue(cap);
                     }
                 },
             }
@@ -5081,6 +5110,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         // Bind the expression ID so it can be called later
                         try self.bindLambdaPattern(param_id, arg_id);
                         // Also evaluate and bind the value (for captures, etc.)
+                        const arg_loc = try self.generateExpr(arg_id);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
+                    },
+                    .lookup => |lookup| {
+                        // Lookup of a symbol - check if it's bound to a lambda/closure
+                        const lookup_symbol_key: u48 = @bitCast(lookup.symbol);
+
+                        // Check lambda_bindings for the looked-up symbol
+                        if (self.lambda_bindings.get(lookup_symbol_key)) |lambda_expr_id| {
+                            // Propagate the lambda binding to the parameter
+                            try self.bindLambdaPattern(param_id, lambda_expr_id);
+                        } else if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
+                            // Check if the definition is a lambda/closure/block
+                            const def_expr = self.store.getExpr(def_expr_id);
+                            switch (def_expr) {
+                                .lambda, .closure, .block => {
+                                    try self.bindLambdaPattern(param_id, def_expr_id);
+                                },
+                                else => {},
+                            }
+                        }
+                        // Evaluate and bind the value
                         const arg_loc = try self.generateExpr(arg_id);
                         try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
@@ -6303,11 +6354,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 },
 
                 .join => |j| {
-                    // Set up storage for join point parameters (they'll be rebound on each jump)
-                    try self.setupJoinPointParams(j.id, j.params);
-
-                    // Initialize jump record list for this join point
+                    // Store param layouts for this join point (needed by rebindJoinPointParams)
                     const jp_key = @intFromEnum(j.id);
+                    try self.join_point_param_layouts.put(jp_key, j.param_layouts);
+
+                    // Set up storage for join point parameters (they'll be rebound on each jump)
+                    try self.setupJoinPointParams(j.id, j.params, j.param_layouts);
                     if (!self.join_point_jumps.contains(jp_key)) {
                         try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
                     }
@@ -6418,34 +6470,97 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         }
 
         /// Set up storage locations for join point parameters
-        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: mono.MonoPatternSpan) Error!void {
+        fn setupJoinPointParams(self: *Self, _: JoinPointId, params: mono.MonoPatternSpan, param_layouts: LayoutIdxSpan) Error!void {
             const pattern_ids = self.store.getPatternSpan(params);
+            const layouts = self.store.getLayoutIdxSpan(param_layouts);
+
+            var reg_idx: u8 = 0;
 
             // For each parameter, allocate a register or stack slot
-            for (pattern_ids, 0..) |pattern_id, i| {
+            for (pattern_ids, 0..) |pattern_id, param_idx| {
                 const pattern = self.store.getPattern(pattern_id);
                 switch (pattern) {
                     .bind => |bind| {
-                        // Use argument registers for parameters
-                        const reg = self.getArgumentRegister(@intCast(i));
                         const symbol_key: u48 = @bitCast(bind.symbol);
-                        try self.symbol_locations.put(symbol_key, .{ .general_reg = reg });
+
+                        // Check if this parameter is a 128-bit type
+                        const is_128bit = if (param_idx < layouts.len) blk: {
+                            const param_layout = layouts[param_idx];
+                            break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
+                        } else false;
+
+                        if (is_128bit) {
+                            // 128-bit types need two consecutive registers
+                            const low_reg = self.getArgumentRegister(reg_idx);
+                            const high_reg = self.getArgumentRegister(reg_idx + 1);
+
+                            // Allocate 16-byte stack slot
+                            const stack_offset = self.codegen.allocStack(16);
+
+                            // Store both registers to stack
+                            try self.codegen.emitStoreStack(.w64, stack_offset, low_reg);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, high_reg);
+
+                            // Track as stack_i128
+                            try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+                            reg_idx += 2;
+                        } else {
+                            // Use argument registers for parameters
+                            const arg_reg = self.getArgumentRegister(reg_idx);
+                            try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                            // Mark the register as in use so it doesn't get allocated for temporaries
+                            // that might clobber the parameter value.
+                            self.codegen.markRegisterInUse(arg_reg);
+                            reg_idx += 1;
+                        }
                     },
-                    else => {},
+                    else => unreachable, // Join point params must be simple bindings
                 }
             }
         }
 
         /// Rebind join point parameters to new argument values (for jump)
-        fn rebindJoinPointParams(self: *Self, _: JoinPointId, arg_locs: []const ValueLocation) Error!void {
+        fn rebindJoinPointParams(self: *Self, target: JoinPointId, arg_locs: []const ValueLocation) Error!void {
+            const jp_key = @intFromEnum(target);
+            const param_layouts_span = self.join_point_param_layouts.get(jp_key) orelse unreachable;
+            const layouts = self.store.getLayoutIdxSpan(param_layouts_span);
+
+            var reg_idx: u8 = 0;
+
             // Move argument values to their parameter registers
             // This needs to be done carefully to avoid clobbering values we still need
             // For now, simple sequential assignment (works when args don't alias params)
-            for (arg_locs, 0..) |loc, i| {
-                const dst_reg = self.getArgumentRegister(@intCast(i));
-                const src_reg = try self.ensureInGeneralReg(loc);
-                if (src_reg != dst_reg) {
-                    try self.emitMovRegReg(dst_reg, src_reg);
+            for (arg_locs, 0..) |loc, param_idx| {
+                const is_128bit = if (param_idx < layouts.len) blk: {
+                    const param_layout = layouts[param_idx];
+                    break :blk param_layout == .i128 or param_layout == .u128 or param_layout == .dec;
+                } else false;
+
+                if (is_128bit) {
+                    const low_reg = self.getArgumentRegister(reg_idx);
+                    const high_reg = self.getArgumentRegister(reg_idx + 1);
+
+                    switch (loc) {
+                        .stack_i128 => |offset| {
+                            try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                            try self.codegen.emitLoadStack(.w64, high_reg, offset + 8);
+                        },
+                        .immediate_i128 => |val| {
+                            const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                            const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                            try self.codegen.emitLoadImm(low_reg, @bitCast(low));
+                            try self.codegen.emitLoadImm(high_reg, @bitCast(high));
+                        },
+                        else => unreachable, // Layout says i128 but location doesn't match
+                    }
+                    reg_idx += 2;
+                } else {
+                    const dst_reg = self.getArgumentRegister(reg_idx);
+                    const src_reg = try self.ensureInGeneralReg(loc);
+                    if (src_reg != dst_reg) {
+                        try self.emitMovRegReg(dst_reg, src_reg);
+                    }
+                    reg_idx += 1;
                 }
             }
         }
