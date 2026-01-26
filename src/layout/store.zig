@@ -2159,7 +2159,9 @@ pub const Store = struct {
                                 break :blk Layout.opaquePtr();
                             }
                         }
-                        break :blk Layout.zst();
+                        // Flex vars should always be resolvable. If we reach here, something is wrong
+                        // with how type variables are being propagated through cross-module calls.
+                        unreachable;
                     },
                     .rigid => |rigid| blk: {
                         // First, check if this rigid var is mapped in the TypeScope
@@ -2202,7 +2204,9 @@ pub const Store = struct {
                                 break :blk Layout.opaquePtr();
                             }
                         }
-                        break :blk Layout.zst();
+                        // Rigid vars should always be resolvable. If we reach here, something is wrong
+                        // with how type variables are being propagated through cross-module calls.
+                        unreachable;
                     },
                     .alias => |alias| {
                         // Follow the alias by updating the work item
