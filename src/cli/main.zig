@@ -55,6 +55,7 @@ pub const targets_validator = @import("targets_validator.zig");
 const platform_validation = @import("platform_validation.zig");
 const cli_context = @import("CliContext.zig");
 const cli_problem = @import("CliProblem.zig");
+const progress = @import("progress.zig");
 
 const CliContext = cli_context.CliContext;
 const Io = cli_context.Io;
@@ -69,6 +70,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
+        std.testing.refAllDecls(progress);
     }
 }
 const bench = @import("bench.zig");
@@ -2583,6 +2585,39 @@ fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
     return std.process.getEnvVarOwned(allocator, key) catch null;
 }
 
+/// Extract a human-readable package name from a URL for display purposes.
+/// For GitHub URLs: "https://github.com/roc-lang/basic-cli/..." -> "roc-lang/basic-cli"
+/// For other URLs: returns the last path segment before the hash
+fn extractPackageName(url: []const u8) []const u8 {
+    // Try to extract org/repo from GitHub-style URLs
+    // Pattern: https://github.com/org/repo/...
+    if (std.mem.indexOf(u8, url, "github.com/")) |start| {
+        const after_github = url[start + "github.com/".len ..];
+        // Find org (first segment)
+        if (std.mem.indexOf(u8, after_github, "/")) |org_end| {
+            const after_org = after_github[org_end + 1 ..];
+            // Find repo (second segment)
+            if (std.mem.indexOf(u8, after_org, "/")) |repo_end| {
+                // Return "org/repo"
+                return after_github[0 .. org_end + 1 + repo_end];
+            }
+        }
+    }
+
+    // Fallback: try to extract meaningful name from path
+    // Find the last "/" before the hash (usually the package name or releases/download)
+    var last_meaningful_segment: []const u8 = "package";
+    var iter = std.mem.splitScalar(u8, url, '/');
+    while (iter.next()) |segment| {
+        // Skip empty segments and hash-like segments (base58 hashes are ~44 chars)
+        if (segment.len > 0 and segment.len < 40 and !std.mem.endsWith(u8, segment, ".tar.zst")) {
+            last_meaningful_segment = segment;
+        }
+    }
+
+    return last_meaningful_segment;
+}
+
 /// Resolve a URL platform specification by downloading and caching the bundle.
 /// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
 fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
@@ -2606,7 +2641,19 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
     var package_dir = std.fs.cwd().openDir(package_dir_path, .{}) catch |err| switch (err) {
         error.FileNotFound => blk: {
             // Not cached - need to download
-            std.log.info("Downloading platform from {s}...", .{url});
+            // Extract a friendly package name from the URL for display
+            const package_name = extractPackageName(url);
+            const stderr = ctx.io.stderr();
+            const is_tty = progress.isStderrTty();
+
+            // Show download starting message
+            progress.renderProgress(stderr, &progress.ProgressState{
+                .package_name = package_name,
+                .downloaded = 0,
+                .total = null,
+                .spinner_idx = 0,
+            }, is_tty) catch {};
+            stderr.flush() catch {};
 
             // Create cache directory structure
             std.fs.cwd().makePath(cache_dir_path) catch |make_err| {
@@ -2645,7 +2692,9 @@ fn resolveUrlPlatform(ctx: *CliContext, url: []const u8) (CliError || error{OutO
                 } });
             };
 
-            std.log.info("Platform cached at {s}", .{package_dir_path});
+            // Show download complete message
+            progress.renderComplete(stderr, package_name, is_tty) catch {};
+            stderr.flush() catch {};
             break :blk new_package_dir;
         },
         else => {
@@ -5421,4 +5470,36 @@ test "appendWindowsQuotedArg" {
 
     // Arg with multiple trailing backslashes (needs space to trigger quoting)
     try testQuote("has spaces\\\\", "\"has spaces\\\\\\\\\"");
+}
+
+test "extractPackageName from GitHub URL" {
+    const testing = std.testing;
+
+    // Standard GitHub release URL
+    try testing.expectEqualStrings(
+        "roc-lang/basic-cli",
+        extractPackageName("https://github.com/roc-lang/basic-cli/releases/download/0.19.0/abcd1234.tar.zst"),
+    );
+
+    // GitHub URL with different org/repo
+    try testing.expectEqualStrings(
+        "someorg/somerepo",
+        extractPackageName("https://github.com/someorg/somerepo/releases/download/v1.0/hash.tar.zst"),
+    );
+}
+
+test "extractPackageName fallback for non-GitHub URLs" {
+    const testing = std.testing;
+
+    // Non-GitHub URL should extract last meaningful segment
+    try testing.expectEqualStrings(
+        "download",
+        extractPackageName("https://example.com/packages/download/abcdefghijklmnopqrstuvwxyz1234567890abcd.tar.zst"),
+    );
+
+    // Simple URL path
+    try testing.expectEqualStrings(
+        "mypackage",
+        extractPackageName("https://example.com/mypackage/hash123.tar.zst"),
+    );
 }

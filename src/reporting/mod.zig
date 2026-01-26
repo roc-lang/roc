@@ -10,6 +10,7 @@ pub const UnderlineRegion = @import("document.zig").UnderlineRegion;
 pub const SourceRegion = @import("document.zig").SourceRegion;
 pub const ColorPalette = @import("style.zig").ColorPalette;
 pub const ColorUtils = @import("style.zig").ColorUtils;
+pub const AnsiCodes = @import("style.zig").AnsiCodes;
 pub const ColorPreference = @import("config.zig").ColorPreference;
 pub const ReportingConfig = @import("config.zig").ReportingConfig;
 pub const Severity = @import("severity.zig").Severity;
