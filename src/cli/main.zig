@@ -1657,8 +1657,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
     header_ptr.module_envs_offset = @intFromPtr(module_env_offsets_ptr.ptr) - shm_base_addr;
 
-    // Initialize Coordinator - use single-threaded mode for debugging
-    // TODO: Switch back to multi-threaded once issues are resolved
+    // Initialize Coordinator
     var coord = try Coordinator.init(
         ctx.gpa, // Use regular allocator for Coordinator internals
         .single_threaded,
