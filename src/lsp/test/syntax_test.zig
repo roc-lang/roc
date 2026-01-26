@@ -8,7 +8,13 @@ fn platformPath(allocator: std.mem.Allocator) ![]u8 {
     // Get the actual repo root by resolving from CWD
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
-    return std.fs.path.resolve(allocator, &.{ cwd, "test", "str", "platform", "main.roc" });
+    const path = try std.fs.path.resolve(allocator, &.{ cwd, "test", "str", "platform", "main.roc" });
+    // Convert backslashes to forward slashes for cross-platform Roc source compatibility
+    // Roc interprets backslashes as escape sequences in string literals
+    for (path) |*c| {
+        if (c.* == '\\') c.* = '/';
+    }
+    return path;
 }
 
 test "syntax checker skips rebuild when content unchanged" {
