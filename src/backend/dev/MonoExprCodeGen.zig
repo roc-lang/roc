@@ -2857,47 +2857,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 } };
             }
 
-            // Check if elements are nested lists by examining the first element
-            const is_nested_list = blk: {
-                if (elems.len > 0) {
-                    const first_elem = self.store.getExpr(elems[0]);
-                    break :blk (first_elem == .list or first_elem == .empty_list);
-                }
-                break :blk false;
-            };
-
-            // Determine element size based on layout
-            // For nested lists, elements are 24-byte structs (ptr + len + capacity)
-            // Use the layout store to compute element size when available
-            const layout_computed_size: ?u32 = if (self.layout_store) |ls2| blk: {
-                const el = ls2.getLayout(list.elem_layout);
-                break :blk ls2.layoutSizeAlign(el).size;
-            } else null;
-            const elem_size: u32 = if (layout_computed_size) |computed| computed else if (is_nested_list) 24 else switch (list.elem_layout) {
-                .i8, .u8 => 1,
-                .i16, .u16 => 2,
-                .i32, .u32, .f32 => 4,
-                .i64, .u64, .f64, .str => 8,
-                .i128, .u128, .dec => 16,
-                else => 8, // Default to 8 bytes for unknown types
-            };
-
-            // Determine element alignment
-            const elem_alignment: u32 = switch (list.elem_layout) {
-                .i8, .u8 => 1,
-                .i16, .u16 => 2,
-                .i32, .u32, .f32 => 4,
-                else => 8, // 8-byte alignment for 64-bit and larger types
-            };
+            // Get element layout from the layout store - required, no fallbacks
+            const ls = self.layout_store orelse unreachable;
+            const elem_layout_data = ls.getLayout(list.elem_layout);
+            const elem_size_align = ls.layoutSizeAlign(elem_layout_data);
+            const elem_size: u32 = elem_size_align.size;
+            const elem_alignment: u32 = @intCast(elem_size_align.alignment.toByteUnits());
 
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
 
-            // Determine if elements contain refcounted data (e.g., List(List(Int)) has refcounted elements)
-            const elements_refcounted: bool = if (self.layout_store) |ls3| blk: {
-                const elem_layout_data = ls3.getLayout(list.elem_layout);
-                break :blk ls3.layoutContainsRefcounted(elem_layout_data);
-            } else is_nested_list; // Fallback: nested lists are always refcounted
+            // Determine if elements contain refcounted data
+            const elements_refcounted: bool = ls.layoutContainsRefcounted(elem_layout_data);
 
             // Get the saved RocOps register
             const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
@@ -2961,78 +2932,71 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emit.movRegMem(.w64, heap_ptr, .RBP, heap_ptr_slot);
                 }
 
-                if (is_nested_list) {
-                    // For nested lists, copy ptr, len, and capacity (24 bytes total)
-                    switch (elem_loc) {
-                        .stack => |src_offset| {
-                            const temp_reg = try self.allocTempGeneral();
+                // Store element to heap based on its actual location type
+                // We must handle different location types differently because the actual
+                // size of the value may differ from elem_size (due to type variable resolution)
+                switch (elem_loc) {
+                    .stack => |src_offset| {
+                        // Copy elem_size bytes from stack to heap in 8-byte chunks
+                        const temp_reg = try self.allocTempGeneral();
+                        var copied: u32 = 0;
+                        while (copied < elem_size) : (copied += 8) {
+                            const chunk_src = src_offset + @as(i32, @intCast(copied));
+                            const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
                             if (comptime builtin.cpu.arch == .aarch64) {
-                                // Copy ptr
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
-                                // Copy len
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
-                                // Copy capacity
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 16);
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, chunk_src);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, chunk_dst);
                             } else {
-                                // Copy ptr
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
-                                // Copy len
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-                                // Copy capacity
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 16, temp_reg);
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, chunk_src);
+                                try self.codegen.emit.movMemReg(.w64, heap_ptr, chunk_dst, temp_reg);
                             }
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        .list_stack => |list_info| {
-                            const temp_reg = try self.allocTempGeneral();
+                        }
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    .list_stack => |list_info| {
+                        // For lists, copy the full 24-byte struct
+                        const temp_reg = try self.allocTempGeneral();
+                        var copied: u32 = 0;
+                        while (copied < 24) : (copied += 8) {
+                            const chunk_src = list_info.struct_offset + @as(i32, @intCast(copied));
+                            const chunk_dst = elem_heap_offset + @as(i32, @intCast(copied));
                             if (comptime builtin.cpu.arch == .aarch64) {
-                                // Copy ptr
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
-                                // Copy len
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 8);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
-                                // Copy capacity
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, list_info.struct_offset + 16);
-                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 16);
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, chunk_src);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, chunk_dst);
                             } else {
-                                // Copy ptr
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
-                                // Copy len
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 8);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
-                                // Copy capacity
-                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, list_info.struct_offset + 16);
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 16, temp_reg);
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, chunk_src);
+                                try self.codegen.emit.movMemReg(.w64, heap_ptr, chunk_dst, temp_reg);
                             }
-                            self.codegen.freeGeneral(temp_reg);
-                        },
-                        else => {
-                            const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.strRegMemSoff(.w64, elem_reg, heap_ptr, elem_heap_offset);
-                            } else {
-                                try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, elem_reg);
+                        }
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    else => {
+                        // For immediates and other register values:
+                        // Store 8 bytes from the register, then zero-pad to elem_size if needed
+                        const elem_reg = try self.ensureInGeneralReg(elem_loc);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, elem_reg, heap_ptr, elem_heap_offset);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, elem_reg);
+                        }
+                        self.codegen.freeGeneral(elem_reg);
+
+                        // Zero-pad remaining bytes if elem_size > 8
+                        if (elem_size > 8) {
+                            const zero_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(zero_reg, 0);
+                            var padded: u32 = 8;
+                            while (padded < elem_size) : (padded += 8) {
+                                const pad_offset = elem_heap_offset + @as(i32, @intCast(padded));
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.strRegMemSoff(.w64, zero_reg, heap_ptr, pad_offset);
+                                } else {
+                                    try self.codegen.emit.movMemReg(.w64, heap_ptr, pad_offset, zero_reg);
+                                }
                             }
-                            self.codegen.freeGeneral(elem_reg);
-                        },
-                    }
-                } else {
-                    // Simple element - store 8 bytes
-                    const elem_reg = try self.ensureInGeneralReg(elem_loc);
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.strRegMemSoff(.w64, elem_reg, heap_ptr, elem_heap_offset);
-                    } else {
-                        try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, elem_reg);
-                    }
-                    self.codegen.freeGeneral(elem_reg);
+                            self.codegen.freeGeneral(zero_reg);
+                        }
+                    },
                 }
 
                 self.codegen.freeGeneral(heap_ptr);
@@ -3833,8 +3797,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             self.codegen.freeGeneral(temp_reg);
             self.codegen.freeGeneral(addr_reg);
 
-            // Bind the element to the pattern
-            try self.bindPattern(for_loop.elem_pattern, .{ .stack = elem_slot });
+            // Bind the element to the pattern, passing the element layout so list patterns
+            // can use the correct inner element size (the pattern's stored elem_layout may be wrong)
+            try self.bindPatternWithLayout(for_loop.elem_pattern, .{ .stack = elem_slot }, for_loop.elem_layout);
 
             // Execute the body (result is discarded)
             _ = try self.generateExpr(for_loop.body);
@@ -4355,8 +4320,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Elements are at ptr[0], ptr[1], etc.
 
                     // Get element size from layout
+                    // IMPORTANT: If we have an override layout (from for_loop.elem_layout), and it's
+                    // a list layout, use its inner element layout. The pattern's lst.elem_layout may
+                    // be wrong when the pattern's element type wasn't properly unified during type checking.
                     const ls = self.layout_store orelse return;
-                    const elem_layout = ls.getLayout(lst.elem_layout);
+                    const elem_layout = if (expr_layout_override) |override_idx| blk: {
+                        const override_layout = ls.getLayout(override_idx);
+                        if (override_layout.tag == .list) {
+                            // The override is a list - use its element layout
+                            break :blk ls.getLayout(override_layout.data.list);
+                        }
+                        break :blk ls.getLayout(lst.elem_layout);
+                    } else ls.getLayout(lst.elem_layout);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
                     const elem_size = elem_size_align.size;
 
@@ -4664,6 +4639,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             for (params, args) |param_id, arg_id| {
                 // Check if the argument is a closure/lambda - if so, bind it for later invocation
                 const arg_expr = self.store.getExpr(arg_id);
+                // Get the argument's layout to pass to pattern binding
+                // This is important for list patterns to use the correct inner element layout
+                const arg_layout = self.getExprLayout(arg_id);
                 switch (arg_expr) {
                     .lambda, .closure => {
                         // This is a closure being passed as an argument
@@ -4671,12 +4649,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.bindLambdaPattern(param_id, arg_id);
                         // Also evaluate and bind the value (for captures, etc.)
                         const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPattern(param_id, arg_loc);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                     else => {
                         // Normal argument - just evaluate and bind
                         const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPattern(param_id, arg_loc);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                 }
             }
@@ -5095,6 +5073,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             for (params, args) |param_id, arg_id| {
                 // Check if the argument is a closure/lambda - if so, bind it for later invocation
                 const arg_expr = self.store.getExpr(arg_id);
+                // Get the argument's layout for correct pattern binding
+                const arg_layout = self.getExprLayout(arg_id);
                 switch (arg_expr) {
                     .lambda, .closure => {
                         // This is a closure being passed as an argument
@@ -5102,12 +5082,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.bindLambdaPattern(param_id, arg_id);
                         // Also evaluate and bind the value (for captures, etc.)
                         const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPattern(param_id, arg_loc);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                     else => {
                         // Normal argument - just evaluate and bind
                         const arg_loc = try self.generateExpr(arg_id);
-                        try self.bindPattern(param_id, arg_loc);
+                        try self.bindPatternWithLayout(param_id, arg_loc, arg_layout);
                     },
                 }
             }

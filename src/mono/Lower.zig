@@ -277,9 +277,34 @@ fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) Layo
     return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
-/// Get the element layout from the for-loop pattern's type variable
-fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
-    return self.getPatternLayout(pattern_idx);
+/// Get the element layout from the for-loop's LIST expression, not the pattern.
+/// The list expression has type List(T) where T is the concrete element type.
+/// The pattern's type may be a flex variable with constraints that doesn't resolve correctly.
+fn getForLoopElementLayout(self: *Self, list_expr_idx: CIR.Expr.Idx) LayoutIdx {
+    const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
+    const ls = self.layout_store orelse unreachable;
+
+    // Get the list's type variable
+    const list_type_var = ModuleEnv.varFrom(list_expr_idx);
+    const resolved = module_env.types.resolveVar(list_type_var);
+
+    // The list type must be a nominal structure (List)
+    switch (resolved.desc.content) {
+        .structure => |structure| {
+            switch (structure) {
+                .nominal_type => |nominal| {
+                    // Get the element type (first type argument of List)
+                    const args = module_env.types.sliceNominalArgs(nominal);
+                    std.debug.assert(args.len > 0); // List must have element type arg
+                    const elem_type_var = args[0];
+                    // Compute layout for the element type from the list's type arg
+                    return ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                },
+                else => unreachable, // For loop list must be List type
+            }
+        },
+        else => unreachable, // For loop list must be structure type
+    }
 }
 
 /// Get the layout for a pattern from its type variable using the global layout store.
@@ -538,7 +563,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
-            // Check if this is a Dec type (explicit or default via unbound)
+            // Use num.kind to determine the literal type - this reflects type inference results
             // Dec is the default numeric type, so num_unbound and int_unbound become Dec
             if (num.kind == .dec or num.kind == .num_unbound or num.kind == .int_unbound) {
                 // Dec values are scaled by 10^18 (one_point_zero = 10^18)
@@ -1162,8 +1187,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Lower the body expression
             const body = try self.lowerExprFromIdx(module_env, for_expr.body);
 
-            // Get element layout from the pattern's type variable
-            const elem_layout = self.getForLoopElementLayout(for_expr.patt);
+            // Get element layout from the list expression's type (not the pattern)
+            const elem_layout = self.getForLoopElementLayout(for_expr.expr);
 
             break :blk .{
                 .for_loop = .{
@@ -2048,8 +2073,8 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 const elem_pattern = try self.lowerPattern(module_env, for_stmt.patt);
                 const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
 
-                // Get element layout from the pattern's type variable
-                const elem_layout = self.getForLoopElementLayout(for_stmt.patt);
+                // Get element layout from the list expression's type (not the pattern)
+                const elem_layout = self.getForLoopElementLayout(for_stmt.expr);
 
                 const for_loop_expr = try self.store.addExpr(.{
                     .for_loop = .{
