@@ -320,7 +320,7 @@ digits_to_num = |digits| {
 }
 ```
 
-You can also put them in blocks, in which case they will work essentailly like a `crash` when you're doing `roc test` or
+You can also put them in blocks, in which case they will work essentially like a `crash` when you're doing `roc test` or
 a debug build of `roc`, but when you do `roc --optimize`, they will be skipped.
 
 Importantly, these are _not_ production [assertions](https://en.wikipedia.org/wiki/Assertion_(software_development))! 
@@ -672,7 +672,7 @@ Now is the time to revisit it! Here is what this is doing:
 
 - `app` means this .roc file specifies a Roc _application_ - an executable, as opposed to a bundle of reusable code like a package
 - `[main!]` specifies the application's *entrypoint*. Some applications have multiple entrypoints, but it's most common to have just one—and also it's most common for that one to be named `main!`
-- `{ pf: platfom "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `pg: "https://..."` to add a dependency on [roc-pg](https://github.com/agu-z/roc-pg) for PostgreSQL access, at which point we'd be able to do things like `import pg.Cmd` and so on.
+- `{ pf: platform "https://..." }` specifies the application's *platform*. If we wanted to add other dependencies, this is where we'd specify them - e.g. we might write `pg: "https://..."` to add a dependency on [roc-pg](https://github.com/agu-z/roc-pg) for PostgreSQL access, at which point we'd be able to do things like `import pg.Cmd` and so on.
 
 ### Platforms
 
