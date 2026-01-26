@@ -11292,9 +11292,12 @@ pub const Interpreter = struct {
             },
 
             .e_lookup_pending => {
-                // Pending lookups should be resolved before evaluation - they should never
-                // reach the interpreter. If we get here, there's a bug in the resolution phase.
-                unreachable;
+                // Pending lookups should normally be resolved before evaluation.
+                // However, if an import references a non-existent package shorthand
+                // (e.g., "import f.S" where "f" is not defined), the pending lookup
+                // cannot be resolved because there's no target module to look up from.
+                // Return an error since we can't evaluate an unresolved lookup.
+                return error.TypeMismatch;
             },
 
             .e_lookup_required => |lookup| {

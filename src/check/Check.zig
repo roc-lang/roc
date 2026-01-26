@@ -3410,8 +3410,13 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
         },
         .e_lookup_pending => {
-            // Pending lookups must be resolved before type-checking
-            unreachable;
+            // Pending lookups should normally be resolved before type-checking.
+            // However, if an import references a non-existent package shorthand
+            // (e.g., "import f.S" where "f" is not defined), the pending lookup
+            // cannot be resolved because there's no target module to look up from.
+            // In this case, treat it as an error type - the user will get an
+            // error about the unresolved identifier elsewhere.
+            try self.unifyWith(expr_var, .err, env);
         },
         .e_lookup_required => |req| {
             // Look up the type from the platform's requires clause

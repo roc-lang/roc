@@ -998,16 +998,23 @@ pub const Coordinator = struct {
 
         // Process discovered external imports
         for (result.discovered_external_imports.items) |ext_imp| {
-            try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
-            try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
-
-            // Register this module as a cross-package dependent of the target
+            // Parse the qualified import name (e.g., "pf.Stdout" -> qual="pf", rest="Stdout")
             const dot_idx = std.mem.indexOfScalar(u8, ext_imp.import_name, '.') orelse continue;
             const qual = ext_imp.import_name[0..dot_idx];
             const rest = ext_imp.import_name[dot_idx + 1 ..];
 
+            // Only add to external_imports if the shorthand resolves to a valid package.
+            // If the shorthand doesn't exist, the import is invalid and should not block
+            // this module - the error will be caught during type-checking when the
+            // pending lookup for this import cannot be resolved.
             const target_pkg_name = pkg.shorthands.get(qual) orelse continue;
             const target_pkg = self.packages.get(target_pkg_name) orelse continue;
+
+            // Valid shorthand - add to external imports and schedule
+            try mod_after_imports.external_imports.append(self.gpa, try self.gpa.dupe(u8, ext_imp.import_name));
+            try self.scheduleExternalImport(result.package_name, ext_imp.import_name);
+
+            // Register this module as a cross-package dependent of the target
             const target_module_id = target_pkg.module_names.get(rest) orelse continue;
 
             try self.registerCrossPackageDependent(
@@ -1774,15 +1781,22 @@ pub const Coordinator = struct {
         }
     }
 
-    /// Check if an external import is ready
+    /// Check if an external import is ready.
+    /// Returns true if:
+    /// - The target module is done (has completed compilation), OR
+    /// - The import cannot be resolved (invalid shorthand, missing package, etc.)
+    ///   In the latter case, we return true to allow the module to proceed to
+    ///   type-checking, where the unresolved import will produce a proper error.
+    ///   Returning false would cause the coordinator to wait forever for something
+    ///   that will never be ready.
     pub fn isExternalReady(self: *Coordinator, source_pkg: []const u8, import_name: []const u8) bool {
-        const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return false;
+        const dot_idx = std.mem.indexOfScalar(u8, import_name, '.') orelse return true;
         const qual = import_name[0..dot_idx];
         const rest = import_name[dot_idx + 1 ..];
 
-        const source = self.packages.get(source_pkg) orelse return false;
-        const target_pkg_name = source.shorthands.get(qual) orelse return false;
-        const target_pkg = self.packages.get(target_pkg_name) orelse return false;
+        const source = self.packages.get(source_pkg) orelse return true;
+        const target_pkg_name = source.shorthands.get(qual) orelse return true;
+        const target_pkg = self.packages.get(target_pkg_name) orelse return true;
 
         return target_pkg.getEnvIfDone(rest) != null;
     }
