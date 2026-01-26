@@ -1033,6 +1033,8 @@ But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 
+**Hint: **This function is effectful, but a pure function is expected.
+
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
 **syntax_grab_bag.md:150:3:150:6:**

@@ -1042,6 +1042,8 @@ But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 
+**Hint: **This function is effectful, but a pure function is expected.
+
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
 **fuzz_crash_027.md:106:3:106:6:**

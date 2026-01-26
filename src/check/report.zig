@@ -436,8 +436,6 @@ pub const ReportBuilder = struct {
 
     /// Render type comparison hints (arity mismatch, missing fields, typos, effect mismatch)
     fn renderDiffHints(self: *Self, report: *Report, hints: diff.HintList, had_static_hints: bool) !void {
-        const ident_store = self.module_env.getIdentStoreConst();
-
         for (hints.slice(), 0..) |hint, i| {
             // Add spacing before first hint
             if (i == 0 and !had_static_hints) {
@@ -447,61 +445,72 @@ pub const ReportBuilder = struct {
 
             switch (hint) {
                 .arity_mismatch => |am| {
-                    try report.document.addAnnotated("Hint: ", .emphasized);
-                    try report.document.addText("This function expects ");
-                    try report.document.addText(try self.numToString(am.expected));
-                    try report.document.addText(if (am.expected == 1) " argument" else " arguments");
-                    try report.document.addText(" but got ");
-                    try report.document.addText(try self.numToString(am.actual));
-                    try report.document.addText(".");
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("This function expects"),
+                        D.num(am.expected),
+                        D.bytes(pluralize(am.expected, "argument", "arguments")),
+                        D.bytes("but got"),
+                        D.num(am.actual),
+                        D.bytes(".").withNoPrecedingSpace(),
+                    }, self, report);
                 },
                 .fields_missing => |fm| {
-                    try report.document.addAnnotated("Hint: ", .emphasized);
                     if (fm.fields.len == 1) {
-                        try report.document.addText("This record is missing the field: ");
-                        try report.document.addInlineCode(ident_store.getText(fm.fields[0]));
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("This record is missing the field:"),
+                            D.ident(fm.fields[0]).withAnnotation(.inline_code),
+                        }, self, report);
                     } else {
-                        try report.document.addText("This record is missing these fields:");
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("This record is missing these fields:"),
+                        }, self, report);
                         for (fm.fields) |field| {
                             try report.document.addLineBreak();
-                            try report.document.addText("  - ");
-                            try report.document.addInlineCode(ident_store.getText(field));
+                            try D.renderSlice(&.{
+                                D.bytes(" -"),
+                                D.ident(field).withAnnotation(.inline_code),
+                            }, self, report);
                         }
                     }
                 },
                 .field_typo => |ft| {
-                    try report.document.addAnnotated("Hint: ", .emphasized);
-                    try report.document.addText("Maybe ");
-                    try report.document.addInlineCode(ident_store.getText(ft.typo));
-                    try report.document.addText(" should be ");
-                    try report.document.addInlineCode(ident_store.getText(ft.suggestion));
-                    try report.document.addText("?");
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("Maybe"),
+                        D.ident(ft.typo).withAnnotation(.inline_code),
+                        D.bytes("should be"),
+                        D.ident(ft.suggestion).withAnnotation(.inline_code),
+                        D.bytes("?").withNoPrecedingSpace(),
+                    }, self, report);
                 },
                 .tag_typo => |tt| {
-                    try report.document.addAnnotated("Hint: ", .emphasized);
-                    try report.document.addText("Maybe ");
-                    try report.document.addInlineCode(ident_store.getText(tt.typo));
-                    try report.document.addText(" should be ");
-                    try report.document.addInlineCode(ident_store.getText(tt.suggestion));
-                    try report.document.addText("?");
+                    try D.renderSlice(&.{
+                        D.bytes("Hint:").withAnnotation(.emphasized),
+                        D.bytes("Maybe"),
+                        D.ident(tt.typo).withAnnotation(.inline_code),
+                        D.bytes("should be"),
+                        D.ident(tt.suggestion).withAnnotation(.inline_code),
+                        D.bytes("?").withNoPrecedingSpace(),
+                    }, self, report);
                 },
                 .effect_mismatch => |em| {
-                    try report.document.addAnnotated("Hint: ", .emphasized);
                     if (em.expected_pure) {
-                        try report.document.addText("This function is effectful, but a pure function is expected.");
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("This function is effectful, but a pure function is expected."),
+                        }, self, report);
                     } else {
-                        try report.document.addText("This function is pure, but an effectful function is expected.");
+                        try D.renderSlice(&.{
+                            D.bytes("Hint:").withAnnotation(.emphasized),
+                            D.bytes("This function is pure, but an effectful function is expected."),
+                        }, self, report);
                     }
                 },
             }
         }
-    }
-
-    /// Convert a number to string using the bytes buffer
-    fn numToString(self: *Self, num: u32) ![]const u8 {
-        const start = self.bytes_buf.items.len;
-        try self.bytes_buf.writer().print("{d}", .{num});
-        return self.bytes_buf.items[start..];
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -514,8 +523,6 @@ pub const ReportBuilder = struct {
     ) !Report {
         const trace = tracy.trace(@src());
         defer trace.end();
-
-        self.diff_scratch.reset();
 
         switch (problem) {
             .type_mismatch => |mismatch| {

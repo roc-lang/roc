@@ -1156,6 +1156,8 @@ But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 
+**Hint: **This function is effectful, but a pure function is expected.
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

@@ -32,6 +32,8 @@ But `getName` needs the first argument to be:
 
     { age: U64, name: Str }
 
+**Hint: **Maybe `namee` should be `name`?
+
 # TOKENS
 ~~~zig
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,

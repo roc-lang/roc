@@ -332,6 +332,102 @@ test "check type - record" {
     );
 }
 
+test "check type - record - field typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { helo : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:31:**
+        \\```roc
+        \\my_record = { helo : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { helo: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** Maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+}
+
+test "check type - record - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord : { hello: Str, world: U8 }
+        \\
+        \\my_record : MyRecord
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
+test "check type - record - ext - field missing" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\MyRecord(ext) : {  hello: Str, ..ext }
+        \\
+        \\my_record : MyRecord({ world: U8 })
+        \\my_record = { hello : "world" }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:13:6:32:**
+        \\```roc
+        \\my_record = { hello : "world" }
+        \\```
+        \\            ^^^^^^^^^^^^^^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    { hello: Str }
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    MyRecord({ world: U8 })
+        \\
+        \\**Hint:** This record is missing the field: `world`
+        \\
+        \\
+    );
+}
+
 // anonymous type equality (is_eq) //
 
 test "check type - record equality - same records are equal" {
@@ -538,6 +634,70 @@ test "check type - tag - args" {
         \\[MyTag(Str, a), .._others]
         \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
         ,
+    );
+}
+
+test "check type - tag union - tag typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color : [Red, Green, Blue]
+        \\
+        \\color : Color
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, .._others]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
+    );
+}
+
+test "check type - tag - ext - typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\Color(ext) : [Red, Blue, ..ext]
+        \\
+        \\color : Color([Green])
+        \\color = Greeen
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This expression is used in an unexpected way:
+        \\**test:6:9:6:15:**
+        \\```roc
+        \\color = Greeen
+        \\```
+        \\        ^^^^^^
+        \\
+        \\It has the type:
+        \\
+        \\    [Greeen, .._others]
+        \\
+        \\But the annotation say it should be:
+        \\
+        \\    Color([Green])
+        \\
+        \\**Hint:** Maybe `Greeen` should be `Green`?
+        \\
+        \\
     );
 }
 
