@@ -3992,89 +3992,118 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     defer platform_info.deinit(ctx.gpa);
 
-    // 2. Extract exposed modules from platform
-    var exposed_modules = std.ArrayList([]const u8).empty;
-    defer exposed_modules.deinit(ctx.gpa);
-
-    extractExposedModulesFromPlatform(ctx, args.platform_path, &exposed_modules) catch |err| {
-        stderr.print("Error: Failed to extract exposed modules: {}\n", .{err}) catch {};
+    // 2. Compile platform using BuildEnv by creating a synthetic app
+    // BuildEnv expects an app file, so we create a minimal app that imports the platform
+    const platform_abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, args.platform_path) catch |err| {
+        stderr.print("Error: Could not resolve platform path: {}\n", .{err}) catch {};
         return;
     };
+    defer ctx.gpa.free(platform_abs_path);
 
-    // 3. Get platform directory for module resolution
-    const platform_dir = std.fs.path.dirname(args.platform_path) orelse ".";
-
-    // 4. Sort modules by dependency order
-    const sorted_modules = sortPlatformModulesByDependency(
-        ctx,
-        exposed_modules.items,
-        platform_dir,
-    ) catch |err| {
-        switch (err) {
-            error.CyclicDependency => stderr.print("Error: Circular dependency detected in platform modules\n", .{}) catch {},
-            else => stderr.print("Error: Failed to sort modules: {}\n", .{err}) catch {},
-        }
+    // Create temp directory for synthetic app and glue spec executable
+    const temp_dir = createUniqueTempDir(ctx) catch |err| {
+        stderr.print("Error: Could not create temp directory: {}\n", .{err}) catch {};
         return;
     };
-    defer ctx.gpa.free(sorted_modules);
+    // Note: temp_dir cleanup happens later after glue spec execution
 
-    // 5. Load builtin modules for compilation
-    var builtin_modules = eval.BuiltinModules.init(ctx.gpa) catch |err| {
-        stderr.print("Error: Failed to load builtin modules: {}\n", .{err}) catch {};
-        return;
-    };
-    defer builtin_modules.deinit();
+    // Generate synthetic app source that imports the platform
+    var app_source = std.ArrayList(u8).empty;
+    defer app_source.deinit(ctx.gpa);
 
-    // 6. Compile each module
-    var compiled_modules = std.array_list.Managed(CompiledModule).init(ctx.gpa);
-    defer {
-        for (compiled_modules.items) |*m| {
-            m.env.deinit();
-        }
-        compiled_modules.deinit();
-    }
-
-    // Pre-allocate to avoid invalidating pointers
-    compiled_modules.ensureTotalCapacity(sorted_modules.len) catch {
+    // Build requires clause: app [entry1, entry2, ...] { pf: platform "path" }
+    app_source.appendSlice(ctx.gpa, "app [") catch {
         stderr.print("Error: Out of memory\n", .{}) catch {};
         return;
     };
+    for (platform_info.requires_entries, 0..) |entry, i| {
+        if (i > 0) app_source.appendSlice(ctx.gpa, ", ") catch {};
+        app_source.appendSlice(ctx.gpa, entry.name) catch {};
+    }
+    app_source.appendSlice(ctx.gpa, "] { pf: platform \"") catch {};
+    app_source.appendSlice(ctx.gpa, platform_abs_path) catch {};
+    app_source.appendSlice(ctx.gpa, "\" }\n\n") catch {};
 
-    var sibling_env_ptrs = ctx.gpa.alloc(*ModuleEnv, sorted_modules.len) catch {
+    // Generate stub implementations for each requires entry
+    for (platform_info.requires_entries) |entry| {
+        // Generate a stub: entry_name = stub_value based on type
+        // For effectful functions like "main! : {} => {}", generate: main! = || {}
+        // For pure functions like "process : Str -> Str", generate: process = |_| crash "stub"
+        app_source.appendSlice(ctx.gpa, entry.name) catch {};
+        if (std.mem.indexOf(u8, entry.type_str, "=>")) |_| {
+            // Effectful function - return unit
+            app_source.appendSlice(ctx.gpa, " = || {}\n") catch {};
+        } else if (std.mem.indexOf(u8, entry.type_str, "->")) |_| {
+            // Pure function - crash as stub
+            app_source.appendSlice(ctx.gpa, " = |_| crash \"stub\"\n") catch {};
+        } else {
+            // Value - use unit
+            app_source.appendSlice(ctx.gpa, " = {}\n") catch {};
+        }
+    }
+
+    // Write synthetic app to temp file
+    const synthetic_app_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
         stderr.print("Error: Out of memory\n", .{}) catch {};
         return;
     };
-    defer ctx.gpa.free(sibling_env_ptrs);
+    defer ctx.gpa.free(synthetic_app_path);
 
-    for (sorted_modules, 0..) |module_name, i| {
-        const module_filename = std.fmt.allocPrint(ctx.gpa, "{s}.roc", .{module_name}) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
-        defer ctx.gpa.free(module_filename);
+    std.fs.cwd().writeFile(.{
+        .sub_path = synthetic_app_path,
+        .data = app_source.items,
+    }) catch |err| {
+        stderr.print("Error: Could not write synthetic app: {}\n", .{err}) catch {};
+        return;
+    };
 
-        const module_path = std.fs.path.join(ctx.gpa, &[_][]const u8{ platform_dir, module_filename }) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
-        defer ctx.gpa.free(module_path);
+    // Compile using BuildEnv
+    const thread_count: usize = 1;
+    const mode: Mode = .single_threaded;
 
-        const compiled = compileModuleForSerialization(
-            ctx,
-            module_path,
-            module_name,
-            &builtin_modules,
-            sibling_env_ptrs[0..i],
-            sorted_modules[0..i],
-        ) catch |err| {
-            stderr.print("Error: Failed to compile module '{s}': {}\n", .{ module_name, err }) catch {};
-            return;
-        };
-        compiled_modules.appendAssumeCapacity(compiled);
-        sibling_env_ptrs[i] = &compiled_modules.items[compiled_modules.items.len - 1].env;
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count) catch |err| {
+        stderr.print("Error: Failed to initialize build environment: {}\n", .{err}) catch {};
+        return;
+    };
+    defer build_env.deinit();
+
+    // Build the synthetic app (which compiles the platform as a dependency)
+    build_env.build(synthetic_app_path) catch |err| {
+        // Drain and display error reports
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
+        }
+        stderr.print("Error: Compilation failed: {}\n", .{err}) catch {};
+        return;
+    };
+
+    // Drain any reports (warnings, etc.)
+    {
+        const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
+        defer build_env.gpa.free(drained);
+        for (drained) |mod| {
+            for (mod.reports) |*report| {
+                const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+                const config = reporting.ReportingConfig.initColorTerminal();
+                reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
+            }
+        }
     }
 
-    // 7. Collect and sort hosted functions globally
+    // Get compiled modules in dependency order
+    const modules = build_env.getModulesInSerializationOrder(ctx.gpa) catch |err| {
+        stderr.print("Error: Failed to get compiled modules: {}\n", .{err}) catch {};
+        return;
+    };
+    defer ctx.gpa.free(modules);
+
+    // 3. Collect hosted functions from compiled platform modules
     const HostedCompiler = can.HostedCompiler;
     var all_hosted_fns = std.ArrayList(HostedCompiler.HostedFunctionInfo).empty;
     defer {
@@ -4084,26 +4113,27 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
         all_hosted_fns.deinit(ctx.gpa);
     }
 
-    for (compiled_modules.items) |*m| {
-        var module_fns = HostedCompiler.collectAndSortHostedFunctions(&m.env) catch continue;
-        defer {
-            for (module_fns.items) |fn_info| {
-                m.env.gpa.free(fn_info.name_text);
+    for (modules) |mod| {
+        if (mod.is_platform_sibling or mod.is_platform_main) {
+            var module_fns = HostedCompiler.collectAndSortHostedFunctions(mod.env) catch continue;
+            defer {
+                for (module_fns.items) |fn_info| {
+                    mod.env.gpa.free(fn_info.name_text);
+                }
+                module_fns.deinit(mod.env.gpa);
             }
-            module_fns.deinit(m.env.gpa);
-        }
 
-        for (module_fns.items) |fn_info| {
-            // Duplicate the name_text since we're storing it in a different list
-            const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
-            all_hosted_fns.append(ctx.gpa, .{
-                .symbol_name = fn_info.symbol_name,
-                .expr_idx = fn_info.expr_idx,
-                .name_text = name_copy,
-            }) catch {
-                ctx.gpa.free(name_copy);
-                continue;
-            };
+            for (module_fns.items) |fn_info| {
+                const name_copy = ctx.gpa.dupe(u8, fn_info.name_text) catch continue;
+                all_hosted_fns.append(ctx.gpa, .{
+                    .symbol_name = fn_info.symbol_name,
+                    .expr_idx = fn_info.expr_idx,
+                    .name_text = name_copy,
+                }) catch {
+                    ctx.gpa.free(name_copy);
+                    continue;
+                };
+            }
         }
     }
 
@@ -4115,7 +4145,18 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
-    // 8. Build and run the glue spec
+    // 4. Print compiled module types
+    const stdout = ctx.io.stdout();
+    stdout.print("\n=== Platform Module Types ===\n", .{}) catch {};
+    for (modules) |mod| {
+        if (mod.is_platform_sibling or mod.is_platform_main) {
+            stdout.print("\nModule: {s}\n", .{mod.name}) catch {};
+            printCompiledModuleTypes(ctx, &mod, mod.name, stdout, &all_hosted_fns);
+        }
+    }
+    stdout.print("\n", .{}) catch {};
+
+    // 5. Build and run the glue spec
     // Get path to current roc executable
     const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
         stderr.print("Error: Could not determine roc executable path\n", .{}) catch {};
@@ -4123,11 +4164,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     defer ctx.gpa.free(roc_exe_path);
 
-    // Create temp directory for the glue spec executable
-    const temp_dir = createUniqueTempDir(ctx) catch |err| {
-        stderr.print("Error: Could not create temp directory: {}\n", .{err}) catch {};
-        return;
-    };
+    // Use the same temp directory for glue spec executable
     const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
         stderr.print("Error: Out of memory\n", .{}) catch {};
         return;
@@ -4340,12 +4377,12 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
 /// Print type information for a compiled module using TypeWriter for resolved types.
 fn printCompiledModuleTypes(
     ctx: *CliContext,
-    compiled_module: *CompiledModule,
+    compiled_module: *const BuildEnv.CompiledModuleInfo,
     module_name: []const u8,
     writer: anytype,
     all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
 ) void {
-    const env = &compiled_module.env;
+    const env = compiled_module.env;
 
     // First, look for nominal type declarations (s_nominal_decl)
     const all_stmts = env.store.sliceStatements(env.all_statements);
