@@ -796,8 +796,9 @@ pub fn ldrRegMemSoff(self: *Emit, width: RegisterWidth, dst: GeneralReg, base: G
         }
     }
 
-    // Fallback: compute effective address in IP0, then load
-    try self.movRegImm32(.w64, .IP0, offset);
+    // Handle offsets outside LDUR range [-256,255] and not suitable for unsigned encoding
+    // Use movRegImm64 for correct sign extension of negative offsets
+    try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
     try self.addRegRegReg(.w64, .IP0, base, .IP0);
     try self.ldurRegMem(width, dst, .IP0, 0);
 }
@@ -824,8 +825,9 @@ pub fn strRegMemSoff(self: *Emit, width: RegisterWidth, src: GeneralReg, base: G
         }
     }
 
-    // Fallback: compute effective address in IP0, then store
-    try self.movRegImm32(.w64, .IP0, offset);
+    // Handle offsets outside STUR range [-256,255] and not suitable for unsigned encoding
+    // Use movRegImm64 for correct sign extension of negative offsets
+    try self.movRegImm64(.IP0, @bitCast(@as(i64, offset)));
     try self.addRegRegReg(.w64, .IP0, base, .IP0);
     try self.sturRegMem(width, src, .IP0, 0);
 }
