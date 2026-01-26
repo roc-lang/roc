@@ -4187,8 +4187,21 @@ pub fn resolvePendingLookups(store: *NodeStore, env: anytype, imported_envs: []c
                         std.debug.print("[PENDING]   Looking for qualified name: {s}\n", .{qualified_member_name});
                     }
 
-                    // First try the qualified name (for methods on opaque types)
+                    // Try to resolve the pending lookup in order of preference:
+                    // 1. Full member_name directly (for nested module access like "Outer.Inner.inner")
+                    // 2. Qualified name (for methods on opaque types like "Outer.method")
+                    // 3. Base member name only (for simple exports)
                     const target_node_idx_opt: ?u16 = blk: {
+                        // First try the full member_name (for nested module access)
+                        if (tenv.common.findIdent(member_name)) |full_ident| {
+                            if (tenv.getExposedNodeIndexById(full_ident)) |idx| {
+                                if (comptime trace_pending) {
+                                    std.debug.print("[PENDING]   Found via full member name: {}\n", .{idx});
+                                }
+                                break :blk idx;
+                            }
+                        }
+                        // Try the qualified name (for methods on opaque types)
                         if (tenv.common.findIdent(qualified_member_name)) |qident| {
                             if (tenv.getExposedNodeIndexById(qident)) |idx| {
                                 if (comptime trace_pending) {
