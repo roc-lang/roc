@@ -123,10 +123,6 @@ PARSE ERROR - everything.md:14:11:14:12
 PARSE ERROR - everything.md:14:12:14:15
 PARSE ERROR - everything.md:14:16:14:17
 PARSE ERROR - everything.md:14:18:14:19
-PARSE ERROR - everything.md:15:4:15:5
-PARSE ERROR - everything.md:15:5:15:6
-PARSE ERROR - everything.md:16:4:16:5
-PARSE ERROR - everything.md:17:3:17:4
 PARSE ERROR - everything.md:17:5:17:7
 PARSE ERROR - everything.md:17:11:17:12
 PARSE ERROR - everything.md:18:3:18:9
@@ -136,10 +132,6 @@ PARSE ERROR - everything.md:18:11:18:12
 PARSE ERROR - everything.md:18:12:18:15
 PARSE ERROR - everything.md:18:16:18:17
 PARSE ERROR - everything.md:18:18:18:19
-PARSE ERROR - everything.md:19:4:19:5
-PARSE ERROR - everything.md:19:5:19:6
-PARSE ERROR - everything.md:20:4:20:5
-PARSE ERROR - everything.md:21:3:21:4
 PARSE ERROR - everything.md:21:5:21:7
 PARSE ERROR - everything.md:22:1:22:2
 PARSE ERROR - everything.md:22:2:22:3
@@ -155,10 +147,6 @@ PARSE ERROR - everything.md:24:11:24:12
 PARSE ERROR - everything.md:24:12:24:15
 PARSE ERROR - everything.md:24:16:24:17
 PARSE ERROR - everything.md:24:18:24:19
-PARSE ERROR - everything.md:25:4:25:5
-PARSE ERROR - everything.md:25:5:25:6
-PARSE ERROR - everything.md:26:4:26:5
-PARSE ERROR - everything.md:27:3:27:4
 PARSE ERROR - everything.md:27:5:27:7
 PARSE ERROR - everything.md:27:11:27:12
 PARSE ERROR - everything.md:28:3:28:9
@@ -168,10 +156,6 @@ PARSE ERROR - everything.md:28:11:28:12
 PARSE ERROR - everything.md:28:12:28:15
 PARSE ERROR - everything.md:28:16:28:17
 PARSE ERROR - everything.md:28:18:28:19
-PARSE ERROR - everything.md:29:4:29:5
-PARSE ERROR - everything.md:29:5:29:6
-PARSE ERROR - everything.md:30:4:30:5
-PARSE ERROR - everything.md:31:3:31:4
 PARSE ERROR - everything.md:31:5:31:7
 PARSE ERROR - everything.md:33:1:33:2
 PARSE ERROR - everything.md:33:2:33:3
@@ -181,10 +165,6 @@ PARSE ERROR - everything.md:35:2:35:3
 PARSE ERROR - everything.md:36:1:36:2
 PARSE ERROR - everything.md:36:3:36:4
 PARSE ERROR - everything.md:36:5:36:6
-PARSE ERROR - everything.md:37:2:37:3
-PARSE ERROR - everything.md:37:3:37:4
-PARSE ERROR - everything.md:38:2:38:3
-PARSE ERROR - everything.md:39:1:39:2
 WHERE CLAUSE ERROR - everything.md:56:12:56:17
 PARSE ERROR - everything.md:56:18:56:24
 PARSE ERROR - everything.md:56:24:56:25
@@ -301,50 +281,6 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:15:4:15:5:**
-```roc
-			a,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:15:5:15:6:**
-```roc
-			a,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:16:4:16:5:**
-```roc
-			a
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:17:3:17:4:**
-```roc
-		) -> Str,
-```
-		^
-
-
-**PARSE ERROR**
 Function types with multiple arrows need parentheses.
 
 Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
@@ -456,50 +392,6 @@ This is an unexpected parsing error. Please check your syntax.
 		module(a).a2 : (
 ```
 		               ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:19:4:19:5:**
-```roc
-			a,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:19:5:19:6:**
-```roc
-			a,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:20:4:20:5:**
-```roc
-			a
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:21:3:21:4:**
-```roc
-		) -> Str
-```
-		^
 
 
 **PARSE ERROR**
@@ -683,50 +575,6 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:25:4:25:5:**
-```roc
-			b,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:25:5:25:6:**
-```roc
-			b,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:26:4:26:5:**
-```roc
-			b
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:27:3:27:4:**
-```roc
-		) -> Str,
-```
-		^
-
-
-**PARSE ERROR**
 Function types with multiple arrows need parentheses.
 
 Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
@@ -841,50 +689,6 @@ This is an unexpected parsing error. Please check your syntax.
 
 
 **PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:29:4:29:5:**
-```roc
-			b,
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:29:5:29:6:**
-```roc
-			b,
-```
-			 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:30:4:30:5:**
-```roc
-			b
-```
-			^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:31:3:31:4:**
-```roc
-		) -> Str
-```
-		^
-
-
-**PARSE ERROR**
 Function types with multiple arrows need parentheses.
 
 Instead of writing **a -> b -> c**, use parentheses to clarify which you mean:
@@ -996,50 +800,6 @@ This is an unexpected parsing error. Please check your syntax.
 ) : (
 ```
     ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:2:37:3:**
-```roc
-	a,
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:37:3:37:4:**
-```roc
-	a,
-```
-	 ^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:38:2:38:3:**
-```roc
-	b
-```
-	^
-
-
-**PARSE ERROR**
-A parsing error occurred: `statement_unexpected_token`
-This is an unexpected parsing error. Please check your syntax.
-
-**everything.md:39:1:39:2:**
-```roc
-)
-```
-^
 
 
 **WHERE CLAUSE ERROR**
@@ -1471,10 +1231,6 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
 		(s-malformed (tag "expected_colon_after_type_annotation"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1484,16 +1240,8 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
 		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1516,16 +1264,8 @@ EndOfFile,
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "multi_arrow_needs_parens"))
 		(s-malformed (tag "expected_colon_after_type_annotation"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
-		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
 		(s-malformed (tag "statement_unexpected_token"))
@@ -1659,21 +1399,6 @@ import I2 exposing [
 # Where constraint
 A(a) : a
 	where []
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

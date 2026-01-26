@@ -1709,6 +1709,47 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) Error!AST.Statem
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
+            } else if (statementType == .top_level) {
+                // At top level, a parenthesized expression like (x + 1) or (x = 5).foo()
+                // is not valid. Skip past the parentheses and any suffix to produce a single error.
+                // Check if we found a matching close paren or hit EOF
+                const tok_at_lookahead = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                if (tok_at_lookahead == .CloseRound) {
+                    self.pos = lookahead_pos + 1; // Move past the closing paren
+                    // Skip any suffix operators (e.g., .foo(), !(), etc.)
+                    while (self.peek() != .EndOfFile) {
+                        switch (self.peek()) {
+                            .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
+                                self.advance();
+                            },
+                            .NoSpaceOpenRound => {
+                                self.advance();
+                                // Skip to matching close paren
+                                var paren_depth: u32 = 1;
+                                while (paren_depth > 0 and self.peek() != .EndOfFile) {
+                                    switch (self.peek()) {
+                                        .OpenRound, .NoSpaceOpenRound => paren_depth += 1,
+                                        .CloseRound => paren_depth -= 1,
+                                        else => {},
+                                    }
+                                    self.advance();
+                                }
+                            },
+                            .OpBang => {
+                                self.advance();
+                            },
+                            else => break,
+                        }
+                    }
+                    // Back up by one so that pushMalformed's advance() puts us at the current position
+                    // (pushMalformed always advances, so we compensate for that)
+                    if (self.pos > 0) {
+                        self.pos -= 1;
+                    }
+                }
+                // If we didn't find matching close paren, just consume the open paren
+                // and fall through to produce an error at start position
+                return try self.pushMalformed(AST.Statement.Idx, .statement_unexpected_token, start);
             }
         },
         else => {},
