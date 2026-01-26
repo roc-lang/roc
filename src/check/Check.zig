@@ -3890,7 +3890,10 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                 } }, env, expr_region);
 
                 // Then, unify the actual receiver type with the expected record
-                _ = try self.unify(record_being_accessed, receiver_var, env);
+                _ = try self.unifyInContext(record_being_accessed, receiver_var, env, .{ .record_access = .{
+                    .field_name = dot_access.field_name,
+                    .field_region = dot_access.field_name_region,
+                } });
                 _ = try self.unify(expr_var, record_field_var, env);
             }
         },

@@ -53,6 +53,10 @@ pub const Context = union(enum) {
     /// Right side of binary operator
     binop_rhs: BinopContext,
 
+    // Record contexts
+    /// Dot access on a record
+    record_access: RecordAccessContext,
+
     // Special contexts
     /// The ? (try) operator (simple version for early return case)
     try_operator,
@@ -163,6 +167,16 @@ pub const Context = union(enum) {
             gt,
             gte,
         };
+    };
+
+    /// Context for tag argument type errors
+    pub const RecordAccessContext = struct {
+        /// Name of the record field
+        field_name: Ident.Idx,
+        /// Region of the record field
+        /// We have to use the real region here, because the field does not
+        /// have its own CIR node
+        field_region: base.Region,
     };
 
     /// Context for method call type errors

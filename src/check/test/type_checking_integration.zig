@@ -1782,6 +1782,38 @@ test "check type - record - access" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str");
 }
 
+test "check type - record access - field typo" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\r =
+        \\  {
+        \\    hello: "Hello",
+        \\    world: 10,
+        \\  }
+        \\
+        \\x = r.helo
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `helo` field:
+        \\**test:9:6:9:11:**
+        \\```roc
+        \\x = r.helo
+        \\```
+        \\     ^^^^^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\    - `world`
+        \\
+        \\So maybe `helo` should be `hello`?
+        \\
+        \\
+    );
+}
+
 test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field

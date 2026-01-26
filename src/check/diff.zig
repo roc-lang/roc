@@ -92,89 +92,12 @@ pub const Scratch = struct {
     }
 };
 
-/// Gather all field names from a record type, following extension chains.
-/// Returns a slice of Ident.Idx field names collected in scratch.field_names.
-fn gatherFields(
-    snap_store: *const snapshot.Store,
-    initial_idx: SnapshotContentIdx,
-    scratch: *Scratch,
-) []const Ident.Idx {
-    const start = scratch.field_names.items.len;
-    var ext_idx = initial_idx;
-
-    while (true) {
-        const content = snap_store.getContent(ext_idx);
-        switch (content) {
-            .structure => |flat| switch (flat) {
-                .record => |rec| {
-                    // Add fields from this record
-                    const fields = snap_store.sliceRecordFields(rec.fields);
-                    for (fields.items(.name)) |name| {
-                        scratch.field_names.append(scratch.gpa, name) catch {};
-                    }
-                    // Continue to extension
-                    ext_idx = rec.ext;
-                },
-                .record_unbound => |fields_range| {
-                    const fields = snap_store.sliceRecordFields(fields_range);
-                    for (fields.items(.name)) |name| {
-                        scratch.field_names.append(scratch.gpa, name) catch {};
-                    }
-                    break;
-                },
-                .empty_record => break,
-                else => break,
-            },
-            .alias => |alias| {
-                // Follow alias backing type
-                ext_idx = alias.backing;
-            },
-            .flex, .rigid, .err, .recursive => break,
-        }
-    }
-
-    return scratch.field_names.items[start..];
-}
-
-/// Gather all tag names from a tag union type, following extension chains.
-/// Returns a slice of Ident.Idx tag names collected in scratch.tag_names.
-fn gatherTags(
-    snap_store: *const snapshot.Store,
-    initial_idx: SnapshotContentIdx,
-    scratch: *Scratch,
-) []const Ident.Idx {
-    const start = scratch.tag_names.items.len;
-    var ext_idx = initial_idx;
-
-    while (true) {
-        const content = snap_store.getContent(ext_idx);
-        switch (content) {
-            .structure => |flat| switch (flat) {
-                .tag_union => |union_| {
-                    const tags = snap_store.sliceTags(union_.tags);
-                    for (tags.items(.name)) |name| {
-                        scratch.tag_names.append(scratch.gpa, name) catch {};
-                    }
-                    // Continue to extension
-                    ext_idx = union_.ext;
-                },
-                .empty_tag_union => break,
-                else => break,
-            },
-            .alias => |alias| {
-                ext_idx = alias.backing;
-            },
-            .flex, .rigid, .err, .recursive => break,
-        }
-    }
-
-    return scratch.tag_names.items[start..];
-}
+// typo suggestions //
 
 /// Calculate Damerau-Levenshtein edit distance between two strings.
 /// Returns the minimum number of edits (insertions, deletions, substitutions,
 /// or transpositions of adjacent characters) needed to transform a into b.
-pub fn editDistance(a: []const u8, b: []const u8) u32 {
+fn editDistance(a: []const u8, b: []const u8) u32 {
     // Short-circuit for empty strings
     if (a.len == 0) return @intCast(b.len);
     if (b.len == 0) return @intCast(a.len);
@@ -229,59 +152,34 @@ pub fn editDistance(a: []const u8, b: []const u8) u32 {
 
 /// Check if a string is a likely typo of another.
 /// Uses edit distance with length-dependent thresholds.
-pub fn isLikelyTypo(typo: []const u8, correct: []const u8) bool {
-    const dist = editDistance(typo, correct);
+fn isLikelyTypo(typo_len: usize, correct_len: usize, dist: u32) bool {
     // dist > 0 ensures we don't suggest exact matches
     if (dist == 0) return false;
 
-    const min_len = @min(typo.len, correct.len);
+    const min_len = @min(typo_len, correct_len);
+
     // Short strings (1-2 chars): only allow edit distance of 1
     if (min_len <= 2) return dist == 1;
+
     // Longer strings: allow edit distance of 1-2
     return dist <= 2;
 }
 
-/// Find the best typo suggestion from a list of candidates.
-/// Returns the candidate with the smallest edit distance (if within typo threshold).
-pub fn findBestTypoSuggestion(
-    typo: []const u8,
-    candidates: anytype,
-    ident_store: *const Ident.Store,
-) ?Ident.Idx {
-    var best: ?Ident.Idx = null;
-    var best_dist: u32 = 3; // Max typo distance + 1
-
-    for (candidates) |candidate| {
-        const candidate_name = switch (@TypeOf(candidate)) {
-            Ident.Idx => candidate,
-            snapshot.SnapshotRecordField => candidate.name,
-            snapshot.SnapshotTag => candidate.name,
-            else => @compileError("Unsupported candidate type"),
-        };
-        const candidate_text = ident_store.getText(candidate_name);
-        const dist = editDistance(typo, candidate_text);
-        if (dist > 0 and dist < best_dist and isLikelyTypo(typo, candidate_text)) {
-            best_dist = dist;
-            best = candidate_name;
-        }
-    }
-
-    return best;
-}
-
 /// Find the best typo suggestion from a slice of identifier indices.
-fn findBestTypoSuggestionFromNames(
-    typo: []const u8,
+fn findBestTypoSuggestion(
+    typo: Ident.Idx,
     candidates: []const Ident.Idx,
     ident_store: *const Ident.Store,
 ) ?Ident.Idx {
     var best: ?Ident.Idx = null;
     var best_dist: u32 = 3; // Max typo distance + 1
 
+    const typo_text = ident_store.getText(typo);
+
     for (candidates) |candidate| {
         const candidate_text = ident_store.getText(candidate);
-        const dist = editDistance(typo, candidate_text);
-        if (dist > 0 and dist < best_dist and isLikelyTypo(typo, candidate_text)) {
+        const dist = editDistance(typo_text, candidate_text);
+        if (dist > 0 and dist < best_dist and isLikelyTypo(typo_text.len, candidate_text.len, dist)) {
             best_dist = dist;
             best = candidate;
         }
@@ -289,6 +187,52 @@ fn findBestTypoSuggestionFromNames(
 
     return best;
 }
+
+/// A ranked ident based on the distance
+pub const TypoSuggestion = struct {
+    ident: Ident.Idx,
+    dist: u32,
+
+    const Self = TypoSuggestion;
+
+    /// Returns true if field `a` should sort before field `b` by dist.
+    pub fn sortByDistAsc(_: void, a: Self, b: Self) bool {
+        return std.math.order(a.dist, b.dist) == .lt;
+    }
+
+    pub const ArrayList = std.array_list.Managed(Self);
+};
+
+/// Find the best typo suggestions from a slice of identifier indices.
+///
+/// This clobbers `suggestions` and writes suggestions sorted by rank
+pub fn findBestTypoSuggestions(
+    typo: Ident.Idx,
+    candidates: []const Ident.Idx,
+    ident_store: *const Ident.Store,
+    suggestions: *TypoSuggestion.ArrayList,
+) std.mem.Allocator.Error!void {
+    // Clobber and allocate
+    suggestions.clearRetainingCapacity();
+    try suggestions.ensureUnusedCapacity(candidates.len);
+
+    const typo_text = ident_store.getText(typo);
+
+    // Calculate dist
+    for (candidates) |candidate| {
+        const candidate_text = ident_store.getText(candidate);
+        const dist = editDistance(typo_text, candidate_text);
+        suggestions.appendAssumeCapacity(.{
+            .dist = dist,
+            .ident = candidate,
+        });
+    }
+
+    // Sort
+    std.mem.sort(TypoSuggestion, suggestions.items, {}, TypoSuggestion.sortByDistAsc);
+}
+
+// type comparisons //
 
 /// Compare two snapshot types and generate hints about their differences.
 pub fn compareTypes(
@@ -507,7 +451,7 @@ fn compareRecords(
 }
 
 /// Gather all field names from a record, following extension chain.
-fn gatherFieldsFromRecord(
+pub fn gatherFieldsFromRecord(
     snap_store: *const snapshot.Store,
     record: snapshot.SnapshotRecord,
     scratch: *Scratch,
@@ -576,8 +520,7 @@ fn compareFieldNames(
 
         if (!found) {
             // Check if there's a typo candidate in actual fields
-            const exp_name = ident_store.getText(exp_name_idx);
-            if (findBestTypoSuggestionFromNames(exp_name, act_names, ident_store)) |suggestion| {
+            if (findBestTypoSuggestion(exp_name_idx, act_names, ident_store)) |suggestion| {
                 hints.append(.{ .field_typo = .{
                     .typo = suggestion,
                     .suggestion = exp_name_idx,
@@ -643,8 +586,7 @@ fn compareTagUnions(
 
         if (!found) {
             // Check if this is a typo of an expected tag
-            const act_name = ident_store.getText(act_name_idx);
-            if (findBestTypoSuggestionFromNames(act_name, exp_tag_names, ident_store)) |suggestion| {
+            if (findBestTypoSuggestion(act_name_idx, exp_tag_names, ident_store)) |suggestion| {
                 hints.append(.{ .tag_typo = .{
                     .typo = act_name_idx,
                     .suggestion = suggestion,
@@ -725,19 +667,64 @@ test "editDistance - deletion" {
 }
 
 test "isLikelyTypo - valid typos" {
-    try std.testing.expect(isLikelyTypo("nme", "name"));
-    try std.testing.expect(isLikelyTypo("teh", "the"));
-    try std.testing.expect(isLikelyTypo("feild", "field"));
-    try std.testing.expect(isLikelyTypo("recieve", "receive"));
+    try std.testing.expect(blk: {
+        const typo = "nme";
+        const actual = "name";
+        const dist = editDistance(typo, actual);
+        break :blk isLikelyTypo(typo.len, actual.len, dist);
+    });
+    try std.testing.expect(blk: {
+        const typo = "teh";
+        const actual = "the";
+        const dist = editDistance(typo, actual);
+        break :blk isLikelyTypo(typo.len, actual.len, dist);
+    });
+    try std.testing.expect(blk: {
+        const typo = "feild";
+        const actual = "field";
+        const dist = editDistance(typo, actual);
+        break :blk isLikelyTypo(typo.len, actual.len, dist);
+    });
+    try std.testing.expect(blk: {
+        const typo = "recieve";
+        const actual = "receive";
+        const dist = editDistance(typo, actual);
+        break :blk isLikelyTypo(typo.len, actual.len, dist);
+    });
 }
 
 test "isLikelyTypo - not typos" {
-    try std.testing.expect(!isLikelyTypo("foo", "bar"));
-    try std.testing.expect(!isLikelyTypo("completely", "different"));
-    try std.testing.expect(!isLikelyTypo("name", "name")); // exact match
+    try std.testing.expect(blk: {
+        const typo = "foo";
+        const actual = "bar";
+        const dist = editDistance(typo, actual);
+        break :blk !isLikelyTypo(typo.len, actual.len, dist);
+    });
+    try std.testing.expect(blk: {
+        const typo = "completely";
+        const actual = "different";
+        const dist = editDistance(typo, actual);
+        break :blk !isLikelyTypo(typo.len, actual.len, dist);
+    });
+    try std.testing.expect(blk: {
+        const typo = "name";
+        const actual = "name";
+        const dist = editDistance(typo, actual);
+        break :blk !isLikelyTypo(typo.len, actual.len, dist);
+    }); // exact match
 }
 
 test "isLikelyTypo - short strings" {
-    try std.testing.expect(isLikelyTypo("a", "b")); // single char, dist=1
-    try std.testing.expect(!isLikelyTypo("a", "abc")); // dist=2, but len=1, so no
+    try std.testing.expect(blk: {
+        const typo = "a";
+        const actual = "b";
+        const dist = editDistance(typo, actual);
+        break :blk isLikelyTypo(typo.len, actual.len, dist);
+    }); // single char, dist=1
+    try std.testing.expect(blk: {
+        const typo = "a";
+        const actual = "abc";
+        const dist = editDistance(typo, actual);
+        break :blk !isLikelyTypo(typo.len, actual.len, dist);
+    }); // dist=2, but len=1, so no
 }

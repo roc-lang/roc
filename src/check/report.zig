@@ -114,6 +114,7 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    typo_suggestions: diff.TypoSuggestion.ArrayList,
 
     /// Init report builder
     /// Only owned field is `buf`
@@ -129,7 +130,7 @@ pub const ReportBuilder = struct {
     ) !Self {
         return .{
             .gpa = gpa,
-            .bytes_buf = std.array_list.Managed(u8).init(gpa),
+            .bytes_buf = try std.array_list.Managed(u8).initCapacity(gpa, 16),
             .diff_scratch = try diff.Scratch.init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
@@ -139,14 +140,22 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
         };
     }
 
-    /// Deinit report builder
-    /// Owned fields are `bytes_buf` and `diff_scratch`
+    /// Deinit report builder, only fields it owns
     pub fn deinit(self: *Self) void {
         self.bytes_buf.deinit();
         self.diff_scratch.deinit();
+        self.typo_suggestions.deinit();
+    }
+
+    /// Reset report builder, only fields it owns
+    pub fn reset(self: *Self) void {
+        self.bytes_buf.clearRetainingCapacity();
+        self.diff_scratch.reset();
+        self.typo_suggestions.clearRetainingCapacity();
     }
 
     // Helpers
@@ -155,7 +164,12 @@ pub const ReportBuilder = struct {
     /// Consolidates the common pattern of: get region -> calc info -> add to document.
     fn addSourceHighlight(self: *Self, report: *Report, region_idx: Region.Idx) !void {
         const region = self.can_ir.store.regions.get(region_idx);
-        const region_info = self.module_env.calcRegionInfo(region.*);
+        return self.addSourceHighlightRegion(report, region.*);
+    }
+
+    /// Add source code highlighting for a region.
+    fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) !void {
+        const region_info = self.module_env.calcRegionInfo(region);
         try report.document.addSourceRegion(
             region_info,
             .error_highlight,
@@ -209,6 +223,48 @@ pub const ReportBuilder = struct {
         focused: struct { outer: Region.Idx, highlight: Region.Idx },
     };
 
+    /// A lightweight document fragment for building error report text.
+    ///
+    /// Doc provides a declarative way to construct report messages by composing
+    /// small fragments (text, identifiers, numbers) with optional annotations.
+    /// Fragments are rendered immediately via `renderSlice` - they are NOT stored.
+    ///
+    /// ## Usage Pattern
+    ///
+    /// Create Doc slices inline using anonymous array literals and render immediately:
+    ///
+    /// ```zig
+    /// try D.renderSlice(&.{
+    ///     D.bytes("Expected"),
+    ///     D.num(3),
+    ///     D.bytes("arguments"),
+    /// }, self, &report);
+    /// ```
+    ///
+    /// ## IMPORTANT: Slice Lifetime Constraints
+    ///
+    /// Doc slices created with `&.{...}` are stack-allocated and must be rendered
+    /// immediately. NEVER store Doc slices for later use - the underlying memory
+    /// becomes invalid after the enclosing scope ends.
+    ///
+    /// BAD (dangling pointer):
+    /// ```zig
+    /// var stored_slices: ArrayList([]const Doc) = ...;
+    /// for (items) |item| {
+    ///     stored_slices.append(&.{ D.ident(item.name) }); // BUG: stack memory!
+    /// }
+    /// // Later iteration sees garbage data
+    /// ```
+    ///
+    /// GOOD (render immediately):
+    /// ```zig
+    /// for (items) |item| {
+    ///     try D.renderSlice(&.{ D.ident(item.name) }, self, &report);
+    /// }
+    /// ```
+    ///
+    /// For dynamic content that varies per iteration, render directly using
+    /// `report.document` methods instead of the Doc abstraction.
     const Doc = struct {
         type_: union(enum) {
             bytes: []const u8,
@@ -220,8 +276,8 @@ pub const ReportBuilder = struct {
         preceding_space: bool,
         annotation: ?reporting.Annotation,
 
-        // Constructors //
-
+        /// Create a Doc containing literal text bytes.
+        /// The bytes must have static lifetime (string literals) or be owned elsewhere.
         fn bytes(b: []const u8) Doc {
             return Doc{
                 .type_ = .{ .bytes = b },
@@ -230,6 +286,7 @@ pub const ReportBuilder = struct {
             };
         }
 
+        /// Create a Doc containing a hyperlink.
         fn link(b: []const u8) Doc {
             return Doc{
                 .type_ = .{ .link = b },
@@ -238,6 +295,8 @@ pub const ReportBuilder = struct {
             };
         }
 
+        /// Create a Doc that will render an identifier's text.
+        /// The ident is resolved at render time via the ReportBuilder's can_ir.
         fn ident(b: Ident.Idx) Doc {
             return Doc{
                 .type_ = .{ .ident = b },
@@ -246,6 +305,7 @@ pub const ReportBuilder = struct {
             };
         }
 
+        /// Create a Doc containing an ordinal number (1st, 2nd, 3rd, etc.).
         fn num_ord(b: u32) Doc {
             return Doc{
                 .type_ = .{ .num_ord = b },
@@ -254,6 +314,7 @@ pub const ReportBuilder = struct {
             };
         }
 
+        /// Create a Doc containing a cardinal number.
         fn num(b: u32) Doc {
             return Doc{
                 .type_ = .{ .num = b },
@@ -262,22 +323,21 @@ pub const ReportBuilder = struct {
             };
         }
 
-        // Metadata //
-
+        /// Add a visual annotation (inline_code, emphasized, etc.) to this Doc.
         fn withAnnotation(doc: Doc, anno: reporting.Annotation) Doc {
             var result = doc;
             result.annotation = anno;
             return result;
         }
 
+        /// Remove the default space that precedes this Doc when rendered in a slice.
         fn withNoPrecedingSpace(doc: Doc) Doc {
             var result = doc;
             result.preceding_space = false;
             return result;
         }
 
-        // Rendering //
-
+        /// Render a single Doc fragment to the report.
         fn render(doc: Doc, builder: *ReportBuilder, report: *Report) !void {
             switch (doc.type_) {
                 .bytes => |b| {
@@ -317,12 +377,25 @@ pub const ReportBuilder = struct {
             }
         }
 
+        /// Render a slice of Doc fragments to the report, joining with spaces.
+        ///
+        /// This is the primary way to use Docs - create an inline slice and render
+        /// immediately. The slice is processed in a single pass with no allocations
+        /// beyond what individual Doc variants require (e.g., ident lookup).
+        ///
+        /// Performance: O(n) where n is the number of docs. Each doc involves:
+        /// - A switch on the doc type
+        /// - For .bytes/.link: direct string append (very fast)
+        /// - For .ident: one hash lookup + string copy
+        /// - For .num/.num_ord: integer formatting to scratch buffer + copy
         fn renderSlice(docs: []const Doc, builder: *ReportBuilder, report: *Report) !void {
             for (docs, 0..) |doc, i| {
                 if (i != 0 and doc.preceding_space) try report.document.addReflowingText(" ");
                 try doc.render(builder, report);
             }
         }
+
+        pub const ArrayList = std.array_list.Managed(Doc);
     };
     const D = Doc;
 
@@ -434,6 +507,40 @@ pub const ReportBuilder = struct {
         return report;
     }
 
+    /// Helper to create a "type mismatch" report, where both the actual type and
+    /// the expected type need to be displayed
+    fn makeCustomReport(
+        self: *Self,
+        region: ProblemRegion,
+        title: []const Doc,
+        hints: []const []const Doc,
+    ) !Report {
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        // Add title
+        try D.renderSlice(title, self, &report);
+        try report.document.addLineBreak();
+
+        // Add the region to highlight
+        switch (region) {
+            .simple => |region_idx| {
+                try self.addSourceHighlight(&report, region_idx);
+            },
+            .focused => |ctx| {
+                try self.addFocusedSourceHighlight(&report, ctx.outer, ctx.highlight);
+            },
+        }
+
+        // Print static hints
+        for (hints) |hint| {
+            try report.document.addLineBreak();
+            try D.renderSlice(hint, self, &report);
+        }
+
+        return report;
+    }
+
     /// Render type comparison hints (arity mismatch, missing fields, typos, effect mismatch)
     fn renderDiffHints(self: *Self, report: *Report, hints: diff.HintList, had_static_hints: bool) !void {
         for (hints.slice(), 0..) |hint, i| {
@@ -524,6 +631,8 @@ pub const ReportBuilder = struct {
         const trace = tracy.trace(@src());
         defer trace.end();
 
+        self.reset();
+
         switch (problem) {
             .type_mismatch => |mismatch| {
                 // All error contexts are now handled via mismatch.context
@@ -550,6 +659,7 @@ pub const ReportBuilder = struct {
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
+                    .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
                     .platform_requirement => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way:")},
@@ -1897,6 +2007,130 @@ pub const ReportBuilder = struct {
                 },
             },
         );
+    }
+
+    /// Data about a record snapshot, used to render nice hints
+    const Record = union(enum) {
+        not_a_record,
+        empty_record,
+        record: []const Ident.Idx,
+    };
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildRecordAccess(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.RecordAccessContext,
+    ) !Report {
+        // Check the inferred type
+        const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        const record =
+            switch (actual_content) {
+                .structure => |structure| switch (structure) {
+                    .record => |record| blk: {
+                        const fields = diff.gatherFieldsFromRecord(self.snapshots, record, &self.diff_scratch);
+                        if (fields.len == 0) {
+                            break :blk Record.empty_record;
+                        } else {
+                            break :blk Record{ .record = fields };
+                        }
+                    },
+                    .record_unbound => |fields_range| blk: {
+                        const fields = self.snapshots.sliceRecordFields(fields_range).items(.name);
+                        if (fields.len == 0) {
+                            break :blk Record.empty_record;
+                        } else {
+                            break :blk Record{ .record = fields };
+                        }
+                    },
+                    .empty_record => Record.empty_record,
+                    else => Record.not_a_record,
+                },
+                else => Record.not_a_record,
+            };
+
+        const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
+        switch (record) {
+            .not_a_record => {
+                return try self.makeBadTypeReport(
+                    region,
+                    &.{D.bytes("This is not a record, so it does not have any fields to access:")},
+                    &.{D.bytes("It is:")},
+                    types.actual_snapshot,
+                    &.{
+                        &.{
+                            D.bytes("But I need a record with a"),
+                            D.ident(ctx.field_name).withAnnotation(.inline_code),
+                            D.bytes("field."),
+                        },
+                    },
+                );
+            },
+            .empty_record => {
+                return try self.makeCustomReport(
+                    region,
+                    &.{
+                        D.bytes("This record does not have a"),
+                        D.ident(ctx.field_name).withAnnotation(.inline_code),
+                        D.bytes("field:"),
+                    },
+                    &.{
+                        &.{D.bytes("It is actually an record with no fields.")},
+                    },
+                );
+            },
+            .record => |actual_fields| {
+                // In this variant, we have to dynamically calculate and
+                // print similar record fields. This gets hairy with the
+                // makeCustomReport  abstraction, so we fall back to the more
+                // robust full record builder
+
+                // Get a sorted list of the most similar field names
+                try diff.findBestTypoSuggestions(
+                    ctx.field_name,
+                    actual_fields,
+                    self.can_ir.getIdentStoreConst(),
+                    &self.typo_suggestions,
+                );
+                std.debug.assert(self.typo_suggestions.items.len > 0);
+                const best_suggestion = self.typo_suggestions.items[0];
+
+                // Create report directly and render dynamic suggestions inline
+                var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+                errdefer report.deinit();
+
+                // Add title
+                try D.renderSlice(&.{
+                    D.bytes("This record does not have a"),
+                    D.ident(ctx.field_name).withAnnotation(.inline_code),
+                    D.bytes("field:"),
+                }, self, &report);
+                try report.document.addLineBreak();
+
+                // Add source highlight
+                try self.addSourceHighlightRegion(&report, ctx.field_region);
+
+                // Render typo suggestions directly (avoiding slice lifetime issues)
+                try report.document.addLineBreak();
+                try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
+                try report.document.addLineBreak();
+                const count = @min(self.typo_suggestions.items.len, 3);
+                for (self.typo_suggestions.items[0..count]) |suggestion| {
+                    try report.document.addLineBreak();
+                    try report.document.addText("    - ");
+                    try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
+                }
+                try report.document.addLineBreak();
+                try report.document.addLineBreak();
+                try report.document.addReflowingText("So maybe ");
+                try report.document.addAnnotated(self.can_ir.getIdentText(ctx.field_name), .inline_code);
+                try report.document.addReflowingText(" should be ");
+                try report.document.addAnnotated(self.can_ir.getIdentText(best_suggestion.ident), .inline_code);
+                try report.document.addText("?");
+
+                return report;
+            },
+        }
     }
 
     /// Build a report for when an anonymous type doesn't support equality
