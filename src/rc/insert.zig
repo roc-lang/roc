@@ -501,7 +501,7 @@ pub const InsertPass = struct {
         }
 
         // Compute the layout from the type variable
-        return self.layout_store.addTypeVar(0, type_var, self.type_scope) catch unreachable;
+        return self.layout_store.addTypeVar(0, type_var, self.type_scope, null) catch unreachable;
     }
 
     /// Get the layout index for an expression by computing it from the expression's type.
@@ -515,7 +515,7 @@ pub const InsertPass = struct {
         }
 
         // Compute the layout from the type variable
-        return self.layout_store.addTypeVar(0, type_var, self.type_scope) catch unreachable;
+        return self.layout_store.addTypeVar(0, type_var, self.type_scope, null) catch unreachable;
     }
 
     // Phase 2: Transform IR to insert RC operations

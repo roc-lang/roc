@@ -1407,17 +1407,24 @@ pub const Store = struct {
     /// The module_idx parameter specifies which module the type variable belongs to.
     /// This is essential for cross-module layout computation where different modules
     /// may have type variables with the same numeric value referring to different types.
+    ///
+    /// The caller_module_idx parameter specifies the module that owns the type variables
+    /// in the type_scope mappings. When a flex/rigid var is looked up in type_scope and
+    /// found, the mapped var belongs to caller_module_idx, not module_idx. This is critical
+    /// for cross-module polymorphic function calls.
     pub fn addTypeVar(
         self: *Self,
         module_idx: u16,
         unresolved_var: Var,
         type_scope: *const TypeScope,
+        caller_module_idx: ?u16,
     ) std.mem.Allocator.Error!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
 
         const types_store_ptr = self.getTypesStore();
         var current = types_store_ptr.resolveVar(unresolved_var);
+
 
         // If we've already seen this (module, var) pair, return the layout we resolved it to.
         const cache_key = ModuleVarKey{ .module_idx = module_idx, .var_ = current.var_ };
@@ -1505,7 +1512,7 @@ pub const Store = struct {
                     layout_idx = cached_idx;
                 }
                 skip_layout_computation = true;
-            } else if (self.work.in_progress_vars.contains(current.var_)) {
+            } else if (self.work.in_progress_vars.contains(.{ .module_idx = self.current_module_idx, .var_ = current.var_ })) {
                 // Cycle detection: this var is already being processed, indicating a recursive type.
                 //
                 // Function types are an exception: they always have a fixed size (closure pointer)
@@ -1554,8 +1561,13 @@ pub const Store = struct {
                         skip_layout_computation = true;
                     } else {
                         // Invalid: recursive type without heap allocation would have infinite size.
-                        // This is a type error - the user defined a directly recursive type without
-                        // wrapping it in List or Box.
+                        const flat = current.desc.content.structure;
+                        if (flat == .nominal_type) {
+                            const nom = flat.nominal_type;
+                            std.debug.print("RECURSIVE TYPE: var={}, module={}, nominal ident_idx={}, origin_idx={}\n", .{ @intFromEnum(current.var_), self.current_module_idx, nom.ident.ident_idx.idx, nom.origin_module.idx });
+                        } else {
+                            std.debug.print("RECURSIVE TYPE: var={}, module={}, flat={s}\n", .{ @intFromEnum(current.var_), self.current_module_idx, @tagName(flat) });
+                        }
                         unreachable;
                     }
                 }
@@ -1647,7 +1659,7 @@ pub const Store = struct {
                 // which would cause spurious cycle detection when the alias var is encountered
                 // again. See issue #8708.
                 if (current.desc.content != .alias) {
-                    try self.work.in_progress_vars.put(current.var_, {});
+                    try self.work.in_progress_vars.put(.{ .module_idx = self.current_module_idx, .var_ = current.var_ }, {});
                 }
 
                 layout = switch (current.desc.content) {
@@ -2107,27 +2119,40 @@ pub const Store = struct {
                         },
                     },
                     .flex => |flex| blk: {
-                        // First, check if this flex var is mapped in the TypeScope
-                        if (type_scope.lookup(current.var_)) |mapped_var| {
-                            // Debug-only cycle detection: if we've visited this var before,
-                            // there's a cycle which indicates a bug in type checking.
-                            if (@import("builtin").mode == .Debug) {
-                                for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
-                                    if (visited == current.var_) {
-                                        @panic("Cycle detected in layout computation for flex var - this is a type checking bug");
+                        // Only look up in TypeScope if we're doing cross-module resolution.
+                        // caller_module_idx being set indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If it's null,
+                        // we're already in the target module and shouldn't apply mappings.
+                        if (caller_module_idx != null) {
+                            if (type_scope.lookup(current.var_)) |mapped_var| {
+                                // Debug-only cycle detection: if we've visited this var before,
+                                // there's a cycle which indicates a bug in type checking.
+                                if (@import("builtin").mode == .Debug) {
+                                    for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                        if (visited == current.var_) {
+                                            @panic("Cycle detected in layout computation for flex var - this is a type checking bug");
+                                        }
+                                    }
+                                    if (scope_lookup_count < 32) {
+                                        scope_lookup_visited[scope_lookup_count] = current.var_;
+                                        scope_lookup_count += 1;
                                     }
                                 }
-                                if (scope_lookup_count < 32) {
-                                    scope_lookup_visited[scope_lookup_count] = current.var_;
-                                    scope_lookup_count += 1;
-                                }
+                                // IMPORTANT: Remove the flex from in_progress_vars before making
+                                // the recursive call. Otherwise, if the recursive call resolves to
+                                // the same flex, it will see it in in_progress_vars and incorrectly
+                                // detect a cycle.
+                                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
+                                // Make a recursive call to compute the layout in the caller's module.
+                                // This avoids switching current_module_idx which would mess up pending
+                                // work items from the current module.
+                                const target_module = caller_module_idx.?;
+                                // Pass null for caller_module_idx in recursive call - the mapping has
+                                // been resolved, so we don't need to map again.
+                                layout_idx = try self.addTypeVar(target_module, mapped_var, type_scope, null);
+                                skip_layout_computation = true;
+                                break :blk self.getLayout(layout_idx);
                             }
-                            // IMPORTANT: Remove the flex from in_progress_vars before continuing
-                            // with the mapped var. Otherwise, if another call resolves to the same
-                            // flex, it will see it in in_progress_vars and incorrectly detect a cycle.
-                            _ = self.work.in_progress_vars.swapRemove(current.var_);
-                            current = self.getTypesStore().resolveVar(mapped_var);
-                            continue :outer;
                         }
 
                         // Check if this flex var has a from_numeral constraint, indicating
@@ -2136,46 +2161,51 @@ pub const Store = struct {
                             break :blk Layout.default_num();
                         }
 
-                        // For flex vars inside containers (list, box), we need to determine
-                        // the element layout. If the flex var has any constraints (like is_eq),
-                        // it's likely a numeric type that should default to Dec rather than
-                        // opaquePtr. opaquePtr causes crashes when elements are used in
-                        // numeric comparisons. (fixes issue #8946)
-                        if (self.work.pending_containers.len > 0) {
-                            const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
-                            if (pending_item.container == .box or pending_item.container == .list) {
-                                if (!flex.constraints.isEmpty()) {
-                                    break :blk Layout.default_num();
-                                }
-                                break :blk Layout.opaquePtr();
-                            }
+                        // Unconstrained flex vars (like the element type of an empty list)
+                        // have no concrete type, so they're zero-sized.
+                        if (flex.constraints.isEmpty()) {
+                            break :blk Layout.zst();
                         }
-                        // Flex vars must always be resolvable. If we reach here, there's a bug
-                        // in type checking or type propagation.
+
+                        // Flex vars with constraints (like from_numeral) should have been
+                        // resolved during type checking. If we reach here, there's a bug.
                         unreachable;
                     },
                     .rigid => |rigid| blk: {
-                        // First, check if this rigid var is mapped in the TypeScope
-                        if (type_scope.lookup(current.var_)) |mapped_var| {
-                            // Debug-only cycle detection: if we've visited this var before,
-                            // there's a cycle which indicates a bug in type checking.
-                            if (@import("builtin").mode == .Debug) {
-                                for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
-                                    if (visited == current.var_) {
-                                        @panic("Cycle detected in layout computation for rigid var - this is a type checking bug");
+                        // Only look up in TypeScope if we're doing cross-module resolution.
+                        // caller_module_idx being set indicates the type_scope has mappings
+                        // from an external module's vars to the caller's vars. If it's null,
+                        // we're already in the target module and shouldn't apply mappings.
+                        if (caller_module_idx != null) {
+                            if (type_scope.lookup(current.var_)) |mapped_var| {
+                                // Debug-only cycle detection: if we've visited this var before,
+                                // there's a cycle which indicates a bug in type checking.
+                                if (@import("builtin").mode == .Debug) {
+                                    for (scope_lookup_visited[0..scope_lookup_count]) |visited| {
+                                        if (visited == current.var_) {
+                                            @panic("Cycle detected in layout computation for rigid var - this is a type checking bug");
+                                        }
+                                    }
+                                    if (scope_lookup_count < 32) {
+                                        scope_lookup_visited[scope_lookup_count] = current.var_;
+                                        scope_lookup_count += 1;
                                     }
                                 }
-                                if (scope_lookup_count < 32) {
-                                    scope_lookup_visited[scope_lookup_count] = current.var_;
-                                    scope_lookup_count += 1;
-                                }
+                                // IMPORTANT: Remove the rigid from in_progress_vars before making
+                                // the recursive call. Otherwise, if the recursive call resolves to
+                                // the same rigid, it will see it in in_progress_vars and incorrectly
+                                // detect a cycle.
+                                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
+                                // Make a recursive call to compute the layout in the caller's module.
+                                // This avoids switching current_module_idx which would mess up pending
+                                // work items from the current module.
+                                const target_module = caller_module_idx.?;
+                                // Pass null for caller_module_idx in recursive call - the mapping has
+                                // been resolved, so we don't need to map again.
+                                layout_idx = try self.addTypeVar(target_module, mapped_var, type_scope, null);
+                                skip_layout_computation = true;
+                                break :blk self.getLayout(layout_idx);
                             }
-                            // IMPORTANT: Remove the rigid from in_progress_vars before continuing
-                            // with the mapped var. Otherwise, if another call resolves to the same
-                            // rigid, it will see it in in_progress_vars and incorrectly detect a cycle.
-                            _ = self.work.in_progress_vars.swapRemove(current.var_);
-                            current = self.getTypesStore().resolveVar(mapped_var);
-                            continue :outer;
                         }
 
                         // Check if this rigid var has a from_numeral constraint, indicating
@@ -2199,8 +2229,14 @@ pub const Store = struct {
                                 break :blk Layout.opaquePtr();
                             }
                         }
-                        // Rigid vars must always be resolvable. If we reach here, there's a bug
-                        // in type checking or type propagation.
+                        // Unconstrained rigid vars (like from empty list element types) can be ZST.
+                        // This is safe because the code using them either runs with concrete
+                        // types or doesn't run at all (like for empty list iterations).
+                        if (rigid.constraints.isEmpty()) {
+                            break :blk Layout.zst();
+                        }
+
+                        // Rigid vars with constraints must be resolvable.
                         unreachable;
                     },
                     .alias => |alias| {
@@ -2218,7 +2254,7 @@ pub const Store = struct {
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
                 try self.layouts_by_module_var.put(layout_cache_key, layout_idx);
                 // Remove from in_progress now that it's cached (no longer "in progress")
-                _ = self.work.in_progress_vars.swapRemove(current.var_);
+                _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
 
                 // Check if any in-progress nominals need their reserved layouts updated.
                 // When a nominal type's backing type finishes, update the nominal's placeholder.

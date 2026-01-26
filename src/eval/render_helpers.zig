@@ -156,7 +156,7 @@ pub fn renderValueRocWithType(ctx: *RenderCtx, value: StackValue, rt_var: types.
                         errdefer out.deinit();
                         try out.appendSlice("Box(");
 
-                        const payload_layout_idx = try ctx.layout_store.addTypeVar(0, payload_var, ctx.type_scope);
+                        const payload_layout_idx = try ctx.layout_store.addTypeVar(0, payload_var, ctx.type_scope, null);
                         const payload_layout = ctx.layout_store.getLayout(payload_layout_idx);
                         const payload_size = ctx.layout_store.layoutSize(payload_layout);
 

@@ -94,6 +94,12 @@ type_env: std.AutoHashMap(u32, LayoutIdx),
 /// Current module index during lowering
 current_module_idx: u16 = 0,
 
+/// The module whose type variables are in the type_scope mappings.
+/// When we call an external function, we map its rigid type vars to the caller's
+/// concrete types. This tracks the caller's module so addTypeVar can resolve
+/// the mapped vars using the correct module's types store.
+type_scope_caller_module: ?u16 = null,
+
 /// Current binding pattern (for detecting recursive closures)
 /// When lowering a statement like `f = |x| ...`, this holds the pattern for `f`
 /// so we can detect if the closure body references itself.
@@ -225,7 +231,7 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
     const ls = self.layout_store orelse return null;
     const type_var = ModuleEnv.varFrom(expr_idx);
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch null;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch null;
 }
 
 /// Get layout for a block expression by inferring from the final expression
@@ -259,7 +265,7 @@ fn getBlockLayout(self: *Self, module_env: *ModuleEnv, block: anytype) LayoutIdx
 fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(expr_idx);
     const ls = self.layout_store orelse unreachable;
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch unreachable;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
 /// Get the element layout from the for-loop pattern's type variable
@@ -271,7 +277,7 @@ fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx 
 fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(pattern_idx);
     const ls = self.layout_store orelse unreachable;
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch unreachable;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
 
 /// Set up type scope mappings for an external function call.
@@ -306,6 +312,9 @@ fn setupExternalCallTypeScope(
         try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
     }
     const scope = &self.type_scope.scopes.items[0];
+
+    // Track the caller module - mapped vars in type_scope belong to this module
+    self.type_scope_caller_module = self.current_module_idx;
 
     // Get the function's parameter type variables
     const param_vars = ext_module_env.types.sliceVars(func.args);
@@ -500,11 +509,22 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
 
-            // If calling an external function, set up type scope mappings before lowering
-            if (fn_expr == .e_lookup_external) {
+            // If calling an external function, set up type scope mappings before lowering.
+            // We need to clean up after the call is done to avoid polluting subsequent calls.
+            const is_external_call = fn_expr == .e_lookup_external;
+            const old_caller_module = self.type_scope_caller_module;
+            if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
                 try self.setupExternalCallTypeScope(module_env, lookup, call.args);
             }
+            // Clean up type scope after this expression, whether we exit normally or break early
+            defer if (is_external_call) {
+                self.type_scope_caller_module = old_caller_module;
+                // Clear the type_scope mappings to avoid polluting subsequent calls
+                if (self.type_scope.scopes.items.len > 0) {
+                    self.type_scope.scopes.items[0].clearRetainingCapacity();
+                }
+            };
 
             if (fn_expr == .e_low_level_lambda) {
                 const ll = fn_expr.e_low_level_lambda;
@@ -937,7 +957,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -960,7 +980,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -982,7 +1002,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
             const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope) catch break :blk .{ .runtime_error = {} };
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1244,7 +1264,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
                                     // Compute layout for the element type
-                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope) catch LayoutIdx.i64;
+                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.i64;
                                 }
                             },
                             else => {},

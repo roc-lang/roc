@@ -486,7 +486,7 @@ pub const DevEvaluator = struct {
                 const type_var = can.ModuleEnv.varFrom(expr_idx);
                 var type_scope = types.TypeScope.init(self.allocator);
                 defer type_scope.deinit();
-                if (layout_store_ptr.addTypeVar(module_idx, type_var, &type_scope)) |computed_layout| {
+                if (layout_store_ptr.addTypeVar(module_idx, type_var, &type_scope, null)) |computed_layout| {
                     result_layout = computed_layout;
                 } else |_| {}
             },

@@ -6,6 +6,13 @@ const types = @import("types");
 const layout = @import("./layout.zig");
 const Ident = @import("base").Ident;
 
+/// Key to identify a type variable in a specific module.
+/// Used to distinguish type vars with the same index across different modules.
+pub const ModuleVarKey = packed struct {
+    module_idx: u16,
+    var_: types.Var,
+};
+
 /// Key to identify a nominal type by its identity (ident + origin module)
 /// Used for cycle detection in recursive nominal types where different vars
 /// can reference the same nominal type definition.
@@ -32,8 +39,9 @@ pub const Work = struct {
     pending_tag_union_variants: std.MultiArrayList(TagUnionVariant),
     /// Tag union variants whose payload layouts have been computed
     resolved_tag_union_variants: std.MultiArrayList(ResolvedTagUnionVariant),
-    /// Vars currently being processed - used to detect recursive type references
-    in_progress_vars: std.AutoArrayHashMap(types.Var, void),
+    /// Vars currently being processed - used to detect recursive type references.
+    /// Keyed by (module_idx, var) to distinguish vars across modules.
+    in_progress_vars: std.AutoArrayHashMap(ModuleVarKey, void),
     /// Nominal types currently being processed - used to detect recursive nominal types.
     /// Unlike in_progress_vars, this tracks by nominal identity (ident + origin_module)
     /// because recursive references to the same nominal type may have different vars.
@@ -174,7 +182,7 @@ pub const Work = struct {
             .resolved_tuple_fields = resolved_tuple_fields,
             .pending_tag_union_variants = pending_tag_union_variants,
             .resolved_tag_union_variants = resolved_tag_union_variants,
-            .in_progress_vars = std.AutoArrayHashMap(types.Var, void).init(allocator),
+            .in_progress_vars = std.AutoArrayHashMap(ModuleVarKey, void).init(allocator),
             .in_progress_nominals = std.AutoArrayHashMap(NominalKey, NominalProgress).init(allocator),
         };
     }
