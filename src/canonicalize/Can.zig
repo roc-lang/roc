@@ -4501,22 +4501,69 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
+                            // For nested module access like Outer.Inner.inner, build the nested path
+                            // from all qualifiers after the first one, plus the final ident.
+                            // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
+                            // Result: "Inner.inner"
+                            // For simple access like Outer.outer, this is just "outer" (field_text)
+                            var nested_path_buf: [512]u8 = undefined;
+                            const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
+                                var pos: usize = 0;
+                                for (qualifier_tokens[1..]) |qtok| {
+                                    const qtok_idx = @as(Token.Idx, @intCast(qtok));
+                                    if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
+                                        const q_text = self.env.getIdent(q_ident);
+                                        if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
+                                        @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
+                                        pos += q_text.len;
+                                        nested_path_buf[pos] = '.';
+                                        pos += 1;
+                                    }
+                                }
+                                if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
+                                @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
+                                pos += field_text.len;
+                                break :nested_blk nested_path_buf[0..pos];
+                            } else field_text;
+
                             const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
                                 const module_env = info.env;
 
                                 // For auto-imported types with statement_idx (builtin types and platform modules),
                                 // build the full qualified name using qualified_type_ident.
-                                // For regular user module imports (statement_idx is null), use field_text directly.
+                                // For regular user module imports (statement_idx is null), build the full path
+                                // using module name + nested path (for nested access like Outer.Inner.inner).
+                                var full_lookup_buf: [512]u8 = undefined;
                                 const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
                                     // Build the fully qualified member name using the type's qualified ident
                                     // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
                                     // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    // For nested module access like Outer.Inner.inner, use nested_path
+                                    // e.g., "Outer" + "Inner.inner" -> "Outer.Inner.inner"
                                     // Note: qualified_type_ident is always stored in the calling module's ident store
                                     // (self.env), since Ident.Idx values are not transferable between stores.
                                     const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
                                     break :name_blk self.env.getIdent(fully_qualified_idx);
-                                } else field_text;
+                                } else name_blk: {
+                                    // For nested module access (qualifier_tokens.len > 1), exposed items
+                                    // are stored with the full module-qualified path.
+                                    // Build: module_name + "." + nested_path
+                                    // e.g., "Outer.Inner.inner" for Inner.inner in Outer module
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
+                                    if (qualifier_tokens.len == 1) {
+                                        break :name_blk field_text;
+                                    }
+                                    const mod_name = module_env.module_name;
+                                    if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
+                                        break :name_blk nested_path;
+                                    }
+                                    @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
+                                    full_lookup_buf[mod_name.len] = '.';
+                                    @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
+                                    break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
+                                };
 
                                 // Look up the associated item by its name
                                 const qname_ident = module_env.common.findIdent(lookup_name) orelse {
@@ -4544,10 +4591,17 @@ pub fn canonicalizeExpr(
                                     // Build the fully qualified member name like we do for non-placeholder modules.
                                     // For builtin types with statement_idx, use qualified_type_ident + field_text
                                     // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
+                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
+                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
                                     const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
                                         const qualified_text = self.env.getIdent(info.qualified_type_ident);
                                         break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
-                                    } else try self.env.insertQualifiedIdent(self.env.getIdent(module_name), field_text);
+                                    } else if (qualifier_tokens.len > 1)
+                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
+                                    else
+                                        ident;
 
                                     const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
                                         .module_idx = import_idx,
