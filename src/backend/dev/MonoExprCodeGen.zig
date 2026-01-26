@@ -2893,6 +2893,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const num_elems: u32 = @intCast(elems.len);
             const total_data_bytes: usize = @as(usize, elem_size) * @as(usize, num_elems);
 
+            // Determine if elements contain refcounted data (e.g., List(List(Int)) has refcounted elements)
+            const elements_refcounted: bool = if (self.layout_store) |ls3| blk: {
+                const elem_layout_data = ls3.getLayout(list.elem_layout);
+                break :blk ls3.layoutContainsRefcounted(elem_layout_data);
+            } else is_nested_list; // Fallback: nested lists are always refcounted
+
             // Get the saved RocOps register
             const roc_ops_reg = self.roc_ops_reg orelse return Error.UnsupportedExpression;
 
@@ -2910,7 +2916,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 try self.codegen.emit.movRegImm64(.X0, @intCast(total_data_bytes));
                 try self.codegen.emit.movRegImm64(.X1, @intCast(elem_alignment));
-                try self.codegen.emit.movRegImm64(.X2, 0); // elements_refcounted = false for simple lists
+                try self.codegen.emit.movRegImm64(.X2, if (elements_refcounted) 1 else 0);
                 try self.codegen.emit.movRegReg(.w64, .X3, roc_ops_reg);
 
                 // Load function address and call
@@ -2932,7 +2938,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // Set up arguments
                 try self.codegen.emit.movRegImm64(.RDI, @intCast(total_data_bytes));
                 try self.codegen.emit.movRegImm64(.RSI, @intCast(elem_alignment));
-                try self.codegen.emit.movRegImm64(.RDX, 0); // elements_refcounted = false
+                try self.codegen.emit.movRegImm64(.RDX, if (elements_refcounted) 1 else 0);
                 try self.codegen.emit.movRegReg(.w64, .RCX, roc_ops_reg);
 
                 // Call the function
@@ -3758,11 +3764,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Initialize index to 0
             try self.codegen.emitLoadImm(idx_reg, 0);
 
-            // Get element size from layout
-            const elem_size: u32 = if (self.layout_store) |ls| blk: {
-                const elem_layout = ls.getLayout(for_loop.elem_layout);
-                break :blk ls.layoutSizeAlign(elem_layout).size;
-            } else 8;
+            // Get element size from layout - layout store MUST exist at codegen time
+            const ls = self.layout_store orelse unreachable;
+            const elem_layout = ls.getLayout(for_loop.elem_layout);
+            const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
+            std.debug.assert(elem_size > 0);
+            std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
 
             // Allocate stack space for the current element
             const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));

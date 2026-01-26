@@ -1380,36 +1380,35 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
             // Compute element layout from the list pattern's type
             const elem_layout = elem_blk: {
-                const ls = self.layout_store orelse break :elem_blk LayoutIdx.i64;
+                const ls = self.layout_store orelse unreachable; // Layout store must exist
 
                 // Get the type variable from the pattern
                 const pattern_type_var = ModuleEnv.varFrom(pattern_idx);
                 const resolved = module_env.types.resolveVar(pattern_type_var);
 
-                // Check if it's a List (nominal type)
+                // Must be a List (nominal type)
                 switch (resolved.desc.content) {
                     .structure => |structure| {
                         switch (structure) {
                             .nominal_type => |nominal| {
                                 // Get the element type (first type argument of List)
                                 const args = module_env.types.sliceNominalArgs(nominal);
-                                if (args.len > 0) {
-                                    const elem_type_var = args[0];
-                                    // Check if we have a layout hint for this element type
-                                    const elem_resolved = module_env.types.resolveVar(elem_type_var);
-                                    if (self.expr_layout_hints.get(elem_resolved.var_)) |hint_layout| {
-                                        break :elem_blk hint_layout;
-                                    }
-                                    // Compute layout for the element type
-                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.i64;
+                                std.debug.assert(args.len > 0); // List must have element type
+                                const elem_type_var = args[0];
+                                // Check if we have a layout hint for this element type
+                                const elem_resolved = module_env.types.resolveVar(elem_type_var);
+
+                                if (self.expr_layout_hints.get(elem_resolved.var_)) |hint_layout| {
+                                    break :elem_blk hint_layout;
                                 }
+                                // Compute layout for the element type
+                                break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
                             },
-                            else => {},
+                            else => unreachable, // List pattern must match List type
                         }
                     },
-                    else => {},
+                    else => unreachable, // List pattern must match structure type
                 }
-                break :elem_blk LayoutIdx.i64;
             };
 
             break :blk .{
