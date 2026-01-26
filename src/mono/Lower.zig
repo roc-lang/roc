@@ -112,6 +112,13 @@ current_binding_symbol: ?MonoSymbol = null,
 /// Counter for generating unique join point IDs
 next_join_point_id: u32 = 0,
 
+/// Expression-based layout hints for external rigid type vars.
+/// When an external function's rigid type var maps to a caller's flex var,
+/// but we know from the expression that it should be a list, we pre-compute
+/// the layout and store it here. This handles cases like `[[10], [20], [30]]`
+/// where the inner list's type var is flex but the expression is clearly a list.
+expr_layout_hints: std.AutoHashMap(types.Var, LayoutIdx),
+
 /// Initialize a new Lowerer
 pub fn init(
     allocator: Allocator,
@@ -130,6 +137,7 @@ pub fn init(
         .lowered_patterns = std.AutoHashMap(u64, MonoSymbol).init(allocator),
         .lowered_symbols = std.AutoHashMap(u48, MonoExprId).init(allocator),
         .type_env = std.AutoHashMap(u32, LayoutIdx).init(allocator),
+        .expr_layout_hints = std.AutoHashMap(types.Var, LayoutIdx).init(allocator),
     };
 }
 
@@ -139,6 +147,7 @@ pub fn deinit(self: *Self) void {
     self.lowered_symbols.deinit();
     self.type_env.deinit();
     self.type_scope.deinit();
+    self.expr_layout_hints.deinit();
 }
 
 /// Get the module environment at the given index
@@ -276,6 +285,16 @@ fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx 
 /// Get the layout for a pattern from its type variable using the global layout store.
 fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(pattern_idx);
+
+    // Check if we have a pre-computed layout hint for this type variable.
+    // This handles cases where the type var maps to a flex but we know from
+    // expression analysis that it should be a list (e.g., [[10], [20], [30]] elements).
+    const module_env = self.getModuleEnv(self.current_module_idx) orelse unreachable;
+    const resolved = module_env.types.resolveVar(type_var);
+    if (self.expr_layout_hints.get(resolved.var_)) |hint_layout| {
+        return hint_layout;
+    }
+
     const ls = self.layout_store orelse unreachable;
     return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 }
@@ -327,13 +346,16 @@ fn setupExternalCallTypeScope(
         const caller_arg_var = ModuleEnv.varFrom(caller_arg_idx);
 
         // Walk the external parameter type to find rigid vars
-        // and map them to corresponding parts of the caller's arg type
-        try self.collectTypeMappings(
+        // and map them to corresponding parts of the caller's arg type.
+        // Pass the expression index so we can look at the actual expression
+        // when type resolution fails (e.g., for nested lists with unresolved numerics).
+        try self.collectTypeMappingsWithExpr(
             scope,
             ext_module_env,
             ext_param_var,
             caller_module_env,
             caller_arg_var,
+            caller_arg_idx,
         );
     }
 }
@@ -348,12 +370,58 @@ fn collectTypeMappings(
     caller_env: *ModuleEnv,
     caller_var: types.Var,
 ) Allocator.Error!void {
+    return self.collectTypeMappingsWithExpr(scope, ext_env, ext_var, caller_env, caller_var, null);
+}
+
+/// Recursively collect type variable mappings by walking two types in parallel.
+/// Maps rigid vars in ext_type to corresponding parts of caller_type.
+/// When caller_expr_idx is provided and type resolution fails (e.g., for lists with
+/// unresolved numeric elements), falls back to examining the actual expression.
+fn collectTypeMappingsWithExpr(
+    self: *Self,
+    scope: *types.VarMap,
+    ext_env: *const ModuleEnv,
+    ext_var: types.Var,
+    caller_env: *ModuleEnv,
+    caller_var: types.Var,
+    caller_expr_idx: ?CIR.Expr.Idx,
+) Allocator.Error!void {
     const ext_resolved = ext_env.types.resolveVar(ext_var);
     const caller_resolved = caller_env.types.resolveVar(caller_var);
 
     switch (ext_resolved.desc.content) {
         .rigid => {
             // Found a rigid - map it to the caller's type variable
+            // Special handling: if we're mapping to a flex but the expression is a list,
+            // we need to pre-compute the list layout. Otherwise the layout store will see
+            // the flex and return a scalar layout (Dec) instead of List layout.
+            if (caller_resolved.desc.content == .flex) {
+                if (caller_expr_idx) |expr_idx| {
+                    const caller_expr = caller_env.store.getExpr(expr_idx);
+                    if (caller_expr == .e_list) {
+                        // The expression is a list but the type is flex.
+                        // Compute the list layout based on the expression's elements.
+                        const list = caller_expr.e_list;
+                        if (self.layout_store) |ls| {
+                            const list_layout = ls.computeListLayout(
+                                self.current_module_idx,
+                                caller_env,
+                                list.elems,
+                                &self.type_scope,
+                                self.type_scope_caller_module,
+                            ) catch {
+                                // Fall back to normal mapping if layout computation fails
+                                try scope.put(ext_resolved.var_, caller_resolved.var_);
+                                return;
+                            };
+                            self.expr_layout_hints.put(ext_resolved.var_, list_layout) catch {};
+                            // Still map the var for other lookups
+                            try scope.put(ext_resolved.var_, caller_resolved.var_);
+                            return;
+                        }
+                    }
+                }
+            }
             try scope.put(ext_resolved.var_, caller_resolved.var_);
         },
         .flex => {
@@ -399,10 +467,44 @@ fn collectTypeMappings(
                     // For nominal types, map the type arguments
                     const ext_args = ext_env.types.sliceNominalArgs(nt);
                     if (caller_resolved.desc.content.unwrapNominalType()) |caller_nt| {
+                        // Caller type is also nominal, recurse normally
                         const caller_args = caller_env.types.sliceNominalArgs(caller_nt);
                         const num = @min(ext_args.len, caller_args.len);
                         for (0..num) |i| {
+                            // For list expressions, use the actual element's type var instead
+                            // of the type arg from the nominal. This handles cases where the
+                            // type arg is an unresolved flex but the element is a list.
+                            if (caller_expr_idx) |expr_idx| {
+                                const caller_expr = caller_env.store.getExpr(expr_idx);
+                                if (caller_expr == .e_list) {
+                                    const list = caller_expr.e_list;
+                                    const elems = caller_env.store.exprSlice(list.elems);
+                                    if (i < elems.len) {
+                                        // Use the element's type var, not the type arg from the nominal
+                                        const elem_type_var = ModuleEnv.varFrom(elems[i]);
+                                        try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[i], caller_env, elem_type_var, elems[i]);
+                                        continue;
+                                    }
+                                }
+                            }
                             try self.collectTypeMappings(scope, ext_env, ext_args[i], caller_env, caller_args[i]);
+                        }
+                    } else if (caller_expr_idx) |expr_idx| {
+                        // Caller type is not nominal (maybe flex due to unresolved numerics).
+                        // Try to get element type from the actual expression.
+                        // This handles cases like [[10], [20], [30]] where the outer list's
+                        // element type var resolves to flex instead of List.
+                        const caller_expr = caller_env.store.getExpr(expr_idx);
+                        switch (caller_expr) {
+                            .e_list => |list| {
+                                const elems = caller_env.store.exprSlice(list.elems);
+                                if (elems.len > 0 and ext_args.len > 0) {
+                                    // Use the first element's type var and expression
+                                    const first_elem_var = ModuleEnv.varFrom(elems[0]);
+                                    try self.collectTypeMappingsWithExpr(scope, ext_env, ext_args[0], caller_env, first_elem_var, elems[0]);
+                                }
+                            },
+                            else => {},
                         }
                     }
                 },
@@ -628,9 +730,39 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_list => |list| blk: {
             const elems = try self.lowerExprSpan(module_env, list.elems);
+
+            // Compute element layout from the list's type
+            const elem_layout = elem_blk: {
+                const ls = self.layout_store orelse break :elem_blk LayoutIdx.default_num;
+
+                // Get the list expression's type var and resolve it
+                const list_type_var = ModuleEnv.varFrom(expr_idx);
+                const resolved = module_env.types.resolveVar(list_type_var);
+
+                // Check if it's a List (nominal type)
+                switch (resolved.desc.content) {
+                    .structure => |structure| {
+                        switch (structure) {
+                            .nominal_type => |nominal| {
+                                // Get the element type (first type argument of List)
+                                const args = module_env.types.sliceNominalArgs(nominal);
+                                if (args.len > 0) {
+                                    const elem_type_var = args[0];
+                                    // Compute layout for the element type
+                                    break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.default_num;
+                                }
+                            },
+                            else => {},
+                        }
+                    },
+                    else => {},
+                }
+                break :elem_blk LayoutIdx.default_num;
+            };
+
             break :blk .{
                 .list = .{
-                    .elem_layout = LayoutIdx.default_num, // TODO: get from type
+                    .elem_layout = elem_layout,
                     .elems = elems,
                 },
             };
@@ -1263,6 +1395,11 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
                                 const args = module_env.types.sliceNominalArgs(nominal);
                                 if (args.len > 0) {
                                     const elem_type_var = args[0];
+                                    // Check if we have a layout hint for this element type
+                                    const elem_resolved = module_env.types.resolveVar(elem_type_var);
+                                    if (self.expr_layout_hints.get(elem_resolved.var_)) |hint_layout| {
+                                        break :elem_blk hint_layout;
+                                    }
                                     // Compute layout for the element type
                                     break :elem_blk ls.addTypeVar(self.current_module_idx, elem_type_var, &self.type_scope, self.type_scope_caller_module) catch LayoutIdx.i64;
                                 }

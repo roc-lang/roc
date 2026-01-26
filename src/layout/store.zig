@@ -2565,4 +2565,50 @@ pub const Store = struct {
         const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
         ptr.* = layout;
     }
+
+    /// Compute a List layout from a list expression.
+    /// This handles cases where the list expression's type var is a flex (due to unresolved
+    /// numerics) but we need to compute a proper List layout based on the expression structure.
+    pub fn computeListLayout(
+        self: *Self,
+        module_idx: u16,
+        module_env: *ModuleEnv,
+        list_elem_span: can.CIR.Expr.Span,
+        type_scope: *const TypeScope,
+        caller_module_idx: ?u16,
+    ) !Idx {
+        const elems = module_env.store.exprSlice(list_elem_span);
+
+        if (elems.len == 0) {
+            // Empty list - use list of ZST
+            return self.insertLayout(Layout.listOfZst());
+        }
+
+        // Get the first element's type var and compute its layout
+        const first_elem_idx = elems[0];
+        const first_elem = module_env.store.getExpr(first_elem_idx);
+
+        // Check if the first element is also a list (for nested list handling)
+        if (first_elem == .e_list) {
+            // Recursively compute the nested list's layout
+            const nested_list_layout_idx = try self.computeListLayout(
+                module_idx,
+                module_env,
+                first_elem.e_list.elems,
+                type_scope,
+                caller_module_idx,
+            );
+            // Return List(nested_list_layout)
+            const list_layout = Layout.list(nested_list_layout_idx);
+            return self.insertLayout(list_layout);
+        }
+
+        // For non-list elements, try to compute layout from the type var
+        const elem_type_var = ModuleEnv.varFrom(first_elem_idx);
+        const elem_layout_idx = try self.addTypeVar(module_idx, elem_type_var, type_scope, caller_module_idx);
+
+        // Return List(element_layout)
+        const list_layout = Layout.list(elem_layout_idx);
+        return self.insertLayout(list_layout);
+    }
 };

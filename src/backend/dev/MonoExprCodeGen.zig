@@ -2863,7 +2863,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Determine element size based on layout
             // For nested lists, elements are 24-byte structs (ptr + len + capacity)
-            const elem_size: u32 = if (is_nested_list) 24 else switch (list.elem_layout) {
+            // Use the layout store to compute element size when available
+            const layout_computed_size: ?u32 = if (self.layout_store) |ls2| blk: {
+                const el = ls2.getLayout(list.elem_layout);
+                break :blk ls2.layoutSizeAlign(el).size;
+            } else null;
+            const elem_size: u32 = if (layout_computed_size) |computed| computed else if (is_nested_list) 24 else switch (list.elem_layout) {
                 .i8, .u8 => 1,
                 .i16, .u16 => 2,
                 .i32, .u32, .f32 => 4,
