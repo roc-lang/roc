@@ -105,7 +105,6 @@ pub const ReportBuilder = struct {
 
     gpa: Allocator,
     bytes_buf: std.array_list.Managed(u8),
-    diff_scratch: diff.Scratch,
     module_env: *ModuleEnv,
     can_ir: *const ModuleEnv,
     snapshots: *const snapshot.Store,
@@ -114,6 +113,8 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
+    diff_field_names: diff.IdentList,
+    diff_tag_names: diff.IdentList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
 
     /// Init report builder
@@ -131,7 +132,6 @@ pub const ReportBuilder = struct {
         return .{
             .gpa = gpa,
             .bytes_buf = try std.array_list.Managed(u8).initCapacity(gpa, 16),
-            .diff_scratch = try diff.Scratch.init(gpa),
             .module_env = module_env,
             .can_ir = can_ir,
             .snapshots = snapshots,
@@ -140,6 +140,8 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
+            .diff_field_names = try diff.IdentList.initCapacity(gpa, 8),
+            .diff_tag_names = try diff.IdentList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
         };
     }
@@ -147,14 +149,16 @@ pub const ReportBuilder = struct {
     /// Deinit report builder, only fields it owns
     pub fn deinit(self: *Self) void {
         self.bytes_buf.deinit();
-        self.diff_scratch.deinit();
+        self.diff_field_names.deinit(self.gpa);
+        self.diff_tag_names.deinit(self.gpa);
         self.typo_suggestions.deinit();
     }
 
     /// Reset report builder, only fields it owns
     pub fn reset(self: *Self) void {
         self.bytes_buf.clearRetainingCapacity();
-        self.diff_scratch.reset();
+        self.diff_field_names.clearRetainingCapacity();
+        self.diff_tag_names.clearRetainingCapacity();
         self.typo_suggestions.clearRetainingCapacity();
     }
 
@@ -459,7 +463,9 @@ pub const ReportBuilder = struct {
             self.module_env.getIdentStoreConst(),
             expected_snapshot,
             actual_snapshot,
-            &self.diff_scratch,
+            self.gpa,
+            &self.diff_field_names,
+            &self.diff_tag_names,
         );
         try self.renderDiffHints(&report, diff_hints, hints.len > 0);
 
@@ -563,18 +569,20 @@ pub const ReportBuilder = struct {
                     }, self, report);
                 },
                 .fields_missing => |fm| {
-                    if (fm.fields.len == 1) {
+                    // Reconstruct slice from range
+                    const fields = self.diff_field_names.items[fm.fields.start..][0..fm.fields.count];
+                    if (fields.len == 1) {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("This record is missing the field:"),
-                            D.ident(fm.fields[0]).withAnnotation(.inline_code),
+                            D.ident(fields[0]).withAnnotation(.inline_code),
                         }, self, report);
                     } else {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
                             D.bytes("This record is missing these fields:"),
                         }, self, report);
-                        for (fm.fields) |field| {
+                        for (fields) |field| {
                             try report.document.addLineBreak();
                             try D.renderSlice(&.{
                                 D.bytes(" -"),
@@ -604,16 +612,19 @@ pub const ReportBuilder = struct {
                     }, self, report);
                 },
                 .effect_mismatch => |em| {
-                    if (em.expected_pure) {
-                        try D.renderSlice(&.{
-                            D.bytes("Hint:").withAnnotation(.emphasized),
-                            D.bytes("This function is effectful, but a pure function is expected."),
-                        }, self, report);
-                    } else {
-                        try D.renderSlice(&.{
-                            D.bytes("Hint:").withAnnotation(.emphasized),
-                            D.bytes("This function is pure, but an effectful function is expected."),
-                        }, self, report);
+                    switch (em.expected) {
+                        .pure => {
+                            try D.renderSlice(&.{
+                                D.bytes("Hint:").withAnnotation(.emphasized),
+                                D.bytes("This function is effectful, but a pure function is expected."),
+                            }, self, report);
+                        },
+                        .effectful => {
+                            try D.renderSlice(&.{
+                                D.bytes("Hint:").withAnnotation(.emphasized),
+                                D.bytes("This function is pure, but an effectful function is expected."),
+                            }, self, report);
+                        },
                     }
                 },
             }
@@ -2028,10 +2039,11 @@ pub const ReportBuilder = struct {
             switch (actual_content) {
                 .structure => |structure| switch (structure) {
                     .record => |record| blk: {
-                        const fields = diff.gatherFieldsFromRecord(self.snapshots, record, &self.diff_scratch);
-                        if (fields.len == 0) {
+                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_field_names);
+                        if (range.count == 0) {
                             break :blk Record.empty_record;
                         } else {
+                            const fields = self.diff_field_names.items[range.start..][0..range.count];
                             break :blk Record{ .record = fields };
                         }
                     },
