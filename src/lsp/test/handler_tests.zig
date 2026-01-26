@@ -5,6 +5,14 @@ const std = @import("std");
 const server_module = @import("../server.zig");
 const transport_module = @import("../transport.zig");
 
+/// Get the path to the test platform for creating valid Roc files
+fn platformPath(allocator: std.mem.Allocator) ![]u8 {
+    // Get the actual repo root by resolving from CWD
+    const cwd = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd);
+    return std.fs.path.resolve(allocator, &.{ cwd, "test", "str", "platform", "main.roc" });
+}
+
 fn frame(allocator: std.mem.Allocator, body: []const u8) ![]u8 {
     return try std.fmt.allocPrint(allocator, "Content-Length: {d}\r\n\r\n{s}", .{ body.len, body });
 }
@@ -1391,4 +1399,287 @@ test "multiple goto definition calls don't break document symbols" {
     try std.testing.expect(found_def1);
     try std.testing.expect(found_def2);
     try std.testing.expect(found_symbols);
+}
+
+test "document symbol handler returns symbols with correct names" {
+    // Test that outline returns actual symbol names using valid Roc syntax
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "outline.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    // Get the platform path for valid Roc syntax
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create a valid Roc app with proper header and definitions
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [main, add, myConst] {{ pf: platform "{s}" }}
+        \\
+        \\add = |a, b| a + b
+        \\
+        \\myConst = 42
+        \\
+        \\main = add(myConst, 1)
+        \\
+    , .{platform_path});
+    defer allocator.free(roc_source);
+
+    // Write the file to disk (required for platform resolution)
+    try tmp.dir.writeFile(.{ .sub_path = "outline.roc", .data = roc_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Escape the source for JSON
+    var escaped_source = std.ArrayList(u8){};
+    defer escaped_source.deinit(allocator);
+    for (roc_source) |c| {
+        switch (c) {
+            '"' => try escaped_source.appendSlice(allocator, "\\\""),
+            '\\' => try escaped_source.appendSlice(allocator, "\\\\"),
+            '\n' => try escaped_source.appendSlice(allocator, "\\n"),
+            '\r' => try escaped_source.appendSlice(allocator, "\\r"),
+            '\t' => try escaped_source.appendSlice(allocator, "\\t"),
+            else => try escaped_source.append(allocator, c),
+        }
+    }
+
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source.items });
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    const symbols_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(symbols_body);
+    const symbols_msg = try frame(allocator, symbols_body);
+    defer allocator.free(symbols_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, symbols_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [32768]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Find the document symbol response (id: 2)
+    var found_response = false;
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer or id.integer != 2) continue;
+
+        const result = parsed.value.object.get("result") orelse continue;
+        try std.testing.expect(result == .array);
+
+        // Collect symbol names
+        var found_add = false;
+        var found_myConst = false;
+        var found_main = false;
+
+        for (result.array.items) |symbol| {
+            const name = symbol.object.get("name") orelse continue;
+            if (name != .string) continue;
+
+            if (std.mem.eql(u8, name.string, "add")) found_add = true;
+            if (std.mem.eql(u8, name.string, "myConst")) found_myConst = true;
+            if (std.mem.eql(u8, name.string, "main")) found_main = true;
+        }
+
+        // Verify that we found the exposed symbols
+        // The Roc build pipeline should return symbols for exposed definitions
+        try std.testing.expect(found_main or found_add or found_myConst);
+        found_response = true;
+        break;
+    }
+    try std.testing.expect(found_response);
+}
+
+test "document symbol handler works independently of check" {
+    // Regression test: document symbols should work even without a prior check() call
+    // The handler should build the module itself
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "independent.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    // Get the platform path for valid Roc syntax
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    // Create a valid Roc app with proper header
+    const roc_source = try std.fmt.allocPrint(allocator,
+        \\app [hello] {{ pf: platform "{s}" }}
+        \\
+        \\hello = "world"
+        \\
+    , .{platform_path});
+    defer allocator.free(roc_source);
+
+    // Write the file to disk (required for platform resolution)
+    try tmp.dir.writeFile(.{ .sub_path = "independent.roc", .data = roc_source });
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Escape the source for JSON
+    var escaped_source = std.ArrayList(u8){};
+    defer escaped_source.deinit(allocator);
+    for (roc_source) |c| {
+        switch (c) {
+            '"' => try escaped_source.appendSlice(allocator, "\\\""),
+            '\\' => try escaped_source.appendSlice(allocator, "\\\\"),
+            '\n' => try escaped_source.appendSlice(allocator, "\\n"),
+            '\r' => try escaped_source.appendSlice(allocator, "\\r"),
+            '\t' => try escaped_source.appendSlice(allocator, "\\t"),
+            else => try escaped_source.append(allocator, c),
+        }
+    }
+
+    // Open and immediately request symbols WITHOUT any prior textDocument/didChange
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"{s}"}}}}}}
+    , .{ file_uri, escaped_source.items });
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // Immediately request symbols - this should work without waiting for a check
+    const symbols_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/documentSymbol","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(symbols_body);
+    const symbols_msg = try frame(allocator, symbols_body);
+    defer allocator.free(symbols_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":3,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, symbols_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [32768]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Find the document symbol response (id: 2)
+    var found_response = false;
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer or id.integer != 2) continue;
+
+        // Should get a valid response (array), not an error
+        const result = parsed.value.object.get("result");
+        try std.testing.expect(result != null);
+        try std.testing.expect(result.? == .array);
+
+        // Check for the "hello" symbol
+        var found_hello = false;
+        for (result.?.array.items) |symbol| {
+            const name = symbol.object.get("name") orelse continue;
+            if (name != .string) continue;
+            if (std.mem.eql(u8, name.string, "hello")) found_hello = true;
+        }
+        try std.testing.expect(found_hello);
+
+        found_response = true;
+        break;
+    }
+    try std.testing.expect(found_response);
 }

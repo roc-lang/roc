@@ -5,10 +5,10 @@ const SyntaxChecker = @import("../syntax.zig").SyntaxChecker;
 const uri_util = @import("../uri.zig");
 
 fn platformPath(allocator: std.mem.Allocator) ![]u8 {
-    const this_dir = std.fs.path.dirname(@src().file) orelse ".";
-    const abs_dir = try std.fs.path.resolve(allocator, &.{this_dir});
-    defer allocator.free(abs_dir);
-    return std.fs.path.resolve(allocator, &.{ abs_dir, "..", "..", "..", "test", "str", "platform", "main.roc" });
+    // Get the actual repo root by resolving from CWD
+    const cwd = try std.process.getCwdAlloc(allocator);
+    defer allocator.free(cwd);
+    return std.fs.path.resolve(allocator, &.{ cwd, "test", "str", "platform", "main.roc" });
 }
 
 test "syntax checker skips rebuild when content unchanged" {
@@ -173,4 +173,60 @@ test "syntax checker reports diagnostics for invalid source" {
         total_diags += set.diagnostics.len;
     }
     try std.testing.expect(total_diags > 0);
+}
+
+test "getDocumentSymbols returns symbols for valid app file" {
+    // Test that document symbols extraction works correctly
+    const allocator = std.testing.allocator;
+    var checker = SyntaxChecker.init(allocator, .{}, null);
+    defer checker.deinit();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const platform_path = try platformPath(allocator);
+    defer allocator.free(platform_path);
+
+    const contents = try std.fmt.allocPrint(
+        allocator,
+        \\app [main, helper] {{ pf: platform "{s}" }}
+        \\
+        \\helper = "test"
+        \\
+        \\main = helper
+        \\
+    ,
+        .{platform_path},
+    );
+    defer allocator.free(contents);
+
+    try tmp.dir.writeFile(.{ .sub_path = "symbols.roc", .data = contents });
+    const file_path = try tmp.dir.realpathAlloc(allocator, "symbols.roc");
+    defer allocator.free(file_path);
+
+    const uri = try uri_util.pathToUri(allocator, file_path);
+    defer allocator.free(uri);
+
+    // Call getDocumentSymbols directly
+    const symbols = try checker.getDocumentSymbols(allocator, uri, contents);
+    defer {
+        for (symbols) |*sym| {
+            allocator.free(sym.name);
+        }
+        allocator.free(symbols);
+    }
+
+    // Should have symbols for main and helper
+    try std.testing.expectEqual(@as(usize, 2), symbols.len);
+
+    // Verify we have actual symbol names
+    var found_main = false;
+    var found_helper = false;
+    for (symbols) |sym| {
+        if (std.mem.eql(u8, sym.name, "main")) found_main = true;
+        if (std.mem.eql(u8, sym.name, "helper")) found_helper = true;
+    }
+    try std.testing.expect(found_main);
+    try std.testing.expect(found_helper);
+
 }
