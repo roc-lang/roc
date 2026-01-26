@@ -106,14 +106,6 @@ current_binding_symbol: ?MonoSymbol = null,
 /// Counter for generating unique join point IDs
 next_join_point_id: u32 = 0,
 
-/// Errors that can occur during lowering
-pub const Error = error{
-    OutOfMemory,
-    InvalidExpression,
-    ModuleNotFound,
-    LayoutError,
-};
-
 /// Initialize a new Lowerer
 pub fn init(
     allocator: Allocator,
@@ -195,7 +187,7 @@ fn externalToSymbol(self: *Self, import_idx: CIR.Import.Idx, ident_idx: Ident.Id
 
 /// Lower an external definition using its direct Def.Idx
 /// This is the primary path - uses the target_node_idx from e_lookup_external
-fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) Error!void {
+fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) Allocator.Error!void {
     // Skip if symbol is invalid
     if (symbol.module_idx >= self.all_module_envs.len) {
         return;
@@ -271,24 +263,159 @@ fn getExprLayoutFromIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) Layo
 }
 
 /// Get the element layout from the for-loop pattern's type variable
-fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
+fn getForLoopElementLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     return self.getPatternLayout(pattern_idx);
 }
 
 /// Get the layout for a pattern from its type variable using the global layout store.
-fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) Error!LayoutIdx {
+fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
     const type_var = ModuleEnv.varFrom(pattern_idx);
-    const ls = self.layout_store orelse return error.LayoutError;
-    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch return error.LayoutError;
+    const ls = self.layout_store orelse unreachable;
+    return ls.addTypeVar(self.current_module_idx, type_var, &self.type_scope) catch unreachable;
+}
+
+/// Set up type scope mappings for an external function call.
+/// This maps the external function's rigid type variables to concrete types from the call site.
+fn setupExternalCallTypeScope(
+    self: *Self,
+    caller_module_env: *ModuleEnv,
+    lookup: anytype,
+    args: CIR.Expr.Span,
+) Allocator.Error!void {
+    // Get the external module
+    const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
+    if (ext_module_idx >= self.all_module_envs.len) return;
+    const ext_module_env = self.all_module_envs[ext_module_idx];
+
+    // Get the external definition
+    const def_idx: CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+    const def = ext_module_env.store.getDef(def_idx);
+
+    // Get the external function's type
+    const ext_type_var = ModuleEnv.varFrom(def.expr);
+    const ext_resolved = ext_module_env.types.resolveVar(ext_type_var);
+
+    // Check if it's a function type
+    const func = ext_resolved.desc.content.unwrapFunc() orelse return;
+
+    // Get argument expressions from call site
+    const arg_indices = caller_module_env.store.sliceExpr(args);
+
+    // Ensure we have a scope to put mappings into
+    if (self.type_scope.scopes.items.len == 0) {
+        try self.type_scope.scopes.append(types.VarMap.init(self.allocator));
+    }
+    const scope = &self.type_scope.scopes.items[0];
+
+    // Get the function's parameter type variables
+    const param_vars = ext_module_env.types.sliceVars(func.args);
+
+    // Map each external rigid param type to the call site's argument type
+    const num_mappings = @min(param_vars.len, arg_indices.len);
+    for (0..num_mappings) |i| {
+        const ext_param_var = param_vars[i];
+        const caller_arg_idx = arg_indices[i];
+        const caller_arg_var = ModuleEnv.varFrom(caller_arg_idx);
+
+        // Walk the external parameter type to find rigid vars
+        // and map them to corresponding parts of the caller's arg type
+        try self.collectTypeMappings(
+            scope,
+            ext_module_env,
+            ext_param_var,
+            caller_module_env,
+            caller_arg_var,
+        );
+    }
+}
+
+/// Recursively collect type variable mappings by walking two types in parallel.
+/// Maps rigid vars in ext_type to corresponding parts of caller_type.
+fn collectTypeMappings(
+    self: *Self,
+    scope: *types.VarMap,
+    ext_env: *const ModuleEnv,
+    ext_var: types.Var,
+    caller_env: *ModuleEnv,
+    caller_var: types.Var,
+) Allocator.Error!void {
+    const ext_resolved = ext_env.types.resolveVar(ext_var);
+    const caller_resolved = caller_env.types.resolveVar(caller_var);
+
+    switch (ext_resolved.desc.content) {
+        .rigid => {
+            // Found a rigid - map it to the caller's type variable
+            try scope.put(ext_resolved.var_, caller_resolved.var_);
+        },
+        .flex => {
+            // Flex vars might also need mapping if they're unresolved
+            try scope.put(ext_resolved.var_, caller_resolved.var_);
+        },
+        .structure => |st| {
+            // Recurse into structure to find nested rigids
+            switch (st) {
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    const ext_params = ext_env.types.sliceVars(func.args);
+                    const caller_func = caller_resolved.desc.content.unwrapFunc() orelse return;
+                    const caller_params = caller_env.types.sliceVars(caller_func.args);
+                    const num = @min(ext_params.len, caller_params.len);
+                    for (0..num) |i| {
+                        try self.collectTypeMappings(scope, ext_env, ext_params[i], caller_env, caller_params[i]);
+                    }
+                    try self.collectTypeMappings(scope, ext_env, func.ret, caller_env, caller_func.ret);
+                },
+                .record => |rec| {
+                    const caller_rec = caller_resolved.desc.content.unwrapRecord() orelse return;
+                    const ext_fields = ext_env.types.getRecordFieldsSlice(rec.fields);
+                    const caller_fields = caller_env.types.getRecordFieldsSlice(caller_rec.fields);
+                    const num = @min(ext_fields.len, caller_fields.len);
+                    for (0..num) |i| {
+                        try self.collectTypeMappings(scope, ext_env, ext_fields.get(i).var_, caller_env, caller_fields.get(i).var_);
+                    }
+                },
+                .tuple => |tup| {
+                    const ext_elems = ext_env.types.sliceVars(tup.elems);
+                    if (caller_resolved.desc.content == .structure) {
+                        if (caller_resolved.desc.content.structure == .tuple) {
+                            const caller_tup = caller_resolved.desc.content.structure.tuple;
+                            const caller_elems = caller_env.types.sliceVars(caller_tup.elems);
+                            const num = @min(ext_elems.len, caller_elems.len);
+                            for (0..num) |i| {
+                                try self.collectTypeMappings(scope, ext_env, ext_elems[i], caller_env, caller_elems[i]);
+                            }
+                        }
+                    }
+                },
+                .nominal_type => |nt| {
+                    // For nominal types, map the type arguments
+                    const ext_args = ext_env.types.sliceNominalArgs(nt);
+                    if (caller_resolved.desc.content.unwrapNominalType()) |caller_nt| {
+                        const caller_args = caller_env.types.sliceNominalArgs(caller_nt);
+                        const num = @min(ext_args.len, caller_args.len);
+                        for (0..num) |i| {
+                            try self.collectTypeMappings(scope, ext_env, ext_args[i], caller_env, caller_args[i]);
+                        }
+                    }
+                },
+                else => {},
+            }
+        },
+        .alias => |alias| {
+            // Follow the alias
+            const backing = ext_env.types.getAliasBackingVar(alias);
+            try self.collectTypeMappings(scope, ext_env, backing, caller_env, caller_var);
+        },
+        .err => {},
+    }
 }
 
 /// Lower a single expression
-pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
+pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const old_module = self.current_module_idx;
     self.current_module_idx = module_idx;
     defer self.current_module_idx = old_module;
 
-    const module_env = self.getModuleEnv(module_idx) orelse return error.ModuleNotFound;
+    const module_env = self.getModuleEnv(module_idx) orelse unreachable;
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
 
@@ -296,7 +423,7 @@ pub fn lowerExpr(self: *Self, module_idx: u16, expr_idx: CIR.Expr.Idx) Error!Mon
 }
 
 /// Lower an expression with its CIR representation
-fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
+fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: Region, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
@@ -372,6 +499,12 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_call => |call| blk: {
             // Check if this is a call to a low-level lambda (like str_inspekt)
             const fn_expr = module_env.store.getExpr(call.func);
+
+            // If calling an external function, set up type scope mappings before lowering
+            if (fn_expr == .e_lookup_external) {
+                const lookup = fn_expr.e_lookup_external;
+                try self.setupExternalCallTypeScope(module_env, lookup, call.args);
+            }
 
             if (fn_expr == .e_low_level_lambda) {
                 const ll = fn_expr.e_low_level_lambda;
@@ -878,7 +1011,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const body = try self.lowerExprFromIdx(module_env, for_expr.body);
 
             // Get element layout from the pattern's type variable
-            const elem_layout = try self.getForLoopElementLayout(for_expr.patt);
+            const elem_layout = self.getForLoopElementLayout(for_expr.patt);
 
             break :blk .{
                 .for_loop = .{
@@ -897,14 +1030,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 }
 
 /// Lower an expression by its index in the current module
-fn lowerExprFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Error!MonoExprId {
+fn lowerExprFromIdx(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error!MonoExprId {
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
     return self.lowerExprInner(module_env, expr, region, expr_idx);
 }
 
 /// Lower a span of expressions
-fn lowerExprSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Expr.Span) Error!MonoExprSpan {
+fn lowerExprSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Expr.Span) Allocator.Error!MonoExprSpan {
     const expr_indices = module_env.store.sliceExpr(span);
     if (expr_indices.len == 0) return MonoExprSpan.empty();
 
@@ -926,7 +1059,7 @@ const LowerRecordFieldsResult = struct {
 };
 
 /// Lower record fields - sorted alphabetically by field name to match layout order
-fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Error!LowerRecordFieldsResult {
+fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordField.Span) Allocator.Error!LowerRecordFieldsResult {
     const field_indices = module_env.store.sliceRecordFields(fields);
     if (field_indices.len == 0) return .{
         .fields = MonoExprSpan.empty(),
@@ -978,7 +1111,7 @@ fn lowerRecordFields(self: *Self, module_env: *ModuleEnv, fields: CIR.RecordFiel
 }
 
 /// Lower a pattern
-fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) Error!MonoPatternId {
+fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) Allocator.Error!MonoPatternId {
     const pattern = module_env.store.getPattern(pattern_idx);
     const region = module_env.store.getPatternRegion(pattern_idx);
 
@@ -1047,7 +1180,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 
             const fields = try self.store.addPatternSpan(field_patterns.items);
             // Compute the record layout from the pattern's type variable
-            const record_layout = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
+            const record_layout = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .record = .{
                     .record_layout = record_layout,
@@ -1059,7 +1192,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         .tuple => |t| blk: {
             const elems = try self.lowerPatternSpan(module_env, t.patterns);
             // Compute the tuple layout from the pattern's type variable
-            const tuple_layout = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
+            const tuple_layout = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .tuple = .{
                     .tuple_layout = tuple_layout,
@@ -1071,7 +1204,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         .as => |a| blk: {
             const inner = try self.lowerPattern(module_env, a.pattern);
             // Compute the layout from the pattern's type variable
-            const layout_idx = self.getPatternLayout(pattern_idx) catch LayoutIdx.default_num;
+            const layout_idx = self.getPatternLayout(pattern_idx);
             break :blk .{
                 .as_pattern = .{
                     .symbol = self.patternToSymbol(pattern_idx),
@@ -1138,7 +1271,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
 }
 
 /// Lower a span of patterns
-fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span) Error!MonoPatternSpan {
+fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span) Allocator.Error!MonoPatternSpan {
     const indices = module_env.store.slicePatterns(span);
     if (indices.len == 0) return MonoPatternSpan.empty();
 
@@ -1154,7 +1287,7 @@ fn lowerPatternSpan(self: *Self, module_env: *ModuleEnv, span: CIR.Pattern.Span)
 }
 
 /// Lower closure captures
-fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture.Span) Error!MonoCaptureSpan {
+fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture.Span) Allocator.Error!MonoCaptureSpan {
     const capture_indices = module_env.store.sliceCaptures(captures);
     if (capture_indices.len == 0) return MonoCaptureSpan.empty();
 
@@ -1332,7 +1465,7 @@ fn exprContainsPatternRef(
 }
 
 /// Lower if branches
-fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBranch.Span) Error!ir.MonoIfBranchSpan {
+fn lowerIfBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.IfBranch.Span) Allocator.Error!ir.MonoIfBranchSpan {
     const branch_indices = module_env.store.sliceIfBranches(branches);
 
     var lowered = std.ArrayList(MonoIfBranch).empty;
@@ -1367,7 +1500,7 @@ fn collectIfClosureLambdaSet(
     self: *Self,
     module_env: *ModuleEnv,
     if_expr: anytype,
-) Error!IfClosureLambdaSetResult {
+) Allocator.Error!IfClosureLambdaSetResult {
     var members = std.ArrayList(ir.LambdaSetMember).empty;
     defer members.deinit(self.allocator);
 
@@ -1478,7 +1611,7 @@ fn lowerIfBranchesWithLambdaSet(
     module_env: *ModuleEnv,
     branches: CIR.Expr.IfBranch.Span,
     lambda_set_members: ir.LambdaSetMemberSpan,
-) Error!ir.MonoIfBranchSpan {
+) Allocator.Error!ir.MonoIfBranchSpan {
     const branch_indices = module_env.store.sliceIfBranches(branches);
 
     var lowered = std.ArrayList(MonoIfBranch).empty;
@@ -1509,7 +1642,7 @@ fn lowerExprWithLambdaSet(
     expr_idx: CIR.Expr.Idx,
     lambda_set_members: ir.LambdaSetMemberSpan,
     tag: u16,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     const expr = module_env.store.getExpr(expr_idx);
 
     switch (expr) {
@@ -1641,7 +1774,7 @@ fn selectLambdaSetRepresentation(
 }
 
 /// Lower when/match branches
-fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Error!ir.MonoWhenBranchSpan {
+fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Match.Branch.Span) Allocator.Error!ir.MonoWhenBranchSpan {
     const branch_indices = module_env.store.sliceMatchBranches(branches);
 
     var lowered = std.ArrayList(MonoWhenBranch).empty;
@@ -1675,7 +1808,7 @@ fn lowerWhenBranches(self: *Self, module_env: *ModuleEnv, branches: CIR.Expr.Mat
 }
 
 /// Lower statements in a block
-fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Error!ir.MonoStmtSpan {
+fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Allocator.Error!ir.MonoStmtSpan {
     const stmt_slice = module_env.store.sliceStatements(stmts);
     if (stmt_slice.len == 0) return ir.MonoStmtSpan.empty();
 
@@ -1760,7 +1893,7 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Er
                 const body = try self.lowerExprFromIdx(module_env, for_stmt.body);
 
                 // Get element layout from the pattern's type variable
-                const elem_layout = try self.getForLoopElementLayout(for_stmt.patt);
+                const elem_layout = self.getForLoopElementLayout(for_stmt.patt);
 
                 const for_loop_expr = try self.store.addExpr(.{
                     .for_loop = .{
@@ -1820,9 +1953,9 @@ pub fn lowerStrInspekt(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     // Need layout store to resolve layouts
-    const layout_store = self.layout_store orelse return error.LayoutError;
+    const layout_store = self.layout_store orelse unreachable;
 
     // Resolve the type to get its structure
     const resolved = module_env.types.resolveVar(type_var);
@@ -1884,7 +2017,7 @@ fn lowerInspectByLayout(
     layout_val: layout_mod.Layout,
     _: LayoutIdx,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     return switch (layout_val.tag) {
         .scalar => switch (layout_val.data.scalar.tag) {
             .int => try self.store.addExpr(.{ .int_to_str = .{
@@ -1909,7 +2042,7 @@ fn lowerInspectByLayout(
 }
 
 /// Inspect a boolean value
-fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Error!MonoExprId {
+fn lowerInspectBool(self: *Self, value_expr: MonoExprId, region: Region) Allocator.Error!MonoExprId {
     // Create branches for True (discriminant 1) and False (discriminant 0)
     const false_str = try self.addStrLiteral("Bool.false", region);
     const true_str = try self.addStrLiteral("Bool.true", region);
@@ -1931,8 +2064,8 @@ fn lowerInspectRecord(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
-    const layout_store = self.layout_store orelse return error.LayoutError;
+) Allocator.Error!MonoExprId {
+    const layout_store = self.layout_store orelse unreachable;
 
     // Get field info from TYPE (for names)
     const fields_slice = module_env.types.getRecordFieldsSlice(record.fields);
@@ -2004,8 +2137,8 @@ fn lowerInspectTuple(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
-    const layout_store = self.layout_store orelse return error.LayoutError;
+) Allocator.Error!MonoExprId {
+    const layout_store = self.layout_store orelse unreachable;
 
     const elem_vars = module_env.types.sliceVars(tuple.elems);
 
@@ -2062,7 +2195,7 @@ fn lowerInspectTagUnion(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     // Get tag info from TYPE
     const tags_slice = module_env.types.getTagsSlice(tag_union.tags);
     const tag_names = tags_slice.items(.name);
@@ -2124,7 +2257,7 @@ fn lowerInspectNominal(
     value_layout: LayoutIdx,
     module_env: *const ModuleEnv,
     region: Region,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     const type_name = module_env.getIdent(nom.ident.ident_idx);
 
     // Check for Bool type (special case: render as Bool.true/Bool.false)
@@ -2152,7 +2285,7 @@ fn lowerInspectNominal(
     try parts.append(self.allocator, try self.addStrLiteral(type_name, region));
     try parts.append(self.allocator, try self.addStrLiteral(".", region));
     // For backing value, inspect by layout
-    const layout_store = self.layout_store orelse return error.LayoutError;
+    const layout_store = self.layout_store orelse unreachable;
     const layout_val = layout_store.getLayout(value_layout);
     try parts.append(self.allocator, try self.lowerInspectByLayout(value_expr, layout_val, value_layout, region));
 
@@ -2160,7 +2293,7 @@ fn lowerInspectNominal(
 }
 
 /// Helper to add a string literal expression
-fn addStrLiteral(self: *Self, text: []const u8, region: Region) Error!MonoExprId {
+fn addStrLiteral(self: *Self, text: []const u8, region: Region) Allocator.Error!MonoExprId {
     // Add the string literal to the MonoExprStore's string table
     const lit_idx = self.store.insertString(text) catch return error.OutOfMemory;
     return self.store.addExpr(.{ .str_literal = lit_idx }, region);
@@ -2210,7 +2343,7 @@ fn getTupleElemLayout(
 /// The key insight: every expression either:
 /// - Returns a value (becomes a `ret` statement)
 /// - Has subexpressions that might contain returns (recursively lowered)
-fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const expr = module_env.store.getExpr(expr_idx);
     const region = module_env.store.getExprRegion(expr_idx);
 
@@ -2229,7 +2362,7 @@ fn lowerExprToStmt(self: *Self, module_env: *ModuleEnv, expr_idx: CIR.Expr.Idx, 
 
 /// Lower a block to a chain of let statements.
 /// The final expression is lowered to a statement (which might be ret, switch, etc.)
-fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const stmt_slice = module_env.store.sliceStatements(block.stmts);
 
     // First, lower the final expression to a statement
@@ -2275,7 +2408,7 @@ fn lowerBlockToStmt(self: *Self, module_env: *ModuleEnv, block: anytype, ret_lay
 
 /// Lower if-then-else to a switch statement.
 /// This makes branch structure explicit for tail call analysis.
-fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_layout: LayoutIdx) Error!CFStmtId {
+fn lowerIfToSwitchStmt(self: *Self, module_env: *ModuleEnv, ite: anytype, ret_layout: LayoutIdx) Allocator.Error!CFStmtId {
     const branch_indices = module_env.store.sliceIfBranches(ite.branches);
 
     // For a simple if-then-else with one condition:
@@ -2352,12 +2485,12 @@ fn lowerClosureToProc(
     closure: CIR.Expr.Closure,
     binding_symbol: MonoSymbol,
     join_point_id: JoinPointId,
-) Error!MonoProc {
+) Allocator.Error!MonoProc {
     // Get the lambda from the closure
     const lambda_expr = module_env.store.getExpr(closure.lambda_idx);
     const lambda = switch (lambda_expr) {
         .e_lambda => |l| l,
-        else => return error.InvalidExpression,
+        else => unreachable,
     };
 
     // Lower parameters first, then extract their layouts
@@ -2400,7 +2533,7 @@ fn lowerClosureToProc(
 
 /// Extract layouts from already-lowered parameter patterns.
 /// Returns an error if a pattern type doesn't carry layout information.
-fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan {
+fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Allocator.Error!LayoutIdxSpan {
     const pattern_ids = self.store.getPatternSpan(params);
     if (pattern_ids.len == 0) return LayoutIdxSpan.empty();
 
@@ -2422,7 +2555,7 @@ fn extractParamLayouts(self: *Self, params: MonoPatternSpan) Error!LayoutIdxSpan
             // Wildcard patterns don't carry layout information in MonoPattern.
             // This is a design gap - wildcard should have a layout field.
             // For now, surface this as an error rather than silently defaulting.
-            .wildcard => return error.InvalidExpression,
+            .wildcard => unreachable,
         };
         try layouts.append(self.allocator, layout_idx);
     }
@@ -2438,7 +2571,7 @@ pub fn lowerExpression(
     all_module_envs: []const *ModuleEnv,
     module_idx: u16,
     expr_idx: CIR.Expr.Idx,
-) Error!MonoExprId {
+) Allocator.Error!MonoExprId {
     var lowerer = init(allocator, store, all_module_envs, null, null);
     defer lowerer.deinit();
     return lowerer.lowerExpr(module_idx, expr_idx);
@@ -2491,7 +2624,7 @@ pub fn lowerConstants(
     module_idx: u16,
     sccs: []const can.DependencyGraph.SCC,
     allocator: Allocator,
-) Error!LoweredConstants {
+) Allocator.Error!LoweredConstants {
     // Count total constants across all SCCs
     var total_constants: usize = 0;
     for (sccs) |scc| {
@@ -2508,7 +2641,7 @@ pub fn lowerConstants(
     var constants = allocator.alloc(LoweredConstant, total_constants) catch return error.OutOfMemory;
     errdefer allocator.free(constants);
 
-    const module_env = lowerer.getModuleEnv(module_idx) orelse return error.ModuleNotFound;
+    const module_env = lowerer.getModuleEnv(module_idx) orelse unreachable;
 
     var i: usize = 0;
     for (sccs) |scc| {
@@ -2539,7 +2672,7 @@ pub fn lowerFromEntryPoints(
     lambda_inference: ?*LambdaSetInference,
     layout_store: ?*LayoutStore,
     entry_points: []const EntryPoint,
-) Error!void {
+) Allocator.Error!void {
     var lowerer = init(allocator, store, all_module_envs, lambda_inference, layout_store);
     defer lowerer.deinit();
 

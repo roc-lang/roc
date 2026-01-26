@@ -367,9 +367,9 @@ pub fn runExpectTypeMismatchAndCrash(src: []const u8) !void {
     _ = interpreter.eval(resources.expr_idx, ops) catch |err| {
         // Expected: a crash or type mismatch error at runtime
         switch (err) {
-            error.Crash, error.TypeMismatch, error.TypeContainedMismatch => return, // Success - we expected a crash
+            error.Crash, error.TypeMismatch => return, // Success - we expected a crash
             else => {
-                std.debug.print("Expected Crash, TypeMismatch, or TypeContainedMismatch error, got: {}\n", .{err});
+                std.debug.print("Expected Crash or TypeMismatch error, got: {}\n", .{err});
                 return error.UnexpectedError;
             },
         }

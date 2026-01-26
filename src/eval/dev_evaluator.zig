@@ -455,10 +455,12 @@ pub const DevEvaluator = struct {
         // This is a single store shared across all modules for cross-module correctness
         const layout_store_ptr = try self.ensureGlobalLayoutStore(all_module_envs);
 
+        // Create a type scope for RC pass (will be empty, but RC handles null layouts gracefully)
+        var rc_type_scope = types.TypeScope.init(self.allocator);
+        defer rc_type_scope.deinit();
+
         // Run RC insertion pass to add incref/decref operations
-        var rc_pass = rc.InsertPass.init(self.allocator, module_env) catch {
-            return error.OutOfMemory;
-        };
+        var rc_pass = rc.InsertPass.init(self.allocator, module_env, layout_store_ptr, &rc_type_scope);
         defer rc_pass.deinit();
         const rc_expr_idx = rc_pass.runOnExpr(expr_idx) catch expr_idx;
 

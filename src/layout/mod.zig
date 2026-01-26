@@ -40,7 +40,6 @@ pub const SizeAlign = @import("layout.zig").SizeAlign;
 
 // Re-export store functionality
 pub const Store = @import("store.zig").Store;
-pub const LayoutError = @import("store.zig").LayoutError;
 pub const ModuleVarKey = @import("store.zig").ModuleVarKey;
 
 // Re-export work queue functionality

@@ -41,15 +41,6 @@ const SizeAlign = layout_mod.SizeAlign;
 const Work = work.Work;
 
 /// Errors that can occur during layout computation
-pub const LayoutError = error{
-    ZeroSizedType,
-    TypeContainedMismatch,
-    InvalidRecordExtension,
-    InvalidNumberExtension,
-    // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
-    BugUnboxedFlexVar,
-    BugUnboxedRigidVar,
-};
 
 /// Stores Layout instances by Idx.
 ///
@@ -987,7 +978,7 @@ pub const Store = struct {
     fn gatherTags(
         self: *Self,
         tag_union: types.TagUnion,
-    ) (LayoutError || std.mem.Allocator.Error)!usize {
+    ) std.mem.Allocator.Error!usize {
         var num_tags = tag_union.tags.len();
 
         const tag_slice = self.getTypesStore().getTagsSlice(tag_union.tags);
@@ -1022,14 +1013,14 @@ pub const Store = struct {
                             break;
                         }
                     },
-                    else => return LayoutError.InvalidRecordExtension,
+                    else => unreachable,
                 },
                 .alias => |alias| {
                     current_ext = self.getTypesStore().getAliasBackingVar(alias);
                 },
                 // flex and rigid are valid terminal extensions for open unions
                 .flex, .rigid => break,
-                else => return LayoutError.InvalidRecordExtension,
+                else => unreachable,
             }
         }
 
@@ -1041,7 +1032,7 @@ pub const Store = struct {
     fn gatherRecordFields(
         self: *Self,
         record_type: types.Record,
-    ) (LayoutError || std.mem.Allocator.Error)!usize {
+    ) std.mem.Allocator.Error!usize {
         var num_fields = record_type.fields.len();
 
         const field_slice = self.getTypesStore().getRecordFieldsSlice(record_type.fields);
@@ -1089,14 +1080,14 @@ pub const Store = struct {
                         // record_unbound has no extension, so stop here
                         break;
                     },
-                    else => return LayoutError.InvalidRecordExtension,
+                    else => unreachable,
                 },
                 .alias => |alias| {
                     current_ext = self.getTypesStore().getAliasBackingVar(alias);
                 },
                 .flex => |_| break,
                 .rigid => |_| break,
-                else => return LayoutError.InvalidRecordExtension,
+                else => unreachable,
             }
         }
 
@@ -1107,7 +1098,7 @@ pub const Store = struct {
     fn gatherTupleFields(
         self: *Self,
         tuple_type: types.Tuple,
-    ) (LayoutError || std.mem.Allocator.Error)!usize {
+    ) std.mem.Allocator.Error!usize {
         const elem_slice = self.getTypesStore().sliceVars(tuple_type.elems);
         const num_fields = elem_slice.len;
 
@@ -1121,7 +1112,7 @@ pub const Store = struct {
     fn finishRecord(
         self: *Store,
         updated_record: work.Work.PendingRecord,
-    ) (LayoutError || std.mem.Allocator.Error)!Layout {
+    ) std.mem.Allocator.Error!Layout {
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
         const fields_start = self.record_fields.items.len;
@@ -1219,7 +1210,7 @@ pub const Store = struct {
     fn finishTuple(
         self: *Store,
         updated_tuple: work.Work.PendingTuple,
-    ) (LayoutError || std.mem.Allocator.Error)!Layout {
+    ) std.mem.Allocator.Error!Layout {
         const resolved_fields_end = self.work.resolved_tuple_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
         const fields_start = self.tuple_fields.items.len;
@@ -1323,7 +1314,7 @@ pub const Store = struct {
     fn finishTagUnion(
         self: *Self,
         pending: work.Work.PendingTagUnion,
-    ) (LayoutError || std.mem.Allocator.Error)!Layout {
+    ) std.mem.Allocator.Error!Layout {
         const resolved_end = self.work.resolved_tag_union_variants.len;
 
         // Collect resolved variants and sort by index
@@ -1421,7 +1412,7 @@ pub const Store = struct {
         module_idx: u16,
         unresolved_var: Var,
         type_scope: *const TypeScope,
-    ) (LayoutError || std.mem.Allocator.Error)!Idx {
+    ) std.mem.Allocator.Error!Idx {
         // Set the current module for this computation
         self.current_module_idx = module_idx;
 
@@ -1565,7 +1556,7 @@ pub const Store = struct {
                         // Invalid: recursive type without heap allocation would have infinite size.
                         // This is a type error - the user defined a directly recursive type without
                         // wrapping it in List or Box.
-                        return LayoutError.TypeContainedMismatch;
+                        unreachable;
                     }
                 }
             } else if (current.desc.content == .structure) blk: {
@@ -1638,7 +1629,7 @@ pub const Store = struct {
                         }
 
                         // No cached placeholder - this is an error
-                        return LayoutError.TypeContainedMismatch;
+                        unreachable;
                     }
                     // Different var means different instantiation - not a recursive reference.
                     // Fall through to normal processing.
@@ -2131,6 +2122,10 @@ pub const Store = struct {
                                     scope_lookup_count += 1;
                                 }
                             }
+                            // IMPORTANT: Remove the flex from in_progress_vars before continuing
+                            // with the mapped var. Otherwise, if another call resolves to the same
+                            // flex, it will see it in in_progress_vars and incorrectly detect a cycle.
+                            _ = self.work.in_progress_vars.swapRemove(current.var_);
                             current = self.getTypesStore().resolveVar(mapped_var);
                             continue :outer;
                         }
@@ -2149,18 +2144,14 @@ pub const Store = struct {
                         if (self.work.pending_containers.len > 0) {
                             const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                             if (pending_item.container == .box or pending_item.container == .list) {
-                                // If the flex var has any constraints, assume it's numeric and default to Dec.
-                                // This handles cases like `List(a) where a.is_eq : ...` where the type
-                                // should be numeric but doesn't have from_numeral because it was unified
-                                // through method calls rather than numeric literals.
                                 if (!flex.constraints.isEmpty()) {
                                     break :blk Layout.default_num();
                                 }
                                 break :blk Layout.opaquePtr();
                             }
                         }
-                        // Flex vars should always be resolvable. If we reach here, something is wrong
-                        // with how type variables are being propagated through cross-module calls.
+                        // Flex vars must always be resolvable. If we reach here, there's a bug
+                        // in type checking or type propagation.
                         unreachable;
                     },
                     .rigid => |rigid| blk: {
@@ -2179,6 +2170,10 @@ pub const Store = struct {
                                     scope_lookup_count += 1;
                                 }
                             }
+                            // IMPORTANT: Remove the rigid from in_progress_vars before continuing
+                            // with the mapped var. Otherwise, if another call resolves to the same
+                            // rigid, it will see it in in_progress_vars and incorrectly detect a cycle.
+                            _ = self.work.in_progress_vars.swapRemove(current.var_);
                             current = self.getTypesStore().resolveVar(mapped_var);
                             continue :outer;
                         }
@@ -2204,8 +2199,8 @@ pub const Store = struct {
                                 break :blk Layout.opaquePtr();
                             }
                         }
-                        // Rigid vars should always be resolvable. If we reach here, something is wrong
-                        // with how type variables are being propagated through cross-module calls.
+                        // Rigid vars must always be resolvable. If we reach here, there's a bug
+                        // in type checking or type propagation.
                         unreachable;
                     },
                     .alias => |alias| {
@@ -2214,7 +2209,7 @@ pub const Store = struct {
                         current = self.getTypesStore().resolveVar(backing_var);
                         continue;
                     },
-                    .err => return LayoutError.TypeContainedMismatch,
+                    .err => unreachable,
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!

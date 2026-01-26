@@ -197,7 +197,7 @@ pub const Interpreter = struct {
         TupleIndexOutOfBounds,
         TypeMismatch,
         ZeroSizedType,
-    } || std.mem.Allocator.Error || layout.LayoutError;
+    } || std.mem.Allocator.Error;
 
     /// Key for caching type translations, combining module identity with type variable.
     const ModuleVarKey = struct {

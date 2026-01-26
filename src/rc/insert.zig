@@ -55,7 +55,7 @@ pub const SymbolState = struct {
     /// The pattern that introduced this symbol
     pattern_idx: CIR.Pattern.Idx,
     /// Layout of this symbol's value (for checking if refcounted)
-    layout_idx: ?layout_mod.Idx,
+    layout_idx: layout_mod.Idx,
     /// Whether this scope owns the value
     ownership: Ownership,
     /// How many times this symbol is used in remaining code
@@ -96,13 +96,10 @@ pub const InsertPass = struct {
 
     /// The module environment containing the CIR
     module_env: *ModuleEnv,
-    /// Heap-allocated single-element slice for layout store init
-    module_env_slice: []const *const ModuleEnv,
-    /// Layout store for computing and checking if types are refcounted
-    /// Owned by this pass, created using the module's compile-time types
-    layout_store: LayoutStore,
-    /// Empty type scope for layout computation (no flex/rigid mappings needed)
-    type_scope: TypeScope,
+    /// Global layout store (shared with lowerer)
+    layout_store: *LayoutStore,
+    /// Type scope for layout computation (shared with lowerer)
+    type_scope: *TypeScope,
     /// Map from pattern index to symbol state
     symbol_states: std.AutoHashMap(CIR.Pattern.Idx, SymbolState),
     /// Allocator for internal data structures
@@ -110,21 +107,17 @@ pub const InsertPass = struct {
     /// Current scope for tracking pattern introductions
     current_scope: ?*ScopeInfo,
 
-    /// Initialize the RC insertion pass
-    /// Creates a layout store using the module's compile-time types for layout computation.
+    /// Initialize the RC insertion pass with the global layout store
     pub fn init(
         allocator: std.mem.Allocator,
         module_env: *ModuleEnv,
-    ) std.mem.Allocator.Error!Self {
-        // Heap-allocate the module env slice to ensure it outlives the layout store
-        const module_env_slice = try allocator.alloc(*const ModuleEnv, 1);
-        module_env_slice[0] = module_env;
-
+        layout_store: *LayoutStore,
+        type_scope: *TypeScope,
+    ) Self {
         return Self{
             .module_env = module_env,
-            .module_env_slice = module_env_slice,
-            .layout_store = try LayoutStore.init(module_env_slice, module_env.idents.builtin_str, allocator),
-            .type_scope = TypeScope.init(allocator),
+            .layout_store = layout_store,
+            .type_scope = type_scope,
             .symbol_states = std.AutoHashMap(CIR.Pattern.Idx, SymbolState).init(allocator),
             .allocator = allocator,
             .current_scope = null,
@@ -134,9 +127,6 @@ pub const InsertPass = struct {
     /// Deinitialize and free resources
     pub fn deinit(self: *Self) void {
         self.symbol_states.deinit();
-        self.type_scope.deinit();
-        self.layout_store.deinit();
-        self.allocator.free(self.module_env_slice);
     }
 
     /// Run the RC insertion pass on the module
@@ -412,7 +402,7 @@ pub const InsertPass = struct {
 
         // Compute layout - prefer expression type (works for synthetic patterns), fall back to pattern type
         const layout_idx = if (expr_idx) |eidx|
-            self.getLayoutForExpr(eidx) orelse self.getLayoutForPattern(pattern_idx)
+            self.getLayoutForExpr(eidx)
         else
             self.getLayoutForPattern(pattern_idx);
 
@@ -501,9 +491,7 @@ pub const InsertPass = struct {
     }
 
     /// Get the layout index for a pattern by computing it from the type system.
-    /// Returns null if the layout cannot be computed (e.g., for patterns with unresolved types).
-    fn getLayoutForPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) ?layout_mod.Idx {
-        // Pattern indices map directly to type variables
+    fn getLayoutForPattern(self: *Self, pattern_idx: CIR.Pattern.Idx) layout_mod.Idx {
         const type_var: Var = @enumFromInt(@intFromEnum(pattern_idx));
 
         // First check the cache (using module_idx=0 for single-module RC pass)
@@ -513,17 +501,11 @@ pub const InsertPass = struct {
         }
 
         // Compute the layout from the type variable
-        // This will cache the result in layouts_by_module_var
-        // Layout computation can fail for various reasons (unresolved types, etc.)
-        // In those cases, we conservatively assume no RC is needed
-        return self.layout_store.addTypeVar(0, type_var, &self.type_scope) catch null;
+        return self.layout_store.addTypeVar(0, type_var, self.type_scope) catch unreachable;
     }
 
     /// Get the layout index for an expression by computing it from the expression's type.
-    /// This is useful for synthetic patterns where the pattern itself doesn't have type info,
-    /// but the expression being assigned does.
-    fn getLayoutForExpr(self: *Self, expr_idx: CIR.Expr.Idx) ?layout_mod.Idx {
-        // Expression indices map to type variables the same way as patterns
+    fn getLayoutForExpr(self: *Self, expr_idx: CIR.Expr.Idx) layout_mod.Idx {
         const type_var: Var = @enumFromInt(@intFromEnum(expr_idx));
 
         // First check the cache (using module_idx=0 for single-module RC pass)
@@ -533,7 +515,7 @@ pub const InsertPass = struct {
         }
 
         // Compute the layout from the type variable
-        return self.layout_store.addTypeVar(0, type_var, &self.type_scope) catch null;
+        return self.layout_store.addTypeVar(0, type_var, self.type_scope) catch unreachable;
     }
 
     // Phase 2: Transform IR to insert RC operations
@@ -614,10 +596,7 @@ pub const InsertPass = struct {
             // Check if this is NOT the last use
             if (state.remaining_uses > 1) {
                 // Check if the layout needs RC (if we have layout info)
-                const needs_rc = if (state.layout_idx) |layout_idx|
-                    self.layoutNeedsRc(layout_idx)
-                else
-                    false;
+                const needs_rc = self.layoutNeedsRc(state.layout_idx);
 
                 if (needs_rc) {
                     // Decrement remaining uses
@@ -710,10 +689,7 @@ pub const InsertPass = struct {
             if (self.symbol_states.get(pattern_idx)) |state| {
                 if (state.ownership == .owned and !state.consumed) {
                     // Check if layout needs RC
-                    const needs_rc = if (state.layout_idx) |layout_idx|
-                        self.layoutNeedsRc(layout_idx)
-                    else
-                        true; // Assume RC needed if layout unknown
+                    const needs_rc = self.layoutNeedsRc(state.layout_idx); // Assume RC needed if layout unknown
 
                     if (needs_rc) {
                         any_changed = true;
@@ -946,10 +922,7 @@ pub const InsertPass = struct {
                     // Check if it needs RC
                     if (self.symbol_states.get(pattern_idx.*)) |state| {
                         if (state.ownership == .owned) {
-                            const needs_rc = if (state.layout_idx) |layout_idx|
-                                self.layoutNeedsRc(layout_idx)
-                            else
-                                true;
+                            const needs_rc = self.layoutNeedsRc(state.layout_idx);
                             if (needs_rc) {
                                 try decrefs_needed.append(pattern_idx.*);
                             }
@@ -987,10 +960,7 @@ pub const InsertPass = struct {
                 if (!consumed_sets[branches.len].contains(pattern_idx.*)) {
                     if (self.symbol_states.get(pattern_idx.*)) |state| {
                         if (state.ownership == .owned) {
-                            const needs_rc = if (state.layout_idx) |layout_idx|
-                                self.layoutNeedsRc(layout_idx)
-                            else
-                                true;
+                            const needs_rc = self.layoutNeedsRc(state.layout_idx);
                             if (needs_rc) {
                                 try decrefs_needed.append(pattern_idx.*);
                             }
@@ -1101,10 +1071,7 @@ pub const InsertPass = struct {
                 // is assigned to a local that goes out of scope)
                 // For now, we only decref owned values that weren't consumed
                 if (state.ownership == .owned and !state.consumed) {
-                    const needs_rc = if (state.layout_idx) |layout_idx|
-                        self.layoutNeedsRc(layout_idx)
-                    else
-                        true;
+                    const needs_rc = self.layoutNeedsRc(state.layout_idx);
                     if (needs_rc) {
                         try decrefs_needed.append(pattern_idx);
                     }
@@ -1146,10 +1113,7 @@ pub const InsertPass = struct {
             const capture = self.module_env.store.getCapture(capture_idx);
             if (self.symbol_states.get(capture.pattern_idx)) |state| {
                 // Check if the captured variable needs RC
-                const needs_rc = if (state.layout_idx) |layout_idx|
-                    self.layoutNeedsRc(layout_idx)
-                else
-                    false;
+                const needs_rc = self.layoutNeedsRc(state.layout_idx);
                 if (needs_rc) {
                     try increfs_needed.append(capture.pattern_idx);
                 }
@@ -1232,10 +1196,7 @@ pub const InsertPass = struct {
         var needs_decref = false;
         if (self.symbol_states.get(for_stmt.patt)) |state| {
             if (!state.consumed) {
-                const needs_rc = if (state.layout_idx) |layout_idx|
-                    self.layoutNeedsRc(layout_idx)
-                else
-                    false;
+                const needs_rc = self.layoutNeedsRc(state.layout_idx);
                 needs_decref = needs_rc;
             }
         }
@@ -1395,10 +1356,7 @@ pub const InsertPass = struct {
                     // This branch didn't consume this symbol but another did
                     if (self.symbol_states.get(pattern_idx.*)) |state| {
                         if (state.ownership == .owned) {
-                            const needs_rc = if (state.layout_idx) |layout_idx|
-                                self.layoutNeedsRc(layout_idx)
-                            else
-                                true;
+                            const needs_rc = self.layoutNeedsRc(state.layout_idx);
                             if (needs_rc) {
                                 try decrefs_needed.append(pattern_idx.*);
                             }
@@ -1717,10 +1675,7 @@ pub const InsertPass = struct {
             for (s.introduced_patterns.items) |pattern_idx| {
                 if (self.symbol_states.get(pattern_idx)) |state| {
                     if (state.ownership == .owned and !state.consumed) {
-                        const needs_rc = if (state.layout_idx) |layout_idx|
-                            self.layoutNeedsRc(layout_idx)
-                        else
-                            true;
+                        const needs_rc = self.layoutNeedsRc(state.layout_idx);
                         if (needs_rc) {
                             try decrefs_needed.append(pattern_idx);
                         }
