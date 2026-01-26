@@ -1147,3 +1147,248 @@ test "definition handler navigates to builtin type from type annotation" {
     }
     try std.testing.expect(found_response);
 }
+
+test "document symbols works after goto definition (regression test)" {
+    // Regression test: getDocumentSymbols should use getModuleLookupEnv()
+    // for proper fallback to previous_build_env after getDefinitionAtPosition
+    // creates a fresh build env.
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "regression.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Document with a function definition and a usage
+    // "myFunc = |x| x + 1\nresult = myFunc(42)"
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"myFunc = |x| x + 1\\nresult = myFunc(42)"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // First request goto definition on myFunc usage (line 1, character 9)
+    const definition_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":9}}}}}}
+    , .{file_uri});
+    defer allocator.free(definition_body);
+    const definition_msg = try frame(allocator, definition_body);
+    defer allocator.free(definition_msg);
+
+    // Then request document symbols (this should use fallback to previous build env)
+    const symbols_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/documentSymbol","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(symbols_body);
+    const symbols_msg = try frame(allocator, symbols_body);
+    defer allocator.free(symbols_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":4,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, definition_msg);
+    try builder.appendSlice(allocator, symbols_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [32768]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Verify we got both responses
+    var found_definition_response = false;
+    var found_symbols_response = false;
+
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer) continue;
+
+        if (id.integer == 2) {
+            // Definition response
+            const result = parsed.value.object.get("result");
+            try std.testing.expect(result != null);
+            found_definition_response = true;
+        } else if (id.integer == 3) {
+            // Document symbols response - should return an array (possibly empty, but not an error)
+            const result = parsed.value.object.get("result");
+            try std.testing.expect(result != null);
+            try std.testing.expect(result.? == .array);
+            found_symbols_response = true;
+        }
+    }
+    try std.testing.expect(found_definition_response);
+    try std.testing.expect(found_symbols_response);
+}
+
+test "multiple goto definition calls don't break document symbols" {
+    // Test that multiple sequential goto definition calls maintain proper state
+    // for subsequent document symbol requests
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const file_path = try std.fs.path.join(allocator, &.{ tmp_path, "multi_def.roc" });
+    defer allocator.free(file_path);
+    const file_uri = try uriFromPath(allocator, file_path);
+    defer allocator.free(file_uri);
+
+    const init_body =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"clientInfo":{"name":"test"},"capabilities":{}}}
+    ;
+    const init_msg = try frame(allocator, init_body);
+    defer allocator.free(init_msg);
+
+    const initialized_body =
+        \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+    ;
+    const initialized_msg = try frame(allocator, initialized_body);
+    defer allocator.free(initialized_msg);
+
+    // Document with multiple definitions
+    // "foo = 1\nbar = foo\nbaz = bar"
+    const open_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{s}","version":1,"text":"foo = 1\\nbar = foo\\nbaz = bar"}}}}}}
+    , .{file_uri});
+    defer allocator.free(open_body);
+    const open_msg = try frame(allocator, open_body);
+    defer allocator.free(open_msg);
+
+    // First definition request on 'foo' in bar's definition (line 1, char 6)
+    const def1_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":1,"character":6}}}}}}
+    , .{file_uri});
+    defer allocator.free(def1_body);
+    const def1_msg = try frame(allocator, def1_body);
+    defer allocator.free(def1_msg);
+
+    // Second definition request on 'bar' in baz's definition (line 2, char 6)
+    const def2_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{{"textDocument":{{"uri":"{s}"}},"position":{{"line":2,"character":6}}}}}}
+    , .{file_uri});
+    defer allocator.free(def2_body);
+    const def2_msg = try frame(allocator, def2_body);
+    defer allocator.free(def2_msg);
+
+    // Document symbols request after multiple definitions
+    const symbols_body = try std.fmt.allocPrint(allocator,
+        \\{{"jsonrpc":"2.0","id":4,"method":"textDocument/documentSymbol","params":{{"textDocument":{{"uri":"{s}"}}}}}}
+    , .{file_uri});
+    defer allocator.free(symbols_body);
+    const symbols_msg = try frame(allocator, symbols_body);
+    defer allocator.free(symbols_msg);
+
+    const shutdown_body =
+        \\{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+    ;
+    const shutdown_msg = try frame(allocator, shutdown_body);
+    defer allocator.free(shutdown_msg);
+
+    const exit_body =
+        \\{"jsonrpc":"2.0","method":"exit"}
+    ;
+    const exit_msg = try frame(allocator, exit_body);
+    defer allocator.free(exit_msg);
+
+    var builder = std.ArrayList(u8){};
+    defer builder.deinit(allocator);
+    try builder.appendSlice(allocator, init_msg);
+    try builder.appendSlice(allocator, initialized_msg);
+    try builder.appendSlice(allocator, open_msg);
+    try builder.appendSlice(allocator, def1_msg);
+    try builder.appendSlice(allocator, def2_msg);
+    try builder.appendSlice(allocator, symbols_msg);
+    try builder.appendSlice(allocator, shutdown_msg);
+    try builder.appendSlice(allocator, exit_msg);
+    const combined = try builder.toOwnedSlice(allocator);
+    defer allocator.free(combined);
+
+    var reader_stream = std.io.fixedBufferStream(combined);
+    var writer_buffer: [32768]u8 = undefined;
+    var writer_stream = std.io.fixedBufferStream(&writer_buffer);
+
+    const ReaderType = @TypeOf(reader_stream.reader());
+    const WriterType = @TypeOf(writer_stream.writer());
+    var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    defer server.deinit();
+    try server.run();
+
+    const responses = try collectResponses(allocator, writer_stream.getWritten());
+    defer {
+        for (responses) |body| allocator.free(body);
+        allocator.free(responses);
+    }
+
+    // Verify all responses
+    var found_def1 = false;
+    var found_def2 = false;
+    var found_symbols = false;
+
+    for (responses) |response| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, response, .{});
+        defer parsed.deinit();
+        const id = parsed.value.object.get("id") orelse continue;
+        if (id != .integer) continue;
+
+        const result = parsed.value.object.get("result");
+        try std.testing.expect(result != null);
+
+        if (id.integer == 2) {
+            found_def1 = true;
+        } else if (id.integer == 3) {
+            found_def2 = true;
+        } else if (id.integer == 4) {
+            try std.testing.expect(result.? == .array);
+            found_symbols = true;
+        }
+    }
+    try std.testing.expect(found_def1);
+    try std.testing.expect(found_def2);
+    try std.testing.expect(found_symbols);
+}

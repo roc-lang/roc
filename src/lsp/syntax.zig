@@ -523,7 +523,8 @@ pub const SyntaxChecker = struct {
                     return try gpa.dupe(u8, text);
                 }
             }
-            return null;
+            // Fall back to filesystem for non-override files (e.g., platform modules)
+            return FileProvider.filesystem.read(null, path, gpa);
         }
     };
 
@@ -949,7 +950,8 @@ pub const SyntaxChecker = struct {
 
     /// Helper function to find a module by name and return a DefinitionResult pointing to it
     fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
-        const env = self.build_env orelse return null;
+        // Use getModuleLookupEnv for proper fallback to previous_build_env
+        const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
         const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
@@ -2589,7 +2591,9 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        const env = self.build_env orelse return &[_]SymbolInformation{};
+        // Use getModuleLookupEnv for proper fallback to previous_build_env
+        // when current build_env is empty (e.g., after getDefinitionAtPosition)
+        const env = self.getModuleLookupEnv() orelse return &[_]SymbolInformation{};
 
         // Convert URI to absolute path to match against module paths
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
