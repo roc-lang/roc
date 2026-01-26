@@ -3203,47 +3203,72 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
         },
         // record //
         .e_record => |e| {
-            // Create a record type in the type system and assign it the expr_var
-
-            // Write down the top of the scratch records array
-            const record_fields_top = self.scratch_record_fields.top();
-            defer self.scratch_record_fields.clearFrom(record_fields_top);
-
-            // Process each field
-            for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
-                const field = self.cir.store.getRecordField(field_idx);
-
-                // Check the field value expression
-                does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
-
-                // Append it to the scratch records array
-                try self.scratch_record_fields.append(types_mod.RecordField{
-                    .name = field.name,
-                    .var_ = ModuleEnv.varFrom(field.value),
-                });
-            }
-
-            // Copy the scratch fields into the types store
-            const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
-            std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
-            const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
-
             // Check if this is a record update
             if (e.ext) |record_being_updated_expr| {
-                // Create an unbound record with the provided fields
-                const ext_var = try self.fresh(env, expr_region);
-                try self.unifyWith(expr_var, .{ .structure = .{
-                    .record = .{
-                        .fields = record_fields_range,
-                        .ext = ext_var,
-                    },
-                } }, env);
+                // Create a record type in the type system and assign it the expr_var
 
+                // Check the record being updated
                 does_fx = try self.checkExpr(record_being_updated_expr, env, .no_expectation) or does_fx;
-                const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
 
+                const record_being_updated_var = ModuleEnv.varFrom(record_being_updated_expr);
+                const record_being_updated_name: ?Ident.Idx = self.getExprPatternIdent(record_being_updated_expr);
+
+                // Process each field
+                for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
+                    const field = self.cir.store.getRecordField(field_idx);
+
+                    // Check the field value expression
+                    does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
+
+                    // Create a fresh ext var for this field (must be fresh each iteration to avoid cycles)
+                    const ext_var = try self.freshFromContent(.{ .flex = Flex.init() }, env, expr_region);
+
+                    // Create an unbound record with this field
+                    const single_field_record = try self.freshFromContent(.{ .structure = .{
+                        .record = .{
+                            .fields = try self.types.appendRecordFields(&.{types_mod.RecordField{
+                                .name = field.name,
+                                .var_ = ModuleEnv.varFrom(field.value),
+                            }}),
+                            .ext = ext_var,
+                        },
+                    } }, env, expr_region);
+
+                    // Unify this record update with the record we're updating
+                    _ = try self.unifyInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
+                        .field_name = field.name,
+                        .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
+                        .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
+                        .record_name = record_being_updated_name,
+                    } });
+                }
+
+                // Then unify with the actual expression
                 _ = try self.unify(record_being_updated_var, expr_var, env);
             } else {
+                // Write down the top of the scratch records array
+                const record_fields_top = self.scratch_record_fields.top();
+                defer self.scratch_record_fields.clearFrom(record_fields_top);
+
+                // Process each field
+                for (self.cir.store.sliceRecordFields(e.fields)) |field_idx| {
+                    const field = self.cir.store.getRecordField(field_idx);
+
+                    // Check the field value expression
+                    does_fx = try self.checkExpr(field.value, env, .no_expectation) or does_fx;
+
+                    // Append it to the scratch records array
+                    try self.scratch_record_fields.append(types_mod.RecordField{
+                        .name = field.name,
+                        .var_ = ModuleEnv.varFrom(field.value),
+                    });
+                }
+
+                // Copy the scratch fields into the types store
+                const record_fields_scratch = self.scratch_record_fields.sliceFromStart(record_fields_top);
+                std.mem.sort(types_mod.RecordField, record_fields_scratch, self.cir.getIdentStore(), comptime types_mod.RecordField.sortByNameAsc);
+                const record_fields_range = try self.types.appendRecordFields(record_fields_scratch);
+
                 // Create an unbound record with the provided fields
                 const ext_var = try self.freshFromContent(.{ .structure = .empty_record }, env, expr_region);
                 try self.unifyWith(expr_var, .{ .structure = .{ .record = .{
@@ -3633,20 +3658,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                         }
 
                         // Get the name of the function (for error messages)
-                        const func_name: ?Ident.Idx = inner_blk: {
-                            const func_expr = self.cir.store.getExpr(call.func);
-                            switch (func_expr) {
-                                .e_lookup_local => |lookup| {
-                                    // Get the pattern that defines this identifier
-                                    const pattern = self.cir.store.getPattern(lookup.pattern_idx);
-                                    switch (pattern) {
-                                        .assign => |assign| break :inner_blk assign.ident,
-                                        else => break :inner_blk null,
-                                    }
-                                },
-                                else => break :inner_blk null,
-                            }
-                        };
+                        const func_name: ?Ident.Idx = self.getExprPatternIdent(call.func);
 
                         // Now, check the call args against the type of function
                         if (mb_func) |func| {
@@ -3885,8 +3897,9 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     .name = dot_access.field_name,
                     .var_ = record_field_var,
                 }});
+                const record_ext_var = try self.fresh(env, expr_region);
                 const record_being_accessed = try self.freshFromContent(.{ .structure = .{
-                    .record_unbound = record_field_range,
+                    .record = .{ .fields = record_field_range, .ext = record_ext_var },
                 } }, env, expr_region);
 
                 // Then, unify the actual receiver type with the expected record
@@ -4106,6 +4119,21 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
     }
 
     return does_fx;
+}
+
+fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
+    const func_expr = self.cir.store.getExpr(expr_idx);
+    switch (func_expr) {
+        .e_lookup_local => |lookup| {
+            // Get the pattern that defines this identifier
+            const pattern = self.cir.store.getPattern(lookup.pattern_idx);
+            switch (pattern) {
+                .assign => |assign| return assign.ident,
+                else => return null,
+            }
+        },
+        else => return null,
+    }
 }
 
 const AnnoVars = struct { anno_var: Var, anno_var_backup: Var };

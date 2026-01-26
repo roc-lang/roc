@@ -602,6 +602,19 @@ pub const Store = struct {
         return self.contents.get(idx).*;
     }
 
+    pub fn getContentUnwrapAlias(self: *const Self, initial_idx: SnapshotContentIdx) SnapshotContent {
+        var idx = initial_idx;
+        while (true) {
+            const content = self.contents.get(idx).*;
+            switch (content) {
+                .alias => |alias| {
+                    idx = alias.backing;
+                },
+                else => return content,
+            }
+        }
+    }
+
     /// Get the pre-formatted string representation of a tag (e.g., "TagName(a, b)").
     /// The tag was formatted using TypeWriter during snapshotting.
     pub fn getFormattedTagString(tag: SnapshotTag) []const u8 {

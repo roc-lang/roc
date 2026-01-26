@@ -1865,17 +1865,129 @@ test "check type - record - update 2" {
     );
 }
 
-test "check type - record - update fail" {
+test "check type - record - update - fold" {
+    const source =
+        \\test = List.fold([1.U8, 2, 3], {sum: 0.U8, count: 0.U8}, |acc, item| {..acc, sum: acc.sum + item, count: acc.count + 1})
+    ;
+    try checkTypesModule(
+        source,
+        .{ .pass = .{ .def = "test" } },
+        "{ count: U8, sum: U8 }",
+    );
+}
+
+test "check type - record - update - fail - empty record" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = {}
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The `r` record does not have a `hello` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\      ^
+        \\
+        \\It is actually an record with no fields.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - missing field" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hllo: "goodbye" }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\This record does not have a `hllo` field:
+        \\**test:5:7:5:8:**
+        \\```roc
+        \\  { ..r, hllo: "goodbye" }
+        \\```
+        \\      ^
+        \\
+        \\This is often due to a typo. The most similar fields are:
+        \\
+        \\    - `hello`
+        \\
+        \\So maybe `hllo` should be `hello`?
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world" }
+        \\  { ..r, hello: 10.U8 }
+        \\}
+    ;
+    // Number literal 10 used where Str is expected (data field type)
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:22:**
+        \\```roc
+        \\  { ..r, hello: 10.U8 }
+        \\```
+        \\                ^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    { hello: U8 }
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    { hello: Str }
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail 2" {
     const source =
         \\set_data = |container, new_value| { ..container, data: new_value }
         \\
-        \\updated = set_data({ data: "hello" }, 10)
+        \\updated = set_data({ data: "hello" }, 10.U8)
     ;
     // Number literal 10 used where Str is expected (data field type)
-    try checkTypesModule(
-        source,
-        .fail,
-        "TYPE MISMATCH",
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The second argument being passed to this function has the wrong type:
+        \\**test:3:11:**
+        \\```roc
+        \\updated = set_data({ data: "hello" }, 10.U8)
+        \\```
+        \\                                      ^^^^^
+        \\
+        \\This argument has the type:
+        \\
+        \\    U8
+        \\
+        \\But `set_data` needs the second argument to be:
+        \\
+        \\    Str
+        \\
+        \\
     );
 }
 

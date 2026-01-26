@@ -30,6 +30,8 @@ const SourceCodeDisplayRegion = reporting.SourceCodeDisplayRegion;
 const Ident = base.Ident;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
+const SnapshotRecordFieldSafeList = snapshot.SnapshotRecordFieldSafeList;
+const SnapshotTagSafeList = snapshot.SnapshotTagSafeList;
 
 const ByteList = std.array_list.Managed(u8);
 const ByteListRange = struct { start: usize, count: usize };
@@ -113,8 +115,8 @@ pub const ReportBuilder = struct {
     filename: []const u8,
     other_modules: []const *const ModuleEnv,
     import_mapping: *const @import("types").import_mapping.ImportMapping,
-    diff_field_names: diff.IdentList,
-    diff_tag_names: diff.IdentList,
+    diff_fields: SnapshotRecordFieldSafeList,
+    diff_tags: SnapshotTagSafeList,
     typo_suggestions: diff.TypoSuggestion.ArrayList,
 
     /// Init report builder
@@ -140,8 +142,8 @@ pub const ReportBuilder = struct {
             .source = module_env.common.source,
             .filename = filename,
             .other_modules = other_modules,
-            .diff_field_names = try diff.IdentList.initCapacity(gpa, 8),
-            .diff_tag_names = try diff.IdentList.initCapacity(gpa, 8),
+            .diff_fields = try SnapshotRecordFieldSafeList.initCapacity(gpa, 8),
+            .diff_tags = try SnapshotTagSafeList.initCapacity(gpa, 8),
             .typo_suggestions = try diff.TypoSuggestion.ArrayList.initCapacity(gpa, 16),
         };
     }
@@ -149,16 +151,16 @@ pub const ReportBuilder = struct {
     /// Deinit report builder, only fields it owns
     pub fn deinit(self: *Self) void {
         self.bytes_buf.deinit();
-        self.diff_field_names.deinit(self.gpa);
-        self.diff_tag_names.deinit(self.gpa);
+        self.diff_fields.deinit(self.gpa);
+        self.diff_tags.deinit(self.gpa);
         self.typo_suggestions.deinit();
     }
 
     /// Reset report builder, only fields it owns
     pub fn reset(self: *Self) void {
         self.bytes_buf.clearRetainingCapacity();
-        self.diff_field_names.clearRetainingCapacity();
-        self.diff_tag_names.clearRetainingCapacity();
+        self.diff_fields.items.shrinkRetainingCapacity(0);
+        self.diff_tags.items.shrinkRetainingCapacity(0);
         self.typo_suggestions.clearRetainingCapacity();
     }
 
@@ -464,8 +466,8 @@ pub const ReportBuilder = struct {
             expected_snapshot,
             actual_snapshot,
             self.gpa,
-            &self.diff_field_names,
-            &self.diff_tag_names,
+            &self.diff_fields,
+            &self.diff_tags,
         );
         try self.renderDiffHints(&report, diff_hints, hints.len > 0);
 
@@ -570,7 +572,7 @@ pub const ReportBuilder = struct {
                 },
                 .fields_missing => |fm| {
                     // Reconstruct slice from range
-                    const fields = self.diff_field_names.items[fm.fields.start..][0..fm.fields.count];
+                    const fields = self.diff_fields.sliceRange(fm.fields).items(.name);
                     if (fields.len == 1) {
                         try D.renderSlice(&.{
                             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -671,6 +673,7 @@ pub const ReportBuilder = struct {
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
                     .expect => self.buildExpect(mismatch.types),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, ctx),
+                    .record_update => |ctx| self.buildRecordUpdate(mismatch.types, ctx),
                     .platform_requirement => return try self.makeMismatchReport(
                         ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
                         &.{D.bytes("This expression is used in an unexpected way:")},
@@ -1262,7 +1265,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Create actual tag str
-        const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        const actual_content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
         std.debug.assert(actual_content == .structure);
         std.debug.assert(actual_content.structure == .tag_union);
         std.debug.assert(actual_content.structure.tag_union.tags.len() == 1);
@@ -1270,7 +1273,7 @@ pub const ReportBuilder = struct {
         const actual_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(actual_tag));
 
         // Create expected tag str
-        const expected_content = self.snapshots.getContent(types.expected_snapshot);
+        const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
         std.debug.assert(expected_content == .structure);
         std.debug.assert(expected_content.structure == .tag_union);
         const expected_num_tags_str = expected_content.structure.tag_union.tags.len();
@@ -1932,7 +1935,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         // Get the content and explain which parts don't support equality
-        const content = self.snapshots.getContent(data.dispatcher_snapshot);
+        const content = self.snapshots.getContentUnwrapAlias(data.dispatcher_snapshot);
         if (content == .structure) {
             switch (content.structure) {
                 .record => |record| {
@@ -2034,21 +2037,21 @@ pub const ReportBuilder = struct {
         ctx: Context.RecordAccessContext,
     ) !Report {
         // Check the inferred type
-        const actual_content = self.snapshots.getContent(types.actual_snapshot);
+        const actual_content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
         const record =
             switch (actual_content) {
                 .structure => |structure| switch (structure) {
                     .record => |record| blk: {
-                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_field_names);
+                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_fields);
                         if (range.count == 0) {
                             break :blk Record.empty_record;
                         } else {
-                            const fields = self.diff_field_names.items[range.start..][0..range.count];
+                            const fields = self.diff_fields.sliceRange(range).items(.name);
                             break :blk Record{ .record = fields };
                         }
                     },
-                    .record_unbound => |fields_range| blk: {
-                        const fields = self.snapshots.sliceRecordFields(fields_range).items(.name);
+                    .record_unbound => |rec_fields_range| blk: {
+                        const fields = self.snapshots.sliceRecordFields(rec_fields_range).items(.name);
                         if (fields.len == 0) {
                             break :blk Record.empty_record;
                         } else {
@@ -2122,7 +2125,7 @@ pub const ReportBuilder = struct {
                 // Add source highlight
                 try self.addSourceHighlightRegion(&report, ctx.field_region);
 
-                // Render typo suggestions directly (avoiding slice lifetime issues)
+                // Render typo suggestions directly
                 try report.document.addLineBreak();
                 try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
                 try report.document.addLineBreak();
@@ -2141,6 +2144,164 @@ pub const ReportBuilder = struct {
                 try report.document.addText("?");
 
                 return report;
+            },
+        }
+    }
+
+    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+    fn buildRecordUpdate(
+        self: *Self,
+        types: TypePair,
+        ctx: Context.RecordUpdateContext,
+    ) !Report {
+        // Check the inferred type
+        const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
+        const expected_record =
+            switch (expected_content) {
+                .structure => |structure| switch (structure) {
+                    .record => |record| blk: {
+                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_fields);
+                        if (range.count == 0) {
+                            break :blk Record.empty_record;
+                        } else {
+                            const fields = self.diff_fields.sliceRange(range).items(.name);
+                            break :blk Record{ .record = fields };
+                        }
+                    },
+                    .record_unbound => |rec_fields_range| blk: {
+                        const fields = self.snapshots.sliceRecordFields(rec_fields_range).items(.name);
+                        if (fields.len == 0) {
+                            break :blk Record.empty_record;
+                        } else {
+                            break :blk Record{ .record = fields };
+                        }
+                    },
+                    .empty_record => Record.empty_record,
+                    else => Record.not_a_record,
+                },
+                else => Record.not_a_record,
+            };
+
+        const region = ProblemRegion{ .simple = ctx.record_region_idx };
+        switch (expected_record) {
+            .not_a_record => {
+                return try self.makeBadTypeReport(
+                    region,
+                    &.{D.bytes("This is not a record, so it does not have any fields to update:")},
+                    &.{D.bytes("It is:")},
+                    types.actual_snapshot,
+                    &.{
+                        &.{D.bytes("But I need a record with a record!")},
+                    },
+                );
+            },
+            .empty_record => {
+                return try self.makeCustomReport(
+                    region,
+                    if (ctx.record_name) |record_name| &.{
+                        D.bytes("The"),
+                        D.ident(record_name).withAnnotation(.inline_code),
+                        D.bytes("record does not have a"),
+                        D.ident(ctx.field_name).withAnnotation(.inline_code),
+                        D.bytes("field:"),
+                    } else &.{
+                        D.bytes("This record does not have a"),
+                        D.ident(ctx.field_name).withAnnotation(.inline_code),
+                        D.bytes("field:"),
+                    },
+                    &.{
+                        &.{D.bytes("It is actually an record with no fields.")},
+                    },
+                );
+            },
+            .record => |expected_fields| {
+                // In this variant, we have to dynamically calculate and
+                // print similar record fields. This gets hairy with the
+                // makeCustomReport  abstraction, so we fall back to the more
+                // robust full record builder
+
+                // Get a sorted list of the most similar field names
+                try diff.findBestTypoSuggestions(
+                    ctx.field_name,
+                    expected_fields,
+                    self.can_ir.getIdentStoreConst(),
+                    &self.typo_suggestions,
+                );
+                std.debug.assert(self.typo_suggestions.items.len > 0);
+                const best_suggestion = self.typo_suggestions.items[0];
+
+                // Check if the most similar field name is the field we were updating
+                // If so, then it means we have a mismatch, rather than a typo
+                if (best_suggestion.ident == ctx.field_name) {
+                    // TODO: Get the record exact field snapshots and compare
+
+                    return try self.makeMismatchReport(
+                        ProblemRegion{ .simple = ctx.field_region_idx },
+                        &.{
+                            D.bytes("The type of the field"),
+                            D.ident(ctx.field_name).withAnnotation(.inline_code),
+                            D.bytes("is incompatible:"),
+                        },
+                        &.{
+                            D.bytes("You are trying to update the"),
+                            D.ident(ctx.field_name).withAnnotation(.inline_code),
+                            D.bytes("field to be the type:"),
+                        },
+                        types.actual_snapshot,
+                        if (ctx.record_name) |record_name| &.{
+                            D.bytes("But the"),
+                            D.ident(record_name).withAnnotation(.inline_code),
+                            D.bytes("record needs it to be"),
+                        } else &.{
+                            D.bytes("But it should be:"),
+                        },
+                        types.expected_snapshot,
+                        &.{
+                            &.{
+                                D.bytes("Note:").withAnnotation(.underline),
+                                D.bytes("You cannot change the type of a record field with the record update syntax."),
+                                D.bytes("You can do that by create a new record, copying over the unchanged fields, then transforming"),
+                                D.ident(ctx.field_name).withAnnotation(.inline_code),
+                                D.bytes("to be the new type."),
+                            },
+                        },
+                    );
+                } else {
+                    // Create report directly and render dynamic suggestions inline
+                    var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+                    errdefer report.deinit();
+
+                    // Add title
+                    try D.renderSlice(&.{
+                        D.bytes("This record does not have a"),
+                        D.ident(ctx.field_name).withAnnotation(.inline_code),
+                        D.bytes("field:"),
+                    }, self, &report);
+                    try report.document.addLineBreak();
+
+                    // Add source highlight
+                    try self.addSourceHighlight(&report, ctx.record_region_idx);
+
+                    // Render typo suggestions directly (avoiding slice lifetime issues)
+                    try report.document.addLineBreak();
+                    try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
+                    try report.document.addLineBreak();
+                    const count = @min(self.typo_suggestions.items.len, 3);
+                    for (self.typo_suggestions.items[0..count]) |suggestion| {
+                        try report.document.addLineBreak();
+                        try report.document.addText("    - ");
+                        try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
+                    }
+                    try report.document.addLineBreak();
+                    try report.document.addLineBreak();
+                    try report.document.addReflowingText("So maybe ");
+                    try report.document.addAnnotated(self.can_ir.getIdentText(ctx.field_name), .inline_code);
+                    try report.document.addReflowingText(" should be ");
+                    try report.document.addAnnotated(self.can_ir.getIdentText(best_suggestion.ident), .inline_code);
+                    try report.document.addText("?");
+
+                    return report;
+                }
             },
         }
     }
@@ -2402,7 +2563,7 @@ pub const ReportBuilder = struct {
 
     /// Check if a snapshotted type supports equality
     fn snapshotSupportsEquality(self: *Self, content_idx: snapshot.SnapshotContentIdx) bool {
-        const content = self.snapshots.getContent(content_idx);
+        const content = self.snapshots.getContentUnwrapAlias(content_idx);
         return switch (content) {
             .structure => |s| switch (s) {
                 // Functions never support equality
@@ -2458,7 +2619,7 @@ pub const ReportBuilder = struct {
     /// Explain why a type doesn't support equality, adding the explanation to the report.
     /// Returns true if an explanation was added.
     fn explainWhyNoEquality(self: *Self, report: *Report, content_idx: snapshot.SnapshotContentIdx, indent: []const u8) !bool {
-        const content = self.snapshots.getContent(content_idx);
+        const content = self.snapshots.getContentUnwrapAlias(content_idx);
         switch (content) {
             .structure => |s| switch (s) {
                 .fn_pure, .fn_effectful, .fn_unbound => {

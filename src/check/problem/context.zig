@@ -56,6 +56,8 @@ pub const Context = union(enum) {
     // Record contexts
     /// Dot access on a record
     record_access: RecordAccessContext,
+    /// Dot access on a record
+    record_update: RecordUpdateContext,
 
     // Special contexts
     /// The ? (try) operator (simple version for early return case)
@@ -169,7 +171,7 @@ pub const Context = union(enum) {
         };
     };
 
-    /// Context for tag argument type errors
+    /// Context for record access type errors
     pub const RecordAccessContext = struct {
         /// Name of the record field
         field_name: Ident.Idx,
@@ -177,6 +179,18 @@ pub const Context = union(enum) {
         /// We have to use the real region here, because the field does not
         /// have its own CIR node
         field_region: base.Region,
+    };
+
+    /// Context for record update type errors
+    pub const RecordUpdateContext = struct {
+        /// Name of the record field
+        field_name: Ident.Idx,
+        /// Region of the record field
+        field_region_idx: base.Region.Idx,
+        /// Region of the record being update
+        record_region_idx: base.Region.Idx,
+        /// Name of the record being update
+        record_name: ?Ident.Idx,
     };
 
     /// Context for method call type errors
