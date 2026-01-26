@@ -41,6 +41,8 @@ pub const LayoutError = error{
     // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
+    // Type checking produced an error type - evaluation should crash gracefully
+    ErroneousType,
 };
 
 /// Stores Layout instances by Idx.
@@ -2075,7 +2077,7 @@ pub const Store = struct {
                         current = self.types_store.resolveVar(backing_var);
                         continue;
                     },
-                    .err => return LayoutError.TypeContainedMismatch,
+                    .err => return LayoutError.ErroneousType,
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
