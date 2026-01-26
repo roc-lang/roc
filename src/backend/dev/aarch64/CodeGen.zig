@@ -106,9 +106,21 @@ pub const AArch64CodeGen = struct {
     /// Allocate a general-purpose register for a local variable.
     /// This will try caller-saved registers first, then callee-saved,
     /// and finally spill an existing register if all are in use.
+    ///
+    /// INVARIANT: Each local ID must map to at most ONE register. Using the same
+    /// local ID for multiple registers corrupts spill tracking. Use unique temp IDs
+    /// (starting at 0x8000_0000) for temporaries that don't correspond to real locals.
     pub fn allocGeneralFor(self: *Self, local: u32) !GeneralReg {
         // 1. Try caller-saved registers first (preferred - no save/restore needed)
         if (self.allocFromGeneralMask(&self.free_general)) |reg| {
+            // DEBUG: Verify no OTHER register already owns this local
+            if (std.debug.runtime_safety) {
+                for (self.general_owners, 0..) |owner, i| {
+                    if (owner) |owned_local| {
+                        std.debug.assert(owned_local != local or i == @intFromEnum(reg));
+                    }
+                }
+            }
             self.general_owners[@intFromEnum(reg)] = local;
             return reg;
         }
@@ -116,6 +128,14 @@ pub const AArch64CodeGen = struct {
         // 2. Try callee-saved registers (will need save/restore in prologue/epilogue)
         if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
             self.callee_saved_used |= @as(u32, 1) << @intFromEnum(reg);
+            // DEBUG: Verify no OTHER register already owns this local
+            if (std.debug.runtime_safety) {
+                for (self.general_owners, 0..) |owner, i| {
+                    if (owner) |owned_local| {
+                        std.debug.assert(owned_local != local or i == @intFromEnum(reg));
+                    }
+                }
+            }
             self.general_owners[@intFromEnum(reg)] = local;
             return reg;
         }
@@ -161,11 +181,21 @@ pub const AArch64CodeGen = struct {
 
     /// Mark a register as in use so it won't be allocated.
     /// Used for return values from function calls that need to persist.
+    /// NOTE: Uses sentinel value 0 for ownership. Callers of allocGeneralFor must NOT use
+    /// local ID 0 - use unique temp IDs (starting at 0x8000_0000) for temporaries.
     pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
         const idx = @intFromEnum(reg);
         // Remove from free pool (it's now in use)
         self.free_general &= ~(@as(u32, 1) << idx);
         self.callee_saved_available &= ~(@as(u32, 1) << idx);
+        // DEBUG: Verify no OTHER register already owns local 0 before assignment
+        if (std.debug.runtime_safety) {
+            for (self.general_owners, 0..) |owner, i| {
+                if (owner) |owned_local| {
+                    std.debug.assert(owned_local != 0 or i == idx);
+                }
+            }
+        }
         // Set ownership to a sentinel value (0 = temporary)
         self.general_owners[idx] = 0;
     }
@@ -197,6 +227,15 @@ pub const AArch64CodeGen = struct {
 
         // Update the owner's location to stack
         try self.locals.put(owner, .{ .stack = slot });
+
+        // DEBUG: Verify no OTHER register already owns this local before assignment
+        if (std.debug.runtime_safety) {
+            for (self.general_owners, 0..) |other_owner, i| {
+                if (other_owner) |owned_local| {
+                    std.debug.assert(owned_local != local or i == @intFromEnum(reg));
+                }
+            }
+        }
 
         // Clear old ownership, set new ownership
         self.general_owners[@intFromEnum(reg)] = local;
