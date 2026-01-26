@@ -304,6 +304,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Direct: False|1>Via pure/run: False",
         .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
     },
+    .{
+        .roc_file = "test/fx/recursive_where_clause.roc",
+        .io_spec = "1>List.[1, 2, 3, 1]",
+        .description = "Regression test: recursive function with where clause calling builtin in both if branches (issue #9054)",
+    },
 };
 
 /// Get the total number of IO spec tests

@@ -13683,7 +13683,14 @@ pub const Interpreter = struct {
             const ct_var = can.ModuleEnv.varFrom(expr_idx);
             break :blk try self.translateTypeVar(self.env, ct_var);
         };
-        const closure_layout = try self.getRuntimeLayout(rt_var);
+        var closure_layout = try self.getRuntimeLayout(rt_var);
+        if (closure_layout.tag != .closure) {
+            // For recursive closures or polymorphic contexts, the type translation may return
+            // a non-closure layout (like Dec for an unresolved flex var). In evalLowLevelLambda,
+            // we KNOW we need a closure layout, so create one with empty captures.
+            const empty_captures_idx = try self.runtime_layout_store.ensureEmptyRecordLayout();
+            closure_layout = layout.Layout.closure(empty_captures_idx);
+        }
         const value = try self.pushRaw(closure_layout, 0, rt_var);
         self.registerDefValue(expr_idx, value);
         if (value.ptr) |ptr| {
