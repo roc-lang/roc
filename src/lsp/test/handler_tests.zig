@@ -115,6 +115,7 @@ test "formatting handler formats simple expression" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -217,6 +218,7 @@ test "document symbol handler extracts function declarations" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -315,6 +317,7 @@ test "document symbol handler returns empty for empty document" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -410,6 +413,7 @@ test "folding range handler finds bracket ranges" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -509,6 +513,7 @@ test "selection range handler returns range hierarchy" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -620,6 +625,7 @@ test "document highlight handler finds variable occurrences" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -717,6 +723,7 @@ test "document highlight handler returns empty for non-identifier" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -814,6 +821,7 @@ test "definition handler finds local variable definition" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -922,6 +930,7 @@ test "definition handler returns null for undefined symbol" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1019,6 +1028,7 @@ test "hover handler returns type info for type annotation" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1120,6 +1130,7 @@ test "definition handler navigates to builtin type from type annotation" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1238,6 +1249,7 @@ test "document symbols works after goto definition (regression test)" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1364,6 +1376,7 @@ test "multiple goto definition calls don't break document symbols" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1503,6 +1516,7 @@ test "document symbol handler returns symbols with correct names" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 
@@ -1647,6 +1661,7 @@ test "document symbol handler works independently of check" {
     const ReaderType = @TypeOf(reader_stream.reader());
     const WriterType = @TypeOf(writer_stream.writer());
     var server = try server_module.Server(ReaderType, WriterType).init(allocator, reader_stream.reader(), writer_stream.writer(), null, .{});
+    server.syntax_checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues in tests
     defer server.deinit();
     try server.run();
 

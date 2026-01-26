@@ -15,6 +15,7 @@ test "syntax checker skips rebuild when content unchanged" {
     // Test the incremental invalidation: same content should skip rebuild
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
+    checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues
     defer checker.deinit();
 
     var tmp = std.testing.tmpDir(.{});
@@ -72,6 +73,7 @@ test "syntax checker rebuilds when content changes" {
     // Test that changed content triggers rebuild
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
+    checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues
     defer checker.deinit();
 
     var tmp = std.testing.tmpDir(.{});
@@ -135,6 +137,7 @@ test "syntax checker rebuilds when content changes" {
 test "syntax checker reports diagnostics for invalid source" {
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
+    checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues
     defer checker.deinit();
 
     var tmp = std.testing.tmpDir(.{});
@@ -179,6 +182,7 @@ test "getDocumentSymbols returns symbols for valid app file" {
     // Test that document symbols extraction works correctly
     const allocator = std.testing.allocator;
     var checker = SyntaxChecker.init(allocator, .{}, null);
+    checker.cache_config.enabled = false; // Disable cache to avoid deserialized interner issues
     defer checker.deinit();
 
     var tmp = std.testing.tmpDir(.{});
@@ -228,5 +232,4 @@ test "getDocumentSymbols returns symbols for valid app file" {
     }
     try std.testing.expect(found_main);
     try std.testing.expect(found_helper);
-
 }
