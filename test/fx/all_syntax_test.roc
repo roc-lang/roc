@@ -123,6 +123,18 @@ for_loop = |num_list| {
 	$sum
 }
 
+while_loop = |limit| {
+	var $count = 0
+	var $sum = 0
+
+	while $count < limit {
+		$sum = $sum + $count
+		$count = $count + 1
+	}
+
+	$sum
+}
+
 print! = |something| {
 	Stdout.line!(Str.inspect(something))
 }
@@ -321,6 +333,9 @@ main! = || {
 	print!(sum)
 
 	expect sum == 15
+
+	while_sum = while_loop(5)
+	print!(while_sum)
 
 	print!(dbg_keyword())
 
