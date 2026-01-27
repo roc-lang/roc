@@ -375,9 +375,6 @@ generate_header = |hosted_functions| {
     # Generate args structs for functions with arguments
     args_structs = generate_all_args_structs(hosted_functions)
 
-    # Generate static asserts for struct sizes
-    static_asserts = generate_static_asserts(hosted_functions)
-
     # Generate HostedFunctions struct fields
     hosted_fn_fields = generate_hosted_fn_fields(hosted_functions)
 
@@ -391,7 +388,6 @@ generate_header = |hosted_functions| {
         .concat("\n\n")
         .concat(args_structs_header({}))
         .concat(args_structs)
-        .concat(static_asserts)
         .concat("\n")
         .concat(hosted_functions_registry(hosted_fn_fields))
         .concat(extern_c_end({}))
@@ -422,15 +418,6 @@ generate_all_args_structs = |hosted_functions| {
         $args_structs = Str.concat($args_structs, generate_args_struct(f))
     }
     $args_structs
-}
-
-# Generate static asserts for struct sizes
-# Note: Per-struct asserts are now generated inline in generate_args_struct
-# This function now returns empty since asserts are included with each struct
-generate_static_asserts : List({ index : U64, name : Str, type_str : Str }) -> Str
-generate_static_asserts = |_hosted_functions| {
-    # Assertions are now generated inline with each struct definition
-    ""
 }
 
 # Generate HostedFunctions struct fields
