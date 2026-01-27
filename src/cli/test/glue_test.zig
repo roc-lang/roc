@@ -110,3 +110,100 @@ test "glue command with CGlue generates expected C header" {
         try std.testing.expect(false);
     }
 }
+
+test "generated C header compiles with zig cc" {
+    const allocator = std.testing.allocator;
+
+    // Create temp directory for output
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = tmp_dir.dir.realpathAlloc(allocator, ".") catch unreachable;
+    defer allocator.free(tmp_path);
+
+    // Run: roc glue src/glue/src/CGlue.roc <tmp_path> test/fx/platform/main.roc
+    const glue_result = try util.runRocCommand(allocator, &.{
+        "glue",
+        "src/glue/src/CGlue.roc",
+        tmp_path,
+        "test/fx/platform/main.roc",
+    });
+    defer allocator.free(glue_result.stdout);
+    defer allocator.free(glue_result.stderr);
+
+    // Should complete successfully
+    if (glue_result.term != .Exited or glue_result.term.Exited != 0) {
+        std.debug.print("\nCGlue command failed!\nstderr:\n{s}\nstdout:\n{s}\n", .{ glue_result.stderr, glue_result.stdout });
+        try std.testing.expect(false);
+    }
+
+    // Write a minimal C file that includes the header and instantiates the types
+    const test_c_content =
+        \\#include "roc_platform_abi.h"
+        \\
+        \\void test_types(void) {
+        \\    RocStr str = {0};
+        \\    RocList list = {0};
+        \\    HostedFunctions funcs = {0};
+        \\    (void)str;
+        \\    (void)list;
+        \\    (void)funcs;
+        \\}
+    ;
+
+    const test_c_path = std.fs.path.join(allocator, &.{ tmp_path, "test_header.c" }) catch unreachable;
+    defer allocator.free(test_c_path);
+
+    std.fs.cwd().writeFile(.{
+        .sub_path = test_c_path,
+        .data = test_c_content,
+    }) catch |err| {
+        std.debug.print("\nFailed to write test C file: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+
+    const test_o_path = std.fs.path.join(allocator, &.{ tmp_path, "test_header.o" }) catch unreachable;
+    defer allocator.free(test_o_path);
+
+    const include_flag = std.fmt.allocPrint(allocator, "-I{s}", .{tmp_path}) catch unreachable;
+    defer allocator.free(include_flag);
+
+    // Run: zig cc -c -std=c11 -Wall -Werror -I<tmp_path> test_header.c -o test_header.o
+    const cc_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &.{
+            "zig",
+            "cc",
+            "-c",
+            "-std=c11",
+            "-Wall",
+            "-Werror",
+            include_flag,
+            test_c_path,
+            "-o",
+            test_o_path,
+        },
+    }) catch |err| {
+        std.debug.print("\nFailed to run zig cc: {}\n", .{err});
+        try std.testing.expect(false);
+        unreachable;
+    };
+    defer allocator.free(cc_result.stdout);
+    defer allocator.free(cc_result.stderr);
+
+    // Check compilation succeeded
+    if (cc_result.term != .Exited or cc_result.term.Exited != 0) {
+        // Read the generated header for debugging
+        const header_path = std.fs.path.join(allocator, &.{ tmp_path, "roc_platform_abi.h" }) catch unreachable;
+        defer allocator.free(header_path);
+
+        const header_content = std.fs.cwd().readFileAlloc(allocator, header_path, 1024 * 1024) catch "<failed to read header>";
+        defer if (header_content.ptr != "<failed to read header>".ptr) allocator.free(header_content);
+
+        std.debug.print("\nzig cc compilation failed!\n", .{});
+        std.debug.print("\n--- Compiler stderr ---\n{s}\n", .{cc_result.stderr});
+        std.debug.print("\n--- Generated header ---\n{s}\n", .{header_content});
+
+        try std.testing.expect(false);
+    }
+}
