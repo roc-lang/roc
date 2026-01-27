@@ -555,9 +555,23 @@ pub const Interpreter = struct {
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
-        // Convert RocTarget to TargetUsize for layout calculations
-        const target_usize: base_pkg.target.TargetUsize = if (target.ptrBitWidth() == 32) .u32 else .u64;
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str, target_usize);
+        //
+        // The layout store must use SHIM TARGET layout (builtin.cpu.arch), not Compilation Target.
+        // See src/target/README.md for the distinction between these targets.
+        //
+        // The interpreter shim is a compiled program that manipulates its own memory using
+        // Zig types like RocList and RocStr. These types have sizes/alignments determined by
+        // the Shim Target (what this code was compiled for), accessed via builtin.cpu.arch.
+        //
+        // The `target` parameter is the Compilation Target (what the user's Roc app targets).
+        // It's not used here because interpreter memory layout must match the Shim Target.
+        // Code generation (not interpreter) uses Compilation Target for generated code layouts.
+        _ = target;
+        const shim_target_usize: base_pkg.target.TargetUsize = switch (builtin.cpu.arch) {
+            .wasm32 => .u32,
+            else => .u64,
+        };
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str, shim_target_usize);
 
         // Build translated_module_envs for runtime method lookups
         // This maps module names in runtime_layout_store.env's ident space to their ModuleEnvs
@@ -992,10 +1006,7 @@ pub const Interpreter = struct {
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = false, .rt_var = rt_var };
         }
-        var alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
-        // Ensure host pointer alignment for interpreter memory (see pushRaw comment)
-        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
-        alignment = alignment.max(host_ptr_alignment);
+        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
     }
@@ -1068,17 +1079,12 @@ pub const Interpreter = struct {
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = true, .rt_var = rt_var };
         }
-        const target_usize = self.runtime_layout_store.targetUsize();
-        var alignment = layout_val.alignment(target_usize);
+        const shim_target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = layout_val.alignment(shim_target_usize);
         if (layout_val.tag == .closure) {
             const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            alignment = alignment.max(captures_layout.alignment(shim_target_usize));
         }
-        // The interpreter runs on the host and casts memory to host-native types
-        // (like RocList, RocStr which contain usize fields), so we need at least
-        // host pointer alignment for layouts that will be accessed as host types.
-        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
-        alignment = alignment.max(host_ptr_alignment);
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
     }
@@ -1102,15 +1108,12 @@ pub const Interpreter = struct {
 
     pub fn pushCopy(self: *Interpreter, src: StackValue, roc_ops: *RocOps) !StackValue {
         const size: u32 = if (src.layout.tag == .closure) src.getTotalSize(&self.runtime_layout_store, roc_ops) else self.runtime_layout_store.layoutSize(src.layout);
-        const target_usize = self.runtime_layout_store.targetUsize();
-        var alignment = src.layout.alignment(target_usize);
+        const shim_target_usize = self.runtime_layout_store.targetUsize();
+        var alignment = src.layout.alignment(shim_target_usize);
         if (src.layout.tag == .closure) {
             const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
-            alignment = alignment.max(captures_layout.alignment(target_usize));
+            alignment = alignment.max(captures_layout.alignment(shim_target_usize));
         }
-        // Ensure host pointer alignment for interpreter memory (see pushRaw comment)
-        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
-        alignment = alignment.max(host_ptr_alignment);
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
@@ -16621,10 +16624,7 @@ pub const Interpreter = struct {
                                 self.stack_memory.restore(cleanup.saved_stack_ptr);
 
                                 // Assertion: stack allocation after restore should always succeed
-                                var alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
-                                // Ensure host pointer alignment for interpreter memory
-                                const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
-                                alignment = alignment.max(host_ptr_alignment);
+                                const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
                                 const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
                                     self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                     return error.Crash;
@@ -16718,10 +16718,7 @@ pub const Interpreter = struct {
                             // Allocate new space for result on restored stack
                             // Assertion: stack allocation after restore should always succeed
                             // since we just freed more space than we're now requesting
-                            var alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
-                            // Ensure host pointer alignment for interpreter memory
-                            const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
-                            alignment = alignment.max(host_ptr_alignment);
+                            const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
                             const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
                                 self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                 return error.Crash;
