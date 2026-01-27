@@ -255,6 +255,46 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                         break :blk allocator.dupe(u8, "[]") catch unreachable;
                     }
 
+                    // Handle list - format as [elem1, elem2, ...]
+                    if (stored_layout.tag == .list) {
+                        const ListResultBuffer = extern struct {
+                            ptr: [*]const i64,
+                            len: usize,
+                            capacity: usize,
+                        };
+                        var result: ListResultBuffer align(8) = .{
+                            .ptr = undefined,
+                            .len = 0,
+                            .capacity = 0,
+                        };
+                        jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+                        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                            return error.OutOfMemory;
+                        errdefer output.deinit();
+                        output.append('[') catch return error.OutOfMemory;
+
+                        if (result.len > 0) {
+                            const elements = result.ptr[0..result.len];
+                            for (elements, 0..) |elem, i| {
+                                if (i > 0) {
+                                    try output.appendSlice(", ");
+                                }
+                                const elem_str = try std.fmt.allocPrint(allocator, "{}", .{elem});
+                                defer allocator.free(elem_str);
+                                try output.appendSlice(elem_str);
+                            }
+                        }
+
+                        try output.append(']');
+
+                        if (result.len > 0) {
+                            builtins.utils.decrefDataPtrC(@ptrCast(@constCast(result.ptr)), 8, false, @constCast(&dev_eval.roc_ops));
+                        }
+
+                        break :blk output.toOwnedSlice();
+                    }
+
                     // For records, look up the layout from the layout store
                     if (stored_layout.tag == .record) {
                         // Get record field count from record_data

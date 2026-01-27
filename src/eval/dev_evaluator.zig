@@ -481,19 +481,16 @@ pub const DevEvaluator = struct {
 
         // For composite types (tuples, records, calls), compute proper layout from type var
         // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of record)
-        // But don't override if we already know it's a list (list_i64_layout = 100)
-        if (result_layout != list_i64_layout) {
-            switch (cir_expr) {
-                .e_tuple, .e_record, .e_call => {
-                    const type_var = can.ModuleEnv.varFrom(expr_idx);
-                    var type_scope = types.TypeScope.init(self.allocator);
-                    defer type_scope.deinit();
-                    if (layout_store_ptr.addTypeVar(module_idx, type_var, &type_scope, null)) |computed_layout| {
-                        result_layout = computed_layout;
-                    } else |_| {}
-                },
-                else => {},
-            }
+        switch (cir_expr) {
+            .e_tuple, .e_record, .e_call => {
+                const type_var = can.ModuleEnv.varFrom(expr_idx);
+                var type_scope = types.TypeScope.init(self.allocator);
+                defer type_scope.deinit();
+                if (layout_store_ptr.addTypeVar(module_idx, type_var, &type_scope, null)) |computed_layout| {
+                    result_layout = computed_layout;
+                } else |_| {}
+            },
+            else => {},
         }
 
         // Detect tuple expressions to set tuple_len
@@ -773,19 +770,12 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                             const acc_expr = module_env.store.getExpr(args[1]);
                             break :blk getExprLayoutWithTypeEnv(allocator, module_env, acc_expr, type_env);
                         }
-                    } else if (std.mem.eql(u8, func_name, "map") or
-                        std.mem.eql(u8, func_name, "filter") or
-                        std.mem.eql(u8, func_name, "append") or
-                        std.mem.eql(u8, func_name, "prepend"))
-                    {
-                        // These return lists (24-byte structs: ptr, len, capacity)
-                        break :blk list_i64_layout;
                     }
                     break :blk LayoutIdx.default_num;
                 },
                 .e_dot_access => |dot| {
-                    // For method-style calls like List.map(...), List.append(...)
-                    // Check the field name to determine return type
+                    // For method-style calls like List.fold(...)
+                    // Check the field name to determine return type for fold operations
                     const field_name = module_env.getIdent(dot.field_name);
 
                     if (std.mem.eql(u8, field_name, "fold") or
@@ -799,16 +789,9 @@ fn getExprLayoutWithTypeEnv(allocator: Allocator, module_env: *ModuleEnv, expr: 
                             const acc_expr = module_env.store.getExpr(args[1]);
                             break :blk getExprLayoutWithTypeEnv(allocator, module_env, acc_expr, type_env);
                         }
-                    } else if (std.mem.eql(u8, field_name, "map") or
-                        std.mem.eql(u8, field_name, "filter") or
-                        std.mem.eql(u8, field_name, "append") or
-                        std.mem.eql(u8, field_name, "prepend") or
-                        std.mem.eql(u8, field_name, "repeat") or
-                        std.mem.eql(u8, field_name, "with_capacity"))
-                    {
-                        // These return lists (24-byte structs: ptr, len, capacity)
-                        break :blk list_i64_layout;
                     }
+                    // For list-returning functions, the type system override will compute
+                    // the correct layout with .list tag
                     break :blk LayoutIdx.default_num;
                 },
                 else => {},
