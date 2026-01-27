@@ -734,6 +734,10 @@ pub const BuildEnv = struct {
         var platform_to_app_idents = std.AutoHashMap(base.Ident.Idx, base.Ident.Idx).init(self.gpa);
         defer platform_to_app_idents.deinit();
 
+        // Enable runtime inserts on the app's interner so we can add new idents from platform
+        // (the app's interner may be deserialized from cache and not support inserts by default)
+        try app_root_env.common.idents.interner.enableRuntimeInserts(self.gpa);
+
         for (platform_root_env.requires_types.items.items) |required_type| {
             const platform_ident_text = platform_root_env.getIdent(required_type.ident);
             if (app_root_env.common.findIdent(platform_ident_text)) |app_ident| {
@@ -744,18 +748,17 @@ pub const BuildEnv = struct {
             const all_aliases = platform_root_env.for_clause_aliases.items.items;
             const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
             for (type_aliases_slice) |alias| {
-                // Add alias name (e.g., "Model") - insert it into app's ident store to ensure
-                // the mapping can be created even if canonicalization hasn't added it yet.
-                // The app will provide the actual type alias definition which will be checked later.
+                // Add alias name (e.g., "Model") - look up in app's ident store first,
+                // and only insert if not found (avoids error on deserialized interners).
                 const alias_name_text = platform_root_env.getIdent(alias.alias_name);
-                const alias_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
+                const alias_app_ident = app_root_env.common.findIdent(alias_name_text) orelse
+                    try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
                 try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
 
-                // Add rigid name (e.g., "model") - insert it into app's ident store since
-                // the rigid name is a platform concept that gets copied during type processing.
-                // Using insert (not find) ensures the app's ident store has this name for later lookups.
+                // Add rigid name (e.g., "model") - look up first, only insert if not found.
                 const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
-                const rigid_app_ident = try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
+                const rigid_app_ident = app_root_env.common.findIdent(rigid_name_text) orelse
+                    try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
                 try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
             }
         }

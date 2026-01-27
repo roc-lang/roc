@@ -496,7 +496,7 @@ pub const Interpreter = struct {
         import_mapping: *const import_mapping_mod.ImportMapping,
         app_env: ?*can.ModuleEnv,
         constant_strings_arena: ?*std.heap.ArenaAllocator,
-        target: roc_target.RocTarget,
+        _: roc_target.RocTarget, // Target is accepted but unused - interpreter uses shim target (builtin.cpu.arch)
     ) !Interpreter {
         const rt_types_ptr = try allocator.create(types.store.Store);
         rt_types_ptr.* = try types.store.Store.initCapacity(allocator, 1024, 512);
@@ -563,10 +563,9 @@ pub const Interpreter = struct {
         // Zig types like RocList and RocStr. These types have sizes/alignments determined by
         // the Shim Target (what this code was compiled for), accessed via builtin.cpu.arch.
         //
-        // The `target` parameter is the Compilation Target (what the user's Roc app targets).
-        // It's not used here because interpreter memory layout must match the Shim Target.
+        // Note: The target parameter (Compilation Target) is accepted but unused here.
+        // Interpreter memory layout must match the Shim Target (builtin.cpu.arch).
         // Code generation (not interpreter) uses Compilation Target for generated code layouts.
-        _ = target;
         const shim_target_usize: base_pkg.target.TargetUsize = switch (builtin.cpu.arch) {
             .wasm32 => .u32,
             else => .u64,
