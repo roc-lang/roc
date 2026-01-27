@@ -20,6 +20,7 @@ const type_extractor = @import("type_extractor");
 
 const trace_refcount = build_options.trace_refcount;
 
+/// Zig logging configuration override
 pub const std_options: std.Options = .{
     .logFn = std.log.defaultLog,
     .log_level = .warn,
