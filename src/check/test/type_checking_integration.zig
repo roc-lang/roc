@@ -621,7 +621,7 @@ test "check type - tag" {
     const source =
         \\MyTag
     ;
-    try checkTypesExpr(source, .pass, "[MyTag, .._others]");
+    try checkTypesExpr(source, .pass, "[MyTag, ..]");
 }
 
 test "check type - tag - args" {
@@ -631,7 +631,7 @@ test "check type - tag - args" {
     try checkTypesExpr(
         source,
         .pass,
-        \\[MyTag(Str, a), .._others]
+        \\[MyTag(Str, a), ..]
         \\  where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
         ,
     );
@@ -657,7 +657,7 @@ test "check type - tag union - tag typo" {
         \\
         \\It has the type:
         \\
-        \\    [Greeen, .._others]
+        \\    [Greeen, ..]
         \\
         \\But the annotation say it should be:
         \\
@@ -689,7 +689,7 @@ test "check type - tag - ext - typo" {
         \\
         \\It has the type:
         \\
-        \\    [Greeen, .._others]
+        \\    [Greeen, ..]
         \\
         \\But the annotation say it should be:
         \\
@@ -1626,7 +1626,7 @@ test "check type - match - diff cond types 1" {
         \\
         \\The first pattern is trying to match:
         \\
-        \\    [True, .._others]
+        \\    [True, ..]
         \\
         \\But the expression between the `match` parenthesis has the type:
         \\
@@ -1818,7 +1818,7 @@ test "check type - record - access func polymorphic" {
     const source =
         \\x = |r| r.my_field
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "{ my_field: a } -> a");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{ .., my_field: a } -> a");
 }
 
 test "check type - record - access - not a record" {
@@ -3644,7 +3644,7 @@ test "check type - try return with match and error propagation should type-check
         \\}
     ;
     // Expected: should pass type-checking with combined error type (open tag union)
-    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "{  } -> Try(Str, [Impossible, ListWasEmpty, ..])");
 }
 
 test "check type - try operator on method call should apply to whole expression (#8646)" {
@@ -3660,7 +3660,7 @@ test "check type - try operator on method call should apply to whole expression 
         \\    Ok(first_str)
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, .._others])");
+    try checkTypesModule(source, .{ .pass = .last_def }, "List(Str) -> Try(Str, [ListWasEmpty, ..])");
 }
 
 // record extension in type annotations //
@@ -3733,7 +3733,7 @@ test "check type - List.get method syntax" {
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [OutOfBounds, .._others])
+        \\Try(item, [OutOfBounds, ..])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
@@ -3784,7 +3784,7 @@ test "check type - List.first method syntax should not create cyclic types" {
     // cyclic rigid var mappings in the TypeScope when building layouts.
     //
     // The bug: method syntax creates a StaticDispatchConstraint on a flex var.
-    // When the return type is Try(item, [ListWasEmpty, .._others]) with an open tag union,
+    // When the return type is Try(item, [ListWasEmpty, ..]) with an open tag union,
     // the interpreter was creating cyclic rigid -> rigid mappings in the empty_scope TypeScope.
     //
     // Method syntax: [1].first()
@@ -3795,11 +3795,11 @@ test "check type - List.first method syntax should not create cyclic types" {
     const source =
         \\result = [1].first()
     ;
-    // Expected: Try(item, [ListWasEmpty, .._others]) with item having from_numeral constraint
+    // Expected: Try(item, [ListWasEmpty, ..]) with item having from_numeral constraint
     try checkTypesModule(
         source,
         .{ .pass = .last_def },
-        \\Try(item, [ListWasEmpty, .._others])
+        \\Try(item, [ListWasEmpty, ..])
         \\  where [item.from_numeral : Numeral -> Try(item, [InvalidNumeral(Str)])]
         ,
     );
