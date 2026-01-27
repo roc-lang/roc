@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const base = @import("base");
-const snapshot = @import("snapshot.zig");
+const snapshot = @import("../snapshot.zig");
 
 const Allocator = std.mem.Allocator;
 const Ident = base.Ident;

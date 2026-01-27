@@ -11,7 +11,7 @@ const can = @import("can");
 const reporting = @import("reporting");
 
 const snapshot = @import("snapshot.zig");
-const diff = @import("diff.zig");
+const diff = @import("snapshot/diff.zig");
 
 // Import problem types from the problem/ submodule
 const problem_mod = @import("problem.zig");
