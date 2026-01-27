@@ -992,7 +992,10 @@ pub const Interpreter = struct {
         if (size == 0) {
             return StackValue{ .layout = layout_val, .ptr = null, .is_initialized = false, .rt_var = rt_var };
         }
-        const alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        var alignment = layout_val.alignment(self.runtime_layout_store.targetUsize());
+        // Ensure host pointer alignment for interpreter memory (see pushRaw comment)
+        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
+        alignment = alignment.max(host_ptr_alignment);
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
     }
@@ -1071,6 +1074,11 @@ pub const Interpreter = struct {
             const captures_layout = self.runtime_layout_store.getLayout(layout_val.data.closure.captures_layout_idx);
             alignment = alignment.max(captures_layout.alignment(target_usize));
         }
+        // The interpreter runs on the host and casts memory to host-native types
+        // (like RocList, RocStr which contain usize fields), so we need at least
+        // host pointer alignment for layouts that will be accessed as host types.
+        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
+        alignment = alignment.max(host_ptr_alignment);
         const ptr = try self.stack_memory.alloca(size, alignment);
         return StackValue{ .layout = layout_val, .ptr = ptr, .is_initialized = true, .rt_var = rt_var };
     }
@@ -1100,6 +1108,9 @@ pub const Interpreter = struct {
             const captures_layout = self.runtime_layout_store.getLayout(src.layout.data.closure.captures_layout_idx);
             alignment = alignment.max(captures_layout.alignment(target_usize));
         }
+        // Ensure host pointer alignment for interpreter memory (see pushRaw comment)
+        const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
+        alignment = alignment.max(host_ptr_alignment);
         const ptr = if (size > 0) try self.stack_memory.alloca(size, alignment) else null;
         // Preserve rt_var for constant folding
         const dest = StackValue{ .layout = src.layout, .ptr = ptr, .is_initialized = true, .rt_var = src.rt_var };
@@ -16610,7 +16621,10 @@ pub const Interpreter = struct {
                                 self.stack_memory.restore(cleanup.saved_stack_ptr);
 
                                 // Assertion: stack allocation after restore should always succeed
-                                const alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
+                                var alignment = return_val.layout.alignment(self.runtime_layout_store.targetUsize());
+                                // Ensure host pointer alignment for interpreter memory
+                                const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
+                                alignment = alignment.max(host_ptr_alignment);
                                 const new_ptr = self.stack_memory.alloca(@intCast(return_size), alignment) catch {
                                     self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                     return error.Crash;
@@ -16704,7 +16718,10 @@ pub const Interpreter = struct {
                             // Allocate new space for result on restored stack
                             // Assertion: stack allocation after restore should always succeed
                             // since we just freed more space than we're now requesting
-                            const alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+                            var alignment = result.layout.alignment(self.runtime_layout_store.targetUsize());
+                            // Ensure host pointer alignment for interpreter memory
+                            const host_ptr_alignment: std.mem.Alignment = @enumFromInt(@ctz(@as(usize, @alignOf(usize))));
+                            alignment = alignment.max(host_ptr_alignment);
                             const new_ptr = self.stack_memory.alloca(@intCast(result_size), alignment) catch {
                                 self.triggerCrash("The Roc program ran out of memory and had to exit.", false, roc_ops);
                                 return error.Crash;
