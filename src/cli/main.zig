@@ -4011,34 +4011,62 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(ctx.gpa);
 
-    // Build requires clause: app [entry1, entry2, ...] { pf: platform "path" }
+    // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
     app_source.appendSlice(ctx.gpa, "app [") catch {
         stderr.print("Error: Out of memory\n", .{}) catch {};
         return;
     };
-    for (platform_info.requires_entries, 0..) |entry, i| {
+
+    // Add type aliases first
+    for (platform_info.type_aliases, 0..) |alias, i| {
         if (i > 0) app_source.appendSlice(ctx.gpa, ", ") catch {};
+        app_source.appendSlice(ctx.gpa, alias) catch {};
+    }
+
+    // Add requires entries
+    for (platform_info.requires_entries, 0..) |entry, i| {
+        if (platform_info.type_aliases.len > 0 or i > 0) {
+            app_source.appendSlice(ctx.gpa, ", ") catch {};
+        }
         app_source.appendSlice(ctx.gpa, entry.name) catch {};
     }
+
     app_source.appendSlice(ctx.gpa, "] { pf: platform \"") catch {};
     app_source.appendSlice(ctx.gpa, platform_abs_path) catch {};
     app_source.appendSlice(ctx.gpa, "\" }\n\n") catch {};
+
+    // Generate type alias definitions: Model : {}
+    for (platform_info.type_aliases) |alias| {
+        app_source.appendSlice(ctx.gpa, alias) catch {};
+        app_source.appendSlice(ctx.gpa, " : {}\n") catch {};
+    }
+    if (platform_info.type_aliases.len > 0) {
+        app_source.appendSlice(ctx.gpa, "\n") catch {};
+    }
 
     // Generate stub implementations for each requires entry
     for (platform_info.requires_entries) |entry| {
         // Generate a stub: entry_name = stub_value based on type
         // For effectful functions like "main! : {} => {}", generate: main! = || {}
-        // For pure functions like "process : Str -> Str", generate: process = |_| crash "stub"
+        // For pure functions like "process : Str -> Str", generate: process = |_| ...
+        // For values/records (starts with '{'), generate: value = ...
         app_source.appendSlice(ctx.gpa, entry.name) catch {};
-        if (std.mem.indexOf(u8, entry.type_str, "=>")) |_| {
+
+        // Trim leading whitespace to check the type structure
+        const trimmed_type = std.mem.trimLeft(u8, entry.type_str, " \t\n");
+
+        if (trimmed_type.len > 0 and trimmed_type[0] == '{') {
+            // Record type - use ... placeholder directly
+            app_source.appendSlice(ctx.gpa, " = ...\n") catch {};
+        } else if (std.mem.indexOf(u8, entry.type_str, "=>")) |_| {
             // Effectful function - return unit
             app_source.appendSlice(ctx.gpa, " = || {}\n") catch {};
         } else if (std.mem.indexOf(u8, entry.type_str, "->")) |_| {
-            // Pure function - crash as stub
-            app_source.appendSlice(ctx.gpa, " = |_| crash \"stub\"\n") catch {};
+            // Pure function - use ... placeholder
+            app_source.appendSlice(ctx.gpa, " = |_| ...\n") catch {};
         } else {
-            // Value - use unit
-            app_source.appendSlice(ctx.gpa, " = {}\n") catch {};
+            // Other value - use ... placeholder
+            app_source.appendSlice(ctx.gpa, " = ...\n") catch {};
         }
     }
 
@@ -4287,6 +4315,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
 /// Information extracted from a platform header for glue generation.
 const PlatformHeaderInfo = struct {
     requires_entries: []RequiresEntry,
+    type_aliases: [][]const u8,
 
     const RequiresEntry = struct {
         name: []const u8,
@@ -4299,6 +4328,10 @@ const PlatformHeaderInfo = struct {
             gpa.free(entry.type_str);
         }
         gpa.free(self.requires_entries);
+        for (self.type_aliases) |alias| {
+            gpa.free(alias);
+        }
+        gpa.free(self.type_aliases);
     }
 };
 
@@ -4348,8 +4381,25 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 requires_entries.deinit(ctx.gpa);
             }
 
+            // Use a hash set to deduplicate type aliases across requires entries
+            var type_alias_set = std.StringHashMap(void).init(ctx.gpa);
+            defer type_alias_set.deinit();
+
             for (requires_entries_ast) |entry_idx| {
                 const entry = parse_ast.store.getRequiresEntry(entry_idx);
+
+                // Extract type aliases from for-clause
+                const type_aliases_ast = parse_ast.store.forClauseTypeAliasSlice(entry.type_aliases);
+                for (type_aliases_ast) |alias_idx| {
+                    const alias = parse_ast.store.getForClauseTypeAlias(alias_idx);
+                    if (parse_ast.tokens.resolveIdentifier(alias.alias_name)) |ident_idx| {
+                        const alias_name = env.common.getIdent(ident_idx);
+                        if (!type_alias_set.contains(alias_name)) {
+                            try type_alias_set.put(try ctx.gpa.dupe(u8, alias_name), {});
+                        }
+                    }
+                }
+
                 if (parse_ast.tokens.resolveIdentifier(entry.entrypoint_name)) |ident_idx| {
                     const name = env.common.getIdent(ident_idx);
 
@@ -4366,8 +4416,22 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 }
             }
 
+            // Convert type alias set to owned slice
+            var type_aliases = std.ArrayList([]const u8).empty;
+            errdefer {
+                for (type_aliases.items) |alias| {
+                    ctx.gpa.free(alias);
+                }
+                type_aliases.deinit(ctx.gpa);
+            }
+            var alias_iter = type_alias_set.keyIterator();
+            while (alias_iter.next()) |key| {
+                try type_aliases.append(ctx.gpa, key.*);
+            }
+
             return PlatformHeaderInfo{
                 .requires_entries = try requires_entries.toOwnedSlice(ctx.gpa),
+                .type_aliases = try type_aliases.toOwnedSlice(ctx.gpa),
             };
         },
         else => return error.NotPlatformFile,
