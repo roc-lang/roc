@@ -286,21 +286,28 @@ const legalDetailsFileContent = @embedFile("legal_details");
 /// memory fragmentation. With a 25KB source file, type checking can use ~2GB
 /// of shared memory due to this fragmentation.
 ///
-/// On 64-bit targets, we reserve 2TB of virtual address space. This is possible
+/// On 64-bit Linux/Windows, we reserve 2TB of virtual address space. This is possible
 /// without consuming physical memory:
-/// - On POSIX: mmap with MAP_SHARED reserves virtual address space without backing
-///   it until pages are actually touched.
+/// - On Linux: memfd_create with lazy page allocation means untouched pages cost nothing.
 /// - On Windows: SEC_RESERVE reserves virtual address space without page file backing,
 ///   and VirtualAlloc(MEM_COMMIT) commits pages on-demand as they're accessed.
+///
+/// On macOS, shm_open + ftruncate creates a Mach VM object with higher per-object
+/// kernel overhead than Linux's memfd_create. Using 2TB causes kernel resource pressure
+/// that accumulates across rapid sequential process invocations (e.g., running tests
+/// in a loop), leading to SIGKILL from the jetsam memory pressure system.
+/// We use 8GB on macOS which provides ample headroom while keeping kernel overhead low.
 ///
 /// On 32-bit targets, we use 256MB since larger sizes won't fit in the address space.
 const SHARED_MEMORY_SIZE: usize = if (@sizeOf(usize) < 8)
     256 * 1024 * 1024 // 256MB for 32-bit targets
+else if (builtin.os.tag == .macos)
+    8 * 1024 * 1024 * 1024 // 8GB for macOS (shm_open has higher kernel overhead)
 else
-    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit targets
+    2 * 1024 * 1024 * 1024 * 1024; // 2TB for 64-bit Linux/Windows
 
-/// Fallback size for systems with overcommit disabled. On Linux with
-/// vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
+/// Fallback size for systems with overcommit disabled or limited resources.
+/// On Linux with vm.overcommit_memory=2, the kernel rejects large ftruncate calls even
 /// though the memory wouldn't actually be used. We fall back to 4GB which
 /// should work on most systems while still being large enough for typical use.
 const SHARED_MEMORY_FALLBACK_SIZE: usize = if (@sizeOf(usize) < 8)
@@ -1159,13 +1166,15 @@ fn rocRun(ctx: *CliContext, args: cli_args.RunArgs) !void {
 
     const shm_handle = shm_result.handle;
 
-    // Ensure we clean up shared memory resources on all exit paths
+    // Ensure we clean up shared memory resources on all exit paths.
+    // Use mapped_size (the full mmap'd region) rather than size (the used portion)
+    // to properly unmap the entire shared memory region and release kernel resources.
     defer {
         if (comptime is_windows) {
             _ = ipc.platform.windows.UnmapViewOfFile(shm_handle.ptr);
             _ = ipc.platform.windows.CloseHandle(@ptrCast(shm_handle.fd));
         } else {
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = c.close(shm_handle.fd);
         }
     }
@@ -1509,7 +1518,12 @@ fn runWithPosixFdInheritance(ctx: *CliContext, exe_path: []const u8, shm_handle:
 pub const SharedMemoryHandle = struct {
     fd: if (is_windows) *anyopaque else c_int,
     ptr: *anyopaque,
+    /// The used size of the shared memory (for coordination with child process).
     size: usize,
+    /// The total mapped size of the shared memory region (for munmap cleanup).
+    /// This may be much larger than `size` since the bump allocator reserves
+    /// a large virtual address region upfront.
+    mapped_size: usize,
 };
 
 /// Result of setting up shared memory with type checking information.
@@ -1572,6 +1586,7 @@ fn writeToWindowsSharedMemory(data: []const u8, total_size: usize) !SharedMemory
         .fd = shm_handle,
         .ptr = mapped_ptr,
         .size = total_size,
+        .mapped_size = total_size,
     };
 }
 
@@ -1658,8 +1673,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
     const module_env_offsets_ptr = try shm_allocator.alloc(u64, max_module_count);
     header_ptr.module_envs_offset = @intFromPtr(module_env_offsets_ptr.ptr) - shm_base_addr;
 
-    // Initialize Coordinator - use single-threaded mode for debugging
-    // TODO: Switch back to multi-threaded once issues are resolved
+    // Initialize Coordinator
     var coord = try Coordinator.init(
         ctx.gpa, // Use regular allocator for Coordinator internals
         .single_threaded,
@@ -1912,6 +1926,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
                 .fd = shm.handle,
                 .ptr = shm.base_ptr,
                 .size = shm.getUsedSize(),
+                .mapped_size = shm.total_size,
             },
             .error_count = error_count,
             .warning_count = warning_count,
@@ -1925,6 +1940,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
             .fd = shm.handle,
             .ptr = shm.base_ptr,
             .size = shm.getUsedSize(),
+            .mapped_size = shm.total_size,
         },
         .error_count = error_count,
         .warning_count = warning_count,
@@ -2371,6 +2387,7 @@ fn writeToPosixSharedMemory(data: []const u8, total_size: usize) !SharedMemoryHa
         .fd = shm_fd,
         .ptr = mapped_ptr,
         .size = total_size,
+        .mapped_size = total_size,
     };
 }
 

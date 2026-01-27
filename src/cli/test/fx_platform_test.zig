@@ -256,6 +256,7 @@ test "fx platform all_syntax_test.roc prints expected output" {
         "Unicode escape sequence: \u{00A0}\n" ++
         "This is an effectful function!\n" ++
         "15\n" ++
+        "10\n" ++
         "42\n" ++
         "NotOneTwoNotFive\n" ++
         "(\"Roc\", 1)\n" ++

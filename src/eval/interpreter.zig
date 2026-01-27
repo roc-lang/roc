@@ -11292,9 +11292,12 @@ pub const Interpreter = struct {
             },
 
             .e_lookup_pending => {
-                // Pending lookups should be resolved before evaluation - they should never
-                // reach the interpreter. If we get here, there's a bug in the resolution phase.
-                unreachable;
+                // Pending lookups should normally be resolved before evaluation.
+                // However, if an import references a non-existent package shorthand
+                // (e.g., "import f.S" where "f" is not defined), the pending lookup
+                // cannot be resolved because there's no target module to look up from.
+                // Return an error since we can't evaluate an unresolved lookup.
+                return error.TypeMismatch;
             },
 
             .e_lookup_required => |lookup| {
@@ -18348,6 +18351,35 @@ pub const Interpreter = struct {
                         if (ownership == .borrow) {
                             arg.decref(&self.runtime_layout_store, roc_ops);
                         }
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Check if hosted lambda (platform-provided function)
+                if (lambda_expr == .e_hosted_lambda) {
+                    const hosted = lambda_expr.e_hosted_lambda;
+
+                    // Build args array: receiver + explicit args
+                    var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
+                    defer self.allocator.free(all_args);
+                    all_args[0] = receiver_value;
+                    for (arg_values, 0..) |arg, idx| {
+                        all_args[1 + idx] = arg;
+                    }
+
+                    // Get the return type from the call site
+                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    const result = try self.callHostedFunction(hosted.index, all_args, roc_ops, return_rt_var);
+
+                    // Decref all arguments (hosted functions borrow their arguments)
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);

@@ -891,3 +891,31 @@ test "roc check with invalid --jobs value returns error" {
     const has_error = std.mem.indexOf(u8, result.stderr, "not a valid value") != null;
     try testing.expect(has_error);
 }
+
+test "roc check does not panic on invalid package shorthand import (issue 9084)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    // This test verifies that importing from a non-existent package shorthand
+    // (e.g., "import f.S" where "f" is not defined) produces an error message
+    // instead of causing the coordinator to panic with "Coordinator stuck in infinite loop".
+    const result = try util.runRoc(gpa, &.{ "check", "--no-cache" }, "test/cli/invalid_package_shorthand.roc");
+    defer gpa.free(result.stdout);
+    defer gpa.free(result.stderr);
+
+    // Verify that:
+    // 1. Command did not abort/panic (exit code 134 on macOS/Linux indicates SIGABRT)
+    const did_panic = result.term == .Signal or (result.term == .Exited and result.term.Exited == 134);
+    try testing.expect(!did_panic);
+
+    // 2. Stderr should not contain "panic" or "Coordinator stuck"
+    const has_panic_text = std.mem.indexOf(u8, result.stderr, "panic") != null or
+        std.mem.indexOf(u8, result.stderr, "Coordinator stuck") != null;
+    try testing.expect(!has_panic_text);
+
+    // 3. Command should fail with a non-zero exit code (error, not success)
+    try testing.expect(result.term != .Exited or result.term.Exited != 0);
+
+    // 4. Stderr should contain some error information
+    try testing.expect(result.stderr.len > 0);
+}
