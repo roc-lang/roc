@@ -4155,10 +4155,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
-    // 4. Print compiled module types and collect module type info for JSON
-    const stdout = ctx.io.stdout();
-    stdout.print("\n=== Platform Module Types ===\n", .{}) catch {};
-
+    // 4. Collect module type info for JSON serialization
     var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
     defer {
         for (collected_modules.items) |*mod_info| {
@@ -4169,16 +4166,11 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
 
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
-            stdout.print("\nModule: {s}\n", .{mod.name}) catch {};
-            printCompiledModuleTypes(ctx, &mod, mod.name, stdout, &all_hosted_fns);
-
-            // Also collect for JSON serialization
             if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns)) |mod_info| {
                 collected_modules.append(ctx.gpa, mod_info) catch {};
             }
         }
     }
-    stdout.print("\n", .{}) catch {};
 
     // Serialize collected module type infos to JSON
     const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch |err| {
@@ -4470,151 +4462,6 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
             };
         },
         else => return error.NotPlatformFile,
-    }
-}
-
-/// Print type information for a compiled module using TypeWriter for resolved types.
-fn printCompiledModuleTypes(
-    ctx: *CliContext,
-    compiled_module: *const BuildEnv.CompiledModuleInfo,
-    module_name: []const u8,
-    writer: anytype,
-    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
-) void {
-    const env = compiled_module.env;
-
-    // First, look for nominal type declarations (s_nominal_decl)
-    const all_stmts = env.store.sliceStatements(env.all_statements);
-
-    for (all_stmts) |stmt_idx| {
-        const stmt = env.store.getStatement(stmt_idx);
-        if (stmt == .s_nominal_decl) {
-            const nominal = stmt.s_nominal_decl;
-            const type_header = env.store.getTypeHeader(nominal.header);
-            const type_name = env.getIdent(type_header.relative_name);
-
-            // Check if this is the main type for this module
-            if (std.mem.eql(u8, type_name, module_name)) {
-                // Get the type annotation using TypeWriter
-                var type_writer = env.initTypeWriter() catch continue;
-                defer type_writer.deinit();
-
-                // Get the type var for the annotation (the backing type)
-                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
-                const type_var = ModuleEnv.varFrom(anno_node_idx);
-
-                type_writer.write(type_var, .one_line) catch continue;
-                const type_str = type_writer.get();
-
-                const kind = if (nominal.is_opaque) "::" else ":=";
-                writer.print("    Type: {s} {s} {s}\n", .{ module_name, kind, type_str }) catch {};
-                break;
-            }
-        }
-    }
-
-    // Get all definitions from the module
-    const all_defs = env.store.sliceDefs(env.all_defs);
-
-    // Collect functions and hosted functions for this module
-    var functions = std.ArrayList([]const u8).empty;
-    defer {
-        for (functions.items) |item| ctx.gpa.free(item);
-        functions.deinit(ctx.gpa);
-    }
-
-    var hosted_functions = std.ArrayList(struct { index: usize, name: []const u8 }).empty;
-    defer {
-        for (hosted_functions.items) |item| ctx.gpa.free(item.name);
-        hosted_functions.deinit(ctx.gpa);
-    }
-
-    // Build module prefix for filtering associated items
-    const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{module_name}) catch return;
-    defer ctx.gpa.free(module_prefix);
-
-    // Iterate through all defs to find functions
-    for (all_defs) |def_idx| {
-        const def = env.store.getDef(def_idx);
-        const expr = env.store.getExpr(def.expr);
-
-        const pattern = env.store.getPattern(def.pattern);
-        if (pattern != .assign) continue;
-
-        const def_name = env.getIdent(pattern.assign.ident);
-
-        // Skip the module's main type definition
-        if (std.mem.eql(u8, def_name, module_name)) continue;
-
-        // Determine if this is an associated item (starts with "ModuleName.")
-        // and get the local name (without the module prefix)
-        const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
-            def_name[module_prefix.len..]
-        else
-            continue; // Skip defs that don't belong to this module
-
-        // Check if this is a hosted function
-        if (expr == .e_hosted_lambda) {
-            // Build qualified name for comparison (strip the `!` for comparison with sorted list)
-            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
-                def_name[0 .. def_name.len - 1]
-            else
-                def_name;
-
-            // Find the global index
-            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
-                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
-                    // Get the type
-                    var type_writer = env.initTypeWriter() catch continue;
-                    defer type_writer.deinit();
-
-                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-                    const type_var = ModuleEnv.varFrom(def_node_idx);
-
-                    type_writer.write(type_var, .one_line) catch continue;
-                    const type_str = type_writer.get();
-
-                    const formatted = std.fmt.allocPrint(ctx.gpa, "[{d}] {s} : {s}", .{ global_idx, local_name, type_str }) catch continue;
-                    hosted_functions.append(ctx.gpa, .{ .index = global_idx, .name = formatted }) catch {
-                        ctx.gpa.free(formatted);
-                        continue;
-                    };
-                    break;
-                }
-            }
-        } else if (expr == .e_lambda or def.annotation != null) {
-            // Regular function
-            var type_writer = env.initTypeWriter() catch continue;
-            defer type_writer.deinit();
-
-            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
-            const type_var = ModuleEnv.varFrom(def_node_idx);
-
-            type_writer.write(type_var, .one_line) catch continue;
-            const type_str = type_writer.get();
-
-            const formatted = std.fmt.allocPrint(ctx.gpa, "{s} : {s}", .{ local_name, type_str }) catch continue;
-            functions.append(ctx.gpa, formatted) catch {
-                ctx.gpa.free(formatted);
-                continue;
-            };
-        }
-    }
-
-    // Print regular functions
-    if (functions.items.len > 0) {
-        writer.print("    Functions:\n", .{}) catch {};
-        for (functions.items) |func_str| {
-            writer.print("      {s}\n", .{func_str}) catch {};
-        }
-    }
-
-    // Print hosted functions
-    if (hosted_functions.items.len > 0) {
-        writer.print("    Hosted Functions:\n", .{}) catch {};
-        for (hosted_functions.items) |hosted| {
-            writer.print("      {s}\n", .{hosted.name}) catch {};
-        }
     }
 }
 
