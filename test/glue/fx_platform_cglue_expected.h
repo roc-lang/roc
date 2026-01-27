@@ -85,16 +85,17 @@ typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);
 /**
  * Total number of hosted functions in this platform
  */
-#define HOSTED_FUNCTION_COUNT 4
+#define HOSTED_FUNCTION_COUNT 5
 
 /**
  * Index constants for each hosted function
  * Use these with the HostedFunctions struct to access specific functions
  */
 #define HOSTED_IDX_BUILDER_PRINT_VALUE 0
-#define HOSTED_IDX_STDERR_LINE 1
-#define HOSTED_IDX_STDIN_LINE 2
-#define HOSTED_IDX_STDOUT_LINE 3
+#define HOSTED_IDX_HOST_GET_GREETING 1
+#define HOSTED_IDX_STDERR_LINE 2
+#define HOSTED_IDX_STDIN_LINE 3
+#define HOSTED_IDX_STDOUT_LINE 4
 
 // =============================================================================
 // Argument Structures
@@ -118,6 +119,27 @@ _Static_assert(_Alignof(BuilderPrint_valueArgs) >= 1, "BuilderPrint_valueArgs mu
  * void hosted_builder_print_value(struct RocOps* ops, BuilderPrint_valueArgs* args, void* ret) {
  *     // args->arg0 is void* (Builder)
  *     // No return value (void)
+ * }
+ */
+
+/**
+ * Arguments for Host.get_greeting!
+ * Roc signature: Host => Str
+ * C function name: host_get_greeting
+ * Return type: RocStr
+ */
+typedef struct {
+    void* arg0;  // Host
+} HostGet_greetingArgs;
+
+_Static_assert(sizeof(HostGet_greetingArgs) > 0, "HostGet_greetingArgs must have non-zero size");
+_Static_assert(_Alignof(HostGet_greetingArgs) >= 1, "HostGet_greetingArgs must be aligned");
+
+/*
+ * Example implementation:
+ * void hosted_host_get_greeting(struct RocOps* ops, HostGet_greetingArgs* args, void* ret) {
+ *     // args->arg0 is void* (Host)
+ *     // Set return value: *((RocStr*)ret) = result;
  * }
  */
 
@@ -176,9 +198,10 @@ _Static_assert(_Alignof(StdoutLineArgs) >= 1, "StdoutLineArgs must be aligned");
  */
 typedef struct {
     HostedFn Builder_print_value;  // index 0, C name: builder_print_value
-    HostedFn Stderr_line;  // index 1, C name: stderr_line
-    HostedFn Stdin_line;  // index 2, C name: stdin_line
-    HostedFn Stdout_line;  // index 3, C name: stdout_line
+    HostedFn Host_get_greeting;  // index 1, C name: host_get_greeting
+    HostedFn Stderr_line;  // index 2, C name: stderr_line
+    HostedFn Stdin_line;  // index 3, C name: stdin_line
+    HostedFn Stdout_line;  // index 4, C name: stdout_line
 } HostedFunctions;
 
 #ifdef __cplusplus
