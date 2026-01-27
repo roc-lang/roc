@@ -488,6 +488,29 @@ pub fn listWithCapacity(
     );
 }
 
+/// C-compatible wrapper for listWithCapacity that writes result via output pointer.
+/// This avoids ABI issues with returning 24-byte structs on aarch64.
+pub fn listWithCapacityC(
+    out: *RocList,
+    capacity: u64,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    inc_context: ?*anyopaque,
+    inc: Inc,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    out.* = listWithCapacity(
+        capacity,
+        alignment,
+        element_width,
+        elements_refcounted,
+        inc_context,
+        inc,
+        roc_ops,
+    );
+}
+
 /// Ensure the list has capacity for additional elements to prevent reallocation.
 pub fn listReserve(
     list: RocList,
@@ -586,6 +609,25 @@ pub fn listAppendUnsafe(
     }
 
     return output;
+}
+
+/// C-compatible wrapper for listAppendUnsafe that writes result via output pointer.
+/// Takes explicit scalar arguments to avoid ABI issues with 24-byte struct on aarch64.
+pub fn listAppendUnsafeC(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_length: usize,
+    list_capacity_or_alloc_ptr: usize,
+    element: Opaque,
+    element_width: usize,
+    copy: CopyFallbackFn,
+) callconv(.c) void {
+    const list = RocList{
+        .bytes = list_bytes,
+        .length = list_length,
+        .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr,
+    };
+    out.* = listAppendUnsafe(list, element, element_width, copy);
 }
 
 /// List.append - adds an element to the end of a list.

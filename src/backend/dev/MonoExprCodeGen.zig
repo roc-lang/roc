@@ -39,9 +39,10 @@ const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
 const rcNone = builtins.utils.rcNone;
 
-// List builtin functions
-const listWithCapacity = builtins.list.listWithCapacity;
-const listAppendUnsafe = builtins.list.listAppendUnsafe;
+// List builtin functions - using C-compatible wrappers to avoid ABI issues
+// with 24-byte RocList struct returns on aarch64
+const listWithCapacityC = builtins.list.listWithCapacityC;
+const listAppendUnsafeC = builtins.list.listAppendUnsafeC;
 const copy_fallback = builtins.list.copy_fallback;
 
 const Relocation = @import("Relocation.zig").Relocation;
@@ -623,7 +624,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => .{ .size = 8, .alignment = .@"8" },
                     };
 
-                    const fn_addr: usize = @intFromPtr(&listWithCapacity);
+                    const fn_addr: usize = @intFromPtr(&listWithCapacityC);
                     const rc_none_addr: usize = @intFromPtr(&rcNone);
 
                     // Convert RocAlignment enum to actual byte alignment
@@ -634,57 +635,66 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                     if (comptime builtin.cpu.arch == .aarch64) {
                         // aarch64 calling convention: X0-X7 for args
-                        // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
-                        //                  inc_context, inc, roc_ops) -> RocList
-                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
-                        try self.codegen.emit.movRegReg(.w64, .X0, cap_reg);
-                        try self.codegen.emitLoadImm(.X1, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.X2, @intCast(elem_size_align.size));
-                        try self.codegen.emitLoadImm(.X3, 0); // elements_refcounted = false
-                        try self.codegen.emitLoadImm(.X4, 0); // inc_context = null
-                        try self.codegen.emitLoadImm(.X5, @intCast(rc_none_addr));
-                        try self.codegen.emit.movRegReg(.w64, .X6, roc_ops_reg);
+                        // listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
+                        //                   inc_context, inc, roc_ops) -> void
+                        // Using C wrapper to avoid ABI issues with 24-byte struct return
 
-                        const addr_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(addr_reg);
-                        self.codegen.freeGeneral(addr_reg);
+                        // IMPORTANT: First save capacity to X1 before we clobber any argument registers.
+                        // capacity_loc might be in X0-X7, and we need to preserve it.
+                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
+                        try self.codegen.emit.movRegReg(.w64, .X1, cap_reg);
                         self.codegen.freeGeneral(cap_reg);
 
-                        // Store RocList result (returned in X0=bytes, X1=length, X2=capacity)
-                        try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, result_offset);
-                        try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, result_offset + 8);
-                        try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, result_offset + 16);
+                        // Now set the other argument registers (X2-X7)
+                        try self.codegen.emitLoadImm(.X2, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.X3, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.X4, 0); // elements_refcounted = false
+                        try self.codegen.emitLoadImm(.X5, 0); // inc_context = null
+                        try self.codegen.emitLoadImm(.X6, @intCast(rc_none_addr));
+                        try self.codegen.emit.movRegReg(.w64, .X7, roc_ops_reg);
+
+                        // X0 = output pointer (FP + result_offset)
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
+
+                        // Load function address into X9 right before the call
+                        // (after all register allocations to avoid X9 being clobbered)
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
+
+                        // Call
+                        try self.codegen.emit.blrReg(.X9);
+
+                        // No result storage needed - function writes directly to output pointer
                     } else if (comptime builtin.cpu.arch == .x86_64) {
                         // x86_64 calling convention: RDI, RSI, RDX, RCX, R8, R9, then stack
+                        // listWithCapacityC(out, capacity, alignment, elem_width, elements_refcounted,
+                        //                   inc_context, inc, roc_ops) -> void
                         const cap_reg = try self.ensureInGeneralReg(capacity_loc);
 
-                        // Push 7th arg (roc_ops) to stack first
+                        // Push 8th arg (roc_ops) and 7th arg (inc) to stack
                         try self.codegen.emit.pushReg(roc_ops_reg);
+                        try self.codegen.emitLoadImm(.R11, @intCast(rc_none_addr));
+                        try self.codegen.emit.pushReg(.R11);
 
-                        try self.codegen.emit.movRegReg(.w64, .RDI, cap_reg);
-                        try self.codegen.emitLoadImm(.RSI, @intCast(alignment_bytes));
-                        try self.codegen.emitLoadImm(.RDX, @intCast(elem_size_align.size));
-                        try self.codegen.emitLoadImm(.RCX, 0); // elements_refcounted = false
-                        try self.codegen.emitLoadImm(.R8, 0); // inc_context = null
-                        try self.codegen.emitLoadImm(.R9, @intCast(rc_none_addr));
+                        // RDI = output pointer
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+
+                        // RSI = capacity
+                        try self.codegen.emit.movRegReg(.w64, .RSI, cap_reg);
+                        self.codegen.freeGeneral(cap_reg);
+
+                        try self.codegen.emitLoadImm(.RDX, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.RCX, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.R8, 0); // elements_refcounted = false
+                        try self.codegen.emitLoadImm(.R9, 0); // inc_context = null
 
                         try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
                         try self.codegen.emit.callReg(.R11);
 
-                        // Clean up stack arg
-                        try self.codegen.emit.addImm(.RSP, 8);
-                        self.codegen.freeGeneral(cap_reg);
+                        // Clean up stack args (2 * 8 bytes)
+                        try self.codegen.emit.addImm(.RSP, 16);
 
-                        // Store RocList result - x86_64 returns structs differently
-                        // For 24-byte structs, RAX=bytes, RDX=length, and capacity is returned separately
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset, .RAX);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, .RDX);
-                        // Third field needs to be loaded from memory or another register
-                        // Actually for C calling convention, large structs are returned via hidden pointer
-                        // Let's use a simpler approach - return empty list directly
-                        try self.codegen.emitLoadImm(.R11, 0);
-                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 16, .R11);
+                        // No result storage needed - function writes directly to output pointer
                     } else {
                         unreachable;
                     }
@@ -769,41 +779,68 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Allocate result slot (24 bytes for RocList)
                     const result_offset = self.codegen.allocStackSlot(24);
 
-                    const fn_addr: usize = @intFromPtr(&listAppendUnsafe);
+                    const fn_addr: usize = @intFromPtr(&listAppendUnsafeC);
                     const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
 
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        // listAppendUnsafe(list, element, element_width, copy_fn) -> RocList
-                        // Load list struct into X0-X2
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, list_offset);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_offset + 8);
-                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_offset + 16);
+                        // listAppendUnsafeC(out, list_bytes, list_len, list_cap, element, elem_width, copy_fn) -> void
+                        // Using C wrapper with explicit scalar args to avoid ABI issues
 
-                        // Element pointer in X3 (stack address = FP + elem_offset)
-                        // Handle arbitrary offsets (positive or negative) by loading to register first
-                        try self.codegen.emit.movRegImm64(.X3, @bitCast(@as(i64, elem_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, .X3, .FP, .X3);
+                        // X0 = output pointer (FP + result_offset)
+                        try self.codegen.emit.movRegImm64(.X0, @bitCast(@as(i64, result_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X0, .FP, .X0);
 
-                        // Element width in X4
-                        try self.codegen.emitLoadImm(.X4, @intCast(elem_size_align.size));
+                        // X1-X3 = list fields (bytes, length, capacity)
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_offset);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_offset + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X3, .FP, list_offset + 16);
 
-                        // copy_fallback in X5
-                        try self.codegen.emitLoadImm(.X5, @intCast(copy_fallback_addr));
+                        // X4 = element pointer (FP + elem_offset)
+                        try self.codegen.emit.movRegImm64(.X4, @bitCast(@as(i64, elem_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X4, .FP, .X4);
+
+                        // X5 = element width
+                        try self.codegen.emitLoadImm(.X5, @intCast(elem_size_align.size));
+
+                        // X6 = copy_fallback
+                        try self.codegen.emitLoadImm(.X6, @intCast(copy_fallback_addr));
+
+                        // Load function address into X9 right before the call
+                        try self.codegen.emitLoadImm(.X9, @intCast(fn_addr));
 
                         // Call
-                        const addr_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
-                        try self.codegen.emit.blrReg(addr_reg);
-                        self.codegen.freeGeneral(addr_reg);
+                        try self.codegen.emit.blrReg(.X9);
 
-                        // Store result
-                        try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, result_offset);
-                        try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, result_offset + 8);
-                        try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, result_offset + 16);
+                        // No result storage needed - function writes directly to output pointer
                     } else if (comptime builtin.cpu.arch == .x86_64) {
-                        // x86_64: struct return via hidden pointer
-                        std.debug.print("BUG: list_append not implemented for x86_64\n", .{});
-                        unreachable;
+                        // x86_64 calling convention: RDI, RSI, RDX, RCX, R8, R9, then stack
+                        // listAppendUnsafeC(out, list_bytes, list_len, list_cap, element, elem_width, copy_fn) -> void
+
+                        // Push 7th arg (copy_fn) to stack
+                        try self.codegen.emitLoadImm(.R11, @intCast(copy_fallback_addr));
+                        try self.codegen.emit.pushReg(.R11);
+
+                        // RDI = output pointer
+                        try self.codegen.emit.leaRegMem(.RDI, .RBP, result_offset);
+
+                        // RSI, RDX, RCX = list fields
+                        try self.codegen.emit.movRegMem(.w64, .RSI, .RBP, list_offset);
+                        try self.codegen.emit.movRegMem(.w64, .RDX, .RBP, list_offset + 8);
+                        try self.codegen.emit.movRegMem(.w64, .RCX, .RBP, list_offset + 16);
+
+                        // R8 = element pointer
+                        try self.codegen.emit.leaRegMem(.R8, .RBP, elem_offset);
+
+                        // R9 = element width
+                        try self.codegen.emitLoadImm(.R9, @intCast(elem_size_align.size));
+
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+
+                        // Clean up stack arg
+                        try self.codegen.emit.addImm(.RSP, 8);
+
+                        // No result storage needed - function writes directly to output pointer
                     } else {
                         unreachable;
                     }
@@ -6335,7 +6372,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                 },
                 else => {
-                    // Check if this is a composite type (record/tuple) via layout store
+                    // Check if this is a composite type (record/tuple/list) via layout store
                     if (self.layout_store) |ls| {
                         const layout_val = ls.getLayout(result_layout);
                         switch (layout_val.tag) {
@@ -6352,6 +6389,11 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             .tag_union => {
                                 const tu_data = ls.getTagUnionData(layout_val.data.tag_union.idx);
                                 try self.copyStackToPtr(loc, saved_ptr_reg, tu_data.size);
+                                return;
+                            },
+                            .list, .list_of_zst => {
+                                // Lists are 24-byte structs (ptr, len, capacity)
+                                try self.copyStackToPtr(loc, saved_ptr_reg, 24);
                                 return;
                             },
                             else => {},
@@ -6754,14 +6796,51 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 reg_idx += 2;
                             }
                         } else {
-                            // Normal 64-bit or smaller parameter
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
-                            // IMPORTANT: Mark the register as in use so the allocator won't
-                            // reuse it for other values. Without this, loading a literal
-                            // might clobber the parameter value.
-                            self.codegen.markRegisterInUse(arg_reg);
-                            reg_idx += 1;
+                            // Check if this is a list type (24 bytes)
+                            const is_list = if (param_idx < layouts.len) blk: {
+                                const param_layout = layouts[param_idx];
+                                if (self.layout_store) |ls| {
+                                    const layout_val = ls.getLayout(param_layout);
+                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (is_list) {
+                                // List types arrive in 3 consecutive registers (X0+X1+X2)
+                                // Spill to 24-byte stack slot
+                                const stack_offset = self.codegen.allocStackSlot(24);
+
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg0, .FP, stack_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg1, .FP, stack_offset + 8);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg2, .FP, stack_offset + 16);
+                                } else {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, reg0);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, reg1);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, reg2);
+                                }
+
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                                reg_idx += 3;
+                            } else {
+                                // Normal 64-bit or smaller parameter
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                                // IMPORTANT: Mark the register as in use so the allocator won't
+                                // reuse it for other values. Without this, loading a literal
+                                // might clobber the parameter value.
+                                self.codegen.markRegisterInUse(arg_reg);
+                                reg_idx += 1;
+                            }
                         }
                     },
                     else => {
@@ -6876,6 +6955,48 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                                 else => unreachable,
                             }
                         }
+                    } else if (value_loc == .list_stack) {
+                        // List return (24 bytes) - return in X0, X1, X2 (aarch64) or RAX, RDX, RCX (x86_64)
+                        const offset = value_loc.list_stack.struct_offset;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emitLoadStack(.w64, .X0, offset);
+                            try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                            try self.codegen.emitLoadStack(.w64, .X2, offset + 16);
+                        } else {
+                            try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                            try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                            try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
+                        }
+                    } else if (value_loc == .stack) {
+                        // Check if this is a list (24 bytes) based on expression layout
+                        var is_list = false;
+                        if (self.layout_store) |ls| {
+                            if (self.getExprLayout(r.value)) |ret_layout| {
+                                const layout_val = ls.getLayout(ret_layout);
+                                is_list = layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                            }
+                        }
+
+                        if (is_list) {
+                            // List return (24 bytes) from .stack location
+                            const offset = value_loc.stack;
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emitLoadStack(.w64, .X0, offset);
+                                try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                                try self.codegen.emitLoadStack(.w64, .X2, offset + 16);
+                            } else {
+                                try self.codegen.emitLoadStack(.w64, .RAX, offset);
+                                try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                                try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
+                            }
+                        } else {
+                            // Normal 64-bit return from stack
+                            const return_reg = self.getReturnRegister();
+                            const value_reg = try self.ensureInGeneralReg(value_loc);
+                            if (value_reg != return_reg) {
+                                try self.emitMovRegReg(return_reg, value_reg);
+                            }
+                        }
                     } else {
                         // Move to return register (64-bit values)
                         const return_reg = self.getReturnRegister();
@@ -6937,13 +7058,49 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
                             reg_idx += 2;
                         } else {
-                            // Use argument registers for parameters
-                            const arg_reg = self.getArgumentRegister(reg_idx);
-                            try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
-                            // Mark the register as in use so it doesn't get allocated for temporaries
-                            // that might clobber the parameter value.
-                            self.codegen.markRegisterInUse(arg_reg);
-                            reg_idx += 1;
+                            // Check if this is a list type (24 bytes)
+                            const is_list = if (param_idx < layouts.len) blk: {
+                                const param_layout = layouts[param_idx];
+                                if (self.layout_store) |ls| {
+                                    const layout_val = ls.getLayout(param_layout);
+                                    break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                                }
+                                break :blk false;
+                            } else false;
+
+                            if (is_list) {
+                                // List types need 3 consecutive registers
+                                const stack_offset = self.codegen.allocStackSlot(24);
+
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg0, .FP, stack_offset);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg1, .FP, stack_offset + 8);
+                                    try self.codegen.emit.strRegMemSoff(.w64, reg2, .FP, stack_offset + 16);
+                                } else {
+                                    const reg0 = self.getArgumentRegister(reg_idx);
+                                    const reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, reg0);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, reg1);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, reg2);
+                                }
+
+                                try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                                reg_idx += 3;
+                            } else {
+                                // Use argument registers for parameters
+                                const arg_reg = self.getArgumentRegister(reg_idx);
+                                try self.symbol_locations.put(symbol_key, .{ .general_reg = arg_reg });
+                                // Mark the register as in use so it doesn't get allocated for temporaries
+                                // that might clobber the parameter value.
+                                self.codegen.markRegisterInUse(arg_reg);
+                                reg_idx += 1;
+                            }
                         }
                     },
                     else => unreachable, // Join point params must be simple bindings
@@ -6987,12 +7144,65 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     }
                     reg_idx += 2;
                 } else {
-                    const dst_reg = self.getArgumentRegister(reg_idx);
-                    const src_reg = try self.ensureInGeneralReg(loc);
-                    if (src_reg != dst_reg) {
-                        try self.emitMovRegReg(dst_reg, src_reg);
+                    // Check if this is a list type (24 bytes)
+                    const is_list = if (param_idx < layouts.len) blk: {
+                        const param_layout = layouts[param_idx];
+                        if (self.layout_store) |ls| {
+                            const layout_val = ls.getLayout(param_layout);
+                            break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                        }
+                        break :blk false;
+                    } else false;
+
+                    if (is_list) {
+                        // List types need 3 consecutive registers
+                        const dst0 = self.getArgumentRegister(reg_idx);
+                        const dst1 = self.getArgumentRegister(reg_idx + 1);
+                        const dst2 = self.getArgumentRegister(reg_idx + 2);
+
+                        switch (loc) {
+                            .stack => |offset| {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst0, .FP, offset);
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst1, .FP, offset + 8);
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst2, .FP, offset + 16);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, dst0, .RBP, offset);
+                                    try self.codegen.emit.movRegMem(.w64, dst1, .RBP, offset + 8);
+                                    try self.codegen.emit.movRegMem(.w64, dst2, .RBP, offset + 16);
+                                }
+                            },
+                            .list_stack => |ls_info| {
+                                const base_offset = ls_info.struct_offset;
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst0, .FP, base_offset);
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst1, .FP, base_offset + 8);
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, dst2, .FP, base_offset + 16);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, dst0, .RBP, base_offset);
+                                    try self.codegen.emit.movRegMem(.w64, dst1, .RBP, base_offset + 8);
+                                    try self.codegen.emit.movRegMem(.w64, dst2, .RBP, base_offset + 16);
+                                }
+                            },
+                            else => {
+                                // For other cases, try to load as single value (shouldn't happen for lists)
+                                const src_reg = try self.ensureInGeneralReg(loc);
+                                if (src_reg != dst0) {
+                                    try self.emitMovRegReg(dst0, src_reg);
+                                }
+                                try self.codegen.emitLoadImm(dst1, 0);
+                                try self.codegen.emitLoadImm(dst2, 0);
+                            },
+                        }
+                        reg_idx += 3;
+                    } else {
+                        const dst_reg = self.getArgumentRegister(reg_idx);
+                        const src_reg = try self.ensureInGeneralReg(loc);
+                        if (src_reg != dst_reg) {
+                            try self.emitMovRegReg(dst_reg, src_reg);
+                        }
+                        reg_idx += 1;
                     }
-                    reg_idx += 1;
                 }
             }
         }
