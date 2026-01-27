@@ -199,7 +199,7 @@ const main_help =
     \\  test             Run all top-level `expect`s in a main module and any modules it imports
     \\  repl             Launch the interactive Read Eval Print Loop (REPL)
     \\  fmt              Format a .roc file or the .roc files contained in a directory using standard Roc formatting
-    \\  glue             Print platform glue information (entry points and exposed types)
+    \\  glue             Generate native glue code from a Roc platform using a language-specific glue spec
     \\  version          Print the Roc compiler's version
     \\  check            Check the code for problems, but don't build or run it
     \\  docs             Generate documentation for a Roc package or platform
@@ -716,41 +716,41 @@ fn parseGlue(args: []const []const u8) CliArgs {
     // glue_spec is required
     if (glue_spec == null) {
         return CliArgs{ .help =
-            \\Error: Missing required argument <GLUE_SPEC>
-            \\
-            \\Generate glue code from a platform using a glue spec
-            \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
-            \\  <GLUE_DIR>   The output directory for generated glue files
-            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-        };
+        \\Error: Missing required argument <GLUE_SPEC>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
     }
 
     // output_dir is required
     if (output_dir == null) {
         return CliArgs{ .help =
-            \\Error: Missing required argument <GLUE_DIR>
-            \\
-            \\Generate glue code from a platform using a glue spec
-            \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
-            \\
-            \\Arguments:
-            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
-            \\  <GLUE_DIR>   The output directory for generated glue files
-            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
-            \\
-            \\Options:
-            \\  -h, --help  Print help
-            \\
-        };
+        \\Error: Missing required argument <GLUE_DIR>
+        \\
+        \\Generate glue code from a platform using a glue spec
+        \\
+        \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+        \\
+        \\Arguments:
+        \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+        \\  <GLUE_DIR>   The output directory for generated glue files
+        \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+        \\
+        \\Options:
+        \\  -h, --help  Print help
+        \\
+    };
     }
 
     return CliArgs{ .glue = GlueArgs{
