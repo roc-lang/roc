@@ -1207,12 +1207,37 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             var arg_list = std.ArrayList(MonoExprId).empty;
             defer arg_list.deinit(self.allocator);
 
+            // Get the function type from the expression to extract parameter types.
+            // This is needed because the pattern type variables in builtins are generic (flex),
+            // but the function type has the proper mappings through the type scope.
+            const expr_type_var = ModuleEnv.varFrom(expr_idx);
+            const expr_resolved = module_env.types.resolveVar(expr_type_var);
+            const func_type = expr_resolved.desc.content.unwrapFunc();
+            const ls = self.layout_store orelse unreachable;
+
+            var param_idx: usize = 0;
             for (param_patterns) |patt_idx| {
                 const symbol = self.patternToSymbol(patt_idx);
+
+                // Get the layout from the function's parameter type, not the pattern's type variable.
+                // The pattern type in builtins is generic (flex), but the function type has the
+                // concrete types through the type scope mappings.
+                const patt_layout = if (func_type) |ft| layout_blk: {
+                    const param_vars = module_env.types.sliceVars(ft.args);
+                    if (param_idx < param_vars.len) {
+                        const param_type_var = param_vars[param_idx];
+                        break :layout_blk ls.addTypeVar(self.current_module_idx, param_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
+                    }
+                    unreachable; // Pattern count should match function parameter count
+                } else {
+                    unreachable; // e_low_level_lambda should always have a function type
+                };
+                param_idx += 1;
+
                 const arg_id = try self.store.addExpr(.{
                     .lookup = .{
                         .symbol = symbol,
-                        .layout_idx = .i64, // TODO: get proper layout
+                        .layout_idx = patt_layout,
                     },
                 }, region);
                 try arg_list.append(self.allocator, arg_id);

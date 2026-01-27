@@ -1755,14 +1755,53 @@ pub const Store = struct {
                                 const elem_var = type_args[0];
 
                                 // Check if the element type is a known ZST
-                                // Treat flex/rigid as ZST ONLY if they are unconstrained.
-                                // Constrained flex types (e.g., numeric literals with constraints) should default to Dec.
-                                // Unconstrained flex types (e.g., empty list []) should use list_of_zst.
+                                // For flex/rigid types that are mapped in the type scope, we need to
+                                // check what the mapped type resolves to.
                                 const elem_resolved = self.getTypesStore().resolveVar(elem_var);
                                 const elem_content = elem_resolved.desc.content;
                                 const is_elem_zst = switch (elem_content) {
-                                    .flex => |flex| flex.constraints.count == 0,
-                                    .rigid => |rigid| rigid.constraints.count == 0,
+                                    .flex => |flex| blk: {
+                                        // If mapped in type scope, check what it maps to
+                                        if (caller_module_idx) |caller_mod| {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
+                                                // Resolve the mapped type in the caller module
+                                                const caller_env = self.all_module_envs[caller_mod];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
+                                                // Check if the MAPPED type is ZST
+                                                break :blk switch (mapped_resolved.desc.content) {
+                                                    .structure => |ft| switch (ft) {
+                                                        .empty_record, .empty_tag_union => true,
+                                                        else => false,
+                                                    },
+                                                    .flex => |mf| mf.constraints.count == 0,
+                                                    .rigid => |mr| mr.constraints.count == 0,
+                                                    else => false,
+                                                };
+                                            }
+                                        }
+                                        break :blk flex.constraints.count == 0;
+                                    },
+                                    .rigid => |rigid| blk: {
+                                        // If mapped in type scope, check what it maps to
+                                        if (caller_module_idx) |caller_mod| {
+                                            if (type_scope.lookup(elem_resolved.var_)) |mapped_var| {
+                                                // Resolve the mapped type in the caller module
+                                                const caller_env = self.all_module_envs[caller_mod];
+                                                const mapped_resolved = caller_env.types.resolveVar(mapped_var);
+                                                // Check if the MAPPED type is ZST
+                                                break :blk switch (mapped_resolved.desc.content) {
+                                                    .structure => |ft| switch (ft) {
+                                                        .empty_record, .empty_tag_union => true,
+                                                        else => false,
+                                                    },
+                                                    .flex => |mf| mf.constraints.count == 0,
+                                                    .rigid => |mr| mr.constraints.count == 0,
+                                                    else => false,
+                                                };
+                                            }
+                                        }
+                                        break :blk rigid.constraints.count == 0;
+                                    },
                                     .structure => |ft| switch (ft) {
                                         .empty_record, .empty_tag_union => true,
                                         else => false,

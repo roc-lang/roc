@@ -250,9 +250,36 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
                 if (code_result.layout_store) |ls| {
                     const stored_layout = ls.getLayout(code_result.result_layout);
 
-                    // Handle list_of_zst - represents empty lists or lists of zero-sized types
+                    // Handle list_of_zst - lists of zero-sized types
+                    // We still need to execute the JIT code to get the length
                     if (stored_layout.tag == .list_of_zst) {
-                        break :blk allocator.dupe(u8, "[]") catch unreachable;
+                        const ListResultBuffer = extern struct {
+                            ptr: ?[*]const u8,
+                            len: usize,
+                            capacity: usize,
+                        };
+                        var result: ListResultBuffer align(8) = .{
+                            .ptr = null,
+                            .len = 0,
+                            .capacity = 0,
+                        };
+                        jit.callWithResultPtrAndRocOps(@ptrCast(&result), @constCast(&dev_eval.roc_ops));
+
+                        // Format as [(), (), ...] based on the length
+                        var output = std.array_list.Managed(u8).initCapacity(allocator, 64) catch
+                            return error.OutOfMemory;
+                        errdefer output.deinit();
+                        output.append('[') catch return error.OutOfMemory;
+
+                        for (0..result.len) |i| {
+                            if (i > 0) {
+                                try output.appendSlice(", ");
+                            }
+                            try output.appendSlice("()");
+                        }
+
+                        try output.append(']');
+                        break :blk output.toOwnedSlice();
                     }
 
                     // Handle list - format as [elem1, elem2, ...]

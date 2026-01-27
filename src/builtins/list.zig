@@ -627,7 +627,42 @@ pub fn listAppendUnsafeC(
         .length = list_length,
         .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr,
     };
-    out.* = listAppendUnsafe(list, element, element_width, copy);
+    const result = listAppendUnsafe(list, element, element_width, copy);
+    out.* = result;
+}
+
+/// C-compatible wrapper for the SAFE listAppend that reserves capacity first.
+/// Takes explicit scalar arguments to avoid ABI issues with 24-byte struct on aarch64.
+pub fn listAppendSafeC(
+    out: *RocList,
+    list_bytes: ?[*]u8,
+    list_length: usize,
+    list_capacity_or_alloc_ptr: usize,
+    element: Opaque,
+    alignment: u32,
+    element_width: usize,
+    elements_refcounted: bool,
+    copy: CopyFallbackFn,
+    roc_ops: *RocOps,
+) callconv(.c) void {
+    const list = RocList{
+        .bytes = list_bytes,
+        .length = list_length,
+        .capacity_or_alloc_ptr = list_capacity_or_alloc_ptr,
+    };
+    const result = listAppend(
+        list,
+        alignment,
+        element,
+        element_width,
+        elements_refcounted,
+        null, // inc_context
+        rcNone, // inc - no refcount increment needed
+        .InPlace, // update_mode - try to update in place
+        copy,
+        roc_ops,
+    );
+    out.* = result;
 }
 
 /// List.append - adds an element to the end of a list.
