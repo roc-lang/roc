@@ -907,7 +907,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 return self.generateFloatBinop(binop.op, lhs_loc, rhs_loc);
             } else if (operands_are_i128 or binop.result_layout == .i128 or binop.result_layout == .u128 or binop.result_layout == .dec) {
                 // Use i128 path for Dec/i128 operands (even for comparisons that return bool)
-                return self.generateI128Binop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
+                // Convert .stack locations to .stack_i128 for Dec operations, since Dec values are 16 bytes
+                // but may be stored with .stack location type (e.g., mutable variables)
+                const is_dec_op = binop.result_layout == .dec or binop.result_layout == .i128 or binop.result_layout == .u128;
+                const adj_lhs = if (is_dec_op and lhs_loc == .stack) ValueLocation{ .stack_i128 = lhs_loc.stack } else lhs_loc;
+                const adj_rhs = if (is_dec_op and rhs_loc == .stack) ValueLocation{ .stack_i128 = rhs_loc.stack } else rhs_loc;
+                return self.generateI128Binop(binop.op, adj_lhs, adj_rhs, binop.result_layout);
             } else {
                 return self.generateIntBinop(binop.op, lhs_loc, rhs_loc, binop.result_layout);
             }
