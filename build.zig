@@ -2203,42 +2203,18 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // Build-time compiler for builtin .roc modules with caching
+    // Build-time compiler for builtin .roc modules
     //
-    // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
-    // However, if you modify the compiler itself (e.g., parse, can, check modules) and want those
-    // changes reflected in the builtin .bin files, you need to run: zig build rebuild-builtins
-    //
-    // We cache the builtin compiler executable to avoid ~doubling normal build times.
-    // CI always rebuilds from scratch, so it's not affected by this caching.
+    // Always rebuild builtins when building roc to ensure they match the compiler.
+    // The builtin_compiler is cached by zig, so this only adds overhead when
+    // compiler sources actually change.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
-
-    // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
-    const should_rebuild_builtins = blk: {
-        const builtin_bin_path = "zig-out/builtins/Builtin.bin";
-
-        const roc_stat = std.fs.cwd().statFile(builtin_roc_path) catch break :blk true;
-        const bin_stat = std.fs.cwd().statFile(builtin_bin_path) catch break :blk true;
-
-        // If .roc file is newer than .bin file, rebuild
-        if (roc_stat.mtime > bin_stat.mtime) {
-            break :blk true;
-        }
-
-        // Check if builtin_indices.bin exists
-        _ = std.fs.cwd().statFile("zig-out/builtins/builtin_indices.bin") catch break :blk true;
-
-        // Builtin.bin exists and is up-to-date
-        break :blk false;
-    };
 
     const write_compiled_builtins = b.addWriteFiles();
 
-    // Regenerate .bin files if necessary
-    if (should_rebuild_builtins) {
-        const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-        write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
-    }
+    // Always regenerate .bin files to ensure they match the current compiler
+    const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
 
     // Copy Builtin.bin from zig-out/builtins/
     _ = write_compiled_builtins.addCopyFile(
