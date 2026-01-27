@@ -51,6 +51,7 @@ const cache_manager_mod = @import("cache_manager.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const ImportInfo = cache_manager_mod.ImportInfo;
 const CacheModule = @import("cache_module.zig").CacheModule;
+const roc_target = @import("roc_target");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
@@ -382,6 +383,7 @@ pub const Coordinator = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
+    target: roc_target.RocTarget,
 
     /// All packages in the workspace
     packages: std.StringHashMap(*PackageState),
@@ -468,6 +470,7 @@ pub const Coordinator = struct {
         gpa: Allocator,
         mode: Mode,
         max_threads: usize,
+        target: roc_target.RocTarget,
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
@@ -480,6 +483,7 @@ pub const Coordinator = struct {
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
             .result_channel = try Channel(WorkerResult).init(gpa, channel.DEFAULT_CAPACITY),
             .task_queue = try std.ArrayList(WorkerTask).initCapacity(std.heap.page_allocator, initial_task_capacity),
@@ -2137,6 +2141,7 @@ pub const Coordinator = struct {
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
+            self.target,
         ) catch {
             return .{
                 .type_checked = .{
@@ -2263,6 +2268,7 @@ test "Coordinator basic initialization" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
@@ -2281,6 +2287,7 @@ test "Coordinator package creation" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2305,6 +2312,7 @@ test "Coordinator module creation" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2331,6 +2339,7 @@ test "Coordinator task queue" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2368,6 +2377,7 @@ test "Coordinator isComplete logic" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2414,6 +2424,7 @@ test "Channel in coordinator context" {
         allocator,
         .multi_threaded,
         2,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2446,6 +2457,7 @@ test "Coordinator enqueueParseTask flow" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2483,6 +2495,7 @@ test "Coordinator single-threaded loop with mock result" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
