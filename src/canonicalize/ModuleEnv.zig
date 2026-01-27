@@ -623,6 +623,11 @@ pub fn deinitCachedModule(self: *Self) void {
     // rigid_vars is initialized empty during deserialization and may have
     // items added during type checking, so we need to free it
     self.rigid_vars.deinit(self.gpa);
+
+    // If enableRuntimeInserts was called on the interner, it allocated new memory
+    // that needs to be freed. The interner.deinit checks supports_inserts internally
+    // and will only free if memory was actually allocated (not for pure cached data).
+    self.common.idents.interner.deinit(self.gpa);
 }
 
 // Module compilation functionality
