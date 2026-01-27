@@ -891,8 +891,14 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const field_name = module_env.getIdent(dot.field_name);
 
             // Check if this is a list.len or list.is_empty access
-            const receiver_expr = module_env.store.getExpr(dot.receiver);
-            if (receiver_expr == .e_list) {
+            // Check based on layout, not expression type, so it works for list variables too
+            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse LayoutIdx.default_num;
+            const is_list_receiver = if (self.layout_store) |ls| is_list: {
+                const layout_val = ls.getLayout(receiver_layout);
+                break :is_list layout_val.tag == .list or layout_val.tag == .list_of_zst;
+            } else false;
+
+            if (is_list_receiver) {
                 if (std.mem.eql(u8, field_name, "len")) {
                     // Convert list.len to low_level list_len operation
                     const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
@@ -916,10 +922,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 }
             }
 
-            // Compute receiver's layout to get field info
-            const receiver_layout = self.computeLayoutFromExprIdx(module_env, dot.receiver) orelse LayoutIdx.default_num;
-
             // Try to compute field index and layout from the record layout
+            // (receiver_layout was already computed above for list check)
             var field_idx: u16 = 0;
             var field_layout: LayoutIdx = LayoutIdx.default_num;
             if (self.layout_store) |ls| {
