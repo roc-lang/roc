@@ -2127,6 +2127,7 @@ pub fn build(b: *std.Build) void {
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
     const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
+    const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
 
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
@@ -2161,6 +2162,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
+    build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);
@@ -2212,42 +2214,18 @@ pub fn build(b: *std.Build) void {
 
     const roc_modules = modules.RocModules.create(b, build_options, zstd);
 
-    // Build-time compiler for builtin .roc modules with caching
+    // Build-time compiler for builtin .roc modules
     //
-    // Changes to .roc files in src/build/roc/ are automatically detected and trigger recompilation.
-    // However, if you modify the compiler itself (e.g., parse, can, check modules) and want those
-    // changes reflected in the builtin .bin files, you need to run: zig build rebuild-builtins
-    //
-    // We cache the builtin compiler executable to avoid ~doubling normal build times.
-    // CI always rebuilds from scratch, so it's not affected by this caching.
+    // Always rebuild builtins when building roc to ensure they match the compiler.
+    // The builtin_compiler is cached by zig, so this only adds overhead when
+    // compiler sources actually change.
     const builtin_roc_path = "src/build/roc/Builtin.roc";
-
-    // Check if we need to rebuild builtins by comparing .roc and .bin file timestamps
-    const should_rebuild_builtins = blk: {
-        const builtin_bin_path = "zig-out/builtins/Builtin.bin";
-
-        const roc_stat = std.fs.cwd().statFile(builtin_roc_path) catch break :blk true;
-        const bin_stat = std.fs.cwd().statFile(builtin_bin_path) catch break :blk true;
-
-        // If .roc file is newer than .bin file, rebuild
-        if (roc_stat.mtime > bin_stat.mtime) {
-            break :blk true;
-        }
-
-        // Check if builtin_indices.bin exists
-        _ = std.fs.cwd().statFile("zig-out/builtins/builtin_indices.bin") catch break :blk true;
-
-        // Builtin.bin exists and is up-to-date
-        break :blk false;
-    };
 
     const write_compiled_builtins = b.addWriteFiles();
 
-    // Regenerate .bin files if necessary
-    if (should_rebuild_builtins) {
-        const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
-        write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
-    }
+    // Always regenerate .bin files to ensure they match the current compiler
+    const run_builtin_compiler = createAndRunBuiltinCompiler(b, roc_modules, flag_enable_tracy, &.{builtin_roc_path});
+    write_compiled_builtins.step.dependOn(&run_builtin_compiler.step);
 
     // Copy Builtin.bin from zig-out/builtins/
     _ = write_compiled_builtins.addCopyFile(

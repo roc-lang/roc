@@ -38,6 +38,9 @@ pub const AutoImportedType = struct {
     /// Whether this is a package-qualified import (e.g., "pf.Stdout" vs "Bool")
     /// Used to determine the correct module name for auto-imports
     is_package_qualified: bool = false,
+    /// Whether this is a placeholder entry for a module that hasn't been compiled yet.
+    /// When true, member lookup failures are not errors - they'll be validated during type checking.
+    is_placeholder: bool = false,
 };
 
 /// Information about a placeholder identifier, tracking its component parts
@@ -102,6 +105,9 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Local type declarations found inside function bodies.
+/// Collected during canonicalization, then added to all_statements at the end.
+scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Counter for generating unique malformed import placeholder names
 malformed_import_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
@@ -231,6 +237,7 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
+    self.scratch_local_type_decls.deinit(gpa);
 }
 
 /// Options for initializing the canonicalizer.
@@ -263,6 +270,7 @@ pub fn init(
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .scratch_local_type_decls = try std.ArrayList(CIR.Statement.Idx).initCapacity(gpa, 0),
     };
 
     // Top-level scope is not a function boundary
@@ -2629,6 +2637,11 @@ pub fn canonicalizeFile(
     // Check for exposed but not implemented items
     try self.checkExposedButNotImplemented();
 
+    // Add local type declarations to all_statements
+    for (self.scratch_local_type_decls.items) |stmt_idx| {
+        try self.env.store.addScratchStatement(stmt_idx);
+    }
+
     // Create the span of all top-level defs and statements
     self.env.all_defs = try self.env.store.defSpanFrom(scratch_defs_start);
     self.env.all_statements = try self.env.store.statementSpanFrom(scratch_statements_start);
@@ -3588,6 +3601,22 @@ fn introduceItemsAliased(
             }
             return;
         };
+
+        // If module is a placeholder (not yet compiled), skip validation and introduce items directly
+        // This matches the behavior in type annotation canonicalization where placeholders create pending lookups
+        if (module_entry.is_placeholder) {
+            for (exposed_items_slice) |exposed_item_idx| {
+                const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
+                const item_name = exposed_item.alias orelse exposed_item.name;
+                const item_info = Scope.ExposedItemInfo{
+                    .module_name = module_name,
+                    .original_name = exposed_item.name,
+                };
+                try self.scopeIntroduceExposedItem(item_name, item_info, import_region);
+            }
+            return;
+        }
+
         const module_env = module_entry.env;
 
         // Auto-expose the module's main type for type modules
@@ -4441,8 +4470,9 @@ pub fn canonicalizeExpr(
                             // Check if this module is imported in the current scope
                             // For auto-imported nested types (Bool, Str), use the parent module name (Builtin)
                             // For package-qualified imports (pf.Stdout), use the qualified name as-is
+                            // For placeholder modules, use the original module text (not the placeholder's env.module_name)
                             const lookup_module_name = if (auto_imported_type_info) |info|
-                                if (info.is_package_qualified) module_text else info.env.module_name
+                                if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name
                             else
                                 module_text;
 
@@ -4450,9 +4480,10 @@ pub fn canonicalizeExpr(
                             const import_idx = self.scopeLookupImportedModule(lookup_module_name) orelse blk: {
                                 // Check if this is an auto-imported module
                                 if (auto_imported_type_info) |info| {
+                                    // For placeholders, use the original module text
                                     // For auto-imported nested types (like Bool, Str), import the parent module (Builtin)
                                     // For package-qualified imports (pf.Stdout), use the qualified name
-                                    const actual_module_name = if (info.is_package_qualified) module_text else info.env.module_name;
+                                    const actual_module_name = if (info.is_placeholder) module_text else if (info.is_package_qualified) module_text else info.env.module_name;
                                     break :blk try self.getOrCreateAutoImport(actual_module_name);
                                 }
 
@@ -4470,22 +4501,69 @@ pub fn canonicalizeExpr(
                             // Need to convert identifier from current module to target module
                             const field_text = self.env.getIdent(ident);
 
+                            // For nested module access like Outer.Inner.inner, build the nested path
+                            // from all qualifiers after the first one, plus the final ident.
+                            // e.g., for Outer.Inner.inner: qualifiers[1..] = [Inner], field = inner
+                            // Result: "Inner.inner"
+                            // For simple access like Outer.outer, this is just "outer" (field_text)
+                            var nested_path_buf: [512]u8 = undefined;
+                            const nested_path: []const u8 = if (qualifier_tokens.len > 1) nested_blk: {
+                                var pos: usize = 0;
+                                for (qualifier_tokens[1..]) |qtok| {
+                                    const qtok_idx = @as(Token.Idx, @intCast(qtok));
+                                    if (self.parse_ir.tokens.resolveIdentifier(qtok_idx)) |q_ident| {
+                                        const q_text = self.env.getIdent(q_ident);
+                                        if (pos + q_text.len + 1 > nested_path_buf.len) break :nested_blk field_text;
+                                        @memcpy(nested_path_buf[pos..][0..q_text.len], q_text);
+                                        pos += q_text.len;
+                                        nested_path_buf[pos] = '.';
+                                        pos += 1;
+                                    }
+                                }
+                                if (pos + field_text.len > nested_path_buf.len) break :nested_blk field_text;
+                                @memcpy(nested_path_buf[pos..][0..field_text.len], field_text);
+                                pos += field_text.len;
+                                break :nested_blk nested_path_buf[0..pos];
+                            } else field_text;
+
                             const target_node_idx_opt: ?u16 = if (auto_imported_type_info) |info| blk: {
                                 const module_env = info.env;
 
                                 // For auto-imported types with statement_idx (builtin types and platform modules),
                                 // build the full qualified name using qualified_type_ident.
-                                // For regular user module imports (statement_idx is null), use field_text directly.
+                                // For regular user module imports (statement_idx is null), build the full path
+                                // using module name + nested path (for nested access like Outer.Inner.inner).
+                                var full_lookup_buf: [512]u8 = undefined;
                                 const lookup_name: []const u8 = if (info.statement_idx) |_| name_blk: {
                                     // Build the fully qualified member name using the type's qualified ident
                                     // e.g., for U8.to_i16: "Builtin.Num.U8" + "to_i16" -> "Builtin.Num.U8.to_i16"
                                     // e.g., for Str.concat: "Builtin.Str" + "concat" -> "Builtin.Str.concat"
+                                    // For nested module access like Outer.Inner.inner, use nested_path
+                                    // e.g., "Outer" + "Inner.inner" -> "Outer.Inner.inner"
                                     // Note: qualified_type_ident is always stored in the calling module's ident store
                                     // (self.env), since Ident.Idx values are not transferable between stores.
                                     const qualified_text = self.env.getIdent(info.qualified_type_ident);
-                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    const fully_qualified_idx = try self.env.insertQualifiedIdent(qualified_text, nested_path);
                                     break :name_blk self.env.getIdent(fully_qualified_idx);
-                                } else field_text;
+                                } else name_blk: {
+                                    // For nested module access (qualifier_tokens.len > 1), exposed items
+                                    // are stored with the full module-qualified path.
+                                    // Build: module_name + "." + nested_path
+                                    // e.g., "Outer.Inner.inner" for Inner.inner in Outer module
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
+                                    if (qualifier_tokens.len == 1) {
+                                        break :name_blk field_text;
+                                    }
+                                    const mod_name = module_env.module_name;
+                                    if (mod_name.len + 1 + nested_path.len > full_lookup_buf.len) {
+                                        break :name_blk nested_path;
+                                    }
+                                    @memcpy(full_lookup_buf[0..mod_name.len], mod_name);
+                                    full_lookup_buf[mod_name.len] = '.';
+                                    @memcpy(full_lookup_buf[mod_name.len + 1 ..][0..nested_path.len], nested_path);
+                                    break :name_blk full_lookup_buf[0 .. mod_name.len + 1 + nested_path.len];
+                                };
 
                                 // Look up the associated item by its name
                                 const qname_ident = module_env.common.findIdent(lookup_name) orelse {
@@ -4496,8 +4574,8 @@ pub fn canonicalizeExpr(
                                 break :blk module_env.getExposedNodeIndexById(qname_ident);
                             } else null;
 
-                            const target_node_idx = target_node_idx_opt orelse {
-                                // The identifier doesn't exist in the module or isn't exposed
+                            // If target_node_idx_opt is null, we need to handle the error case
+                            if (target_node_idx_opt == null) {
                                 // Check if the module is in module_envs - if not, the import failed (MODULE NOT FOUND)
                                 // and we shouldn't report a redundant error here
                                 if (auto_imported_type_info == null) {
@@ -4506,24 +4584,47 @@ pub fn canonicalizeExpr(
                                     break :blk_qualified;
                                 }
 
+                                // If this is a placeholder module (not yet compiled), create a pending lookup
+                                // that will be resolved after all modules are canonicalized.
+                                if (auto_imported_type_info.?.is_placeholder) {
+                                    const info = auto_imported_type_info.?;
+                                    // Build the fully qualified member name like we do for non-placeholder modules.
+                                    // For builtin types with statement_idx, use qualified_type_ident + field_text
+                                    // e.g., for Message.msg: "Message" + "msg" -> "Message.msg"
+                                    // For nested module access (qualifier_tokens.len > 1), use module_name + nested_path
+                                    // e.g., for Outer.Inner.inner: "Outer" + "Inner.inner" -> "Outer.Inner.inner"
+                                    // For simple access (qualifier_tokens.len == 1), just use field_text
+                                    // e.g., for A.main!: just "main!" (not "A.main!")
+                                    const qualified_ident_idx: Ident.Idx = if (info.statement_idx != null) idx_blk: {
+                                        const qualified_text = self.env.getIdent(info.qualified_type_ident);
+                                        break :idx_blk try self.env.insertQualifiedIdent(qualified_text, field_text);
+                                    } else if (qualifier_tokens.len > 1)
+                                        try self.env.insertQualifiedIdent(self.env.getIdent(module_name), nested_path)
+                                    else
+                                        ident;
+
+                                    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_pending = .{
+                                        .module_idx = import_idx,
+                                        .ident_idx = qualified_ident_idx,
+                                        .region = region,
+                                    } }, region);
+                                    return CanonicalizedExpr{
+                                        .idx = expr_idx,
+                                        .free_vars = DataSpan.empty(),
+                                    };
+                                }
+
                                 // Generate a more helpful error for auto-imported types (List, Bool, Try, etc.)
-                                const diagnostic = if (auto_imported_type_info != null)
-                                    Diagnostic{ .nested_value_not_found = .{
+                                return CanonicalizedExpr{
+                                    .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .nested_value_not_found = .{
                                         .parent_name = module_name,
                                         .nested_name = ident,
                                         .region = region,
-                                    } }
-                                else
-                                    Diagnostic{ .qualified_ident_does_not_exist = .{
-                                        .ident = qualified_ident,
-                                        .region = region,
-                                    } };
-
-                                return CanonicalizedExpr{
-                                    .idx = try self.env.pushMalformed(Expr.Idx, diagnostic),
+                                    } }),
                                     .free_vars = DataSpan.empty(),
                                 };
-                            };
+                            }
+                            const target_node_idx = target_node_idx_opt.?;
 
                             // Create the e_lookup_external expression with Import.Idx
                             const expr_idx = try self.env.addExpr(CIR.Expr{ .e_lookup_external = .{
@@ -9114,6 +9215,21 @@ fn canonicalizeTypeAnnoBasicType(
             // Check if this is an auto-imported type from module_envs
             if (self.module_envs) |envs_map| {
                 if (envs_map.get(type_name_ident)) |auto_imported_type| {
+                    // If this is a placeholder module (not yet compiled), create a pending lookup
+                    // that will be resolved after all modules are canonicalized.
+                    if (auto_imported_type.is_placeholder) {
+                        // Get or create import for the placeholder module
+                        const module_name_text = self.env.getIdent(type_name_ident);
+                        const import_idx = try self.getOrCreateAutoImport(module_name_text);
+                        return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{
+                            .name = type_name_ident,
+                            .base = .{ .pending = .{
+                                .module_idx = import_idx,
+                                .type_name = type_name_ident,
+                            } },
+                        } }, region);
+                    }
+
                     // This is an auto-imported type like Bool or Try
                     // We need to create an import for it and return the type annotation
                     const module_name_text = auto_imported_type.env.module_name;
@@ -9277,6 +9393,15 @@ fn canonicalizeTypeAnnoBasicType(
             const auto_imported_type = envs_map.get(module_name) orelse {
                 break :blk 0;
             };
+
+            // If this is a placeholder module (not yet compiled), create a pending lookup
+            // that will be resolved after all modules are canonicalized.
+            if (auto_imported_type.is_placeholder) {
+                return try self.env.addTypeAnno(CIR.TypeAnno{ .lookup = .{ .name = type_name_ident, .base = .{ .pending = .{
+                    .module_idx = import_idx,
+                    .type_name = type_name_ident,
+                } } } }, region);
+            }
 
             const target_ident = auto_imported_type.env.common.findIdent(type_name_text) orelse {
                 // Type is not exposed by the module
@@ -10296,6 +10421,9 @@ pub fn canonicalizeBlockStatement(self: *Self, ast_stmt: AST.Statement, ast_stmt
                     };
 
                     const stmt_idx = try self.env.addStatement(type_decl_stmt, region);
+
+                    // Collect local type decls to add to all_statements later
+                    try self.scratch_local_type_decls.append(self.env.gpa, stmt_idx);
 
                     // Introduce the type into the current scope for local use
                     try self.introduceType(type_header.name, stmt_idx, region);

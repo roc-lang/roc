@@ -11291,6 +11291,15 @@ pub const Interpreter = struct {
                 try value_stack.push(value);
             },
 
+            .e_lookup_pending => {
+                // Pending lookups should normally be resolved before evaluation.
+                // However, if an import references a non-existent package shorthand
+                // (e.g., "import f.S" where "f" is not defined), the pending lookup
+                // cannot be resolved because there's no target module to look up from.
+                // Return an error since we can't evaluate an unresolved lookup.
+                return error.TypeMismatch;
+            },
+
             .e_lookup_required => |lookup| {
                 // Required lookups reference values from the app that provides values to the
                 // platform's `requires` clause.
@@ -12496,6 +12505,7 @@ pub const Interpreter = struct {
                     if (other_env) |builtin_env| {
                         traceDbg(roc_ops, "e_call: resolved to env \"{s}\"", .{builtin_env.module_name});
                         const target_def_idx: can.CIR.Def.Idx = @enumFromInt(lookup.target_node_idx);
+                        traceDbg(roc_ops, "e_call: getDef target_node_idx={} store.nodes.len={}", .{ lookup.target_node_idx, builtin_env.store.nodes.len() });
                         const target_def = builtin_env.store.getDef(target_def_idx);
                         const target_pattern = builtin_env.store.getPattern(target_def.pattern);
                         traceDbg(roc_ops, "e_call: target_pattern tag={s}", .{@tagName(target_pattern)});
@@ -14012,50 +14022,66 @@ pub const Interpreter = struct {
                             const rec_ptr: *anyopaque = @ptrCast(base + aligned_off);
                             const rec_val = StackValue{ .layout = captures_layout, .ptr = rec_ptr, .is_initialized = true, .rt_var = cls_val.rt_var };
                             var accessor = try rec_val.asRecord(&self.runtime_layout_store);
-                            // First try the original module ident
-                            if (accessor.findFieldIndex(var_ident)) |fidx| {
-                                const field_rt = try self.runtime_types.fresh();
-                                const field_val = try accessor.getFieldByIndex(fidx, field_rt);
-                                return try self.pushCopy(field_val, roc_ops);
-                            }
-                            // If not found and closure is from the current module with this capture,
-                            // try translated ident. Capture field names are stored using
-                            // runtime_layout_store.env idents, so we need to translate to match.
-                            // Only do this if the variable is actually in this closure's captures
-                            // list AND it's not a top-level def (those should be looked up directly).
+
+                            // IMPORTANT: We must verify the variable is actually in the closure's
+                            // captures list BEFORE trying to look it up by ident index. Ident indices
+                            // are module-local and can collide between different modules, causing
+                            // false positives from findFieldIndex.
+                            const captures = header.source_env.store.sliceCaptures(closure_data.captures);
+                            var captured_pattern_idx: ?can.CIR.Pattern.Idx = null;
+                            var captured_ident: ?base_pkg.Ident.Idx = null;
+
+                            // Check if this variable is in the closure's captures list
                             if (header.source_env == self.env) {
-                                const captures = header.source_env.store.sliceCaptures(closure_data.captures);
-                                var captured_pattern_idx: ?can.CIR.Pattern.Idx = null;
+                                // Same module: compare ident indices directly
                                 for (captures) |cap_idx| {
                                     const cap = header.source_env.store.getCapture(cap_idx);
-                                    // Since header.source_env == self.env, compare ident indices directly.
-                                    // The idents are from the same module's ident store.
                                     if (@as(u32, @bitCast(cap.name)) == @as(u32, @bitCast(var_ident))) {
                                         captured_pattern_idx = cap.pattern_idx;
+                                        captured_ident = cap.name;
                                         break;
                                     }
                                 }
-                                if (captured_pattern_idx) |cap_pattern| {
-                                    // Skip if this pattern corresponds to a top-level def.
-                                    // Top-level defs should be looked up directly, not via captures,
-                                    // because the type info in captures may be incomplete.
-                                    const all_defs = self.env.store.sliceDefs(self.env.all_defs);
-                                    var is_top_level_def = false;
-                                    for (all_defs) |def_idx| {
-                                        const def = self.env.store.getDef(def_idx);
-                                        if (def.pattern == cap_pattern) {
-                                            is_top_level_def = true;
+                            } else {
+                                // Cross-module: translate ident to source_env's ident store and compare indices
+                                const var_ident_text = self.env.getIdent(var_ident);
+                                if (header.source_env.common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
+                                    for (captures) |cap_idx| {
+                                        const cap = header.source_env.store.getCapture(cap_idx);
+                                        if (@as(u32, @bitCast(cap.name)) == @as(u32, @bitCast(translated_ident))) {
+                                            captured_pattern_idx = cap.pattern_idx;
+                                            captured_ident = cap.name;
                                             break;
                                         }
                                     }
-                                    if (!is_top_level_def) {
-                                        const var_ident_text = self.env.getIdent(var_ident);
-                                        if (self.runtime_layout_store.env.common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
-                                            if (accessor.findFieldIndex(translated_ident)) |fidx| {
-                                                const field_rt = try self.runtime_types.fresh();
-                                                const field_val = try accessor.getFieldByIndex(fidx, field_rt);
-                                                return try self.pushCopy(field_val, roc_ops);
-                                            }
+                                }
+                            }
+
+                            // Only proceed if we found the variable in the captures list
+                            if (captured_pattern_idx) |cap_pattern| {
+                                // Skip if this pattern corresponds to a top-level def.
+                                // Top-level defs should be looked up directly, not via captures,
+                                // because the type info in captures may be incomplete.
+                                const all_defs = self.env.store.sliceDefs(self.env.all_defs);
+                                var is_top_level_def = false;
+                                for (all_defs) |def_idx| {
+                                    const def = self.env.store.getDef(def_idx);
+                                    if (def.pattern == cap_pattern) {
+                                        is_top_level_def = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!is_top_level_def) {
+                                    // Try to find the captured value in the closure's captures record.
+                                    // Capture field names are stored using runtime_layout_store.env idents,
+                                    // so we need to translate the ident to match.
+                                    const var_ident_text = self.env.getIdent(var_ident);
+                                    if (self.runtime_layout_store.env.common.idents.lookup(base_pkg.Ident.for_text(var_ident_text))) |translated_ident| {
+                                        if (accessor.findFieldIndex(translated_ident)) |fidx| {
+                                            const field_rt = try self.runtime_types.fresh();
+                                            const field_val = try accessor.getFieldByIndex(fidx, field_rt);
+                                            return try self.pushCopy(field_val, roc_ops);
                                         }
                                     }
                                 }
@@ -18325,6 +18351,35 @@ pub const Interpreter = struct {
                         if (ownership == .borrow) {
                             arg.decref(&self.runtime_layout_store, roc_ops);
                         }
+                    }
+
+                    method_func.decref(&self.runtime_layout_store, roc_ops);
+                    self.env = saved_env;
+                    try value_stack.push(result);
+                    return true;
+                }
+
+                // Check if hosted lambda (platform-provided function)
+                if (lambda_expr == .e_hosted_lambda) {
+                    const hosted = lambda_expr.e_hosted_lambda;
+
+                    // Build args array: receiver + explicit args
+                    var all_args = try self.allocator.alloc(StackValue, 1 + total_args);
+                    defer self.allocator.free(all_args);
+                    all_args[0] = receiver_value;
+                    for (arg_values, 0..) |arg, idx| {
+                        all_args[1 + idx] = arg;
+                    }
+
+                    // Get the return type from the call site
+                    const return_ct_var = can.ModuleEnv.varFrom(dac.expr_idx);
+                    const return_rt_var = try self.translateTypeVar(saved_env, return_ct_var);
+
+                    const result = try self.callHostedFunction(hosted.index, all_args, roc_ops, return_rt_var);
+
+                    // Decref all arguments (hosted functions borrow their arguments)
+                    for (all_args) |arg| {
+                        arg.decref(&self.runtime_layout_store, roc_ops);
                     }
 
                     method_func.decref(&self.runtime_layout_store, roc_ops);

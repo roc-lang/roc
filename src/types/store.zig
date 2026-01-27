@@ -857,26 +857,34 @@ pub const Store = struct {
             self.gpa = .{ 0, 0 };
         }
 
-        /// Deserialize this Serialized struct into a Store
+        /// Deserialize into a Store value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize, gpa: Allocator) *Store {
-            // Note: Serialized may be smaller than the runtime struct because:
-            // - Uses u64 offsets instead of usize pointers
-            // - Omits runtime-only fields like the allocator
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const store = @as(*Store, @ptrFromInt(@intFromPtr(self)));
-
-            store.* = Store{
+        /// WARNING: The returned Store points into the cache buffer and CANNOT be mutated.
+        /// Use deserializeWithCopy() if the store needs to be mutable.
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) Store {
+            return Store{
                 .gpa = gpa,
-                .slots = self.slots.deserialize(base_addr).*,
-                .descs = self.descs.deserialize(base_addr).*,
-                .vars = self.vars.deserialize(base_addr).*,
-                .record_fields = self.record_fields.deserialize(base_addr).*,
-                .tags = self.tags.deserialize(base_addr).*,
-                .static_dispatch_constraints = self.static_dispatch_constraints.deserialize(base_addr).*,
+                .slots = self.slots.deserializeInto(base_addr),
+                .descs = self.descs.deserializeInto(base_addr),
+                .vars = self.vars.deserializeInto(base_addr),
+                .record_fields = self.record_fields.deserializeInto(base_addr),
+                .tags = self.tags.deserializeInto(base_addr),
+                .static_dispatch_constraints = self.static_dispatch_constraints.deserializeInto(base_addr),
             };
+        }
 
-            return store;
+        /// Deserialize into a Store value with fresh memory allocation.
+        /// The returned Store owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!Store {
+            return Store{
+                .gpa = gpa,
+                .slots = try self.slots.deserializeWithCopy(base_addr, gpa),
+                .descs = try self.descs.deserializeWithCopy(base_addr, gpa),
+                .vars = try self.vars.deserializeWithCopy(base_addr, gpa),
+                .record_fields = try self.record_fields.deserializeWithCopy(base_addr, gpa),
+                .tags = try self.tags.deserializeWithCopy(base_addr, gpa),
+                .static_dispatch_constraints = try self.static_dispatch_constraints.deserializeWithCopy(base_addr, gpa),
+            };
         }
     };
 
@@ -1045,18 +1053,20 @@ const SlotStore = struct {
             try self.backing.serialize(&slot_store.backing, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into a SlotStore
+        /// Deserialize into a SlotStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize) *SlotStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const slot_store = @as(*SlotStore, @ptrFromInt(@intFromPtr(self)));
-
-            slot_store.* = SlotStore{
-                .backing = self.backing.deserialize(base_addr).*,
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) SlotStore {
+            return SlotStore{
+                .backing = self.backing.deserializeInto(base_addr),
             };
+        }
 
-            return slot_store;
+        /// Deserialize into a SlotStore value with fresh memory allocation.
+        /// The returned SlotStore owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!SlotStore {
+            return SlotStore{
+                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
+            };
         }
     };
 
@@ -1152,18 +1162,20 @@ const DescStore = struct {
             try self.backing.serialize(&desc_store.backing, allocator, writer);
         }
 
-        /// Deserialize this Serialized struct into a DescStore
+        /// Deserialize into a DescStore value (no in-place modification of cache buffer).
         /// The base parameter is the base address of the serialized buffer in memory.
-        pub fn deserialize(self: *Serialized, base_addr: usize) *DescStore {
-            // Note: Serialized may be smaller than the runtime struct.
-            // We deserialize by overwriting the Serialized memory with the runtime struct.
-            const desc_store = @as(*DescStore, @ptrFromInt(@intFromPtr(self)));
-
-            desc_store.* = DescStore{
-                .backing = self.backing.deserialize(base_addr).*,
+        pub fn deserializeInto(self: *const Serialized, base_addr: usize) DescStore {
+            return DescStore{
+                .backing = self.backing.deserializeInto(base_addr),
             };
+        }
 
-            return desc_store;
+        /// Deserialize into a DescStore value with fresh memory allocation.
+        /// The returned DescStore owns its memory and can be safely grown/mutated.
+        pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!DescStore {
+            return DescStore{
+                .backing = try self.backing.deserializeWithCopy(base_addr, gpa),
+            };
         }
     };
 
@@ -1549,7 +1561,7 @@ test "SlotStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*SlotStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
 
     // Verify using captured indices
     try std.testing.expectEqual(@as(u64, 3), deserialized.backing.len());
@@ -1611,7 +1623,7 @@ test "DescStore.Serialized roundtrip" {
 
     // Deserialize - find the Serialized struct at the beginning of the buffer
     const deser_ptr = @as(*DescStore.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr));
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr));
     // Note: deserialize already handles relocation, don't call relocate again
 
     // Verify using captured indices
@@ -1661,7 +1673,7 @@ test "Store.Serialized roundtrip" {
 
     // Deserialize - Store.Serialized is at the beginning of the buffer
     const deser_ptr = @as(*Store.Serialized, @ptrCast(@alignCast(buffer.ptr)));
-    const deserialized = deser_ptr.deserialize(@intFromPtr(buffer.ptr), gpa);
+    const deserialized = deser_ptr.deserializeInto(@intFromPtr(buffer.ptr), gpa);
 
     // Verify the store was deserialized correctly
     try std.testing.expectEqual(@as(usize, 3), deserialized.len());

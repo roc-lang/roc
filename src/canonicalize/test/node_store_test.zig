@@ -259,6 +259,13 @@ test "NodeStore round trip - Expressions" {
         },
     });
     try expressions.append(gpa, CIR.Expr{
+        .e_lookup_pending = .{
+            .module_idx = rand_idx_u16(CIR.Import.Idx),
+            .ident_idx = rand_ident_idx(),
+            .region = rand_region(),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
         .e_lookup_required = .{
             .requires_idx = ModuleEnv.RequiredType.SafeList.Idx.fromU32(rand.random().int(u32)),
         },

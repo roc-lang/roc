@@ -1,4 +1,4 @@
-module [greet]
-
-greet : Str -> Str
-greet = |name| "Hello, ${name}!"
+Helper := [].{
+    greet : Str -> Str
+    greet = |name| "Hello, ${name}!"
+}

@@ -86,30 +86,30 @@ test "ModuleEnv.Serialized roundtrip" {
     const env = @as(*ModuleEnv, @ptrCast(@alignCast(deserialized_ptr)));
 
     // Deserialize common env first so we can look up identifiers
-    const common = deserialized_ptr.common.deserialize(@intFromPtr(buffer.ptr), source).*;
+    const common = deserialized_ptr.common.deserializeInto(@intFromPtr(buffer.ptr), source);
 
     env.* = ModuleEnv{
         .gpa = gpa,
         .common = common,
-        .types = deserialized_ptr.types.deserialize(@intFromPtr(buffer.ptr), gpa).*,
+        .types = deserialized_ptr.types.deserializeInto(@intFromPtr(buffer.ptr), gpa),
         .module_kind = deserialized_ptr.module_kind.decode(),
         .all_defs = deserialized_ptr.all_defs,
         .all_statements = deserialized_ptr.all_statements,
         .exports = deserialized_ptr.exports,
-        .requires_types = deserialized_ptr.requires_types.deserialize(@intFromPtr(buffer.ptr)).*,
-        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserialize(@intFromPtr(buffer.ptr)).*,
+        .requires_types = deserialized_ptr.requires_types.deserializeInto(@intFromPtr(buffer.ptr)),
+        .for_clause_aliases = deserialized_ptr.for_clause_aliases.deserializeInto(@intFromPtr(buffer.ptr)),
         .builtin_statements = deserialized_ptr.builtin_statements,
-        .external_decls = deserialized_ptr.external_decls.deserialize(@intFromPtr(buffer.ptr)).*,
-        .imports = (try deserialized_ptr.imports.deserialize(@intFromPtr(buffer.ptr), deser_alloc)).*,
+        .external_decls = deserialized_ptr.external_decls.deserializeInto(@intFromPtr(buffer.ptr)),
+        .imports = try deserialized_ptr.imports.deserializeInto(@intFromPtr(buffer.ptr), deser_alloc),
         .module_name = "TestModule",
         .module_name_idx = undefined, // Not used for deserialized modules (only needed during fresh canonicalization)
         .diagnostics = deserialized_ptr.diagnostics,
-        .store = deserialized_ptr.store.deserialize(@intFromPtr(buffer.ptr), deser_alloc).*,
+        .store = deserialized_ptr.store.deserializeInto(@intFromPtr(buffer.ptr), deser_alloc),
         .evaluation_order = null,
         .idents = ModuleEnv.CommonIdents.find(&common),
         .deferred_numeric_literals = try ModuleEnv.DeferredNumericLiteral.SafeList.initCapacity(deser_alloc, 0),
         .import_mapping = types.import_mapping.ImportMapping.init(deser_alloc),
-        .method_idents = deserialized_ptr.method_idents.deserialize(@intFromPtr(buffer.ptr)).*,
+        .method_idents = deserialized_ptr.method_idents.deserializeInto(@intFromPtr(buffer.ptr)),
         .rigid_vars = std.AutoHashMapUnmanaged(base.Ident.Idx, types.Var){},
     };
 

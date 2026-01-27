@@ -84,7 +84,6 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     build_env.build(abs_path) catch |err| {
         switch (err) {
             error.OutOfMemory => @panic("OOM"),
-            error.NoSpaceLeft => @panic("No Space Left"),
             error.TooNested => {
                 // This comes from the parser, so don't treat it as a canonicalize error
                 return;

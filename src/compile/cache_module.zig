@@ -119,8 +119,7 @@ pub const CacheModule = struct {
         var writer = CompactWriter.init();
 
         // Allocate space for ModuleEnv.Serialized
-        const env_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv);
-        const serialized_ptr = @as(*ModuleEnv.Serialized, @ptrCast(@alignCast(env_ptr)));
+        const serialized_ptr = try writer.appendAlloc(arena_allocator, ModuleEnv.Serialized);
 
         // Serialize the ModuleEnv
         try serialized_ptr.serialize(module_env, arena_allocator, &writer);
@@ -195,7 +194,8 @@ pub const CacheModule = struct {
         const serialized_data = self.data;
 
         // The ModuleEnv.Serialized should be at the beginning of the data
-        if (serialized_data.len < @sizeOf(ModuleEnv)) {
+        // Note: Check against Serialized size, not ModuleEnv size, since we're deserializing from Serialized format
+        if (serialized_data.len < @sizeOf(ModuleEnv.Serialized)) {
             return error.BufferTooSmall;
         }
 
@@ -205,8 +205,8 @@ pub const CacheModule = struct {
         // Calculate the base address of the serialized data
         const base_addr = @intFromPtr(serialized_data.ptr);
 
-        // Deserialize the ModuleEnv
-        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserialize(base_addr, allocator, source, module_name);
+        // Deserialize the ModuleEnv with mutable types so it can be type-checked further
+        const module_env_ptr: *ModuleEnv = try deserialized_ptr.deserializeWithMutableTypes(base_addr, allocator, source, module_name);
 
         return module_env_ptr;
     }
@@ -280,8 +280,9 @@ pub const CacheModule = struct {
         file_path: []const u8,
         filesystem: anytype,
     ) !CacheData {
+        // TEMPORARILY DISABLED: mmap for debugging - always use allocated memory
         // Try to use memory mapping on supported platforms
-        if (comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
+        if (false and comptime @hasDecl(std.posix, "mmap") and @import("builtin").target.os.tag != .windows and @import("builtin").target.os.tag != .freestanding) {
             // Open the file
             const file = std.fs.cwd().openFile(file_path, .{ .mode = .read_only }) catch {
                 // Fall back to regular reading on open error

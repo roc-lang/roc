@@ -163,7 +163,7 @@ test "integration - shared memory setup and parsing" {
     defer allocs.gpa.free(roc_path);
 
     // Test that we can set up shared memory with ModuleEnv
-    const shm_result = try main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true);
+    const shm_result = try main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
     const shm_handle = shm_result.handle;
 
     // Clean up shared memory resources
@@ -176,7 +176,7 @@ test "integration - shared memory setup and parsing" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -220,7 +220,7 @@ test "integration - compilation pipeline for different platforms" {
         const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, relative_path }) catch continue;
         defer allocs.gpa.free(roc_path);
         // Test the full compilation pipeline (parse -> canonicalize -> typecheck)
-        const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true) catch |err| {
+        const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
             std.log.warn("Failed to set up shared memory for {s}: {}\n", .{ roc_path, err });
             continue;
         };
@@ -236,7 +236,7 @@ test "integration - compilation pipeline for different platforms" {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
                 _ = posix.close(shm_handle.fd);
             }
         }
@@ -273,7 +273,7 @@ test "integration - error handling for non-existent file" {
     defer allocs.gpa.free(roc_path);
 
     // This should fail because the file doesn't exist
-    const result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true);
+    const result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true);
 
     // We expect this to fail - the important thing is that it doesn't crash
     if (result) |shm_result| {
@@ -288,7 +288,7 @@ test "integration - error handling for non-existent file" {
                     extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                     extern "c" fn close(fd: c_int) c_int;
                 };
-                _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+                _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
                 _ = posix.close(shm_handle.fd);
             }
         }
@@ -337,7 +337,7 @@ test "integration - automatic module dependency ordering" {
     defer allocs.gpa.free(roc_path);
 
     // This should compile successfully because modules are automatically sorted
-    const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true) catch |err| {
+    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile with automatic dependency ordering: {}\n", .{err});
         return err;
     };
@@ -353,7 +353,7 @@ test "integration - automatic module dependency ordering" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -395,7 +395,7 @@ test "integration - transitive module imports (module A imports module B)" {
     defer allocs.gpa.free(roc_path);
 
     // This should compile successfully now that we pass sibling modules during compilation
-    const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true) catch |err| {
+    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile transitive import test: {}\n", .{err});
         return err;
     };
@@ -411,7 +411,7 @@ test "integration - transitive module imports (module A imports module B)" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -460,7 +460,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
     defer allocs.gpa.free(roc_path);
 
     // This should compile successfully with correct dependency ordering
-    const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true) catch |err| {
+    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile diamond dependency test: {}\n", .{err});
         return err;
     };
@@ -476,7 +476,7 @@ test "integration - diamond dependency pattern (A imports B and C, both import D
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = posix.close(shm_handle.fd);
         }
     }
@@ -514,7 +514,7 @@ test "integration - direct Core and Utils calls from app" {
     const roc_path = std.fs.path.join(allocs.gpa, &.{ cwd_path, "test/str/app_direct_core.roc" }) catch return;
     defer allocs.gpa.free(roc_path);
 
-    const shm_result = main.setupSharedMemoryWithModuleEnv(&ctx, roc_path, true) catch |err| {
+    const shm_result = main.setupSharedMemoryWithCoordinator(&ctx, roc_path, true) catch |err| {
         std.log.err("Failed to compile direct Core call test: {}\n", .{err});
         return err;
     };
@@ -530,7 +530,7 @@ test "integration - direct Core and Utils calls from app" {
                 extern "c" fn munmap(addr: *anyopaque, len: usize) c_int;
                 extern "c" fn close(fd: c_int) c_int;
             };
-            _ = posix.munmap(shm_handle.ptr, shm_handle.size);
+            _ = posix.munmap(shm_handle.ptr, shm_handle.mapped_size);
             _ = posix.close(shm_handle.fd);
         }
     }
