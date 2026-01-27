@@ -450,43 +450,7 @@ pub fn gatherFieldsFromRecord(
     fields: *SnapshotRecordFieldSafeList,
 ) SnapshotRecordFieldSafeList.Range {
     const start: u32 = fields.len();
-
-    // Add immediate fields
-    const record_fields = snap_store.sliceRecordFields(record.fields);
-    for (record_fields.items(.name), record_fields.items(.content)) |name, content| {
-        _ = fields.append(gpa, .{ .name = name, .content = content }) catch {};
-    }
-
-    // Follow extension chain
-    var ext_idx = record.ext;
-    while (true) {
-        const content = snap_store.getContent(ext_idx);
-        switch (content) {
-            .structure => |flat| switch (flat) {
-                .record => |rec| {
-                    const ext_fields = snap_store.sliceRecordFields(rec.fields);
-                    for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                        _ = fields.append(gpa, .{ .name = name, .content = field_content }) catch {};
-                    }
-                    ext_idx = rec.ext;
-                },
-                .record_unbound => |fields_range| {
-                    const ext_fields = snap_store.sliceRecordFields(fields_range);
-                    for (ext_fields.items(.name), ext_fields.items(.content)) |name, field_content| {
-                        _ = fields.append(gpa, .{ .name = name, .content = field_content }) catch {};
-                    }
-                    break;
-                },
-                .empty_record => break,
-                else => break,
-            },
-            .alias => |alias| {
-                ext_idx = alias.backing;
-            },
-            .flex, .rigid, .err, .recursive => break,
-        }
-    }
-
+    snap_store.gatherRecordFieldsHelp(record, gpa, fields) catch {};
     return fields.rangeToEnd(start);
 }
 

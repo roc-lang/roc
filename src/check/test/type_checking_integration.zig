@@ -1895,7 +1895,7 @@ test "check type - record - update - fail - empty record" {
         \\```
         \\      ^
         \\
-        \\It is actually an record with no fields.
+        \\It is actually a record with no fields.
         \\
         \\
     );
@@ -1925,6 +1925,8 @@ test "check type - record - update - fail - missing field" {
         \\    - `hello`
         \\
         \\So maybe `hllo` should be `hello`?
+        \\
+        \\__Note:__ You cannot add new fields to a record with the record update syntax.
         \\
         \\
     );

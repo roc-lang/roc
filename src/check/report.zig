@@ -230,6 +230,12 @@ pub const ReportBuilder = struct {
         focused: struct { outer: Region.Idx, highlight: Region.Idx },
     };
 
+    /// Region for source highlighting - can be either a Region.Idx or a direct Region
+    const SourceHighlightRegion = union(enum) {
+        idx: Region.Idx,
+        region: Region,
+    };
+
     /// A lightweight document fragment for building error report text.
     ///
     /// Doc provides a declarative way to construct report messages by composing
@@ -2028,46 +2034,83 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Data about a record snapshot, used to render nice hints
-    const Record = union(enum) {
-        not_a_record,
-        empty_record,
-        record: []const Ident.Idx,
-    };
+    /// Build a typo suggestions report for when a record field is not found.
+    /// This is used by both buildRecordAccess and buildRecordUpdate.
+    fn buildTypoSuggestionsReport(
+        self: *Self,
+        field_name: Ident.Idx,
+        available_fields: []const Ident.Idx,
+        source_region: SourceHighlightRegion,
+        is_record_update: bool,
+    ) !Report {
+        // Get a sorted list of the most similar field names
+        try diff.findBestTypoSuggestions(
+            field_name,
+            available_fields,
+            self.can_ir.getIdentStoreConst(),
+            &self.typo_suggestions,
+        );
+        std.debug.assert(self.typo_suggestions.items.len > 0);
+        const best_suggestion = self.typo_suggestions.items[0];
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
+        // Create report directly and render dynamic suggestions inline
+        var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
+        errdefer report.deinit();
+
+        // Add title
+        try D.renderSlice(&.{
+            D.bytes("This record does not have a"),
+            D.ident(field_name).withAnnotation(.inline_code),
+            D.bytes("field:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        // Add source highlight
+        switch (source_region) {
+            .idx => |idx| try self.addSourceHighlight(&report, idx),
+            .region => |region| try self.addSourceHighlightRegion(&report, region),
+        }
+
+        // Render typo suggestions directly
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
+        try report.document.addLineBreak();
+        const count = @min(self.typo_suggestions.items.len, 3);
+        for (self.typo_suggestions.items[0..count]) |suggestion| {
+            try report.document.addLineBreak();
+            try report.document.addText("    - ");
+            try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
+        }
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+        try report.document.addReflowingText("So maybe ");
+        try report.document.addAnnotated(self.can_ir.getIdentText(field_name), .inline_code);
+        try report.document.addReflowingText(" should be ");
+        try report.document.addAnnotated(self.can_ir.getIdentText(best_suggestion.ident), .inline_code);
+        try report.document.addText("?");
+
+        // Add note about record update syntax limitations
+        if (is_record_update) {
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+            try D.renderSlice(&.{
+                D.bytes("Note:").withAnnotation(.underline),
+                D.bytes("You cannot add new fields to a record with the record update syntax."),
+            }, self, &report);
+        }
+
+        return report;
+    }
+
+    /// Build a report for when a record field is accessed but doesn't exist
     fn buildRecordAccess(
         self: *Self,
         types: TypePair,
         ctx: Context.RecordAccessContext,
     ) !Report {
-        // Check the inferred type
-        const actual_content = self.snapshots.getContentUnwrapAlias(types.actual_snapshot);
-        const record =
-            switch (actual_content) {
-                .structure => |structure| switch (structure) {
-                    .record => |record| blk: {
-                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_fields);
-                        if (range.count == 0) {
-                            break :blk Record.empty_record;
-                        } else {
-                            const fields = self.diff_fields.sliceRange(range).items(.name);
-                            break :blk Record{ .record = fields };
-                        }
-                    },
-                    .record_unbound => |rec_fields_range| blk: {
-                        const fields = self.snapshots.sliceRecordFields(rec_fields_range).items(.name);
-                        if (fields.len == 0) {
-                            break :blk Record.empty_record;
-                        } else {
-                            break :blk Record{ .record = fields };
-                        }
-                    },
-                    .empty_record => Record.empty_record,
-                    else => Record.not_a_record,
-                },
-                else => Record.not_a_record,
-            };
+        self.diff_fields.items.clearRetainingCapacity();
+
+        const record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
 
         const region = ProblemRegion{ .simple = regionIdxFrom(types.actual_var) };
         switch (record) {
@@ -2095,60 +2138,18 @@ pub const ReportBuilder = struct {
                         D.bytes("field:"),
                     },
                     &.{
-                        &.{D.bytes("It is actually an record with no fields.")},
+                        &.{D.bytes("It is actually a record with no fields.")},
                     },
                 );
             },
-            .record => |actual_fields| {
-                // In this variant, we have to dynamically calculate and
-                // print similar record fields. This gets hairy with the
-                // makeCustomReport  abstraction, so we fall back to the more
-                // robust full record builder
-
-                // Get a sorted list of the most similar field names
-                try diff.findBestTypoSuggestions(
+            .record => |actual_fields_range| {
+                const actual_fields = self.diff_fields.sliceRange(actual_fields_range).items(.name);
+                return try self.buildTypoSuggestionsReport(
                     ctx.field_name,
                     actual_fields,
-                    self.can_ir.getIdentStoreConst(),
-                    &self.typo_suggestions,
+                    SourceHighlightRegion{ .region = ctx.field_region },
+                    false,
                 );
-                std.debug.assert(self.typo_suggestions.items.len > 0);
-                const best_suggestion = self.typo_suggestions.items[0];
-
-                // Create report directly and render dynamic suggestions inline
-                var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-                errdefer report.deinit();
-
-                // Add title
-                try D.renderSlice(&.{
-                    D.bytes("This record does not have a"),
-                    D.ident(ctx.field_name).withAnnotation(.inline_code),
-                    D.bytes("field:"),
-                }, self, &report);
-                try report.document.addLineBreak();
-
-                // Add source highlight
-                try self.addSourceHighlightRegion(&report, ctx.field_region);
-
-                // Render typo suggestions directly
-                try report.document.addLineBreak();
-                try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
-                try report.document.addLineBreak();
-                const count = @min(self.typo_suggestions.items.len, 3);
-                for (self.typo_suggestions.items[0..count]) |suggestion| {
-                    try report.document.addLineBreak();
-                    try report.document.addText("    - ");
-                    try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
-                }
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
-                try report.document.addReflowingText("So maybe ");
-                try report.document.addAnnotated(self.can_ir.getIdentText(ctx.field_name), .inline_code);
-                try report.document.addReflowingText(" should be ");
-                try report.document.addAnnotated(self.can_ir.getIdentText(best_suggestion.ident), .inline_code);
-                try report.document.addText("?");
-
-                return report;
             },
         }
     }
@@ -2190,7 +2191,7 @@ pub const ReportBuilder = struct {
                         D.bytes("field:"),
                     },
                     &.{
-                        &.{D.bytes("It is actually an record with no fields.")},
+                        &.{D.bytes("It is actually a record with no fields.")},
                     },
                 );
             },
@@ -2276,51 +2277,13 @@ pub const ReportBuilder = struct {
                 } else {
                     // If the expected field does NOT exist, then it likely means
                     // there was a typo.
-
-                    self.typo_suggestions.clearRetainingCapacity();
-                    try diff.findBestTypoSuggestions(
+                    const expected_field_names = self.diff_fields.sliceRange(expected_fields).items(.name);
+                    return try self.buildTypoSuggestionsReport(
                         ctx.field_name,
-                        self.diff_fields.sliceRange(expected_fields).items(.name),
-                        self.can_ir.getIdentStoreConst(),
-                        &self.typo_suggestions,
+                        expected_field_names,
+                        SourceHighlightRegion{ .idx = ctx.record_region_idx },
+                        true,
                     );
-                    std.debug.assert(self.typo_suggestions.items.len > 0);
-                    const best_suggestion = self.typo_suggestions.items[0];
-
-                    // Create report directly and render dynamic suggestions inline
-                    var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
-                    errdefer report.deinit();
-
-                    // Add title
-                    try D.renderSlice(&.{
-                        D.bytes("This record does not have a"),
-                        D.ident(ctx.field_name).withAnnotation(.inline_code),
-                        D.bytes("field:"),
-                    }, self, &report);
-                    try report.document.addLineBreak();
-
-                    // Add source highlight
-                    try self.addSourceHighlight(&report, ctx.record_region_idx);
-
-                    // Render typo suggestions directly (avoiding slice lifetime issues)
-                    try report.document.addLineBreak();
-                    try report.document.addReflowingText("This is often due to a typo. The most similar fields are:");
-                    try report.document.addLineBreak();
-                    const count = @min(self.typo_suggestions.items.len, 3);
-                    for (self.typo_suggestions.items[0..count]) |suggestion| {
-                        try report.document.addLineBreak();
-                        try report.document.addText("    - ");
-                        try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
-                    }
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
-                    try report.document.addReflowingText("So maybe ");
-                    try report.document.addAnnotated(self.can_ir.getIdentText(ctx.field_name), .inline_code);
-                    try report.document.addReflowingText(" should be ");
-                    try report.document.addAnnotated(self.can_ir.getIdentText(best_suggestion.ident), .inline_code);
-                    try report.document.addText("?");
-
-                    return report;
                 }
             },
         }
