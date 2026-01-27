@@ -81,7 +81,7 @@ The first argument has the type:
 
 But the seventh argument has the type:
 
-    [True, .._others]
+    [True, ..]
 
 `multi_arg_fn` needs these arguments to have compatible types.
 

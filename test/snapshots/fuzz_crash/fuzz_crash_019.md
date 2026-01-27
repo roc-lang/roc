@@ -945,7 +945,7 @@ This fourth branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -960,7 +960,7 @@ The `me` function expects 2 arguments, but it got 1 instead:
 
 The `me` function has the type:
 
-    [Blue, .._others], [Tb, .._others2] -> Error
+    [Blue, ..], [Tb, ..] -> Error
 
 Are there any missing commas?
 
@@ -1013,7 +1013,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    (f, Str, Error, [O, .._others], (Error, Error), List(j))
+    (f, Str, Error, [O, ..], (Error, Error), List(j))
       where [
         f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),
         j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),
@@ -2162,7 +2162,7 @@ expect {
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, .._others], [Tb, .._others2] -> Error"))
+		(patt (type "[Blue, ..], [Tb, ..] -> Error"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{  }"))
@@ -2199,7 +2199,7 @@ expect {
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, .._others], [Tb, .._others2] -> Error"))
+		(expr (type "[Blue, ..], [Tb, ..] -> Error"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{  }"))

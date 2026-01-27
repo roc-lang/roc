@@ -20,8 +20,7 @@ This **not** method is being called on a value whose type doesn't have that meth
 
 The value's type, which does not have a method named**not**, is:
 
-    [C(a), .._others]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    [C(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 # TOKENS
 ~~~zig

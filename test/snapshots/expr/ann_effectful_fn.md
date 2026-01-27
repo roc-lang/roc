@@ -45,7 +45,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [Bool, .._others]
+    [Bool, ..]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
@@ -60,7 +60,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [LaunchNukeErr, .._others]
+    [LaunchNukeErr, ..]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.

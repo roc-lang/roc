@@ -31,7 +31,7 @@ A?
 
 This expression has type:
 
-    [A, .._others]
+    [A, ..]
 
 __Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 

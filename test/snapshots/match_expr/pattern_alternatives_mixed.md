@@ -54,7 +54,7 @@ match ... {
 
 This pattern is trying to match:
 
-    [Ok(_a), .._others]
+    [Ok(_a), ..]
 
 But the expression between the `match` parenthesis has the type:
 

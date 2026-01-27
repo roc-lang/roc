@@ -42,7 +42,7 @@ The second branch is:
 
 But the previous branch results in:
 
-    [A, .._others]
+    [A, ..]
 
 # TOKENS
 ~~~zig

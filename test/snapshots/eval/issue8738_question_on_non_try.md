@@ -32,8 +32,7 @@ The `?` operator expects a `Try` type (a tag union containing ONLY `Ok` and `Err
 
 This expression has type:
 
-    [Exit(a), .._others]
-      where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
+    [Exit(a), ..] where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)])]
 
 __Tip:__ Maybe wrap a value using `Ok(value)` or `Err(value)`.
 
@@ -195,9 +194,9 @@ NO CHANGE
 	(defs
 		(patt (type "Try(ok, _err), ok -> ok"))
 		(patt (type "({}) -> Try({}, err)"))
-		(patt (type "[Ok({}), .._others]")))
+		(patt (type "[Ok({}), ..]")))
 	(expressions
 		(expr (type "Try(ok, _err), ok -> ok"))
 		(expr (type "({}) -> Try({}, err)"))
-		(expr (type "[Ok({}), .._others]"))))
+		(expr (type "[Ok({}), ..]"))))
 ~~~

@@ -1037,7 +1037,7 @@ This fourth branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Red, ..[Blue, Green, .._others]]
+    [Red, ..[Blue, Green, ..]]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -1052,7 +1052,7 @@ The `match_time` function expects 2 arguments, but it got 1 instead:
 
 The `match_time` function has the type:
 
-    [Red, ..[Blue, Green, .._others]], _arg -> Error
+    [Red, ..[Blue, Green, ..]], _arg -> Error
 
 Are there any missing commas?
 
@@ -1084,7 +1084,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
@@ -1156,7 +1156,7 @@ But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 
-**Hint: **This function is effectful, but a pure function is expected.
+**Hint:** This function is effectful, but a pure function is expected.
 
 # TOKENS
 ~~~zig
@@ -2822,7 +2822,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
@@ -2869,7 +2869,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))

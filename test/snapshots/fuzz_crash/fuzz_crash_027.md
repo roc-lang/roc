@@ -960,7 +960,7 @@ This third branch is trying to match:
 
 But the expression between the `match` parenthesis has the type:
 
-    [Red, Blue, .._others]
+    [Red, Blue, ..]
 
 These can never match! Either the pattern or expression has a problem.
 
@@ -975,7 +975,7 @@ The `match_time` function expects 2 arguments, but it got 1 instead:
 
 The `match_time` function has the type:
 
-    [Blue, Red, .._others], _arg -> Error
+    [Blue, Red, ..], _arg -> Error
 
 Are there any missing commas?
 
@@ -1042,7 +1042,7 @@ But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
 
-**Hint: **This function is effectful, but a pure function is expected.
+**Hint:** This function is effectful, but a pure function is expected.
 
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
@@ -1054,7 +1054,7 @@ This `return` does not match the function's return type:
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 But the function's return type is:
 
@@ -2450,7 +2450,7 @@ expect {
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Red, Blue, .._others], _arg -> Error"))
+		(patt (type "[Red, Blue, ..], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2487,7 +2487,7 @@ expect {
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Red, Blue, .._others], _arg -> Error"))
+		(expr (type "[Red, Blue, ..], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

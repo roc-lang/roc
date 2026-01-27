@@ -120,13 +120,13 @@ EndOfFile,
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
-		(patt (type "a -> (a -> (a -> [#1_make_adder({ .._others, y: a }), .._others]))"))
+		(patt (type "a -> [#1_make_adder({ .., y: a }), ..]"))
+		(patt (type "a -> (a -> (a -> [#1_make_adder({ .., y: a }), ..]))"))
 		(patt (type "a -> (b -> [#1_make_adder({ ..c, y: b }), ..d]) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral([#1_make_adder({ ..c, y: b }), ..d])])]"))
-		(patt (type "a -> [#1_make_adder({ .._others, y: a }), .._others]")))
+		(patt (type "a -> [#1_make_adder({ .., y: a }), ..]")))
 	(expressions
-		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
-		(expr (type "a -> [#1_make_adder({ .._others, y: a }), .._others]"))
-		(expr (type "[#1_make_adder({ .._others, y: _field }), .._others]"))
+		(expr (type "a -> [#1_make_adder({ .., y: a }), ..]"))
+		(expr (type "a -> [#1_make_adder({ .., y: a }), ..]"))
+		(expr (type "[#1_make_adder({ .., y: _field }), ..]"))
 		(expr (type "Try(a -> [#1_make_adder({ ..b, y: a }), ..c], [InvalidNumeral([#1_make_adder({ ..b, y: a }), ..c])])"))))
 ~~~

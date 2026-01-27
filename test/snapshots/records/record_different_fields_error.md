@@ -556,7 +556,7 @@ This expression produces a value, but it's not being used:
 
 It has the type:
 
-    [PascalCase, .._others]
+    [PascalCase, ..]
 
 Since this expression is used as a statement, it must evaluate to `{}`.
 If you don't need the value, you can ignore it with `_ =`.
