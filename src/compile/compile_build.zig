@@ -736,7 +736,8 @@ pub const BuildEnv = struct {
 
         // Enable runtime inserts on the app's interner so we can add new idents from platform
         // (the app's interner may be deserialized from cache and not support inserts by default)
-        try app_root_env.common.idents.interner.enableRuntimeInserts(self.gpa);
+        // Use app_root_env.gpa so the memory is freed by the same allocator during ModuleEnv.deinit()
+        try app_root_env.common.idents.interner.enableRuntimeInserts(app_root_env.gpa);
 
         for (platform_root_env.requires_types.items.items) |required_type| {
             const platform_ident_text = platform_root_env.getIdent(required_type.ident);
@@ -752,13 +753,13 @@ pub const BuildEnv = struct {
                 // and only insert if not found (avoids error on deserialized interners).
                 const alias_name_text = platform_root_env.getIdent(alias.alias_name);
                 const alias_app_ident = app_root_env.common.findIdent(alias_name_text) orelse
-                    try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(alias_name_text));
+                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(alias_name_text));
                 try platform_to_app_idents.put(alias.alias_name, alias_app_ident);
 
                 // Add rigid name (e.g., "model") - look up first, only insert if not found.
                 const rigid_name_text = platform_root_env.getIdent(alias.rigid_name);
                 const rigid_app_ident = app_root_env.common.findIdent(rigid_name_text) orelse
-                    try app_root_env.common.insertIdent(self.gpa, base.Ident.for_text(rigid_name_text));
+                    try app_root_env.common.insertIdent(app_root_env.gpa, base.Ident.for_text(rigid_name_text));
                 try platform_to_app_idents.put(alias.rigid_name, rigid_app_ident);
             }
         }
