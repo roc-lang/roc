@@ -700,24 +700,58 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         unreachable;
                     };
 
-                    // Get element layout from return type
-                    const ret_layout = ls.getLayout(ll.ret_layout);
-                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
-                        .list => blk: {
+                    // Get element size from the element argument (args[1])
+                    // The list layout indices can be from a different module (e.g., List.map builtin)
+                    // and may not be valid in the current layout store, but the element itself has
+                    // a concrete layout we can use.
+                    const elem_size_align: layout.SizeAlign = blk: {
+                        // Try to get element layout directly from the element expression
+                        if (self.getExprLayout(args[1])) |elem_layout_idx| {
+                            const elem_layout = ls.getLayout(elem_layout_idx);
+                            break :blk ls.layoutSizeAlign(elem_layout);
+                        }
+
+                        // Try the return layout if it's a list
+                        const ret_layout = ls.getLayout(ll.ret_layout);
+                        if (ret_layout.tag == .list) {
                             const elem_layout = ls.getLayout(ret_layout.data.list);
                             break :blk ls.layoutSizeAlign(elem_layout);
-                        },
-                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
-                        else => {
-                            std.debug.print("BUG: list_append return layout is not a list: {s}\n", .{@tagName(ret_layout.tag)});
-                            unreachable;
-                        },
+                        }
+                        if (ret_layout.tag == .list_of_zst) {
+                            break :blk .{ .size = 0, .alignment = .@"1" };
+                        }
+
+                        // Fallback: estimate size from the generated element value
+                        // Default to 8 bytes (most common case for I64, pointers, etc.)
+                        break :blk .{ .size = 8, .alignment = .@"8" };
                     };
 
                     // Generate list argument (must be on stack - 24 bytes)
                     const list_loc = try self.generateExpr(args[0]);
                     const list_offset: i32 = switch (list_loc) {
                         .stack => |off| off,
+                        .list_stack => |ls_info| ls_info.struct_offset,
+                        .immediate_i64 => |val| blk: {
+                            // Empty list case: materialize on stack (ptr=0, len=0, capacity=0)
+                            if (val != 0) {
+                                std.debug.print("BUG: list_append got immediate_i64 that's not 0: {}\n", .{val});
+                                unreachable;
+                            }
+                            const slot = self.codegen.allocStackSlot(24);
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(temp, 0);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 8);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 16);
+                            } else {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                                try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp);
+                                try self.codegen.emit.movMemReg(.w64, .RBP, slot + 16, temp);
+                            }
+                            self.codegen.freeGeneral(temp);
+                            break :blk slot;
+                        },
                         else => {
                             std.debug.print("BUG: list_append list arg must be on stack: {s}\n", .{@tagName(list_loc)});
                             unreachable;
@@ -3194,8 +3228,56 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         }
                         self.codegen.freeGeneral(temp_reg);
                     },
+                    .immediate_i128 => |val| {
+                        // For i128/Dec immediates, store the full 16 bytes
+                        const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                        const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                        const temp_reg = try self.allocTempGeneral();
+
+                        // Store low 8 bytes
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(low));
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
+                        }
+
+                        // Store high 8 bytes
+                        try self.codegen.emitLoadImm(temp_reg, @bitCast(high));
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
+                        }
+
+                        self.codegen.freeGeneral(temp_reg);
+                    },
+                    .stack_i128 => |src_offset| {
+                        // For i128/Dec stack values, copy the full 16 bytes
+                        const temp_reg = try self.allocTempGeneral();
+
+                        // Copy low 8 bytes
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset);
+                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset, temp_reg);
+                        }
+
+                        // Copy high 8 bytes
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, .FP, src_offset + 8);
+                            try self.codegen.emit.strRegMemSoff(.w64, temp_reg, heap_ptr, elem_heap_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, temp_reg, .RBP, src_offset + 8);
+                            try self.codegen.emit.movMemReg(.w64, heap_ptr, elem_heap_offset + 8, temp_reg);
+                        }
+
+                        self.codegen.freeGeneral(temp_reg);
+                    },
                     else => {
-                        // For immediates and other register values:
+                        // For other immediates and register values:
                         // Store 8 bytes from the register, then zero-pad to elem_size if needed
                         const elem_reg = try self.ensureInGeneralReg(elem_loc);
                         if (comptime builtin.cpu.arch == .aarch64) {
@@ -3318,8 +3400,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the record layout to find field offset and size
             const record_layout = ls.getLayout(access.record_layout);
             if (record_layout.tag != .record) {
-                // ZST closure captures return location as-is (nothing to offset)
-                if (record_layout.tag == .list_of_zst and access.field_idx == 0) {
+                // Cross-module layout index mismatch: the record_layout index from
+                // a builtin module may map to a different layout in the current module.
+                // When field_idx is 0, just return the value as-is (first field = whole value).
+                if (access.field_idx == 0) {
                     return record_loc;
                 }
                 // Any other field access on non-record is a compiler bug
