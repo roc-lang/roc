@@ -5032,11 +5032,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
             if (comptime builtin.cpu.arch == .aarch64) {
                 // AArch64: X0-X7 for arguments
+                if (index >= 8) {
+                    std.debug.print("BUG: getArgumentRegister called with index {} >= 8 (only X0-X7 available)\n", .{index});
+                    unreachable;
+                }
                 return @enumFromInt(index);
             } else {
                 // x86_64 System V: RDI, RSI, RDX, RCX, R8, R9
                 const arg_regs = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
-                return arg_regs[@min(index, arg_regs.len - 1)];
+                if (index >= arg_regs.len) {
+                    std.debug.print("BUG: getArgumentRegister called with index {} >= 6 (only 6 arg regs available)\n", .{index});
+                    unreachable;
+                }
+                return arg_regs[index];
             }
         }
 
@@ -5888,16 +5896,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         /// This is used for recursive functions that were compiled via compileAllProcs.
         fn generateCallToCompiledProc(self: *Self, proc: CompiledProc, args_span: anytype, ret_layout: layout.Idx) Error!ValueLocation {
             // Evaluate arguments and place them in argument registers
+            // Track register index separately since some args use multiple registers
             const args = self.store.getExprSpan(args_span);
-            for (args, 0..) |arg_id, i| {
+            var reg_idx: u8 = 0;
+
+            for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
+                const arg_layout = self.getExprLayout(arg_id);
 
                 // Handle i128/Dec arguments (need two registers)
                 if (arg_loc == .stack_i128 or arg_loc == .immediate_i128) {
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        // aarch64: pass i128 in consecutive registers (X0/X1 for arg 0, X2/X3 for arg 1, etc.)
-                        const low_reg = self.getArgumentRegister(@intCast(i * 2));
-                        const high_reg = self.getArgumentRegister(@intCast(i * 2 + 1));
+                        const low_reg = self.getArgumentRegister(reg_idx);
+                        const high_reg = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
                             .stack_i128 => |offset| {
                                 try self.codegen.emitLoadStack(.w64, low_reg, offset);
@@ -5912,10 +5923,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             else => unreachable,
                         }
                     } else {
-                        // x86_64: similar handling with RDI/RSI, RDX/RCX, etc.
-                        const arg_regs = [_]GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
-                        const low_reg = arg_regs[i * 2];
-                        const high_reg = arg_regs[i * 2 + 1];
+                        const low_reg = self.getArgumentRegister(reg_idx);
+                        const high_reg = self.getArgumentRegister(reg_idx + 1);
                         switch (arg_loc) {
                             .stack_i128 => |offset| {
                                 try self.codegen.emitLoadStack(.w64, low_reg, offset);
@@ -5930,9 +5939,50 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             else => unreachable,
                         }
                     }
+                    reg_idx += 2;
                 } else {
-                    const arg_reg = self.getArgumentRegister(@intCast(i));
-                    try self.moveToReg(arg_loc, arg_reg);
+                    // Check if this is a list argument (24 bytes)
+                    const is_list = if (arg_layout) |al| blk: {
+                        if (self.layout_store) |ls| {
+                            const layout_val = ls.getLayout(al);
+                            break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+                        }
+                        break :blk false;
+                    } else (arg_loc == .list_stack);
+
+                    if (is_list) {
+                        // List arguments need 3 registers
+                        const offset: i32 = switch (arg_loc) {
+                            .stack => |off| off,
+                            .list_stack => |li| li.struct_offset,
+                            else => {
+                                // Try to use default - shouldn't happen for real lists
+                                const reg = self.getArgumentRegister(reg_idx);
+                                try self.moveToReg(arg_loc, reg);
+                                reg_idx += 1;
+                                continue;
+                            },
+                        };
+
+                        const reg0 = self.getArgumentRegister(reg_idx);
+                        const reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg0, .FP, offset);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg1, .FP, offset + 8);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, reg2, .FP, offset + 16);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, reg0, .RBP, offset);
+                            try self.codegen.emit.movRegMem(.w64, reg1, .RBP, offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, reg2, .RBP, offset + 16);
+                        }
+                        reg_idx += 3;
+                    } else {
+                        const arg_reg = self.getArgumentRegister(reg_idx);
+                        try self.moveToReg(arg_loc, arg_reg);
+                        reg_idx += 1;
+                    }
                 }
             }
 
@@ -5941,22 +5991,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Handle i128/Dec return values (returned in two registers)
             if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
-                // Save the i128 result to the stack since we can't track two registers
                 const stack_offset = self.codegen.allocStackSlot(16);
                 if (comptime builtin.cpu.arch == .aarch64) {
-                    // Result is in X0 (low), X1 (high)
                     try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
                     try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
                 } else {
-                    // Result is in RAX (low), RDX (high)
                     try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
                     try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
                 }
                 return .{ .stack_i128 = stack_offset };
             }
 
-            // Result is in the return register - mark it as allocated so it won't
-            // be reused before we're done with it
+            // Check if return type is a list (24 bytes)
+            const is_list_return = if (self.layout_store) |ls| blk: {
+                const layout_val = ls.getLayout(ret_layout);
+                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+            } else false;
+
+            if (is_list_return) {
+                // List return (24 bytes) - save X0/X1/X2 to stack
+                const stack_offset = self.codegen.allocStackSlot(24);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, stack_offset + 16);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .RAX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
+                }
+                return .{ .stack = stack_offset };
+            }
+
+            // Result is in the return register - mark it as allocated
             const ret_reg = self.getReturnRegister();
             self.codegen.markRegisterInUse(ret_reg);
             return .{ .general_reg = ret_reg };
