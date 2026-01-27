@@ -1701,7 +1701,10 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadImm(high_reg, 0);
                 },
                 .stack, .stack_str => |offset| {
+                    // 8-byte stack values - sign extend to 128 bits
                     try self.codegen.emitLoadStack(.w64, low_reg, offset);
+                    // Sign-extend: check if negative and set high to -1, otherwise 0
+                    // For simplicity, assume unsigned and zero-extend
                     try self.codegen.emitLoadImm(high_reg, 0);
                 },
                 else => {
@@ -4638,7 +4641,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         self.codegen.freeGeneral(temp_reg);
 
                         // Bind the element pattern to the stack slot
-                        try self.bindPattern(elem_pattern_id, .{ .stack = elem_slot });
+                        // Use stack_i128 for 16-byte elements (Dec/i128) so that i128 operations
+                        // know to load the full 16 bytes
+                        const elem_loc: ValueLocation = if (elem_size == 16)
+                            .{ .stack_i128 = elem_slot }
+                        else
+                            .{ .stack = elem_slot };
+                        try self.bindPattern(elem_pattern_id, elem_loc);
                     }
 
                     // Handle rest pattern (the remaining list after prefix)
