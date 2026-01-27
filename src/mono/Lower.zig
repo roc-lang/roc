@@ -226,6 +226,17 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     self.current_module_idx = symbol.module_idx;
     defer self.current_module_idx = old_module;
 
+    // Set up binding context for recursive closure detection
+    // This is necessary for external functions like List.repeat that have recursive helpers
+    const old_binding = self.current_binding_pattern;
+    const old_symbol = self.current_binding_symbol;
+    self.current_binding_pattern = def.pattern;
+    self.current_binding_symbol = symbol;
+    defer {
+        self.current_binding_pattern = old_binding;
+        self.current_binding_symbol = old_symbol;
+    }
+
     const expr_id = self.lowerExprFromIdx(ext_module_env, def.expr) catch {
         // If lowering fails, don't register - the lookup will fail at codegen time
         return;
@@ -259,7 +270,6 @@ fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbo
         // These are handled by block/statement lowering, not here
         return;
     };
-
     // Get the definition
     const def = module_env.store.getDef(def_idx);
 
@@ -636,9 +646,15 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
     const mono_expr: MonoExpr = switch (expr) {
         .e_num => |num| blk: {
             const val = num.value.toI128();
-            // Use num.kind to determine the literal type - this reflects type inference results
-            // Dec is the default numeric type, so num_unbound and int_unbound become Dec
-            if (num.kind == .dec or num.kind == .num_unbound or num.kind == .int_unbound) {
+            // Use the computed layout from type inference to determine the literal type.
+            // The layout reflects the actual resolved type (e.g., U64 from function signature),
+            // not just the syntactic hint from num.kind.
+            const layout_idx = self.computeLayoutFromExprIdx(module_env, expr_idx);
+            const is_dec = if (layout_idx) |idx| idx == .dec else
+                // Fallback to num.kind only when layout is unavailable
+                (num.kind == .dec or num.kind == .num_unbound or num.kind == .int_unbound);
+
+            if (is_dec) {
                 // Dec values are scaled by 10^18 (one_point_zero = 10^18)
                 const one_point_zero: i128 = 1_000_000_000_000_000_000;
                 const scaled_val = val * one_point_zero;
@@ -809,6 +825,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
             // Detect if this closure is recursive (references itself)
             const recursion_info = self.detectClosureRecursion(module_env, closure.lambda_idx);
+
 
             // If this is a recursive closure bound to a variable, create a MonoProc
             // so it can be compiled as a separate procedure with proper stack frame.
@@ -1718,7 +1735,8 @@ fn detectClosureRecursion(self: *Self, module_env: *ModuleEnv, lambda_idx: CIR.E
             const body_expr = lambda_expr.e_lambda.body;
 
             // Check if the body contains a reference to the binding pattern
-            if (self.exprContainsPatternRef(module_env, body_expr, binding_pattern)) {
+            const contains_ref = self.exprContainsPatternRef(module_env, body_expr, binding_pattern);
+            if (contains_ref) {
                 // Generate a unique join point ID for this recursive closure
                 const join_point_id: JoinPointId = @enumFromInt(self.next_join_point_id);
                 self.next_join_point_id += 1;
@@ -2270,6 +2288,26 @@ fn lowerStmts(self: *Self, module_env: *ModuleEnv, stmts: CIR.Statement.Span) Al
                 try lowered.append(self.allocator, .{
                     .pattern = wildcard_pattern,
                     .expr = for_loop_expr,
+                });
+            },
+            .s_while => |while_stmt| {
+                // While loop statement - lower to a while_loop expression
+                const cond = try self.lowerExprFromIdx(module_env, while_stmt.cond);
+                const body = try self.lowerExprFromIdx(module_env, while_stmt.body);
+
+                const while_loop_expr = try self.store.addExpr(.{
+                    .while_loop = .{
+                        .cond = cond,
+                        .body = body,
+                    },
+                }, Region.zero());
+
+                // Create a wildcard pattern to discard the result (while loops return unit)
+                const wildcard_pattern = try self.store.addPattern(.{ .wildcard = {} }, Region.zero());
+
+                try lowered.append(self.allocator, .{
+                    .pattern = wildcard_pattern,
+                    .expr = while_loop_expr,
                 });
             },
             else => {

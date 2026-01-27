@@ -499,6 +499,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // For loop over a list
                 .for_loop => |for_loop| try self.generateForLoop(for_loop),
 
+                // While loop
+                .while_loop => |while_loop| try self.generateWhileLoop(while_loop),
+
                 // Early return from a block
                 .early_return => |er| try self.generateEarlyReturn(er),
 
@@ -4399,6 +4402,65 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return .{ .immediate_i64 = 0 };
         }
 
+        /// Generate code for a while loop
+        /// Executes body while condition is true
+        fn generateWhileLoop(self: *Self, while_loop: anytype) Error!ValueLocation {
+            // Record loop start position for the backward jump
+            const loop_start = self.codegen.currentOffset();
+
+            // Evaluate condition
+            const cond_loc = try self.generateExpr(while_loop.cond);
+
+            // Get condition value into a register for comparison
+            const cond_reg = switch (cond_loc) {
+                .immediate_i64 => |val| blk: {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, @intCast(val));
+                    break :blk reg;
+                },
+                .stack => |off| blk: {
+                    const reg = try self.allocTempGeneral();
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, reg, .FP, off);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, reg, .RBP, off);
+                    }
+                    break :blk reg;
+                },
+                .general_reg => |r| blk: {
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emit.movRegReg(.w64, reg, r);
+                    break :blk reg;
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
+            // Compare condition with 0 (false)
+            const zero_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadImm(zero_reg, 0);
+            try self.emitCmpReg(cond_reg, zero_reg);
+            self.codegen.freeGeneral(zero_reg);
+            self.codegen.freeGeneral(cond_reg);
+
+            // Jump to end if condition is false (equal to 0)
+            const exit_patch = try self.emitJumpIfEqual();
+
+            // Execute the body (result is discarded)
+            // NOTE: This may call C functions which clobber all caller-saved registers
+            // The body may contain reassignments that update mutable variables
+            _ = try self.generateExpr(while_loop.body);
+
+            // Jump back to loop start (to re-evaluate condition)
+            try self.emitJumpBackward(loop_start);
+
+            // Patch the exit jump to point here
+            const loop_exit_offset = self.codegen.currentOffset();
+            self.codegen.patchJump(exit_patch, loop_exit_offset);
+
+            // While loops return unit (empty record)
+            return .{ .immediate_i64 = 0 };
+        }
+
         /// Generate code for early return
         fn generateEarlyReturn(self: *Self, er: anytype) Error!ValueLocation {
             // Generate the return value
@@ -5736,6 +5798,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 // JB (jump if below = unsigned less than) with placeholder offset
                 const patch_loc = self.codegen.currentOffset() + 2;
                 try self.codegen.emit.jccRel32(.below, @bitCast(@as(i32, 0)));
+                return patch_loc;
+            }
+        }
+
+        /// Emit a conditional jump if equal (for while loop false condition check)
+        fn emitJumpIfEqual(self: *Self) !usize {
+            if (comptime builtin.cpu.arch == .aarch64) {
+                // B.EQ (branch if equal) with placeholder offset
+                const patch_loc = self.codegen.currentOffset();
+                try self.codegen.emit.bcond(.eq, 0);
+                return patch_loc;
+            } else {
+                // JE (jump if equal) with placeholder offset
+                const patch_loc = self.codegen.currentOffset() + 2;
+                try self.codegen.emit.jccRel32(.equal, @bitCast(@as(i32, 0)));
                 return patch_loc;
             }
         }

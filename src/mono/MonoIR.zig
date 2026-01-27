@@ -597,6 +597,16 @@ pub const MonoExpr = union(enum) {
         body: MonoExprId,
     },
 
+    /// While loop
+    /// Executes body while condition is true
+    /// Returns empty record (unit) after loop completes
+    while_loop: struct {
+        /// Condition expression (must return Bool)
+        cond: MonoExprId,
+        /// Body expression (typically a block with statements and reassignments)
+        body: MonoExprId,
+    },
+
     /// Increment reference count of a refcounted value
     /// If the value has static refcount (isize::MIN), this is a no-op
     incref: struct {
