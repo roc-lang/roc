@@ -1446,6 +1446,11 @@ pub const Store = struct {
         var scope_lookup_visited: if (@import("builtin").mode == .Debug) [32]Var else void = if (@import("builtin").mode == .Debug) undefined else {};
         var scope_lookup_count: if (@import("builtin").mode == .Debug) u8 else void = if (@import("builtin").mode == .Debug) 0 else {};
 
+        // Track whether this computation depends on unresolved type parameters.
+        // If so, we should NOT cache the result because the same type var can have
+        // different layouts depending on the caller's type context.
+        var depends_on_unresolved_type_params = false;
+
         outer: while (true) {
             // Flag to skip layout computation if we hit cache or detect a cycle
             var skip_layout_computation = false;
@@ -1768,18 +1773,24 @@ pub const Store = struct {
                                                 // Resolve the mapped type in the caller module
                                                 const caller_env = self.all_module_envs[caller_mod];
                                                 const mapped_resolved = caller_env.types.resolveVar(mapped_var);
-                                                // Check if the MAPPED type is ZST
+                                                // If there's a mapping, the element type is NOT ZST.
+                                                // We'll compute the actual layout recursively.
+                                                // Only treat as ZST if the mapped type is truly empty.
                                                 break :blk switch (mapped_resolved.desc.content) {
                                                     .structure => |ft| switch (ft) {
                                                         .empty_record, .empty_tag_union => true,
                                                         else => false,
                                                     },
-                                                    .flex => |mf| mf.constraints.count == 0,
-                                                    .rigid => |mr| mr.constraints.count == 0,
+                                                    // A mapped flex/rigid should be computed, not assumed ZST
+                                                    .flex, .rigid => false,
                                                     else => false,
                                                 };
                                             }
                                         }
+                                        // No mapping found for this flex type parameter.
+                                        // Mark this computation as depending on unresolved params
+                                        // so the result won't be cached.
+                                        depends_on_unresolved_type_params = true;
                                         break :blk flex.constraints.count == 0;
                                     },
                                     .rigid => |rigid| blk: {
@@ -1789,18 +1800,49 @@ pub const Store = struct {
                                                 // Resolve the mapped type in the caller module
                                                 const caller_env = self.all_module_envs[caller_mod];
                                                 const mapped_resolved = caller_env.types.resolveVar(mapped_var);
-                                                // Check if the MAPPED type is ZST
+                                                // If there's a mapping, the element type is NOT ZST.
+                                                // We'll compute the actual layout recursively.
+                                                // Only treat as ZST if the mapped type is truly empty.
                                                 break :blk switch (mapped_resolved.desc.content) {
                                                     .structure => |ft| switch (ft) {
                                                         .empty_record, .empty_tag_union => true,
                                                         else => false,
                                                     },
-                                                    .flex => |mf| mf.constraints.count == 0,
-                                                    .rigid => |mr| mr.constraints.count == 0,
+                                                    // A mapped flex/rigid should be computed, not assumed ZST
+                                                    .flex, .rigid => false,
                                                     else => false,
                                                 };
                                             }
                                         }
+                                        // No mapping found for this rigid type parameter.
+                                        // Try to find ANY rigid mapping as a heuristic - in a monomorphized
+                                        // function, all unmapped rigids should map to the same concrete type.
+                                        if (caller_module_idx) |caller_mod| {
+                                            if (type_scope.scopes.items.len > 0) {
+                                                var iter = type_scope.scopes.items[0].iterator();
+                                                while (iter.next()) |entry| {
+                                                    // Check if this mapping is from a rigid (not a specific structure)
+                                                    const ext_env = self.all_module_envs[self.current_module_idx];
+                                                    const key_resolved = ext_env.types.resolveVar(entry.key_ptr.*);
+                                                    if (key_resolved.desc.content == .rigid) {
+                                                        // Found a rigid mapping - use it
+                                                        const caller_env = self.all_module_envs[caller_mod];
+                                                        const mapped_resolved = caller_env.types.resolveVar(entry.value_ptr.*);
+                                                        break :blk switch (mapped_resolved.desc.content) {
+                                                            .structure => |ft| switch (ft) {
+                                                                .empty_record, .empty_tag_union => true,
+                                                                else => false,
+                                                            },
+                                                            .flex, .rigid => false,
+                                                            else => false,
+                                                        };
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        // Mark this computation as depending on unresolved params
+                                        // so the result won't be cached.
+                                        depends_on_unresolved_type_params = true;
                                         break :blk rigid.constraints.count == 0;
                                     },
                                     .structure => |ft| switch (ft) {
@@ -2295,11 +2337,16 @@ pub const Store = struct {
                 };
 
                 // We actually resolved a layout that wasn't zero-sized!
-                // First things first: add it to the cache.
                 layout_idx = try self.insertLayout(layout);
                 const layout_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = current.var_ };
-                try self.layouts_by_module_var.put(layout_cache_key, layout_idx);
-                // Remove from in_progress now that it's cached (no longer "in progress")
+                // Only cache if the layout doesn't depend on unresolved type parameters.
+                // Layouts that depend on unresolved params (like List(a) where 'a' has no mapping)
+                // could produce different results with different caller contexts, so caching
+                // them would cause bugs when the same type var is used with different concrete types.
+                if (!depends_on_unresolved_type_params) {
+                    try self.layouts_by_module_var.put(layout_cache_key, layout_idx);
+                }
+                // Remove from in_progress now that it's done (regardless of caching)
                 _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = self.current_module_idx, .var_ = current.var_ });
 
                 // Check if any in-progress nominals need their reserved layouts updated.

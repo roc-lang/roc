@@ -386,11 +386,13 @@ fn getPatternLayout(self: *Self, pattern_idx: CIR.Pattern.Idx) LayoutIdx {
 
 /// Set up type scope mappings for an external function call.
 /// This maps the external function's rigid type variables to concrete types from the call site.
+/// The call_expr_idx is the call expression itself, used to map return type params.
 fn setupExternalCallTypeScope(
     self: *Self,
     caller_module_env: *ModuleEnv,
     lookup: anytype,
     args: CIR.Expr.Span,
+    call_expr_idx: CIR.Expr.Idx,
 ) Allocator.Error!void {
     // Get the external module
     const ext_module_idx = caller_module_env.imports.getResolvedModule(lookup.module_idx) orelse return;
@@ -417,8 +419,13 @@ fn setupExternalCallTypeScope(
     }
     const scope = &self.type_scope.scopes.items[0];
 
-    // Track the caller module - mapped vars in type_scope belong to this module
-    self.type_scope_caller_module = self.current_module_idx;
+    // Track the caller module - mapped vars in type_scope belong to this module.
+    // IMPORTANT: Only set this for the OUTERMOST external call!
+    // For nested calls (e.g., List.map calling List.with_capacity), we should preserve
+    // the original caller's module context, not overwrite it with the builtins module.
+    if (self.type_scope_caller_module == null) {
+        self.type_scope_caller_module = self.current_module_idx;
+    }
 
     // Get the function's parameter type variables
     const param_vars = ext_module_env.types.sliceVars(func.args);
@@ -443,6 +450,12 @@ fn setupExternalCallTypeScope(
             caller_arg_idx,
         );
     }
+
+    // Also map the return type. This is important for functions like List.map
+    // where the return type has type parameters (List b) that are used in the body.
+    // The call expression's type represents the return type after unification with the caller's context.
+    const caller_return_var = ModuleEnv.varFrom(call_expr_idx);
+    try self.collectTypeMappings(scope, ext_module_env, func.ret, caller_module_env, caller_return_var);
 }
 
 /// Recursively collect type variable mappings by walking two types in parallel.
@@ -709,7 +722,7 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             const old_caller_module = self.type_scope_caller_module;
             if (is_external_call) {
                 const lookup = fn_expr.e_lookup_external;
-                try self.setupExternalCallTypeScope(module_env, lookup, call.args);
+                try self.setupExternalCallTypeScope(module_env, lookup, call.args, expr_idx);
             }
             // Clean up type scope after this expression, whether we exit normally or break early
             defer if (is_external_call) {
