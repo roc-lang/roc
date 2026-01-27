@@ -67,7 +67,8 @@ pub const Work = struct {
 
     /// A container being processed. The var_ is optional because synthetic tuples
     /// (created for multi-arg tag union variants) don't have a meaningful var to cache.
-    pub const PendingContainerItem = struct { var_: ?types.Var, container: PendingContainer };
+    /// module_idx tracks which module the var belongs to for correct in_progress_vars removal.
+    pub const PendingContainerItem = struct { var_: ?types.Var, module_idx: u16, container: PendingContainer };
 
     /// Tuple field for layout work - similar to RecordField but with index instead of name.
     /// We need to explicitly record the index because zero-sized tuple fields might have

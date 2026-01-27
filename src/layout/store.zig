@@ -1733,6 +1733,7 @@ pub const Store = struct {
                                     // (This includes flex/rigid which will resolve to opaque_ptr)
                                     try self.work.pending_containers.append(self.allocator, .{
                                         .var_ = current.var_,
+                                        .module_idx = self.current_module_idx,
                                         .container = .box,
                                     });
 
@@ -1816,6 +1817,7 @@ pub const Store = struct {
                                     // Otherwise, add this to the stack of pending work
                                     try self.work.pending_containers.append(self.allocator, .{
                                         .var_ = current.var_,
+                                        .module_idx = self.current_module_idx,
                                         .container = .list,
                                     });
 
@@ -1902,6 +1904,7 @@ pub const Store = struct {
 
                             try self.work.pending_containers.append(self.allocator, .{
                                 .var_ = current.var_,
+                                .module_idx = self.current_module_idx,
                                 .container = .{
                                     .tuple = .{
                                         .num_fields = @intCast(num_fields),
@@ -1931,6 +1934,7 @@ pub const Store = struct {
 
                             try self.work.pending_containers.append(self.allocator, .{
                                 .var_ = current.var_,
+                                .module_idx = self.current_module_idx,
                                 .container = .{
                                     .record = .{
                                         .num_fields = @intCast(num_fields),
@@ -2046,6 +2050,7 @@ pub const Store = struct {
                             // Push the tag union container
                             try self.work.pending_containers.append(self.allocator, .{
                                 .var_ = current.var_,
+                                .module_idx = self.current_module_idx,
                                 .container = .{
                                     .tag_union = .{
                                         .num_variants = @intCast(num_tags),
@@ -2082,6 +2087,7 @@ pub const Store = struct {
                                 }
                                 try self.work.pending_containers.append(self.allocator, .{
                                     .var_ = null, // synthetic tuple for multi-arg variant
+                                    .module_idx = self.current_module_idx,
                                     .container = .{
                                         .tuple = .{
                                             .num_fields = @intCast(args_slice.len),
@@ -2116,6 +2122,7 @@ pub const Store = struct {
 
                             try self.work.pending_containers.append(self.allocator, .{
                                 .var_ = current.var_,
+                                .module_idx = self.current_module_idx,
                                 .container = .{
                                     .record = .{
                                         .num_fields = @intCast(num_fields),
@@ -2463,6 +2470,7 @@ pub const Store = struct {
                                 // Push tuple container on top of the tag union
                                 try self.work.pending_containers.append(self.allocator, .{
                                     .var_ = null, // synthetic tuple for multi-arg variant
+                                    .module_idx = self.current_module_idx,
                                     .container = .{
                                         .tuple = .{
                                             .num_fields = @intCast(next_args_slice.len),
@@ -2490,9 +2498,19 @@ pub const Store = struct {
                 // Synthetic tuples (for multi-arg tag union variants) have var_=null and
                 // should not be cached or trigger nominal updates.
                 if (pending_item.var_) |container_var| {
+                    // Use pending_item.module_idx for cache and in_progress_vars removal.
+                    // This is the module that was active when the container started processing,
+                    // which is the key that in_progress_vars was added under, and the key that
+                    // future lookups from that module context will use.
+                    const container_module_idx = pending_item.module_idx;
+
                     // Add the container's layout to our layouts_by_module_var cache for later use.
-                    const container_cache_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = container_var };
+                    const container_cache_key = ModuleVarKey{ .module_idx = container_module_idx, .var_ = container_var };
                     try self.layouts_by_module_var.put(container_cache_key, layout_idx);
+
+                    // Remove from in_progress_vars now that it's cached (no longer "in progress").
+                    // Use container_module_idx - this is the key that was added when processing started.
+                    _ = self.work.in_progress_vars.swapRemove(.{ .module_idx = container_module_idx, .var_ = container_var });
 
                     // Check if any in-progress nominals need their reserved layouts updated.
                     // This handles the case where a nominal's backing type is a container (e.g., tag union).
@@ -2507,7 +2525,8 @@ pub const Store = struct {
                             // The backing type (container) just finished!
                             // IMPORTANT: Keep the reserved placeholder as a Box pointing to the real layout.
                             // This ensures recursive references remain boxed (correct size).
-                            const container_nominal_key = ModuleVarKey{ .module_idx = self.current_module_idx, .var_ = progress.nominal_var };
+                            // Use container_module_idx - the nominal should have been cached in the same module.
+                            const container_nominal_key = ModuleVarKey{ .module_idx = container_module_idx, .var_ = progress.nominal_var };
                             if (self.layouts_by_module_var.get(container_nominal_key)) |reserved_idx| {
                                 // reserved_idx should never equal layout_idx (would create self-referential box)
                                 std.debug.assert(reserved_idx != layout_idx);
