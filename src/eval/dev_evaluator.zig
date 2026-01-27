@@ -479,10 +479,10 @@ pub const DevEvaluator = struct {
         const cir_expr = module_env.store.getExpr(expr_idx);
         var result_layout = getExprLayoutWithTypeEnv(self.allocator, module_env, cir_expr, &type_env);
 
-        // For composite types (tuples, records, calls), compute proper layout from type var
-        // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of record)
+        // For composite types (tuples, records, calls, method calls), compute proper layout from type var
+        // The default layout from getExprLayoutWithTypeEnv may be incorrect (e.g., .dec instead of record/list)
         switch (cir_expr) {
-            .e_tuple, .e_record, .e_call => {
+            .e_tuple, .e_record, .e_call, .e_dot_access => {
                 const type_var = can.ModuleEnv.varFrom(expr_idx);
                 var type_scope = types.TypeScope.init(self.allocator);
                 defer type_scope.deinit();

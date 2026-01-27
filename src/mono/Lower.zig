@@ -928,7 +928,75 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 break :is_list layout_val.tag == .list or layout_val.tag == .list_of_zst;
             } else false;
 
-            if (is_list_receiver) {
+            // Handle method calls (dot.args != null)
+            if (dot.args) |arg_span| {
+                const arg_slice = module_env.store.sliceExpr(arg_span);
+
+                if (is_list_receiver) {
+                    // List method calls
+                    if (std.mem.eql(u8, field_name, "append")) {
+                        // list.append(elem) -> list_append(list, elem)
+                        if (arg_slice.len >= 1) {
+                            const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_append,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "prepend")) {
+                        // list.prepend(elem) -> list_prepend(list, elem)
+                        if (arg_slice.len >= 1) {
+                            const elem = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, elem });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_prepend,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "get")) {
+                        // list.get(idx) -> list_get(list, idx)
+                        if (arg_slice.len >= 1) {
+                            const idx = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse LayoutIdx.default_num;
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, idx });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_get,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    } else if (std.mem.eql(u8, field_name, "concat")) {
+                        // list.concat(other) -> list_concat(list, other)
+                        if (arg_slice.len >= 1) {
+                            const other = try self.lowerExprFromIdx(module_env, arg_slice[0]);
+                            const ret_layout = self.computeLayoutFromExprIdx(module_env, expr_idx) orelse receiver_layout;
+                            const args = try self.store.addExprSpan(&[_]ir.MonoExprId{ receiver, other });
+                            break :blk .{
+                                .low_level = .{
+                                    .op = .list_concat,
+                                    .args = args,
+                                    .ret_layout = ret_layout,
+                                },
+                            };
+                        }
+                    }
+                }
+                // Fall through to handle as external call lookup if not a known method
+            }
+
+            // Handle field access (no args) for list properties
+            if (is_list_receiver and dot.args == null) {
                 if (std.mem.eql(u8, field_name, "len")) {
                     // Convert list.len to low_level list_len operation
                     const args = try self.store.addExprSpan(&[_]ir.MonoExprId{receiver});
