@@ -29,6 +29,7 @@ const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.tr
 const BuiltinTypes = eval.BuiltinTypes;
 const BuiltinModules = eval.BuiltinModules;
 const module_discovery = @import("module_discovery.zig");
+const roc_target = @import("roc_target");
 
 const Check = check.Check;
 const Can = can.Can;
@@ -267,6 +268,7 @@ pub const PackageEnv = struct {
     root_dir: []const u8,
     mode: Mode,
     max_threads: usize,
+    target: roc_target.RocTarget,
     sink: ReportSink,
     /// Optional resolver for cross-package imports; when null, all imports are treated as local
     resolver: ?ImportResolver = null,
@@ -318,7 +320,7 @@ pub const PackageEnv = struct {
         import_name: []const u8,
     };
 
-    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
+    pub fn init(gpa: Allocator, package_name: []const u8, root_dir: []const u8, mode: Mode, max_threads: usize, target: roc_target.RocTarget, sink: ReportSink, schedule_hook: ScheduleHook, compiler_version: []const u8, builtin_modules: *const BuiltinModules, file_provider: ?FileProvider) PackageEnv {
         // Pre-allocate module storage to avoid reallocation during multi-threaded processing
         var modules = std.ArrayList(ModuleState).empty;
         if (mode == .multi_threaded) {
@@ -330,6 +332,7 @@ pub const PackageEnv = struct {
             .root_dir = root_dir,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
             .sink = sink,
             .schedule_hook = schedule_hook,
             .compiler_version = compiler_version,
@@ -348,6 +351,7 @@ pub const PackageEnv = struct {
         root_dir: []const u8,
         mode: Mode,
         max_threads: usize,
+        target: roc_target.RocTarget,
         sink: ReportSink,
         resolver: ImportResolver,
         schedule_hook: ScheduleHook,
@@ -366,6 +370,7 @@ pub const PackageEnv = struct {
             .root_dir = root_dir,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
             .sink = sink,
             .resolver = resolver,
             .schedule_hook = schedule_hook,
@@ -1254,6 +1259,7 @@ pub const PackageEnv = struct {
         env: *ModuleEnv,
         builtin_module_env: *const ModuleEnv,
         imported_envs: []const *ModuleEnv,
+        target: roc_target.RocTarget,
     ) !Check {
         // Load builtin indices from the binary data generated at build time
         const builtin_indices = try builtin_loading.deserializeBuiltinIndices(gpa, compiled_builtins.builtin_indices_bin);
@@ -1294,7 +1300,7 @@ pub const PackageEnv = struct {
 
         // After type checking, evaluate top-level declarations at compile time
         const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module_env, builtin_module_env, builtin_module_env);
-        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping);
+        var comptime_evaluator = try eval.ComptimeEvaluator.init(gpa, env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module_env, &checker.import_mapping, target);
         defer comptime_evaluator.deinit();
         _ = try comptime_evaluator.evalAll();
 
@@ -1360,7 +1366,7 @@ pub const PackageEnv = struct {
         resolvePendingLookups(env, imported_envs.items);
 
         const check_start = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
-        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items);
+        var checker = try typeCheckModule(self.gpa, env, self.builtin_modules.builtin_module.env, imported_envs.items, self.target);
         defer checker.deinit();
         const check_end = if (@import("builtin").target.cpu.arch != .wasm32) std.time.nanoTimestamp() else 0;
         if (@import("builtin").target.cpu.arch != .wasm32) {

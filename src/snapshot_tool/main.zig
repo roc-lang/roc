@@ -22,6 +22,7 @@ const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
+const roc_target = @import("roc_target");
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -1334,7 +1335,7 @@ fn processSnapshotContent(
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
             const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
             const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
+            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative());
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs

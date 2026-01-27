@@ -15,6 +15,7 @@ const builtins = @import("builtins");
 
 const helpers = @import("helpers.zig");
 const eval_mod = @import("../mod.zig");
+const roc_target = @import("roc_target");
 const TestEnv = @import("TestEnv.zig");
 const Interpreter = eval_mod.Interpreter;
 const BuiltinTypes = eval_mod.BuiltinTypes;
@@ -196,7 +197,7 @@ fn evalToInt(allocator: std.mem.Allocator, source: []const u8) !i128 {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -227,7 +228,7 @@ fn evalToBool(allocator: std.mem.Allocator, source: []const u8) !bool {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();
@@ -742,7 +743,7 @@ fn evalTupleFirst(allocator: std.mem.Allocator, source: []const u8) !i128 {
 
     const builtin_types = BuiltinTypes.init(resources.builtin_indices, resources.builtin_module.env, resources.builtin_module.env, resources.builtin_module.env);
     const imported_envs = [_]*const can.ModuleEnv{resources.builtin_module.env};
-    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(allocator, resources.module_env, builtin_types, resources.builtin_module.env, &imported_envs, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const ops = test_env_instance.get_ops();

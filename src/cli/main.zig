@@ -1677,6 +1677,7 @@ pub fn setupSharedMemoryWithCoordinator(ctx: *CliContext, roc_file_path: []const
         ctx.gpa, // Use regular allocator for Coordinator internals
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(), // IPC runs on host
         &builtin_modules,
         build_options.compiler_version,
         null, // no cache for IPC
@@ -3325,7 +3326,7 @@ fn rocBuildEmbedded(ctx: *CliContext, args: cli_args.BuildArgs) !void {
     const thread_count: usize = if (args.max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, target);
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 
@@ -3850,7 +3851,7 @@ fn rocTest(ctx: *CliContext, args: cli_args.TestArgs) !void {
 
     // Evaluate all top-level declarations at compile time
     const builtin_types_for_eval = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var comptime_evaluator = eval.ComptimeEvaluator.init(ctx.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping) catch |err| {
+    var comptime_evaluator = eval.ComptimeEvaluator.init(ctx.gpa, &env, imported_envs, &checker.problems, builtin_types_for_eval, builtin_module.env, &checker.import_mapping, roc_target.RocTarget.detectNative()) catch |err| {
         try stderr.print("Failed to create compile-time evaluator: {}\n", .{err});
         return err;
     };
@@ -4226,7 +4227,7 @@ fn checkFileWithBuildEnvPreserved(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
     build_env.compiler_version = build_options.compiler_version;
     // Note: We do NOT defer build_env.deinit() here because we're returning it
 
@@ -4333,7 +4334,7 @@ fn checkFileWithBuildEnv(
     const thread_count: usize = if (max_threads) |t| t else (std.Thread.getCpuCount() catch 1);
     const mode: compile.package.Mode = if (thread_count <= 1) .single_threaded else .multi_threaded;
 
-    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count);
+    var build_env = try BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative());
     build_env.compiler_version = build_options.compiler_version;
     defer build_env.deinit();
 

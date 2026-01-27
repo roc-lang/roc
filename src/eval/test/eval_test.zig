@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const roc_target = @import("roc_target");
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -410,7 +411,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -768,7 +769,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -846,7 +847,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();

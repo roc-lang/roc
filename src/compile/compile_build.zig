@@ -38,6 +38,7 @@ const FileProvider = compile_package.FileProvider;
 // Actor model components
 const coordinator_mod = @import("coordinator.zig");
 const Coordinator = coordinator_mod.Coordinator;
+const roc_target = @import("roc_target");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
@@ -101,6 +102,7 @@ pub const BuildEnv = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
+    target: roc_target.RocTarget,
     compiler_version: []const u8 = build_options.compiler_version,
 
     // Workspace roots for sandboxing (absolute, canonical)
@@ -141,7 +143,7 @@ pub const BuildEnv = struct {
         import_name: []const u8, // e.g., "pf.Stdout"
     };
 
-    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize) !BuildEnv {
+    pub fn init(gpa: Allocator, mode: Mode, max_threads: usize, target: roc_target.RocTarget) !BuildEnv {
         // Allocate builtin modules on heap to prevent moves that would invalidate internal pointers
         const builtin_modules = try gpa.create(BuiltinModules);
         errdefer gpa.destroy(builtin_modules);
@@ -153,6 +155,7 @@ pub const BuildEnv = struct {
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
             .workspace_roots = std.array_list.Managed([]const u8).init(gpa),
             .sink = OrderedSink.init(gpa),
             .builtin_modules = builtin_modules,
@@ -304,6 +307,7 @@ pub const BuildEnv = struct {
             self.gpa,
             self.mode,
             self.max_threads,
+            self.target,
             self.builtin_modules,
             self.compiler_version,
             self.cache_manager,
@@ -1517,6 +1521,7 @@ pub const BuildEnv = struct {
                 pkg.root_dir,
                 self.mode,
                 self.max_threads,
+                self.target,
                 .{ .ctx = ps, .emitFn = PkgSinkCtx.emit },
                 resolver,
                 schedule_hook,
