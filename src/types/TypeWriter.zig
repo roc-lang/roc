@@ -380,7 +380,7 @@ fn writeVarWithContext(self: *TypeWriter, writer: *ByteWrite, var_: Var, context
     }
 
     if (self.hasSeenVar(resolved.var_)) {
-        _ = try writer.write("...");
+        _ = try writer.write("<RecursiveType>");
     } else {
         try self.seen.append(resolved.var_);
         defer _ = self.seen.pop();

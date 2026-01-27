@@ -426,7 +426,10 @@ fn unifyInContext(self: *Self, a: Var, b: Var, env: *Env, ctx: problem.Context) 
 /// Check if a variable contains an infinite type after solving a definition.
 /// This catches cases like `f = |x| f([x])` which creates `a = List(a)`.
 /// Similar to Rust's check_for_infinite_type called after LetCon.
-fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
+fn checkForInfiniteType(self: *Self, comptime Idx: anytype, idx: Idx) std.mem.Allocator.Error!void {
+    std.debug.assert(Idx == CIR.Def.Idx or Idx == CIR.Expr.Idx);
+
+    const var_ = ModuleEnv.varFrom(idx);
     const occurs_result = try occurs.occurs(self.types, &self.occurs_scratch, var_);
 
     switch (occurs_result) {
@@ -434,20 +437,42 @@ fn checkForInfiniteType(self: *Self, var_: Var) std.mem.Allocator.Error!void {
             // These are fine - no cycle, or valid recursion through a nominal type
         },
         .recursive_anonymous => {
+            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
+                self.occurs_scratch.err_chain.items.items[0]
+            else
+                var_;
+
             // Anonymous recursion (recursive type not through a nominal type)
-            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .anonymous_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
+                .def_name = if (comptime Idx == CIR.Def.Idx) blk: {
+                    const def = self.cir.store.getDef(idx);
+                    break :blk self.getPatternIdent(def.pattern);
+                } else blk: {
+                    break :blk null;
+                },
             } });
             try self.types.setVarContent(var_, .err);
         },
         .infinite => {
+            const err_var = if (self.occurs_scratch.err_chain.len() > 0)
+                self.occurs_scratch.err_chain.items.items[0]
+            else
+                var_;
+
             // Infinite type (like `a = List(a)`)
-            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, var_);
+            const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, err_var);
             _ = try self.problems.appendProblem(self.gpa, .{ .infinite_recursion = .{
                 .var_ = var_,
                 .snapshot = snapshot,
+                .def_name = if (comptime Idx == CIR.Def.Idx) blk: {
+                    const def = self.cir.store.getDef(idx);
+                    break :blk self.getPatternIdent(def.pattern);
+                } else blk: {
+                    break :blk null;
+                },
             } });
             try self.types.setVarContent(var_, .err);
         },
@@ -1080,7 +1105,7 @@ pub fn checkFile(self: *Self) std.mem.Allocator.Error!void {
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
-        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+        try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 
     // Note that we can't use SCCs to determine the order to resolve defs
@@ -1474,7 +1499,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.checkFlexVarConstraintCompatibility(expr_var, &env);
 
     // Check for infinite types
-    try self.checkForInfiniteType(ModuleEnv.varFrom(expr_idx));
+    try self.checkForInfiniteType(CIR.Expr.Idx, expr_idx);
 }
 
 /// Check a REPL expression, also type-checking any definitions (for local type declarations)
@@ -1524,7 +1549,7 @@ pub fn checkExprReplWithDefs(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Alloca
 
     // After solving all deferred constraints, check for infinite types
     for (defs_slice) |def_idx| {
-        try self.checkForInfiniteType(ModuleEnv.varFrom(def_idx));
+        try self.checkForInfiniteType(CIR.Def.Idx, def_idx);
     }
 }
 

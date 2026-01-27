@@ -725,10 +725,10 @@ pub const ReportBuilder = struct {
                 return self.buildUnsupportedAliasWhereClauseReport(data);
             },
             .infinite_recursion => |data| {
-                return self.buildUnimplementedReport("Infinite recursion", data.var_, data.snapshot);
+                return self.buildInfiniteTypeReport(data);
             },
             .anonymous_recursion => |data| {
-                return self.buildUnimplementedReport("Anonymous recursion", data.var_, data.snapshot);
+                return self.buildAnonymousRecursionReport(data);
             },
             .platform_alias_not_found => |data| {
                 return self.buildPlatformAliasNotFound(data);
@@ -2713,6 +2713,95 @@ pub const ReportBuilder = struct {
             },
             else => return false,
         }
+    }
+
+    /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
+    fn buildInfiniteTypeReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "INFINITE TYPE", .runtime_error);
+        errdefer report.deinit();
+
+        try D.renderSlice(&.{
+            D.bytes("I am inferring a weird self-referential type:"),
+        }, self, &report);
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Here is my best effort at writing down the type. You will see"),
+            D.bytes("<RecursiveType>").withAnnotation(.inline_code),
+            D.bytes("for parts of the type that repeat infinitely."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addCodeBlock(actual_type_str);
+        try report.document.addLineBreak();
+
+        return report;
+    }
+
+    /// Build a report for infinite type recursion (e.g., `func = |a| func([a])` creates `a = List(a)`)
+    fn buildAnonymousRecursionReport(self: *Self, data: VarWithSnapshot) !Report {
+        var report = Report.init(self.gpa, "ANONYMOUS RECURSION", .runtime_error);
+        errdefer report.deinit();
+
+        if (data.def_name) |def_name| {
+            try D.renderSlice(&.{
+                D.bytes("I am inferring a recursive type that has no name somewhere in"),
+                D.ident(def_name).withAnnotation(.inline_code),
+                D.bytes(":").withNoPrecedingSpace(),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("I am inferring a recursive type that has no name:"),
+            }, self, &report);
+        }
+        try report.document.addLineBreak();
+
+        const region = self.can_ir.store.regions.get(@enumFromInt(@intFromEnum(data.var_)));
+        const region_info = self.module_env.calcRegionInfo(region.*);
+        try report.document.addSourceRegion(
+            region_info,
+            .error_highlight,
+            self.filename,
+            self.source,
+            self.module_env.getLineStarts(),
+        );
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Here is the type I'm inferring. You will see"),
+            D.bytes("<RecursiveType>").withAnnotation(.inline_code),
+            D.bytes("for parts of the type that repeat."),
+        }, self, &report);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
+        try report.document.addCodeBlock(actual_type_str);
+        try report.document.addLineBreak();
+        try report.document.addLineBreak();
+
+        try D.renderSlice(&.{
+            D.bytes("Hint:").withAnnotation(.emphasized),
+            D.bytes("Recursive types are only allowed through nominal types."),
+            D.bytes("If you need a recursive data structure, define a nominal type using"),
+            D.bytes(":=").withAnnotation(.inline_code),
+            D.bytes(".").withNoPrecedingSpace(),
+        }, self, &report);
+
+        return report;
     }
 
     /// Build a report for "invalid number literal" diagnostic

@@ -93,6 +93,9 @@ pub const ComptimeEvalError = struct {
 pub const VarWithSnapshot = struct {
     var_: Var,
     snapshot: SnapshotContentIdx,
+
+    /// If this type was found in a top-level def, the name of that def
+    def_name: ?Ident.Idx,
 };
 
 // number problems //

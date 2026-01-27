@@ -3435,6 +3435,79 @@ test "top-level: type annotation followed by body should not create duplicate de
     }
 }
 
+// recursive errors //
+
+test "check type - recursive type - infinite" {
+    const source =
+        \\func = |a| func([a])
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**INFINITE TYPE**
+        \\I am inferring a weird self-referential type:
+        \\**test:1:1:1:21:**
+        \\```roc
+        \\func = |a| func([a])
+        \\```
+        \\^^^^^^^^^^^^^^^^^^^^
+        \\
+        \\Here is my best effort at writing down the type. You will see `<RecursiveType>` for parts of the type that repeat infinitely.
+        \\
+        \\    List(<RecursiveType>)
+        \\
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - recursive alias" {
+    const source =
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**RECURSIVE ALIAS**
+        \\The type alias _LinkedList_ references itself, which is not allowed:
+        \\**test:1:31:1:44:**
+        \\```roc
+        \\LinkedList(a) : [Nil, Cons(a, LinkedList(a))]
+        \\```
+        \\                              ^^^^^^^^^^^^^
+        \\
+        \\Type aliases cannot be recursive. If you need a recursive type, use a nominal type `:=` instead of an alias`:`.
+        \\
+        \\
+    );
+}
+
+test "check type - recursive type - anonymous recursion" {
+    const source =
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**ANONYMOUS RECURSION**
+        \\I am inferring a recursive type that has no name somewhere in `len`:
+        \\**test:1:1:5:4:**
+        \\```roc
+        \\len = |linked_list|
+        \\  match linked_list {
+        \\    Cons(_a, rest) => 1 + len(rest)
+        \\    Nil => 0.U8
+        \\  }
+        \\```
+        \\
+        \\Here is the type I'm inferring. You will see `<RecursiveType>` for parts of the type that repeat.
+        \\
+        \\    [Cons(_a, <RecursiveType>), Nil, ..]
+        \\
+        \\**Hint:** Recursive types are only allowed through nominal types. If you need a recursive data structure, define a nominal type using `:=`.
+        \\
+        \\
+    );
+}
+
 // equirecursive static dispatch //
 
 test "check type - equirecursive static dispatch" {
