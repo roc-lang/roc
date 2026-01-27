@@ -45,18 +45,25 @@ fn readTagUnionDiscriminant(layout: Layout, base_ptr: [*]const u8, layout_cache:
     std.debug.assert(layout.tag == .tag_union);
     const tu_idx = layout.data.tag_union.idx;
     const tu_data = layout_cache.getTagUnionData(tu_idx);
-    const variants = layout_cache.getTagUnionVariants(tu_data);
-    // Single-tag unions don't have discriminants, so don't try to read one.
-    if (variants.len == 1) return 0;
     const disc_offset = layout_cache.getTagUnionDiscriminantOffset(tu_idx);
+    // Always read the actual discriminant from memory, even for single-variant unions.
+    // A value may have been created with a wider type (more variants) and later
+    // accessed through a narrower type's layout. Reading the actual discriminant
+    // allows pattern matching to correctly fail when the value doesn't match
+    // the expected narrow type.
+    // For example: if a value is NotFound (discriminant 1) but extracted through
+    // a layout expecting only Exit (1 variant), we need to read 1, not 0.
     const discriminant = tu_data.readDiscriminantFromPtr(base_ptr + disc_offset);
-    std.debug.assert(discriminant < variants.len);
+    // Note: discriminant may be >= variants.len if value was created with wider type.
+    // Callers should handle this case (e.g., pattern matching returns false).
     return discriminant;
 }
 
 /// Increment reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
-fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps) void {
+/// When original_tu_idx is provided and the discriminant is out of range for the current layout,
+/// uses the original layout to correctly handle refcounting for values that crossed type boundaries.
+fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, roc_ops: *RocOps, original_tu_idx: ?layout_mod.TagUnionIdx) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         const raw_ptr = ptr orelse return;
         const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
@@ -92,7 +99,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             const field_layout = layout_cache.getLayout(field_info.layout);
             const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops);
+            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -110,7 +117,7 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             const elem_layout = layout_cache.getLayout(elem_info.layout);
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops);
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -120,8 +127,28 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
+
+        if (discriminant < variants.len) {
+            // Fast path: discriminant in range for current layout
+            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+        } else if (original_tu_idx) |orig_idx| {
+            // Use original layout for correct refcounting when discriminant is out of range
+            const orig_tu_data = layout_cache.getTagUnionData(orig_idx);
+            const orig_variants = layout_cache.getTagUnionVariants(orig_tu_data);
+            if (discriminant < orig_variants.len) {
+                const variant_layout = layout_cache.getLayout(orig_variants.get(discriminant).payload_layout);
+                increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+            } else {
+                // Discriminant out of range even for original layout - compiler bug
+                unreachable;
+            }
+        } else {
+            // No original layout provided and discriminant out of range.
+            // This can happen when a value crosses the platform-app boundary and the
+            // original layout wasn't captured. Skip refcounting to avoid corruption.
+            // May leak memory but is safe.
+        }
         return;
     }
     // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
@@ -129,7 +156,9 @@ fn increfLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
 /// Decrement reference count for a value given its layout and pointer.
 /// Used internally when we don't need full StackValue type information.
-fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps) void {
+/// When original_tu_idx is provided and the discriminant is out of range for the current layout,
+/// uses the original layout to correctly handle refcounting for values that crossed type boundaries.
+fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore, ops: *RocOps, original_tu_idx: ?layout_mod.TagUnionIdx) void {
     if (layout.tag == .scalar and layout.data.scalar.tag == .str) {
         const raw_ptr = ptr orelse return;
         const roc_str: *const RocStr = builtins.utils.alignedPtrCast(*const RocStr, @as([*]u8, @ptrCast(raw_ptr)), @src());
@@ -152,7 +181,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
                 var idx: usize = 0;
                 while (idx < count) : (idx += 1) {
                     const elem_ptr = source + idx * element_width;
-                    decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops);
+                    decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
                 }
             }
         }
@@ -189,7 +218,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
 
         if (builtins.utils.rcUnique(refcount_ptr.*)) {
             if (layout_cache.layoutContainsRefcounted(elem_layout)) {
-                decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops);
+                decrefLayoutPtr(elem_layout, @ptrCast(payload_ptr), layout_cache, ops, null);
             }
         }
         builtins.utils.decrefDataPtrC(@as(?[*]u8, payload_ptr), elem_alignment, false, ops);
@@ -210,7 +239,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             const field_layout = layout_cache.getLayout(field_info.layout);
             const field_offset = layout_cache.getRecordFieldOffset(layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
-            decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops);
+            decrefLayoutPtr(field_layout, field_ptr, layout_cache, ops, null);
         }
         return;
     }
@@ -228,7 +257,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
             const elem_layout = layout_cache.getLayout(elem_info.layout);
             const elem_offset = layout_cache.getTupleElementOffset(layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
-            decrefLayoutPtr(elem_layout, elem_ptr, layout_cache, ops);
+            decrefLayoutPtr(elem_layout, elem_ptr, layout_cache, ops, null);
         }
         return;
     }
@@ -273,7 +302,7 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
                 if (comptime trace_refcount) {
                     traceRefcount("DECREF closure rec_ptr=0x{x}", .{@intFromPtr(rec_ptr)});
                 }
-                decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops);
+                decrefLayoutPtr(captures_layout, rec_ptr, layout_cache, ops, null);
             }
         }
         return;
@@ -284,8 +313,28 @@ fn decrefLayoutPtr(layout: Layout, ptr: ?*anyopaque, layout_cache: *LayoutStore,
         const discriminant = readTagUnionDiscriminant(layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
-        decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
+
+        if (discriminant < variants.len) {
+            // Fast path: discriminant in range for current layout
+            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+            decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops, null);
+        } else if (original_tu_idx) |orig_idx| {
+            // Use original layout for correct refcounting when discriminant is out of range
+            const orig_tu_data = layout_cache.getTagUnionData(orig_idx);
+            const orig_variants = layout_cache.getTagUnionVariants(orig_tu_data);
+            if (discriminant < orig_variants.len) {
+                const variant_layout = layout_cache.getLayout(orig_variants.get(discriminant).payload_layout);
+                decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops, null);
+            } else {
+                // Discriminant out of range even for original layout - compiler bug
+                unreachable;
+            }
+        } else {
+            // No original layout provided and discriminant out of range.
+            // This can happen when a value crosses the platform-app boundary and the
+            // original layout wasn't captured. Skip refcounting to avoid corruption.
+            // May leak memory but is safe.
+        }
         return;
     }
     // Other layout types (scalar ints/floats, zst, etc.) don't need refcounting
@@ -299,6 +348,9 @@ ptr: ?*anyopaque,
 is_initialized: bool = false,
 /// Runtime type variable for type information (used for method dispatch and constant folding)
 rt_var: types.Var,
+/// Optional: Original tag union layout index when value was created with wider type.
+/// Used for safe refcounting when discriminant is out of range for narrowed layout.
+original_tu_layout_idx: ?layout_mod.TagUnionIdx = null,
 
 /// Copy this stack value to a destination pointer with bounds checking
 pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopaque, roc_ops: *RocOps) !void {
@@ -453,7 +505,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const field_offset = layout_cache.getRecordFieldOffset(self.layout.data.record.idx, @intCast(field_index));
             const field_ptr = @as(*anyopaque, @ptrCast(base_ptr + field_offset));
 
-            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops);
+            increfLayoutPtr(field_layout, field_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -484,7 +536,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
             const elem_offset = layout_cache.getTupleElementOffset(self.layout.data.tuple.idx, @intCast(elem_index));
             const elem_ptr = @as(*anyopaque, @ptrCast(base_ptr + elem_offset));
 
-            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops);
+            increfLayoutPtr(elem_layout, elem_ptr, layout_cache, roc_ops, null);
         }
         return;
     }
@@ -526,7 +578,7 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
                 const rec_ptr: [*]u8 = @ptrCast(base_ptr + aligned_off);
 
                 // Incref the entire captures record (which handles all fields recursively)
-                increfLayoutPtr(captures_layout, @ptrCast(rec_ptr), layout_cache, roc_ops);
+                increfLayoutPtr(captures_layout, @ptrCast(rec_ptr), layout_cache, roc_ops, null);
             }
         }
         return;
@@ -543,16 +595,42 @@ pub fn copyToPtr(self: StackValue, layout_cache: *LayoutStore, dest_ptr: *anyopa
         const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
         const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
-        if (comptime trace_refcount) {
-            traceRefcount("INCREF tag_union (copyToPtr) disc={} variant_layout.tag={}", .{
-                discriminant,
-                @intFromEnum(variant_layout.tag),
-            });
+        if (discriminant < variants.len) {
+            // Fast path: discriminant in range for current layout
+            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+            if (comptime trace_refcount) {
+                traceRefcount("INCREF tag_union (copyToPtr) disc={} variant_layout.tag={}", .{
+                    discriminant,
+                    @intFromEnum(variant_layout.tag),
+                });
+            }
+
+            increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+        } else if (self.original_tu_layout_idx) |orig_idx| {
+            // Use original layout for correct refcounting when discriminant is out of range
+            const orig_tu_data = layout_cache.getTagUnionData(orig_idx);
+            const orig_variants = layout_cache.getTagUnionVariants(orig_tu_data);
+            if (discriminant < orig_variants.len) {
+                const variant_layout = layout_cache.getLayout(orig_variants.get(discriminant).payload_layout);
+
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF tag_union (copyToPtr) disc={} (from original) variant_layout.tag={}", .{
+                        discriminant,
+                        @intFromEnum(variant_layout.tag),
+                    });
+                }
+
+                increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+            } else {
+                // Discriminant out of range even for original layout - compiler bug
+                unreachable;
+            }
+        } else {
+            // No original layout provided and discriminant out of range.
+            // Skip refcounting to avoid corruption. May leak memory but is safe.
         }
-
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
     }
 
@@ -956,6 +1034,7 @@ pub const TagUnionAccessor = struct {
     }
 
     /// Get the layout for a specific variant by discriminant
+    /// Caller must ensure discriminant is in range (check against variants.len first)
     pub fn getVariantLayout(self: *const TagUnionAccessor, discriminant: usize) Layout {
         const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
         std.debug.assert(discriminant < variants.len);
@@ -974,8 +1053,11 @@ pub const TagUnionAccessor = struct {
     }
 
     /// Get discriminant and payload layout together
+    /// Only valid when discriminant is known to be in range for this layout
     pub fn getVariant(self: *const TagUnionAccessor) struct { discriminant: usize, payload_layout: Layout } {
         const discriminant = self.getDiscriminant();
+        const variants = self.layout_cache.getTagUnionVariants(&self.tu_data);
+        std.debug.assert(discriminant < variants.len);
         const payload_layout = self.getVariantLayout(discriminant);
         return .{ .discriminant = discriminant, .payload_layout = payload_layout };
     }
@@ -1460,12 +1542,12 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
     }
     // Handle records by recursively incref'ing each field (symmetric with decref)
     if (self.layout.tag == .record) {
-        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops);
+        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops, null);
         return;
     }
     // Handle tuples by recursively incref'ing each element (symmetric with decref)
     if (self.layout.tag == .tuple) {
-        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops);
+        increfLayoutPtr(self.layout, self.ptr, layout_cache, roc_ops, null);
         return;
     }
     // Handle tag unions by reading discriminant and incref'ing only the active variant's payload
@@ -1477,14 +1559,36 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
 
         const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
         const variants = layout_cache.getTagUnionVariants(tu_data);
-        std.debug.assert(discriminant < variants.len);
-        const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
-        if (comptime trace_refcount) {
-            traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
+        if (discriminant < variants.len) {
+            // Fast path: discriminant in range for current layout
+            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+            if (comptime trace_refcount) {
+                traceRefcount("INCREF tag_union disc={} variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
+            }
+
+            increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+        } else if (self.original_tu_layout_idx) |orig_idx| {
+            // Use original layout for correct refcounting when discriminant is out of range
+            const orig_tu_data = layout_cache.getTagUnionData(orig_idx);
+            const orig_variants = layout_cache.getTagUnionVariants(orig_tu_data);
+            if (discriminant < orig_variants.len) {
+                const variant_layout = layout_cache.getLayout(orig_variants.get(discriminant).payload_layout);
+
+                if (comptime trace_refcount) {
+                    traceRefcount("INCREF tag_union disc={} (from original) variant_layout.tag={}", .{ discriminant, @intFromEnum(variant_layout.tag) });
+                }
+
+                increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops, null);
+            } else {
+                // Discriminant out of range even for original layout - compiler bug
+                unreachable;
+            }
+        } else {
+            // No original layout provided and discriminant out of range.
+            // Skip refcounting to avoid corruption. May leak memory but is safe.
         }
-
-        increfLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, roc_ops);
         return;
     }
     // Handle closures by incref'ing their captures (symmetric with decref)
@@ -1514,7 +1618,7 @@ pub fn incref(self: StackValue, layout_cache: *LayoutStore, roc_ops: *RocOps) vo
                 const aligned_off = std.mem.alignForward(usize, header_size, @intCast(cap_align.toByteUnits()));
                 const base_ptr: [*]u8 = @ptrCast(@alignCast(self.ptr.?));
                 const rec_ptr: *anyopaque = @ptrCast(base_ptr + aligned_off);
-                increfLayoutPtr(captures_layout, rec_ptr, layout_cache, roc_ops);
+                increfLayoutPtr(captures_layout, rec_ptr, layout_cache, roc_ops, null);
             }
         }
         return;
@@ -1613,7 +1717,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                     var idx: usize = 0;
                     while (idx < count) : (idx += 1) {
                         const elem_ptr = source + idx * element_width;
-                        decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops);
+                        decrefLayoutPtr(elem_layout, @ptrCast(elem_ptr), layout_cache, ops, null);
                     }
                 }
             }
@@ -1655,7 +1759,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
 
             if (builtins.utils.rcUnique(refcount_ptr.*)) {
                 if (layout_cache.layoutContainsRefcounted(elem_layout)) {
-                    decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops);
+                    decrefLayoutPtr(elem_layout, @ptrCast(@alignCast(payload_ptr)), layout_cache, ops, null);
                 }
             }
 
@@ -1675,7 +1779,7 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops, null);
             return;
         },
         .box_of_zst => {
@@ -1696,11 +1800,11 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
                 });
             }
 
-            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops, null);
             return;
         },
         .closure => {
-            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops);
+            decrefLayoutPtr(self.layout, self.ptr, layout_cache, ops, null);
             if (comptime trace_refcount) {
                 traceRefcount("DECREF closure DONE ptr=0x{x}", .{@intFromPtr(self.ptr)});
             }
@@ -1712,17 +1816,44 @@ pub fn decref(self: StackValue, layout_cache: *LayoutStore, ops: *RocOps) void {
             const discriminant = readTagUnionDiscriminant(self.layout, base_ptr, layout_cache);
             const tu_data = layout_cache.getTagUnionData(self.layout.data.tag_union.idx);
             const variants = layout_cache.getTagUnionVariants(tu_data);
-            const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
 
-            if (comptime trace_refcount) {
-                traceRefcount("DECREF tag_union ptr=0x{x} disc={} variant_layout.tag={}", .{
-                    @intFromPtr(self.ptr),
-                    discriminant,
-                    @intFromEnum(variant_layout.tag),
-                });
+            if (discriminant < variants.len) {
+                // Fast path: discriminant in range for current layout
+                const variant_layout = layout_cache.getLayout(variants.get(discriminant).payload_layout);
+
+                if (comptime trace_refcount) {
+                    traceRefcount("DECREF tag_union ptr=0x{x} disc={} variant_layout.tag={}", .{
+                        @intFromPtr(self.ptr),
+                        discriminant,
+                        @intFromEnum(variant_layout.tag),
+                    });
+                }
+
+                decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops, null);
+            } else if (self.original_tu_layout_idx) |orig_idx| {
+                // Use original layout for correct refcounting when discriminant is out of range
+                const orig_tu_data = layout_cache.getTagUnionData(orig_idx);
+                const orig_variants = layout_cache.getTagUnionVariants(orig_tu_data);
+                if (discriminant < orig_variants.len) {
+                    const variant_layout = layout_cache.getLayout(orig_variants.get(discriminant).payload_layout);
+
+                    if (comptime trace_refcount) {
+                        traceRefcount("DECREF tag_union ptr=0x{x} disc={} (from original) variant_layout.tag={}", .{
+                            @intFromPtr(self.ptr),
+                            discriminant,
+                            @intFromEnum(variant_layout.tag),
+                        });
+                    }
+
+                    decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops, null);
+                } else {
+                    // Discriminant out of range even for original layout - compiler bug
+                    unreachable;
+                }
+            } else {
+                // No original layout provided and discriminant out of range.
+                // Skip refcounting to avoid corruption. May leak memory but is safe.
             }
-
-            decrefLayoutPtr(variant_layout, @as(*anyopaque, @ptrCast(@constCast(base_ptr))), layout_cache, ops);
             return;
         },
         else => {},
