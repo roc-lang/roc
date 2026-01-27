@@ -2116,6 +2116,7 @@ pub fn build(b: *std.Build) void {
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
+    const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
 
     const parsed_args = parseBuildArgs(b);
     const run_args = parsed_args.run_args;
@@ -2150,6 +2151,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(bool, "trace_eval", trace_eval);
     build_options.addOption(bool, "trace_refcount", trace_refcount);
     build_options.addOption(bool, "trace_modules", trace_modules);
+    build_options.addOption(bool, "trace_build", trace_build);
     build_options.addOption([]const u8, "compiler_version", getCompilerVersion(b, optimize));
     build_options.addOption(bool, "enable_tracy_callstack", flag_tracy_callstack);
     build_options.addOption(bool, "enable_tracy_allocation", flag_tracy_allocation);

@@ -41,7 +41,6 @@ const rcNone = builtins.utils.rcNone;
 
 // List builtin functions
 const listWithCapacity = builtins.list.listWithCapacity;
-const listAppend = builtins.list.listAppend;
 const listAppendUnsafe = builtins.list.listAppendUnsafe;
 const copy_fallback = builtins.list.copy_fallback;
 
@@ -521,21 +520,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             switch (ll.op) {
                 .list_len => {
-                    // List is a (ptr, len) pair - length is at offset 8
+                    // List is a (ptr, len, capacity) triple - length is at offset 8
                     if (args.len < 1) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
 
-                    switch (list_loc) {
-                        .stack => |base_offset| {
-                            // Length is at offset 8 in the list struct
-                            const result_reg = try self.allocTempGeneral();
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, base_offset + 8);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, base_offset + 8);
-                            }
-                            return .{ .general_reg = result_reg };
-                        },
+                    // Get base offset from either stack or list_stack location
+                    const base_offset: i32 = switch (list_loc) {
+                        .stack => |off| off,
+                        .list_stack => |ls_info| ls_info.struct_offset,
                         .immediate_i64 => |val| {
                             // Empty list - length is 0
                             if (val == 0) {
@@ -544,7 +536,16 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             return Error.UnsupportedExpression;
                         },
                         else => return Error.UnsupportedExpression,
+                    };
+
+                    // Length is at offset 8 in the list struct
+                    const result_reg = try self.allocTempGeneral();
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, result_reg, .FP, base_offset + 8);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, result_reg, .RBP, base_offset + 8);
                     }
+                    return .{ .general_reg = result_reg };
                 },
                 .list_is_empty => {
                     // List is empty if length is 0
