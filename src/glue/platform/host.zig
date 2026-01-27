@@ -416,12 +416,36 @@ const Shape = extern struct {
     tag: ShapeTag,
 };
 
+/// FunctionInfo record: { name : Str, type_str : Str }
+/// Roc records are ordered alphabetically by field name: name < type_str
+const FunctionInfoRoc = extern struct {
+    name: RocStr,
+    type_str: RocStr,
+};
+
+/// HostedFunctionInfo record: { index : U64, name : Str, type_str : Str }
+/// Roc records are ordered alphabetically: index < name < type_str
+const HostedFunctionInfoRoc = extern struct {
+    index: u64,
+    name: RocStr,
+    type_str: RocStr,
+};
+
+/// ModuleTypeInfo record: { functions : List(FunctionInfo), hosted_functions : List(HostedFunctionInfo), main_type : Str, name : Str }
+/// Roc records are ordered alphabetically: functions < hosted_functions < main_type < name
+const ModuleTypeInfoRoc = extern struct {
+    functions: RocList, // List(FunctionInfo)
+    hosted_functions: RocList, // List(HostedFunctionInfo)
+    main_type: RocStr,
+    name: RocStr,
+};
+
 /// Types opaque type internals (matches Types.roc)
 /// Fields are ordered alphabetically in Roc records
-/// Types record: { entrypoints : List({ name : Str, type_id : U64 }) }
-/// Simplified Types structure - just entry points for now
+/// Types record: { entrypoints : List({ name : Str, type_id : U64 }), modules : List(ModuleTypeInfo) }
 const TypesInner = extern struct {
     entrypoints: RocList, // List({ name : Str, type_id : U64 })
+    modules: RocList, // List(ModuleTypeInfo)
 };
 
 /// Result (List File) Str - Roc Result type
@@ -485,8 +509,148 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 /// No hosted functions for glue platform
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
 
+/// Create a big RocStr from a slice (avoids small string encoding issues)
+fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
+    const SMALL_STRING_SIZE = @sizeOf(RocStr);
+    if (str.len < SMALL_STRING_SIZE) {
+        // Force big string allocation by allocating at least 24 bytes
+        const first_element = builtins.utils.allocateWithRefcount(
+            SMALL_STRING_SIZE,
+            @sizeOf(usize),
+            false,
+            roc_ops,
+        );
+        @memcpy(first_element[0..str.len], str);
+        @memset(first_element[str.len..SMALL_STRING_SIZE], 0);
+
+        return RocStr{
+            .bytes = first_element,
+            .length = str.len,
+            .capacity_or_alloc_ptr = SMALL_STRING_SIZE,
+        };
+    } else {
+        return RocStr.fromSlice(str, roc_ops);
+    }
+}
+
+/// JSON structures for parsing types_json
+const JsonFunctionInfo = struct {
+    name: []const u8,
+    type_str: []const u8,
+};
+
+const JsonHostedFunctionInfo = struct {
+    index: u64,
+    name: []const u8,
+    type_str: []const u8,
+};
+
+const JsonModuleTypeInfo = struct {
+    name: []const u8,
+    main_type: []const u8,
+    functions: []const JsonFunctionInfo,
+    hosted_functions: []const JsonHostedFunctionInfo,
+};
+
+/// Parse types_json and build RocList of ModuleTypeInfoRoc
+fn parseTypesJson(
+    allocator: std.mem.Allocator,
+    json_str: []const u8,
+    roc_ops: *builtins.host_abi.RocOps,
+) !RocList {
+    // Parse the JSON
+    const parsed = std.json.parseFromSlice([]const JsonModuleTypeInfo, allocator, json_str, .{}) catch |err| {
+        const stderr: std.fs.File = .stderr();
+        stderr.writeAll("Error parsing types JSON: ") catch {};
+        var buf: [64]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "{}\n", .{err}) catch "unknown error\n";
+        stderr.writeAll(msg) catch {};
+        return RocList.empty();
+    };
+    defer parsed.deinit();
+
+    const modules = parsed.value;
+    if (modules.len == 0) {
+        return RocList.empty();
+    }
+
+    // Allocate array for ModuleTypeInfoRoc entries
+    const modules_bytes = allocator.alignedAlloc(
+        u8,
+        std.mem.Alignment.fromByteUnits(@alignOf(ModuleTypeInfoRoc)),
+        modules.len * @sizeOf(ModuleTypeInfoRoc),
+    ) catch return error.OutOfMemory;
+    errdefer allocator.free(modules_bytes);
+
+    const modules_ptr: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(modules_bytes.ptr));
+
+    for (modules, 0..) |mod, mod_idx| {
+        // Build functions list
+        const functions_list = if (mod.functions.len > 0) blk: {
+            const funcs_bytes = allocator.alignedAlloc(
+                u8,
+                std.mem.Alignment.fromByteUnits(@alignOf(FunctionInfoRoc)),
+                mod.functions.len * @sizeOf(FunctionInfoRoc),
+            ) catch return error.OutOfMemory;
+
+            const funcs_ptr: [*]FunctionInfoRoc = @ptrCast(@alignCast(funcs_bytes.ptr));
+
+            for (mod.functions, 0..) |func, func_idx| {
+                funcs_ptr[func_idx] = FunctionInfoRoc{
+                    .name = createBigRocStr(func.name, roc_ops),
+                    .type_str = createBigRocStr(func.type_str, roc_ops),
+                };
+            }
+
+            break :blk RocList{
+                .bytes = funcs_bytes.ptr,
+                .length = mod.functions.len,
+                .capacity_or_alloc_ptr = mod.functions.len,
+            };
+        } else RocList.empty();
+
+        // Build hosted_functions list
+        const hosted_functions_list = if (mod.hosted_functions.len > 0) blk: {
+            const hosted_bytes = allocator.alignedAlloc(
+                u8,
+                std.mem.Alignment.fromByteUnits(@alignOf(HostedFunctionInfoRoc)),
+                mod.hosted_functions.len * @sizeOf(HostedFunctionInfoRoc),
+            ) catch return error.OutOfMemory;
+
+            const hosted_ptr: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes.ptr));
+
+            for (mod.hosted_functions, 0..) |hosted, hosted_idx| {
+                hosted_ptr[hosted_idx] = HostedFunctionInfoRoc{
+                    .index = hosted.index,
+                    .name = createBigRocStr(hosted.name, roc_ops),
+                    .type_str = createBigRocStr(hosted.type_str, roc_ops),
+                };
+            }
+
+            break :blk RocList{
+                .bytes = hosted_bytes.ptr,
+                .length = mod.hosted_functions.len,
+                .capacity_or_alloc_ptr = mod.hosted_functions.len,
+            };
+        } else RocList.empty();
+
+        modules_ptr[mod_idx] = ModuleTypeInfoRoc{
+            .functions = functions_list,
+            .hosted_functions = hosted_functions_list,
+            .main_type = createBigRocStr(mod.main_type, roc_ops),
+            .name = createBigRocStr(mod.name, roc_ops),
+        };
+    }
+
+    return RocList{
+        .bytes = modules_bytes.ptr,
+        .length = modules.len,
+        .capacity_or_alloc_ptr = modules.len,
+    };
+}
+
 /// Platform host entrypoint
-/// Receives args: [platform_path, entry_point_names...]
+/// Receives args: [platform_path, --types-json=<json>, entry_point_names...]
 /// If no entry point names are provided, defaults to ["main"].
 fn platform_main(args: [][*:0]u8) !c_int {
     if (args.len < 1) {
@@ -494,6 +658,19 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
 
     const platform_path = std.mem.span(args[0]);
+
+    // Parse --types-json argument if present
+    var types_json: ?[]const u8 = null;
+    var entry_point_start_idx: usize = 1;
+    for (args[1..], 1..) |arg, idx| {
+        const arg_str = std.mem.span(arg);
+        if (std.mem.startsWith(u8, arg_str, "--types-json=")) {
+            types_json = arg_str["--types-json=".len..];
+            entry_point_start_idx = idx + 1;
+            break;
+        }
+    }
+
     // Install signal handlers
     _ = builtins.handlers.install(handleRocStackOverflow, handleRocAccessViolation, handleRocArithmeticError);
 
@@ -578,16 +755,16 @@ fn platform_main(args: [][*:0]u8) !c_int {
     }
     stdout.writeAll("\n") catch {};
 
-    // Entry point names from args[1..], or default to ["main"] if none provided
+    // Entry point names from args[entry_point_start_idx..], or default to ["main"] if none provided
     const default_entry_points = [_][]const u8{"main"};
-    const entry_point_names: []const []const u8 = if (args.len > 1) blk: {
-        const names = allocator.alloc([]const u8, args.len - 1) catch return error.OutOfMemory;
-        for (args[1..], 0..) |arg, i| {
+    const entry_point_names: []const []const u8 = if (args.len > entry_point_start_idx) blk: {
+        const names = allocator.alloc([]const u8, args.len - entry_point_start_idx) catch return error.OutOfMemory;
+        for (args[entry_point_start_idx..], 0..) |arg, i| {
             names[i] = std.mem.span(arg);
         }
         break :blk names;
     } else &default_entry_points;
-    defer if (args.len > 1) allocator.free(entry_point_names);
+    defer if (args.len > entry_point_start_idx) allocator.free(entry_point_names);
 
     // Allocate array for EntryPoint entries with proper alignment
     const tuple1_size = @sizeOf(EntryPoint);
@@ -643,6 +820,12 @@ fn platform_main(args: [][*:0]u8) !c_int {
         .capacity_or_alloc_ptr = entry_point_names.len,
     };
 
+    // Parse types_json to create modules list
+    const modules_list = if (types_json) |json|
+        parseTypesJson(allocator, json, &roc_ops) catch RocList.empty()
+    else
+        RocList.empty();
+
     // Heap-allocate TypesInner with proper alignment
     const types_inner_bytes = try allocator.alignedAlloc(u8, std.mem.Alignment.fromByteUnits(@alignOf(TypesInner)), @sizeOf(TypesInner));
     defer allocator.free(types_inner_bytes);
@@ -650,6 +833,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     const types_inner_ptr: *TypesInner = @ptrCast(@alignCast(types_inner_bytes.ptr));
     types_inner_ptr.* = TypesInner{
         .entrypoints = entrypoints_list,
+        .modules = modules_list,
     };
 
     // Create a List Types with one element (the Types structure)

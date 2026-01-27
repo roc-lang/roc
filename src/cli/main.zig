@@ -4155,16 +4155,37 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     };
     std.mem.sort(HostedCompiler.HostedFunctionInfo, all_hosted_fns.items, {}, SortContext.lessThan);
 
-    // 4. Print compiled module types
+    // 4. Print compiled module types and collect module type info for JSON
     const stdout = ctx.io.stdout();
     stdout.print("\n=== Platform Module Types ===\n", .{}) catch {};
+
+    var collected_modules = std.ArrayList(CollectedModuleTypeInfo).empty;
+    defer {
+        for (collected_modules.items) |*mod_info| {
+            mod_info.deinit(ctx.gpa);
+        }
+        collected_modules.deinit(ctx.gpa);
+    }
+
     for (modules) |mod| {
         if (mod.is_platform_sibling or mod.is_platform_main) {
             stdout.print("\nModule: {s}\n", .{mod.name}) catch {};
             printCompiledModuleTypes(ctx, &mod, mod.name, stdout, &all_hosted_fns);
+
+            // Also collect for JSON serialization
+            if (collectModuleTypeInfo(ctx, &mod, mod.name, &all_hosted_fns)) |mod_info| {
+                collected_modules.append(ctx.gpa, mod_info) catch {};
+            }
         }
     }
     stdout.print("\n", .{}) catch {};
+
+    // Serialize collected module type infos to JSON
+    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch |err| {
+        stderr.print("Error: Failed to serialize types to JSON: {}\n", .{err}) catch {};
+        return;
+    };
+    defer ctx.gpa.free(types_json);
 
     // 5. Build and run the glue spec
     // Get path to current roc executable
@@ -4250,6 +4271,17 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
 
         // Pass platform source file path - the glue platform will do its own compilation
         run_argv.append(ctx.gpa, args.platform_path) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+
+        // Pass types JSON as argument
+        const types_json_arg = std.fmt.allocPrint(ctx.gpa, "--types-json={s}", .{types_json}) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        defer ctx.gpa.free(types_json_arg);
+        run_argv.append(ctx.gpa, types_json_arg) catch {
             stderr.print("Error: Out of memory\n", .{}) catch {};
             return;
         };
@@ -4571,6 +4603,235 @@ fn printCompiledModuleTypes(
         writer.print("    Hosted Functions:\n", .{}) catch {};
         for (hosted_functions.items) |hosted| {
             writer.print("      {s}\n", .{hosted.name}) catch {};
+        }
+    }
+}
+
+/// Collected module type information for JSON serialization
+const CollectedModuleTypeInfo = struct {
+    name: []const u8,
+    main_type: []const u8,
+    functions: std.ArrayList(CollectedFunctionInfo),
+    hosted_functions: std.ArrayList(CollectedHostedFunctionInfo),
+
+    const CollectedFunctionInfo = struct {
+        name: []const u8,
+        type_str: []const u8,
+    };
+
+    const CollectedHostedFunctionInfo = struct {
+        index: usize,
+        name: []const u8,
+        type_str: []const u8,
+    };
+
+    fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
+        gpa.free(self.name);
+        gpa.free(self.main_type);
+        for (self.functions.items) |f| {
+            gpa.free(f.name);
+            gpa.free(f.type_str);
+        }
+        self.functions.deinit(gpa);
+        for (self.hosted_functions.items) |h| {
+            gpa.free(h.name);
+            gpa.free(h.type_str);
+        }
+        self.hosted_functions.deinit(gpa);
+    }
+};
+
+/// Collect type information from a compiled module (same logic as printCompiledModuleTypes).
+fn collectModuleTypeInfo(
+    ctx: *CliContext,
+    compiled_module: *const BuildEnv.CompiledModuleInfo,
+    module_name: []const u8,
+    all_hosted_fns: *const std.ArrayList(can.HostedCompiler.HostedFunctionInfo),
+) ?CollectedModuleTypeInfo {
+    const env = compiled_module.env;
+
+    // Find main type
+    var main_type_str: []const u8 = "";
+    const all_stmts = env.store.sliceStatements(env.all_statements);
+
+    for (all_stmts) |stmt_idx| {
+        const stmt = env.store.getStatement(stmt_idx);
+        if (stmt == .s_nominal_decl) {
+            const nominal = stmt.s_nominal_decl;
+            const type_header = env.store.getTypeHeader(nominal.header);
+            const type_name = env.getIdent(type_header.relative_name);
+
+            if (std.mem.eql(u8, type_name, module_name)) {
+                var type_writer = env.initTypeWriter() catch continue;
+                defer type_writer.deinit();
+
+                const anno_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(nominal.anno));
+                const type_var = ModuleEnv.varFrom(anno_node_idx);
+
+                type_writer.write(type_var, .one_line) catch continue;
+                const type_str = type_writer.get();
+
+                main_type_str = ctx.gpa.dupe(u8, type_str) catch "";
+                break;
+            }
+        }
+    }
+
+    // Collect functions
+    const all_defs = env.store.sliceDefs(env.all_defs);
+    var functions = std.ArrayList(CollectedModuleTypeInfo.CollectedFunctionInfo).empty;
+    var hosted_functions = std.ArrayList(CollectedModuleTypeInfo.CollectedHostedFunctionInfo).empty;
+
+    const module_prefix = std.fmt.allocPrint(ctx.gpa, "{s}.", .{module_name}) catch return null;
+    defer ctx.gpa.free(module_prefix);
+
+    for (all_defs) |def_idx| {
+        const def = env.store.getDef(def_idx);
+        const expr = env.store.getExpr(def.expr);
+
+        const pattern = env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+
+        const def_name = env.getIdent(pattern.assign.ident);
+
+        if (std.mem.eql(u8, def_name, module_name)) continue;
+
+        const local_name = if (std.mem.startsWith(u8, def_name, module_prefix))
+            def_name[module_prefix.len..]
+        else
+            continue;
+
+        if (expr == .e_hosted_lambda) {
+            const qualified_name = if (std.mem.endsWith(u8, def_name, "!"))
+                def_name[0 .. def_name.len - 1]
+            else
+                def_name;
+
+            for (all_hosted_fns.items, 0..) |fn_info, global_idx| {
+                if (std.mem.eql(u8, fn_info.name_text, qualified_name)) {
+                    var type_writer = env.initTypeWriter() catch continue;
+                    defer type_writer.deinit();
+
+                    const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+                    const type_var = ModuleEnv.varFrom(def_node_idx);
+
+                    type_writer.write(type_var, .one_line) catch continue;
+                    const type_str = type_writer.get();
+
+                    hosted_functions.append(ctx.gpa, .{
+                        .index = global_idx,
+                        .name = ctx.gpa.dupe(u8, local_name) catch continue,
+                        .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
+                    }) catch continue;
+                    break;
+                }
+            }
+        } else if (expr == .e_lambda or def.annotation != null) {
+            var type_writer = env.initTypeWriter() catch continue;
+            defer type_writer.deinit();
+
+            const def_node_idx: @TypeOf(env.store.nodes).Idx = @enumFromInt(@intFromEnum(def_idx));
+            const type_var = ModuleEnv.varFrom(def_node_idx);
+
+            type_writer.write(type_var, .one_line) catch continue;
+            const type_str = type_writer.get();
+
+            functions.append(ctx.gpa, .{
+                .name = ctx.gpa.dupe(u8, local_name) catch continue,
+                .type_str = ctx.gpa.dupe(u8, type_str) catch continue,
+            }) catch continue;
+        }
+    }
+
+    return CollectedModuleTypeInfo{
+        .name = ctx.gpa.dupe(u8, module_name) catch return null,
+        .main_type = main_type_str,
+        .functions = functions,
+        .hosted_functions = hosted_functions,
+    };
+}
+
+/// Serialize collected module type infos to JSON.
+fn serializeModuleTypeInfosToJson(
+    gpa: std.mem.Allocator,
+    module_infos: []const CollectedModuleTypeInfo,
+) ![]const u8 {
+    var json_buf = std.ArrayList(u8).empty;
+    defer json_buf.deinit(gpa);
+
+    // Start array
+    json_buf.appendSlice(gpa, "[") catch return error.OutOfMemory;
+
+    for (module_infos, 0..) |mod, mod_idx| {
+        if (mod_idx > 0) {
+            json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
+        }
+
+        // Start module object
+        json_buf.appendSlice(gpa, "{") catch return error.OutOfMemory;
+
+        // name
+        json_buf.appendSlice(gpa, "\"name\":\"") catch return error.OutOfMemory;
+        appendJsonEscaped(gpa, &json_buf, mod.name);
+        json_buf.appendSlice(gpa, "\",") catch return error.OutOfMemory;
+
+        // main_type
+        json_buf.appendSlice(gpa, "\"main_type\":\"") catch return error.OutOfMemory;
+        appendJsonEscaped(gpa, &json_buf, mod.main_type);
+        json_buf.appendSlice(gpa, "\",") catch return error.OutOfMemory;
+
+        // functions array
+        json_buf.appendSlice(gpa, "\"functions\":[") catch return error.OutOfMemory;
+        for (mod.functions.items, 0..) |func, func_idx| {
+            if (func_idx > 0) {
+                json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
+            }
+            json_buf.appendSlice(gpa, "{\"name\":\"") catch return error.OutOfMemory;
+            appendJsonEscaped(gpa, &json_buf, func.name);
+            json_buf.appendSlice(gpa, "\",\"type_str\":\"") catch return error.OutOfMemory;
+            appendJsonEscaped(gpa, &json_buf, func.type_str);
+            json_buf.appendSlice(gpa, "\"}") catch return error.OutOfMemory;
+        }
+        json_buf.appendSlice(gpa, "],") catch return error.OutOfMemory;
+
+        // hosted_functions array
+        json_buf.appendSlice(gpa, "\"hosted_functions\":[") catch return error.OutOfMemory;
+        for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
+            if (hosted_idx > 0) {
+                json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
+            }
+            json_buf.appendSlice(gpa, "{\"index\":") catch return error.OutOfMemory;
+            var idx_buf: [32]u8 = undefined;
+            const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{hosted.index}) catch "0";
+            json_buf.appendSlice(gpa, idx_str) catch return error.OutOfMemory;
+            json_buf.appendSlice(gpa, ",\"name\":\"") catch return error.OutOfMemory;
+            appendJsonEscaped(gpa, &json_buf, hosted.name);
+            json_buf.appendSlice(gpa, "\",\"type_str\":\"") catch return error.OutOfMemory;
+            appendJsonEscaped(gpa, &json_buf, hosted.type_str);
+            json_buf.appendSlice(gpa, "\"}") catch return error.OutOfMemory;
+        }
+        json_buf.appendSlice(gpa, "]") catch return error.OutOfMemory;
+
+        // End module object
+        json_buf.appendSlice(gpa, "}") catch return error.OutOfMemory;
+    }
+
+    // End array
+    json_buf.appendSlice(gpa, "]") catch return error.OutOfMemory;
+
+    return gpa.dupe(u8, json_buf.items);
+}
+
+/// Append a string to the buffer, escaping JSON special characters.
+fn appendJsonEscaped(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), str: []const u8) void {
+    for (str) |char| {
+        switch (char) {
+            '"' => buf.appendSlice(gpa, "\\\"") catch {},
+            '\\' => buf.appendSlice(gpa, "\\\\") catch {},
+            '\n' => buf.appendSlice(gpa, "\\n") catch {},
+            '\r' => buf.appendSlice(gpa, "\\r") catch {},
+            '\t' => buf.appendSlice(gpa, "\\t") catch {},
+            else => buf.append(gpa, char) catch {},
         }
     }
 }
