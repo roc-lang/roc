@@ -4491,6 +4491,14 @@ const CollectedModuleTypeInfo = struct {
         type_str: []const u8,
     };
 
+    /// JSON-serializable view of CollectedModuleTypeInfo (uses slices instead of ArrayLists)
+    const JsonView = struct {
+        name: []const u8,
+        main_type: []const u8,
+        functions: []const CollectedFunctionInfo,
+        hosted_functions: []const CollectedHostedFunctionInfo,
+    };
+
     fn deinit(self: *CollectedModuleTypeInfo, gpa: std.mem.Allocator) void {
         gpa.free(self.name);
         gpa.free(self.main_type);
@@ -4622,84 +4630,24 @@ fn serializeModuleTypeInfosToJson(
     gpa: std.mem.Allocator,
     module_infos: []const CollectedModuleTypeInfo,
 ) ![]const u8 {
-    var json_buf = std.ArrayList(u8).empty;
-    defer json_buf.deinit(gpa);
+    // Create JSON-serializable views (slices instead of ArrayLists)
+    var json_views = std.ArrayList(CollectedModuleTypeInfo.JsonView).empty;
+    defer json_views.deinit(gpa);
 
-    // Start array
-    json_buf.appendSlice(gpa, "[") catch return error.OutOfMemory;
-
-    for (module_infos, 0..) |mod, mod_idx| {
-        if (mod_idx > 0) {
-            json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
-        }
-
-        // Start module object
-        json_buf.appendSlice(gpa, "{") catch return error.OutOfMemory;
-
-        // name
-        json_buf.appendSlice(gpa, "\"name\":\"") catch return error.OutOfMemory;
-        appendJsonEscaped(gpa, &json_buf, mod.name);
-        json_buf.appendSlice(gpa, "\",") catch return error.OutOfMemory;
-
-        // main_type
-        json_buf.appendSlice(gpa, "\"main_type\":\"") catch return error.OutOfMemory;
-        appendJsonEscaped(gpa, &json_buf, mod.main_type);
-        json_buf.appendSlice(gpa, "\",") catch return error.OutOfMemory;
-
-        // functions array
-        json_buf.appendSlice(gpa, "\"functions\":[") catch return error.OutOfMemory;
-        for (mod.functions.items, 0..) |func, func_idx| {
-            if (func_idx > 0) {
-                json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
-            }
-            json_buf.appendSlice(gpa, "{\"name\":\"") catch return error.OutOfMemory;
-            appendJsonEscaped(gpa, &json_buf, func.name);
-            json_buf.appendSlice(gpa, "\",\"type_str\":\"") catch return error.OutOfMemory;
-            appendJsonEscaped(gpa, &json_buf, func.type_str);
-            json_buf.appendSlice(gpa, "\"}") catch return error.OutOfMemory;
-        }
-        json_buf.appendSlice(gpa, "],") catch return error.OutOfMemory;
-
-        // hosted_functions array
-        json_buf.appendSlice(gpa, "\"hosted_functions\":[") catch return error.OutOfMemory;
-        for (mod.hosted_functions.items, 0..) |hosted, hosted_idx| {
-            if (hosted_idx > 0) {
-                json_buf.appendSlice(gpa, ",") catch return error.OutOfMemory;
-            }
-            json_buf.appendSlice(gpa, "{\"index\":") catch return error.OutOfMemory;
-            var idx_buf: [32]u8 = undefined;
-            const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{hosted.index}) catch "0";
-            json_buf.appendSlice(gpa, idx_str) catch return error.OutOfMemory;
-            json_buf.appendSlice(gpa, ",\"name\":\"") catch return error.OutOfMemory;
-            appendJsonEscaped(gpa, &json_buf, hosted.name);
-            json_buf.appendSlice(gpa, "\",\"type_str\":\"") catch return error.OutOfMemory;
-            appendJsonEscaped(gpa, &json_buf, hosted.type_str);
-            json_buf.appendSlice(gpa, "\"}") catch return error.OutOfMemory;
-        }
-        json_buf.appendSlice(gpa, "]") catch return error.OutOfMemory;
-
-        // End module object
-        json_buf.appendSlice(gpa, "}") catch return error.OutOfMemory;
+    for (module_infos) |mod| {
+        json_views.append(gpa, .{
+            .name = mod.name,
+            .main_type = mod.main_type,
+            .functions = mod.functions.items,
+            .hosted_functions = mod.hosted_functions.items,
+        }) catch return error.OutOfMemory;
     }
 
-    // End array
-    json_buf.appendSlice(gpa, "]") catch return error.OutOfMemory;
-
-    return gpa.dupe(u8, json_buf.items);
-}
-
-/// Append a string to the buffer, escaping JSON special characters.
-fn appendJsonEscaped(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), str: []const u8) void {
-    for (str) |char| {
-        switch (char) {
-            '"' => buf.appendSlice(gpa, "\\\"") catch {},
-            '\\' => buf.appendSlice(gpa, "\\\\") catch {},
-            '\n' => buf.appendSlice(gpa, "\\n") catch {},
-            '\r' => buf.appendSlice(gpa, "\\r") catch {},
-            '\t' => buf.appendSlice(gpa, "\\t") catch {},
-            else => buf.append(gpa, char) catch {},
-        }
-    }
+    // Serialize using std.json
+    var writer: std.io.Writer.Allocating = .init(gpa);
+    defer writer.deinit();
+    std.json.Stringify.value(json_views.items, .{}, &writer.writer) catch return error.OutOfMemory;
+    return writer.toOwnedSlice();
 }
 
 /// Print a type annotation to a buffer (for requires entries which use AST types)

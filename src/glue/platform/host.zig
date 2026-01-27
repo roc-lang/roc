@@ -566,7 +566,7 @@ fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, allocator: std.mem.Allocator, 
             funcs[i].type_str.decref(roc_ops);
         }
         // Free the container (allocated via alignedAlloc, not roc_allocations)
-        const slice = func_bytes[0..mod.functions.length * @sizeOf(FunctionInfoRoc)];
+        const slice = func_bytes[0 .. mod.functions.length * @sizeOf(FunctionInfoRoc)];
         allocator.free(@as([]align(@alignOf(FunctionInfoRoc)) u8, @alignCast(slice)));
     }
 
@@ -578,7 +578,7 @@ fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, allocator: std.mem.Allocator, 
             hosted[i].type_str.decref(roc_ops);
         }
         // Free the container
-        const slice = hosted_bytes[0..mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc)];
+        const slice = hosted_bytes[0 .. mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc)];
         allocator.free(@as([]align(@alignOf(HostedFunctionInfoRoc)) u8, @alignCast(slice)));
     }
 }
@@ -591,7 +591,7 @@ fn cleanupModulesList(modules_list: RocList, allocator: std.mem.Allocator, roc_o
             cleanupModuleTypeInfo(&mods[i], allocator, roc_ops);
         }
         // Free the modules container
-        const slice = mod_bytes[0..modules_list.length * @sizeOf(ModuleTypeInfoRoc)];
+        const slice = mod_bytes[0 .. modules_list.length * @sizeOf(ModuleTypeInfoRoc)];
         allocator.free(@as([]align(@alignOf(ModuleTypeInfoRoc)) u8, @alignCast(slice)));
     }
 }
@@ -722,8 +722,6 @@ fn platform_main(args: [][*:0]u8) !c_int {
         return error.MissingPlatformPath;
     }
 
-    const platform_path = std.mem.span(args[0]);
-
     // Parse --types-json and --output-dir arguments if present
     var types_json: ?[]const u8 = null;
     var output_dir: ?[]const u8 = null;
@@ -801,11 +799,7 @@ fn platform_main(args: [][*:0]u8) !c_int {
     // TODO: Extract actual entry points from compiled platform module
     const allocator = host_env.gpa.allocator();
 
-    // Print platform path for debugging
     const stdout: std.fs.File = .stdout();
-    stdout.writeAll("Glue host received platform path: ") catch {};
-    stdout.writeAll(platform_path) catch {};
-    stdout.writeAll("\n") catch {};
 
     // Create target info for type extraction
     const target_info = type_extractor.Target.native();
