@@ -204,7 +204,7 @@ EndOfFile,
 (file
 	(type-module)
 	(statements
-		(s-import (raw "json.Utf8")
+		(s-import (raw "json.Core.Utf8")
 			(exposing
 				(exposed-upper-ident (text "Encoder"))))
 		(s-type-anno (name "json_encoder")
@@ -239,7 +239,7 @@ EndOfFile,
 ~~~
 # FORMATTED
 ~~~roc
-import json.Utf8 exposing [Encoder]
+import json.Core.Utf8 exposing [Encoder]
 
 json_encoder : Encoder
 json_encoder = Json.Core.Utf8.defaultEncoder
@@ -276,7 +276,7 @@ data = json
 		(e-runtime-error (tag "ident_not_in_scope"))
 		(annotation
 			(ty-malformed)))
-	(s-import (module "json.Core.Utf8")
+	(s-import (module "json.Core")
 		(exposes
 			(exposed (name "Encoder") (wildcard false)))))
 ~~~

@@ -23,9 +23,11 @@ bytes: collections.SafeList(u8) = .{},
 hash_table: collections.SafeList(Idx) = .{},
 /// The current number of entries in the hash table.
 entry_count: u32 = 0,
-/// Debug-only flag to catch invalid inserts into deserialized interners.
-/// Deserialized interners should never have inserts - if they do, it's a bug.
-supports_inserts: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) true else {},
+/// Flag to track whether this interner supports inserts (true) or is deserialized (false).
+/// Deserialized interners have memory owned by the deserialization buffer, so:
+/// - deinit() must NOT free memory (would double-free)
+/// - insert operations are invalid (buffer is immutable)
+supports_inserts: bool = true,
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) {
@@ -95,12 +97,12 @@ pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) 
 
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
-/// NOTE: Do NOT call deinit on deserialized interners - their memory is owned by the deserialization buffer.
+/// NOTE: For deserialized interners, this is a no-op since memory is owned by the deserialization buffer.
 pub fn deinit(self: *SmallStringInterner, gpa: std.mem.Allocator) void {
-    if (std.debug.runtime_safety) {
-        if (!self.supports_inserts) {
-            @panic("deinit called on deserialized interner - memory is owned by deserialization buffer");
-        }
+    // Deserialized interners have supports_inserts = false.
+    // Their memory is owned by the deserialization buffer, so we must not free it.
+    if (!self.supports_inserts) {
+        return;
     }
     self.bytes.deinit(gpa);
     self.hash_table.deinit(gpa);
@@ -287,38 +289,16 @@ pub const Serialized = extern struct {
         self._padding = 0;
     }
 
-    /// Deserialize this Serialized struct into a SmallStringInterner
+    /// Deserialize into a SmallStringInterner value (no in-place modification of cache buffer).
     /// The base parameter is the base address of the serialized buffer in memory.
-    pub fn deserialize(self: *Serialized, base: usize) *SmallStringInterner {
-        // Verify that Serialized is at least as large as the runtime struct.
-        comptime {
-            if (@sizeOf(Serialized) < @sizeOf(SmallStringInterner)) {
-                @compileError(std.fmt.comptimePrint(
-                    "SmallStringInterner.Serialized ({d} bytes) is smaller than SmallStringInterner ({d} bytes)",
-                    .{ @sizeOf(Serialized), @sizeOf(SmallStringInterner) },
-                ));
-            }
-        }
-
-        // Overwrite ourself with the deserialized version, and return our pointer after casting it to Self.
-        const interner = @as(*SmallStringInterner, @ptrCast(self));
-
-        // Read values from Serialized BEFORE any writes (required for in-place deserialization)
-        const saved_entry_count = self.entry_count;
-
-        // Now deserialize (which does in-place writes)
-        const bytes_val = self.bytes.deserialize(base).*;
-        const hash_table_val = self.hash_table.deserialize(base).*;
-
-        interner.* = .{
-            .bytes = bytes_val,
-            .hash_table = hash_table_val,
-            .entry_count = saved_entry_count,
-            // Debug-only: mark as not supporting inserts - deserialized interners should never need new idents
-            .supports_inserts = if (std.debug.runtime_safety) false else {},
+    pub fn deserializeInto(self: *const Serialized, base: usize) SmallStringInterner {
+        return SmallStringInterner{
+            .bytes = self.bytes.deserializeInto(base),
+            .hash_table = self.hash_table.deserializeInto(base),
+            .entry_count = self.entry_count,
+            // Mark as not supporting inserts - deserialized interners have memory owned by the buffer
+            .supports_inserts = false,
         };
-
-        return interner;
     }
 };
 

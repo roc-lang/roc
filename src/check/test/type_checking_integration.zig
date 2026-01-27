@@ -1139,6 +1139,47 @@ test "check type - nominal w/ polymorphic function" {
     );
 }
 
+// nominal types //
+
+test "check type - nominal - local - fail" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = |{}| {
+        \\  Utf8Format := {}.{
+        \\    encode_str : Utf8Format, Str -> List(U8)
+        \\    encode_str = |_fmt, s| Str.to_utf8(s)
+        \\  }
+        \\  fmt = Utf8Format
+        \\  Str.encode("hi", fmt)
+        \\}
+    ;
+    try checkTypesModule(
+        source,
+        .fail_with,
+        \\**TYPE MISMATCH**
+        \\`Utf8Format` can't be used here because its `encode_str` method has an incompatible type:
+        \\**test:9:20:9:23:**
+        \\```roc
+        \\  Str.encode("hi", fmt)
+        \\```
+        \\                   ^^^
+        \\
+        \\`Utf8Format`.`encode_str` has the type:
+        \\
+        \\    Utf8Format, Str -> List(U8)
+        \\
+        \\But the expected signature is:
+        \\
+        \\    Utf8Format, Str -> Try(encoded, err)
+        \\
+        \\**Hint:** Check that the method signature matches what's expected, including argument and return types.
+        \\
+        \\
+        ,
+    );
+}
+
 // bool
 
 test "check type - bool unqualified" {

@@ -580,6 +580,7 @@ fn transformBodyWithCaptures(
         .e_str_segment,
         .e_str,
         .e_lookup_external,
+        .e_lookup_pending,
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,

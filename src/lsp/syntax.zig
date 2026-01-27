@@ -523,7 +523,8 @@ pub const SyntaxChecker = struct {
                     return try gpa.dupe(u8, text);
                 }
             }
-            return null;
+            // Fall back to filesystem for non-override files (e.g., platform modules)
+            return FileProvider.filesystem.read(null, path, gpa);
         }
     };
 
@@ -949,7 +950,8 @@ pub const SyntaxChecker = struct {
 
     /// Helper function to find a module by name and return a DefinitionResult pointing to it
     fn findModuleByName(self: *SyntaxChecker, module_name: []const u8) ?DefinitionResult {
-        const env = self.build_env orelse return null;
+        // Use getModuleLookupEnv for proper fallback to previous_build_env
+        const env = self.getModuleLookupEnv() orelse return null;
 
         // Extract the base module name (e.g., "Stdout" from "pf.Stdout")
         const base_name = if (std.mem.lastIndexOf(u8, module_name, ".")) |dot_pos|
@@ -1269,8 +1271,8 @@ pub const SyntaxChecker = struct {
                             .range = range,
                         };
                     },
-                    .builtin, .external => {
-                        // Builtin or external type - find the module
+                    .builtin, .external, .pending => {
+                        // Builtin, external, or pending type - find the module
                         return self.findModuleByName(type_name);
                     },
                 }
@@ -1300,8 +1302,8 @@ pub const SyntaxChecker = struct {
                             .range = range,
                         };
                     },
-                    .builtin, .external => {
-                        // Builtin or external type - find the module
+                    .builtin, .external, .pending => {
+                        // Builtin, external, or pending type - find the module
                         return self.findModuleByName(type_name);
                     },
                 }
@@ -2589,9 +2591,7 @@ pub const SyntaxChecker = struct {
     ) ![]document_symbol_handler.SymbolInformation {
         const SymbolInformation = document_symbol_handler.SymbolInformation;
 
-        const env = self.build_env orelse return &[_]SymbolInformation{};
-
-        // Convert URI to absolute path to match against module paths
+        // Convert URI to absolute path
         const path = uri_util.uriToPath(allocator, uri) catch return &[_]SymbolInformation{};
         defer allocator.free(path);
 
@@ -2599,20 +2599,59 @@ pub const SyntaxChecker = struct {
             allocator.dupe(u8, path) catch return &[_]SymbolInformation{};
         defer allocator.free(absolute_path);
 
-        // Find the module matching this file path across all schedulers
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        // Create fresh build env and build the module (like getDefinitionAtPosition)
+        var env = self.createFreshBuildEnv() catch return &[_]SymbolInformation{};
+
+        // Set up file provider with source as override text
+        var provider_state = OverrideProvider{
+            .override_path = absolute_path,
+            .override_text = source,
+        };
+        const provider: FileProvider = .{
+            .ctx = &provider_state,
+            .read = OverrideProvider.read,
+        };
+        env.setFileProvider(provider);
+        defer env.setFileProvider(null);
+
+        // Change to file's directory for relative path resolution
+        const dir_slice = std.fs.path.dirname(absolute_path) orelse ".";
+        const dir_owned = allocator.dupe(u8, dir_slice) catch return &[_]SymbolInformation{};
+        defer allocator.free(dir_owned);
+        const prev_cwd = std.process.getCwdAlloc(allocator) catch null;
+        defer if (prev_cwd) |cwd| {
+            std.process.changeCurDir(cwd) catch {};
+            allocator.free(cwd);
+        };
+        std.process.changeCurDir(dir_owned) catch {};
+
+        self.logDebug(.build, "symbols: building {s}", .{absolute_path});
+        env.build(absolute_path) catch |err| {
+            self.logDebug(.build, "symbols: build failed for {s}: {s}", .{ absolute_path, @errorName(err) });
+            return &[_]SymbolInformation{};
+        };
+
+        // Drain reports but ignore them for symbols (must still free to avoid leaks)
+        const drained = env.drainReports() catch return &[_]SymbolInformation{};
+        defer self.freeDrainedWithReports(drained);
+
+        // Get the module env from the scheduler
         const module_env = blk: {
-            var sched_it = env.schedulers.iterator();
-            while (sched_it.next()) |entry| {
-                const sched = entry.value_ptr.*;
-                // Search for module by path in this scheduler
-                if (sched.findModuleByPath(absolute_path)) |module| {
-                    if (module.env) |*e| {
+            // Try "app" scheduler first
+            if (env.schedulers.get("app")) |sched| {
+                if (sched.getRootModule()) |rm| {
+                    if (rm.env) |*e| {
                         break :blk e;
                     }
                 }
             }
-            // Fallback: try the root module of the "app" scheduler
-            if (env.schedulers.get("app")) |sched| {
+            // Fallback: try any scheduler with a root module
+            var sched_it = env.schedulers.iterator();
+            while (sched_it.next()) |entry| {
+                const sched = entry.value_ptr.*;
                 if (sched.getRootModule()) |rm| {
                     if (rm.env) |*e| {
                         break :blk e;
@@ -2635,9 +2674,14 @@ pub const SyntaxChecker = struct {
 
         // Check top-level definitions (modules/apps store functions here)
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+        self.logDebug(.build, "symbols: all_defs.len={}, all_statements.len={}", .{
+            defs_slice.len,
+            module_env.store.sliceStatements(module_env.all_statements).len,
+        });
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
             if (extractSymbolFromDecl(module_env, def.pattern, def.expr, source, uri, &line_offsets)) |symbol| {
+                self.logDebug(.build, "symbols: found def symbol '{s}'", .{symbol.name});
                 const owned_name = try allocator.dupe(u8, symbol.name);
                 try symbols.append(allocator, .{
                     .name = owned_name,
@@ -2659,6 +2703,7 @@ pub const SyntaxChecker = struct {
             if (stmt_parts.pattern) |pattern_idx| {
                 if (stmt_parts.expr) |expr_idx| {
                     if (extractSymbolFromDecl(module_env, pattern_idx, expr_idx, source, uri, &line_offsets)) |symbol| {
+                        self.logDebug(.build, "symbols: found stmt symbol '{s}'", .{symbol.name});
                         const owned_name = try allocator.dupe(u8, symbol.name);
                         try symbols.append(allocator, .{
                             .name = owned_name,
@@ -2672,6 +2717,7 @@ pub const SyntaxChecker = struct {
                 }
             }
         }
+        self.logDebug(.build, "symbols: returning {} symbols", .{symbols.items.len});
         return symbols.toOwnedSlice(allocator);
     }
 };

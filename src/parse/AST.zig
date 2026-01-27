@@ -773,6 +773,62 @@ pub fn resolveQualifiedName(
     }
 }
 
+/// Resolves the full module path for an import statement.
+/// For auto-expose imports, module_name_tok points to the second-to-last token.
+/// For explicit clause imports, module_name_tok points to the first token and
+/// we iterate through consecutive uppercase tokens.
+pub fn resolveImportModulePath(self: *const AST, module_name_tok: Token.Idx, qualifier_tok: ?Token.Idx, exposes: ExposedItem.Span) []const u8 {
+    const tags = self.tokens.tokens.items(.tag);
+
+    // Check if this is auto-expose by seeing if the first exposed item's token
+    // immediately follows module_name_tok
+    var is_auto_expose = false;
+    if (exposes.span.len > 0) {
+        const exposed_slice = self.store.exposedItemSlice(exposes);
+        if (exposed_slice.len > 0) {
+            const first_exposed = self.store.getExposedItem(exposed_slice[0]);
+            const first_exposed_tok: ?Token.Idx = switch (first_exposed) {
+                .lower_ident => |i| i.ident,
+                .upper_ident => |i| i.ident,
+                .upper_ident_star => |i| i.ident,
+                .malformed => null,
+            };
+            if (first_exposed_tok) |tok| {
+                if (tok == module_name_tok + 1) {
+                    is_auto_expose = true;
+                }
+            }
+        }
+    }
+
+    // Get start position (qualifier or first module segment)
+    const start_offset: usize = if (qualifier_tok) |q|
+        self.tokens.resolve(q).start.offset
+    else
+        self.tokens.resolve(module_name_tok).start.offset;
+
+    // Find the end token
+    var end_tok = module_name_tok;
+    if (!is_auto_expose) {
+        // For explicit clauses, iterate through consecutive uppercase tokens
+        var tok = module_name_tok + 1;
+        while (tok < tags.len) {
+            const tag = tags[tok];
+            if (tag == .NoSpaceDotUpperIdent or tag == .DotUpperIdent) {
+                end_tok = tok;
+                tok += 1;
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Get end position
+    const end_offset = self.tokens.resolve(end_tok).end.offset;
+
+    return self.env.source[start_offset..end_offset];
+}
+
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
     /// e.g. 1 in case we use import `as`: `import Module as Mod`
@@ -939,23 +995,9 @@ pub const Statement = union(enum) {
                 try tree.pushStaticAtom("s-import");
                 try ast.appendRegionInfoToSexprTree(env, tree, import.region);
 
-                // Reconstruct full qualified module name
-                const module_name_raw = ast.resolve(import.module_name_tok);
-                if (import.qualifier_tok) |tok| {
-                    const qualifier_str = ast.resolve(tok);
-                    // Strip leading dot from module name if present
-                    const module_name_clean = if (module_name_raw.len > 0 and module_name_raw[0] == '.')
-                        module_name_raw[1..]
-                    else
-                        module_name_raw;
-
-                    // Combine qualifier and module name
-                    const full_module_name = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ qualifier_str, module_name_clean });
-                    defer gpa.free(full_module_name);
-                    try tree.pushStringPair("raw", full_module_name);
-                } else {
-                    try tree.pushStringPair("raw", module_name_raw);
-                }
+                // Reconstruct full qualified module name using the new helper
+                const full_module_name = ast.resolveImportModulePath(import.module_name_tok, import.qualifier_tok, import.exposes);
+                try tree.pushStringPair("raw", full_module_name);
 
                 // alias e.g. `OUT` in `import pf.Stdout as OUT`
                 if (import.alias_tok) |tok| {
