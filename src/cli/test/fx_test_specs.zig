@@ -304,6 +304,11 @@ pub const io_spec_tests = [_]TestSpec{
         .io_spec = "1>Direct: False|1>Via pure/run: False",
         .description = "Regression test: Bool.False inspected via opaque type extraction shows correct value (issue #9049)",
     },
+    .{
+        .roc_file = "test/fx/hosted_effect_opaque_with_data.roc",
+        .io_spec = "1>Hello, World!",
+        .description = "Regression test: Hosted effects on opaque types with data (not just [])",
+    },
 };
 
 /// Get the total number of IO spec tests
