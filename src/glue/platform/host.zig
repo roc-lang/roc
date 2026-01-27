@@ -509,9 +509,10 @@ fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 /// No hosted functions for glue platform
 const hosted_function_ptrs = [_]builtins.host_abi.HostedFn{};
 
+const SMALL_STRING_SIZE = @sizeOf(RocStr);
+
 /// Create a big RocStr from a slice (avoids small string encoding issues)
 fn createBigRocStr(str: []const u8, roc_ops: *builtins.host_abi.RocOps) RocStr {
-    const SMALL_STRING_SIZE = @sizeOf(RocStr);
     if (str.len < SMALL_STRING_SIZE) {
         // Force big string allocation by allocating at least 24 bytes
         const first_element = builtins.utils.allocateWithRefcount(
@@ -850,7 +851,6 @@ fn platform_main(args: [][*:0]u8) !c_int {
         // Roc's compiled code reads the length field directly, which is 0 for small strings
         // (small strings store length in byte[23] with high bit set).
         // By always allocating >= 24 bytes, we ensure the string is treated as a big string.
-        const SMALL_STRING_SIZE = @sizeOf(RocStr);
         const roc_name = if (name.len < SMALL_STRING_SIZE) blk: {
             // Force big string allocation by allocating at least 24 bytes
             const first_element = builtins.utils.allocateWithRefcount(
