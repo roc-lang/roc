@@ -681,3 +681,10 @@ Roc has a first-class concept of _platforms_ and _applications_. You can [read a
 - Every Roc application specifies [exactly one platform](https://www.roc-lang.org/faq#multiple-platforms) that it will be built on
 - The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - that's why they're imported as `pf.Stdout` and `pf.Stdin`)
 - Roc's standard library does not include any effectful functions; they all come from the platform. We still have some platforms published in the old version of the compiler (e.g. [basic-cli](https://roc-lang.github.io/basic-cli/0.20.0/Stdout/) and [basic-webserver](https://roc-lang.github.io/basic-webserver/0.13.0/Http/#Request)) but at least as of December 1, 2025, the only platform that has been ported over to the new compiler is the one in this tutorial!
+
+# Additional Resources
+
+For more, check out:
+- [All builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)
+- [A single file demonstrating all Roc syntax](https://github.com/lukewilliamboswell/roc-platform-template-zig/blob/main/examples/all_roc_syntax.roc)
+- [Roc getting started guide](https://github.com/rickhull/roc-init) (community contributed)
