@@ -3977,125 +3977,159 @@ fn rocRepl(ctx: *CliContext, repl_args: cli_args.ReplArgs) !void {
     return cli_repl.run(ctx, repl_args.backend);
 }
 
+/// Error types for glue generation operations.
+const GlueError = error{
+    GlueSpecNotFound,
+    NotPlatformFile,
+    FileNotFound,
+    ParseFailed,
+    PlatformPathResolution,
+    TempDirCreation,
+    SyntheticAppWrite,
+    BuildEnvInit,
+    CompilationFailed,
+    ModuleRetrieval,
+    JsonSerialization,
+    ExePathResolution,
+    ProcessSpawn,
+    ProcessFailed,
+    OutOfMemory,
+};
+
+/// Clean up the temp directory used for glue generation.
+fn cleanupGlueTempDir(temp_dir: []const u8) void {
+    // Delete temp_dir directly - it's already the directory we want to remove.
+    // Do NOT use dirname here - temp_dir is already the correct path.
+    std.fs.cwd().deleteTree(temp_dir) catch {};
+}
+
 /// Print platform glue information for a platform's main.roc file using full compilation path.
 /// This provides resolved types via TypeWriter and discovers hosted functions via e_hosted_lambda detection.
 fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
+    rocGlueInner(ctx, args) catch |err| {
+        const stderr = ctx.io.stderr();
+        (switch (err) {
+            error.GlueSpecNotFound => stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}),
+            error.NotPlatformFile => blk: {
+                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
+                break :blk stderr.print("The glue command only works with platform files.\n", .{});
+            },
+            error.FileNotFound => stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}),
+            error.ParseFailed => stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}),
+            error.PlatformPathResolution => stderr.print("Error: Could not resolve platform path\n", .{}),
+            error.TempDirCreation => stderr.print("Error: Could not create temp directory\n", .{}),
+            error.SyntheticAppWrite => stderr.print("Error: Could not write synthetic app\n", .{}),
+            error.BuildEnvInit => stderr.print("Error: Failed to initialize build environment\n", .{}),
+            error.CompilationFailed => stderr.print("Error: Compilation failed\n", .{}),
+            error.ModuleRetrieval => stderr.print("Error: Failed to get compiled modules\n", .{}),
+            error.JsonSerialization => stderr.print("Error: Failed to serialize types to JSON\n", .{}),
+            error.ExePathResolution => stderr.print("Error: Could not determine roc executable path\n", .{}),
+            error.ProcessSpawn => stderr.print("Error: Could not spawn process\n", .{}),
+            error.ProcessFailed => stderr.print("Error: Process failed\n", .{}),
+            error.OutOfMemory => stderr.print("Error: Out of memory\n", .{}),
+        }) catch {};
+    };
+}
+
+/// Inner implementation of rocGlue that returns errors instead of printing them.
+fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const stderr = ctx.io.stderr();
 
     // 0. Validate glue spec file exists
     std.fs.cwd().access(args.glue_spec, .{}) catch {
-        stderr.print("Error: Glue spec file not found: '{s}'\n", .{args.glue_spec}) catch {};
-        return;
+        return error.GlueSpecNotFound;
     };
 
     // 1. Parse platform header to get requires entries and verify it's a platform file
     const platform_info = parsePlatformHeader(ctx, args.platform_path) catch |err| {
-        switch (err) {
-            error.NotPlatformFile => {
-                stderr.print("Error: '{s}' is not a platform file.\n", .{args.platform_path}) catch {};
-                stderr.print("The glue command only works with platform files.\n", .{}) catch {};
-            },
-            error.FileNotFound => {
-                stderr.print("Error: File not found: '{s}'\n", .{args.platform_path}) catch {};
-            },
-            error.ParseFailed => {
-                stderr.print("Error: Failed to parse '{s}'\n", .{args.platform_path}) catch {};
-            },
-            else => {
-                stderr.print("Error: Failed to process '{s}': {}\n", .{ args.platform_path, err }) catch {};
-            },
-        }
-        return;
+        return switch (err) {
+            error.NotPlatformFile => error.NotPlatformFile,
+            error.FileNotFound => error.FileNotFound,
+            error.ParseFailed => error.ParseFailed,
+            else => error.ParseFailed,
+        };
     };
     defer platform_info.deinit(ctx.gpa);
 
     // 2. Compile platform using BuildEnv by creating a synthetic app
     // BuildEnv expects an app file, so we create a minimal app that imports the platform
-    const platform_abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, args.platform_path) catch |err| {
-        stderr.print("Error: Could not resolve platform path: {}\n", .{err}) catch {};
-        return;
+    const platform_abs_path = std.fs.cwd().realpathAlloc(ctx.gpa, args.platform_path) catch {
+        return error.PlatformPathResolution;
     };
     defer ctx.gpa.free(platform_abs_path);
 
     // Create temp directory for synthetic app and glue spec executable
-    const temp_dir = createUniqueTempDir(ctx) catch |err| {
-        stderr.print("Error: Could not create temp directory: {}\n", .{err}) catch {};
-        return;
+    const temp_dir = createUniqueTempDir(ctx) catch {
+        return error.TempDirCreation;
     };
-    // Note: temp_dir cleanup happens later after glue spec execution
+    errdefer cleanupGlueTempDir(temp_dir);
 
     // Generate synthetic app source that imports the platform
     var app_source = std.ArrayList(u8).empty;
     defer app_source.deinit(ctx.gpa);
 
     // Build requires clause: app [Alias1, Alias2, entry1, entry2, ...] { pf: platform "path" }
-    app_source.appendSlice(ctx.gpa, "app [") catch {
-        stderr.print("Error: Out of memory\n", .{}) catch {};
-        return;
-    };
+    try app_source.appendSlice(ctx.gpa, "app [");
 
     // Add type aliases first
     for (platform_info.type_aliases, 0..) |alias, i| {
-        if (i > 0) app_source.appendSlice(ctx.gpa, ", ") catch {};
-        app_source.appendSlice(ctx.gpa, alias) catch {};
+        if (i > 0) try app_source.appendSlice(ctx.gpa, ", ");
+        try app_source.appendSlice(ctx.gpa, alias);
     }
 
     // Add requires entries
     for (platform_info.requires_entries, 0..) |entry, i| {
         if (platform_info.type_aliases.len > 0 or i > 0) {
-            app_source.appendSlice(ctx.gpa, ", ") catch {};
+            try app_source.appendSlice(ctx.gpa, ", ");
         }
-        app_source.appendSlice(ctx.gpa, entry.name) catch {};
+        try app_source.appendSlice(ctx.gpa, entry.name);
     }
 
-    app_source.appendSlice(ctx.gpa, "] { pf: platform \"") catch {};
-    app_source.appendSlice(ctx.gpa, platform_abs_path) catch {};
-    app_source.appendSlice(ctx.gpa, "\" }\n\n") catch {};
+    try app_source.appendSlice(ctx.gpa, "] { pf: platform \"");
+    try app_source.appendSlice(ctx.gpa, platform_abs_path);
+    try app_source.appendSlice(ctx.gpa, "\" }\n\n");
 
     // Generate type alias definitions: Model : {}
     for (platform_info.type_aliases) |alias| {
-        app_source.appendSlice(ctx.gpa, alias) catch {};
-        app_source.appendSlice(ctx.gpa, " : {}\n") catch {};
+        try app_source.appendSlice(ctx.gpa, alias);
+        try app_source.appendSlice(ctx.gpa, " : {}\n");
     }
     if (platform_info.type_aliases.len > 0) {
-        app_source.appendSlice(ctx.gpa, "\n") catch {};
+        try app_source.appendSlice(ctx.gpa, "\n");
     }
 
     // Generate stub implementations for each requires entry
     for (platform_info.requires_entries) |entry| {
-        app_source.appendSlice(ctx.gpa, entry.name) catch {};
-        app_source.appendSlice(ctx.gpa, " = ") catch {};
-        app_source.appendSlice(ctx.gpa, entry.stub_expr) catch {};
-        app_source.appendSlice(ctx.gpa, "\n") catch {};
+        try app_source.appendSlice(ctx.gpa, entry.name);
+        try app_source.appendSlice(ctx.gpa, " = ");
+        try app_source.appendSlice(ctx.gpa, entry.stub_expr);
+        try app_source.appendSlice(ctx.gpa, "\n");
     }
 
     // Write synthetic app to temp file
     const synthetic_app_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "synthetic_app.roc" }) catch {
-        stderr.print("Error: Out of memory\n", .{}) catch {};
-        return;
+        return error.OutOfMemory;
     };
     defer ctx.gpa.free(synthetic_app_path);
 
     std.fs.cwd().writeFile(.{
         .sub_path = synthetic_app_path,
         .data = app_source.items,
-    }) catch |err| {
-        stderr.print("Error: Could not write synthetic app: {}\n", .{err}) catch {};
-        return;
+    }) catch {
+        return error.SyntheticAppWrite;
     };
 
     // Compile using BuildEnv
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count) catch |err| {
-        stderr.print("Error: Failed to initialize build environment: {}\n", .{err}) catch {};
-        return;
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count) catch {
+        return error.BuildEnvInit;
     };
     defer build_env.deinit();
 
     // Build the synthetic app (which compiles the platform as a dependency)
-    build_env.build(synthetic_app_path) catch |err| {
+    build_env.build(synthetic_app_path) catch {
         // Drain and display error reports
         const drained = build_env.drainReports() catch &[_]BuildEnv.DrainedModuleReports{};
         defer build_env.gpa.free(drained);
@@ -4106,8 +4140,7 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
                 reporting.renderReportToTerminal(report, stderr, palette, config) catch {};
             }
         }
-        stderr.print("Error: Compilation failed: {}\n", .{err}) catch {};
-        return;
+        return error.CompilationFailed;
     };
 
     // Drain any reports (warnings, etc.)
@@ -4124,9 +4157,8 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     }
 
     // Get compiled modules in dependency order
-    const modules = build_env.getModulesInSerializationOrder(ctx.gpa) catch |err| {
-        stderr.print("Error: Failed to get compiled modules: {}\n", .{err}) catch {};
-        return;
+    const modules = build_env.getModulesInSerializationOrder(ctx.gpa) catch {
+        return error.ModuleRetrieval;
     };
     defer ctx.gpa.free(modules);
 
@@ -4190,24 +4222,21 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
     }
 
     // Serialize collected module type infos to JSON
-    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch |err| {
-        stderr.print("Error: Failed to serialize types to JSON: {}\n", .{err}) catch {};
-        return;
+    const types_json = serializeModuleTypeInfosToJson(ctx.gpa, collected_modules.items) catch {
+        return error.JsonSerialization;
     };
     defer ctx.gpa.free(types_json);
 
     // 5. Build and run the glue spec
     // Get path to current roc executable
     const roc_exe_path = std.fs.selfExePathAlloc(ctx.gpa) catch {
-        stderr.print("Error: Could not determine roc executable path\n", .{}) catch {};
-        return;
+        return error.ExePathResolution;
     };
     defer ctx.gpa.free(roc_exe_path);
 
     // Use the same temp directory for glue spec executable
     const glue_exe_path = std.fs.path.join(ctx.gpa, &.{ temp_dir, "glue_spec" }) catch {
-        stderr.print("Error: Out of memory\n", .{}) catch {};
-        return;
+        return error.OutOfMemory;
     };
     defer ctx.gpa.free(glue_exe_path);
 
@@ -4216,53 +4245,36 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
         var build_argv = std.ArrayList([]const u8).empty;
         defer build_argv.deinit(ctx.gpa);
 
-        build_argv.append(ctx.gpa, roc_exe_path) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
-        build_argv.append(ctx.gpa, "build") catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
-        build_argv.append(ctx.gpa, args.glue_spec) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try build_argv.append(ctx.gpa, roc_exe_path);
+        try build_argv.append(ctx.gpa, "build");
+        try build_argv.append(ctx.gpa, args.glue_spec);
         // Use --output=path format (CLI expects = not space)
         const output_arg = std.fmt.allocPrint(ctx.gpa, "--output={s}", .{glue_exe_path}) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
+            return error.OutOfMemory;
         };
         defer ctx.gpa.free(output_arg);
-        build_argv.append(ctx.gpa, output_arg) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try build_argv.append(ctx.gpa, output_arg);
 
         var build_child = std.process.Child.init(build_argv.items, ctx.gpa);
         build_child.stdout_behavior = .Inherit;
         build_child.stderr_behavior = .Inherit;
 
-        build_child.spawn() catch |err| {
-            stderr.print("Error: Could not spawn roc build: {}\n", .{err}) catch {};
-            return;
+        build_child.spawn() catch {
+            return error.ProcessSpawn;
         };
 
-        const term = build_child.wait() catch |err| {
-            stderr.print("Error: Could not wait for roc build: {}\n", .{err}) catch {};
-            return;
+        const term = build_child.wait() catch {
+            return error.ProcessFailed;
         };
 
         switch (term) {
             .Exited => |exit_code| {
                 if (exit_code != 0) {
-                    stderr.print("Error: roc build failed with exit code {}\n", .{exit_code}) catch {};
-                    return;
+                    return error.ProcessFailed;
                 }
             },
             else => {
-                stderr.print("Error: roc build terminated abnormally\n", .{}) catch {};
-                return;
+                return error.ProcessFailed;
             },
         }
     }
@@ -4273,59 +4285,40 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
         var run_argv = std.ArrayList([]const u8).empty;
         defer run_argv.deinit(ctx.gpa);
 
-        run_argv.append(ctx.gpa, glue_exe_path) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try run_argv.append(ctx.gpa, glue_exe_path);
 
         // Pass platform source file path - the glue platform will do its own compilation
-        run_argv.append(ctx.gpa, args.platform_path) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try run_argv.append(ctx.gpa, args.platform_path);
 
         // Pass types JSON as argument
         const types_json_arg = std.fmt.allocPrint(ctx.gpa, "--types-json={s}", .{types_json}) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
+            return error.OutOfMemory;
         };
         defer ctx.gpa.free(types_json_arg);
-        run_argv.append(ctx.gpa, types_json_arg) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try run_argv.append(ctx.gpa, types_json_arg);
 
         // Pass output directory as argument
         const output_dir_arg = std.fmt.allocPrint(ctx.gpa, "--output-dir={s}", .{args.output_dir}) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
+            return error.OutOfMemory;
         };
         defer ctx.gpa.free(output_dir_arg);
-        run_argv.append(ctx.gpa, output_dir_arg) catch {
-            stderr.print("Error: Out of memory\n", .{}) catch {};
-            return;
-        };
+        try run_argv.append(ctx.gpa, output_dir_arg);
 
         // Pass entry point names as additional arguments
         for (platform_info.requires_entries) |entry| {
-            run_argv.append(ctx.gpa, entry.name) catch {
-                stderr.print("Error: Out of memory\n", .{}) catch {};
-                return;
-            };
+            try run_argv.append(ctx.gpa, entry.name);
         }
 
         var run_child = std.process.Child.init(run_argv.items, ctx.gpa);
         run_child.stdout_behavior = .Inherit;
         run_child.stderr_behavior = .Inherit;
 
-        run_child.spawn() catch |err| {
-            stderr.print("Error: Could not spawn glue spec: {}\n", .{err}) catch {};
-            return;
+        run_child.spawn() catch {
+            return error.ProcessSpawn;
         };
 
-        const term = run_child.wait() catch |err| {
-            stderr.print("Error: Could not wait for glue spec: {}\n", .{err}) catch {};
-            return;
+        const term = run_child.wait() catch {
+            return error.ProcessFailed;
         };
 
         switch (term) {
@@ -4340,10 +4333,8 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
         }
     }
 
-    // Clean up temp directory
-    if (std.fs.path.dirname(glue_exe_path)) |dir| {
-        compile.CacheCleanup.deleteTempDir(ctx.arena, dir);
-    }
+    // Clean up temp directory (success path)
+    cleanupGlueTempDir(temp_dir);
 }
 
 /// Information extracted from a platform header for glue generation.
