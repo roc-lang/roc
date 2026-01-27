@@ -4124,7 +4124,7 @@ fn rocGlueInner(ctx: *CliContext, args: cli_args.GlueArgs) GlueError!void {
     const thread_count: usize = 1;
     const mode: Mode = .single_threaded;
 
-    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count) catch {
+    var build_env = BuildEnv.init(ctx.gpa, mode, thread_count, roc_target.RocTarget.detectNative()) catch {
         return error.BuildEnvInit;
     };
     defer build_env.deinit();
