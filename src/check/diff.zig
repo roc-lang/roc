@@ -27,26 +27,31 @@ pub const Hint = union(enum) {
     effect_mismatch: EffectMismatch,
 };
 
+/// Hint about fn arity mismatch
 pub const ArityMismatch = struct {
     expected: u32,
     actual: u32,
 };
 
+/// Hint about missing fields
 pub const FieldsMissing = struct {
     /// Range into the fields buffer passed to compareTypes
     fields: SnapshotRecordFieldSafeList.Range,
 };
 
+/// Hint about a field typo
 pub const FieldTypo = struct {
     typo: Ident.Idx,
     suggestion: Ident.Idx,
 };
 
+/// Hint about a tag typo
 pub const TagTypo = struct {
     typo: Ident.Idx,
     suggestion: Ident.Idx,
 };
 
+/// Hint about a function effect/pure mismatch
 pub const EffectMismatch = struct {
     expected: enum { pure, effectful },
 };
@@ -56,6 +61,7 @@ pub const HintList = struct {
     hints: [5]Hint = undefined,
     len: usize = 0,
 
+    /// Append a hint to the list
     pub fn append(self: *HintList, hint: Hint) void {
         if (self.len < 5) {
             self.hints[self.len] = hint;
@@ -63,6 +69,7 @@ pub const HintList = struct {
         }
     }
 
+    /// The the slice of hints
     pub fn slice(self: *const HintList) []const Hint {
         return self.hints[0..self.len];
     }
@@ -617,16 +624,21 @@ test "editDistance - single substitution" {
 }
 
 test "editDistance - transposition" {
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("teh", "the"));
     try std.testing.expectEqual(@as(u32, 1), editDistance("ab", "ba"));
 }
 
 test "editDistance - insertion" {
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("name", "naame"));
+
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("helo", "hello"));
 }
 
 test "editDistance - deletion" {
+    // spellchecker:ignore-next-line
     try std.testing.expectEqual(@as(u32, 1), editDistance("hello", "helo"));
 }
 
@@ -638,18 +650,21 @@ test "isLikelyTypo - valid typos" {
         break :blk isLikelyTypo(typo.len, actual.len, dist);
     });
     try std.testing.expect(blk: {
+        // spellchecker:ignore-next-line
         const typo = "teh";
         const actual = "the";
         const dist = editDistance(typo, actual);
         break :blk isLikelyTypo(typo.len, actual.len, dist);
     });
     try std.testing.expect(blk: {
+        // spellchecker:ignore-next-line
         const typo = "feild";
         const actual = "field";
         const dist = editDistance(typo, actual);
         break :blk isLikelyTypo(typo.len, actual.len, dist);
     });
     try std.testing.expect(blk: {
+        // spellchecker:ignore-next-line
         const typo = "recieve";
         const actual = "receive";
         const dist = editDistance(typo, actual);

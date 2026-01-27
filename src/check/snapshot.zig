@@ -14,9 +14,13 @@ pub const SnapshotContentIdx = SnapshotContentList.Idx;
 
 const SnapshotContentList = collections.SafeList(SnapshotContent);
 const SnapshotContentIdxSafeList = collections.SafeList(SnapshotContentIdx);
-pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
-pub const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 const SnapshotStaticDispatchConstraintSafeList = collections.SafeList(SnapshotStaticDispatchConstraint);
+
+/// A safe list of record fields
+pub const SnapshotRecordFieldSafeList = collections.SafeMultiList(SnapshotRecordField);
+
+/// A safe list of tags
+pub const SnapshotTagSafeList = collections.SafeMultiList(SnapshotTag);
 
 /// The content of a type snapshot, mirroring types.Content for error reporting.
 pub const SnapshotContent = union(enum) {

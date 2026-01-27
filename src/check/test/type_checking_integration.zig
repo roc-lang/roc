@@ -333,6 +333,7 @@ test "check type - record" {
 }
 
 test "check type - record - field typo" {
+    // spellchecker:off
     const source =
         \\main! = |_| {}
         \\
@@ -362,6 +363,7 @@ test "check type - record - field typo" {
         \\
         \\
     );
+    // spellchecker:on
 }
 
 test "check type - record - field missing" {
@@ -1783,6 +1785,7 @@ test "check type - record - access" {
 }
 
 test "check type - record access - field typo" {
+    // spellchecker:off
     const source =
         \\main! = |_| {}
         \\
@@ -1812,6 +1815,7 @@ test "check type - record access - field typo" {
         \\
         \\
     );
+    // spellchecker:on
 }
 
 test "check type - record - access func polymorphic" {

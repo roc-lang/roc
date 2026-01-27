@@ -2931,7 +2931,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
             }
 
             if (did_err) {
-                // If any segment errored, propgate that error to the root string
+                // If any segment errored, propagate that error to the root string
                 try self.unifyWith(expr_var, .err, env);
             } else {
                 // Otherwise, set the type of this expr to be nominal Str
@@ -3643,7 +3643,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
                     }
 
                     if (did_err) {
-                        // If the fn or any args had error, propgate the error
+                        // If the fn or any args had error, propagate the error
                         // without doing any additional work
                         try self.unifyWith(expr_var, .err, env);
                     } else {
@@ -3866,7 +3866,7 @@ fn checkExpr(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, expected: Expected)
 
                 if (did_err) {
                     // If the receiver or any arguments are errors, then
-                    // propgate the error without doing any static dispatch work
+                    // propagate the error without doing any static dispatch work
                     try self.unifyWith(expr_var, .err, env);
                 } else {
                     // For static dispatch to be used like `thing.dispatch(...)` the
@@ -5048,7 +5048,7 @@ const ExternalType = struct {
 
 /// Copy a variable from a different module into this module's types store.
 ///
-/// IMPORTANT: The caller must instantiate this variable before unifing
+/// IMPORTANT: The caller must instantiate this variable before unifying
 /// against it. This avoid poisoning the copied variable in the types store if
 /// unification fails.
 fn resolveVarFromExternal(
