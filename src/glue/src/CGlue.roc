@@ -147,7 +147,7 @@ roc_type_to_c = |roc_type| {
         "float"
     } else if trimmed == "F64" {
         "double"
-    } else if trimmed == "{}" or trimmed == "()" {
+    } else if trimmed == "{}" or trimmed == "()" or trimmed == "{  }" {
         "void"
     } else if Str.starts_with(trimmed, "List") {
         "RocList"
@@ -210,8 +210,41 @@ name_to_struct_name : Str -> Str
 name_to_struct_name = |name| {
     # For names like "line!" without module prefix, just remove special chars
     # For names like "Stdout.line!", convert to "StdoutLine"
-    step1 = str_replace_all(name, ".", "")
-    str_replace_all(step1, "!", "")
+    # Split on "." and capitalize first letter of each part, then remove "!"
+    parts = Str.split_on(name, ".")
+    var $result = ""
+    for part in parts {
+        clean_part = str_replace_all(part, "!", "")
+        capitalized = capitalize_first(clean_part)
+        $result = Str.concat($result, capitalized)
+    }
+    $result
+}
+
+# Capitalize the first letter of a string
+capitalize_first : Str -> Str
+capitalize_first = |s| {
+    bytes = Str.to_utf8(s)
+    if List.is_empty(bytes) {
+        ""
+    } else {
+        first = match List.first(bytes) {
+            Ok(b) => b
+            Err(_) => 0
+        }
+        # Check if first byte is lowercase a-z
+        new_first = if first >= 97 and first <= 122 {
+            first - 32 # Convert to uppercase
+        } else {
+            first
+        }
+        rest = List.drop_first(bytes, 1)
+        new_bytes = List.concat([new_first], rest)
+        match Str.from_utf8(new_bytes) {
+            Ok(str) => str
+            Err(_) => s
+        }
+    }
 }
 
 # Convert function name to C field name with module prefix (e.g., "Stdout.line!" -> "Stdout_line")
@@ -222,6 +255,7 @@ name_to_field_name = |name| {
 }
 
 # Generate args struct for a function if it has arguments
+# Enhanced with Roc type signature, field comments, and alignment assertions
 generate_args_struct : { index : U64, name : Str, type_str : Str } -> Str
 generate_args_struct = |func| {
     parsed = parse_type_str(func.type_str)
@@ -230,6 +264,9 @@ generate_args_struct = |func| {
         ""
     } else {
         struct_name = name_to_struct_name(func.name)
+        c_func_name = name_to_c_func_name(func.name)
+        ret_c_type = roc_type_to_c(parsed.ret)
+
         var $fields = ""
         var $idx = 0
         for arg in parsed.args {
@@ -237,12 +274,97 @@ generate_args_struct = |func| {
             if $idx > 0 {
                 $fields = Str.concat($fields, "\n")
             }
-            $fields = Str.concat($fields, "    ${c_type} arg${U64.to_str($idx)};")
+            $fields = Str.concat($fields, "    ${c_type} arg${U64.to_str($idx)};  // ${arg}")
             $idx = $idx + 1
         }
 
-        "// Arguments for ${func.name}\ntypedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
+        struct_doc = doc_comment([
+            "Arguments for ${func.name}",
+            "Roc signature: ${func.type_str}",
+            "C function name: ${c_func_name}",
+            "Return type: ${ret_c_type}",
+        ])
+        struct_def = "typedef struct {\n${$fields}\n} ${struct_name}Args;\n\n"
+        size_assert = "_Static_assert(sizeof(${struct_name}Args) > 0, \"${struct_name}Args must have non-zero size\");\n"
+        align_assert = "_Static_assert(_Alignof(${struct_name}Args) >= 1, \"${struct_name}Args must be aligned\");\n\n"
+        example = generate_example_impl(func.name, struct_name, parsed.args, ret_c_type)
+
+        "${struct_doc}${struct_def}${size_assert}${align_assert}${example}"
     }
+
+}
+
+# Convert function name to lowercase C function name (e.g., "Stdout.line!" -> "stdout_line")
+name_to_c_func_name : Str -> Str
+name_to_c_func_name = |name| {
+    step1 = str_replace_all(name, ".", "_")
+    step2 = str_replace_all(step1, "!", "")
+    to_lower_snake_case(step2)
+}
+
+# Convert a string to lower_snake_case
+to_lower_snake_case : Str -> Str
+to_lower_snake_case = |s| {
+    bytes = Str.to_utf8(s)
+    var $output = []
+    var $prev_was_lower = Bool.False
+
+    for byte in bytes {
+        is_upper = byte >= 65 and byte <= 90 # A-Z
+        is_lower = byte >= 97 and byte <= 122 # a-z
+
+        new_byte =
+            if is_upper {
+                byte + 32 # Convert to lowercase
+            } else {
+                byte
+            }
+
+        if is_upper and $prev_was_lower {
+            # Insert underscore before uppercase following lowercase
+            $output = $output.append(95) # 95 is underscore
+        }
+        $output = $output.append(new_byte)
+        $prev_was_lower = is_lower
+    }
+
+    match Str.from_utf8($output) {
+        Ok(str) => str
+        Err(_) => s
+    }
+}
+
+# Generate example implementation comment for a hosted function
+generate_example_impl : Str, Str, List(Str), Str -> Str
+generate_example_impl = |func_name, struct_name, args, ret_c_type| {
+    c_func_name = name_to_c_func_name(func_name)
+
+    args_comment = if List.is_empty(args) {
+        " *     // No arguments"
+    } else {
+        var $arg_lines = ""
+        var $idx = 0
+        for arg in args {
+            c_type = roc_type_to_c(arg)
+            $arg_lines = Str.concat($arg_lines, " *     // args->arg${U64.to_str($idx)} is ${c_type} (${arg})\n")
+            $idx = $idx + 1
+        }
+        Str.trim_end($arg_lines)
+    }
+
+    ret_comment = if ret_c_type == "void" {
+        " *     // No return value (void)"
+    } else {
+        " *     // Set return value: *((${ret_c_type}*)ret) = result;"
+    }
+
+    args_param = if List.is_empty(args) {
+        "void* args"
+    } else {
+        "${struct_name}Args* args"
+    }
+
+    "/*\n * Example implementation:\n * void hosted_${c_func_name}(struct RocOps* ops, ${args_param}, void* ret) {\n${args_comment}\n${ret_comment}\n * }\n */\n\n"
 }
 
 # Generate the complete C header file
@@ -306,22 +428,12 @@ generate_all_args_structs = |hosted_functions| {
 }
 
 # Generate static asserts for struct sizes
+# Note: Per-struct asserts are now generated inline in generate_args_struct
+# This function now returns empty since asserts are included with each struct
 generate_static_asserts : List({ index : U64, name : Str, type_str : Str }) -> Str
-generate_static_asserts = |hosted_functions| {
-    var $static_asserts = ""
-    var $first = Bool.True
-    for f in hosted_functions {
-        parsed = parse_type_str(f.type_str)
-        if !(List.is_empty(parsed.args)) {
-            struct_name = name_to_struct_name(f.name)
-            if !$first {
-                $static_asserts = Str.concat($static_asserts, "\n")
-            }
-            $static_asserts = Str.concat($static_asserts, "_Static_assert(sizeof(${struct_name}Args) > 0, \"${struct_name}Args must have non-zero size\");")
-            $first = Bool.False
-        }
-    }
-    $static_asserts
+generate_static_asserts = |_hosted_functions| {
+    # Assertions are now generated inline with each struct definition
+    ""
 }
 
 # Generate HostedFunctions struct fields
@@ -331,10 +443,11 @@ generate_hosted_fn_fields = |hosted_functions| {
     var $first = Bool.True
     for f in hosted_functions {
         field_name = name_to_field_name(f.name)
+        c_func_name = name_to_c_func_name(f.name)
         if !$first {
             $fields = Str.concat($fields, "\n")
         }
-        $fields = Str.concat($fields, "    HostedFn ${field_name}; // index ${U64.to_str(f.index)}")
+        $fields = Str.concat($fields, "    HostedFn ${field_name};  // index ${U64.to_str(f.index)}, C name: ${c_func_name}")
         $first = Bool.False
     }
     $fields
@@ -342,9 +455,41 @@ generate_hosted_fn_fields = |hosted_functions| {
 
 # Header sections as separate functions to avoid multi-line string issues
 
+# Helper to generate a section with a banner comment
+section : Str, Str -> Str
+section = |title, body|
+    "// =============================================================================\n// ${title}\n// =============================================================================\n\n${body}"
+
+# Helper to generate a doc comment from a list of lines
+doc_comment : List(Str) -> Str
+doc_comment = |lines| {
+    var $result = "/**\n"
+    for line in lines {
+        if line == "" {
+            $result = Str.concat($result, " *\n")
+        } else {
+            $result = Str.concat($result, " * ${line}\n")
+        }
+    }
+    Str.concat($result, " */\n")
+}
+
 header_guard_top : {} -> Str
-header_guard_top = |{}|
-    "/**\n * Roc Platform ABI Header\n *\n * This file defines the C interface for hosted functions in a Roc platform.\n * It is automatically generated by the Roc glue generator.\n *\n * USAGE:\n * 1. Include this header in your platform host implementation\n * 2. Implement each hosted function according to its signature\n * 3. Register your implementations with the Roc runtime\n *\n */\n\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"
+header_guard_top = |{}| {
+    header_doc = doc_comment([
+        "Roc Platform ABI Header",
+        "",
+        "This file defines the C interface for hosted functions in a Roc platform.",
+        "It is automatically generated by the Roc glue generator.",
+        "",
+        "USAGE:",
+        "1. Include this header in your platform host implementation",
+        "2. Implement each hosted function according to its signature",
+        "3. Register your implementations with the Roc runtime",
+        "",
+    ])
+    "${header_doc}\n#ifndef ROC_PLATFORM_ABI_H\n#define ROC_PLATFORM_ABI_H\n\n"
+}
 
 includes_section : {} -> Str
 includes_section = |{}|
@@ -363,21 +508,76 @@ header_guard_bottom = |{}|
     "#endif // ROC_PLATFORM_ABI_H\n"
 
 core_types_section : {} -> Str
-core_types_section = |{}|
-    "// =============================================================================\n// Core Roc Types\n// =============================================================================\n\n/**\n * RocStr - Roc string type\n *\n * A 24-byte structure representing a string. Small strings (up to 23 bytes\n * on 64-bit systems) are stored inline. Larger strings store a pointer to\n * heap-allocated data.\n */\ntypedef struct {\n    uint8_t* bytes;\n    size_t len;\n    size_t capacity;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 24, \"RocStr must be 24 bytes\");\n\n/**\n * RocList - Roc list type\n *\n * A 24-byte structure representing a list. Similar to RocStr, but for\n * arbitrary element types.\n */\ntypedef struct {\n    void* elements;\n    size_t len;\n    size_t capacity;\n} RocList;\n\n_Static_assert(sizeof(RocList) == 24, \"RocList must be 24 bytes\");\n\n"
+core_types_section = |{}| {
+    roc_str_doc = doc_comment([
+        "RocStr - Roc string type",
+        "",
+        "A 24-byte structure representing a string. Small strings (up to 23 bytes",
+        "on 64-bit systems) are stored inline. Larger strings store a pointer to",
+        "heap-allocated data.",
+    ])
+    roc_str_def = "typedef struct {\n    uint8_t* bytes;\n    size_t len;\n    size_t capacity;\n} RocStr;\n\n_Static_assert(sizeof(RocStr) == 24, \"RocStr must be 24 bytes\");\n_Static_assert(_Alignof(RocStr) == 8, \"RocStr must be 8-byte aligned\");\n\n"
+
+    roc_list_doc = doc_comment([
+        "RocList - Roc list type",
+        "",
+        "A 24-byte structure representing a list. Similar to RocStr, but for",
+        "arbitrary element types.",
+    ])
+    roc_list_def = "typedef struct {\n    void* elements;\n    size_t len;\n    size_t capacity;\n} RocList;\n\n_Static_assert(sizeof(RocList) == 24, \"RocList must be 24 bytes\");\n_Static_assert(_Alignof(RocList) == 8, \"RocList must be 8-byte aligned\");\n\n"
+
+    section("Core Roc Types", "${roc_str_doc}${roc_str_def}${roc_list_doc}${roc_list_def}")
+}
 
 hosted_fn_infrastructure : {} -> Str
-hosted_fn_infrastructure = |{}|
-    "// =============================================================================\n// Hosted Function Infrastructure\n// =============================================================================\n\n/**\n * Forward declaration for RocOps\n * This structure contains function pointers for Roc runtime operations\n * (allocation, deallocation, etc.)\n */\nstruct RocOps;\n\n/**\n * HostedFn - Function pointer type for hosted functions\n *\n * All hosted functions follow this signature:\n *   - ops: pointer to Roc runtime operations\n *   - args: pointer to function-specific arguments struct (or NULL if no args)\n *   - ret: pointer to return value storage (or NULL if void return)\n */\ntypedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);\n\n"
+hosted_fn_infrastructure = |{}| {
+    roc_ops_doc = doc_comment([
+        "Forward declaration for RocOps",
+        "This structure contains function pointers for Roc runtime operations",
+        "(allocation, deallocation, etc.)",
+    ])
+    roc_ops_decl = "struct RocOps;\n\n"
+
+    hosted_fn_doc = doc_comment([
+        "HostedFn - Function pointer type for hosted functions",
+        "",
+        "All hosted functions follow this signature:",
+        "  - ops: pointer to Roc runtime operations",
+        "  - args: pointer to function-specific arguments struct (or NULL if no args)",
+        "  - ret: pointer to return value storage (or NULL if void return)",
+    ])
+    hosted_fn_typedef = "typedef void (*HostedFn)(struct RocOps* ops, void* args, void* ret);\n\n"
+
+    section("Hosted Function Infrastructure", "${roc_ops_doc}${roc_ops_decl}${hosted_fn_doc}${hosted_fn_typedef}")
+}
 
 function_count_section : U64 -> Str
-function_count_section = |count|
-    "// =============================================================================\n// Hosted Function Count and Indices\n// =============================================================================\n\n/**\n * Total number of hosted functions in this platform\n */\n#define HOSTED_FUNCTION_COUNT ${U64.to_str(count)}\n\n/**\n * Index constants for each hosted function\n * Use these with the HostedFunctions struct to access specific functions\n */\n"
+function_count_section = |count| {
+    count_doc = doc_comment(["Total number of hosted functions in this platform"])
+    count_define = "#define HOSTED_FUNCTION_COUNT ${U64.to_str(count)}\n\n"
+
+    indices_doc = doc_comment([
+        "Index constants for each hosted function",
+        "Use these with the HostedFunctions struct to access specific functions",
+    ])
+
+    section("Hosted Function Count and Indices", "${count_doc}${count_define}${indices_doc}")
+}
 
 args_structs_header : {} -> Str
 args_structs_header = |{}|
-    "// =============================================================================\n// Argument Structures\n// =============================================================================\n\n"
+    section("Argument Structures", "")
 
 hosted_functions_registry : Str -> Str
-hosted_functions_registry = |fields|
-    "// =============================================================================\n// HostedFunctions Registry\n// =============================================================================\n\n/**\n * HostedFunctions - Registry of all hosted function implementations\n *\n * Platforms should create an instance of this struct and populate it with\n * function pointers for each hosted function they implement.\n */\ntypedef struct {\n${fields}\n} HostedFunctions;\n"
+hosted_functions_registry = |fields| {
+    registry_doc = doc_comment([
+        "HostedFunctions - Registry of all hosted function implementations",
+        "",
+        "Platforms should create an instance of this struct and populate it with",
+        "function pointers for each hosted function they implement.",
+    ])
+    registry_typedef = "typedef struct {\n${fields}\n} HostedFunctions;\n"
+
+    section("HostedFunctions Registry", "${registry_doc}${registry_typedef}")
+}
+

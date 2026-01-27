@@ -552,6 +552,71 @@ const JsonModuleTypeInfo = struct {
     hosted_functions: []const JsonHostedFunctionInfo,
 };
 
+/// Clean up all RocStr values in a ModuleTypeInfoRoc and free container allocations
+fn cleanupModuleTypeInfo(mod: *ModuleTypeInfoRoc, allocator: std.mem.Allocator, roc_ops: *builtins.host_abi.RocOps) void {
+    // Decref name and main_type strings
+    mod.name.decref(roc_ops);
+    mod.main_type.decref(roc_ops);
+
+    // Clean up functions list
+    if (mod.functions.bytes) |func_bytes| {
+        const funcs: [*]FunctionInfoRoc = @ptrCast(@alignCast(func_bytes));
+        for (0..mod.functions.length) |i| {
+            funcs[i].name.decref(roc_ops);
+            funcs[i].type_str.decref(roc_ops);
+        }
+        // Free the container (allocated via alignedAlloc, not roc_allocations)
+        const slice = func_bytes[0..mod.functions.length * @sizeOf(FunctionInfoRoc)];
+        allocator.free(@as([]align(@alignOf(FunctionInfoRoc)) u8, @alignCast(slice)));
+    }
+
+    // Clean up hosted_functions list
+    if (mod.hosted_functions.bytes) |hosted_bytes| {
+        const hosted: [*]HostedFunctionInfoRoc = @ptrCast(@alignCast(hosted_bytes));
+        for (0..mod.hosted_functions.length) |i| {
+            hosted[i].name.decref(roc_ops);
+            hosted[i].type_str.decref(roc_ops);
+        }
+        // Free the container
+        const slice = hosted_bytes[0..mod.hosted_functions.length * @sizeOf(HostedFunctionInfoRoc)];
+        allocator.free(@as([]align(@alignOf(HostedFunctionInfoRoc)) u8, @alignCast(slice)));
+    }
+}
+
+/// Clean up modules_list and all its contained allocations
+fn cleanupModulesList(modules_list: RocList, allocator: std.mem.Allocator, roc_ops: *builtins.host_abi.RocOps) void {
+    if (modules_list.bytes) |mod_bytes| {
+        const mods: [*]ModuleTypeInfoRoc = @ptrCast(@alignCast(mod_bytes));
+        for (0..modules_list.length) |i| {
+            cleanupModuleTypeInfo(&mods[i], allocator, roc_ops);
+        }
+        // Free the modules container
+        const slice = mod_bytes[0..modules_list.length * @sizeOf(ModuleTypeInfoRoc)];
+        allocator.free(@as([]align(@alignOf(ModuleTypeInfoRoc)) u8, @alignCast(slice)));
+    }
+}
+
+/// Clean up result payload from roc__make_glue
+fn cleanupResult(result: *ResultListFileStr, roc_ops: *builtins.host_abi.RocOps) void {
+    switch (result.tag) {
+        .Ok => {
+            const files = result.payload.ok;
+            if (files.bytes) |file_bytes| {
+                const file_slice: [*]File = @ptrCast(@alignCast(file_bytes));
+                for (0..files.length) |i| {
+                    file_slice[i].content.decref(roc_ops);
+                    file_slice[i].name.decref(roc_ops);
+                }
+            }
+            // Note: The files list container itself is Roc-allocated and will be
+            // cleaned up by the defer block's rawFree of remaining roc_allocations
+        },
+        .Err => {
+            result.payload.err.decref(roc_ops);
+        },
+    }
+}
+
 /// Parse types_json and build RocList of ModuleTypeInfoRoc
 fn parseTypesJson(
     allocator: std.mem.Allocator,
@@ -659,14 +724,20 @@ fn platform_main(args: [][*:0]u8) !c_int {
 
     const platform_path = std.mem.span(args[0]);
 
-    // Parse --types-json argument if present
+    // Parse --types-json and --output-dir arguments if present
     var types_json: ?[]const u8 = null;
+    var output_dir: ?[]const u8 = null;
     var entry_point_start_idx: usize = 1;
     for (args[1..], 1..) |arg, idx| {
         const arg_str = std.mem.span(arg);
         if (std.mem.startsWith(u8, arg_str, "--types-json=")) {
             types_json = arg_str["--types-json=".len..];
             entry_point_start_idx = idx + 1;
+        } else if (std.mem.startsWith(u8, arg_str, "--output-dir=")) {
+            output_dir = arg_str["--output-dir=".len..];
+            entry_point_start_idx = idx + 1;
+        } else {
+            // First non-flag argument is start of entry points
             break;
         }
     }
@@ -856,8 +927,8 @@ fn platform_main(args: [][*:0]u8) !c_int {
     // Handle the result
     const stderr: std.fs.File = .stderr();
 
-    switch (result.tag) {
-        .Ok => {
+    const exit_code: c_int = switch (result.tag) {
+        .Ok => blk: {
             const files = result.payload.ok;
             if (files.len() == 0) {
                 stdout.writeAll("Glue spec returned 0 files.\n") catch {};
@@ -866,24 +937,74 @@ fn platform_main(args: [][*:0]u8) !c_int {
                 const msg = std.fmt.bufPrint(&buf, "Glue spec returned {d} file(s):\n", .{files.len()}) catch "Glue spec returned files:\n";
                 stdout.writeAll(msg) catch {};
 
-                // Print file names
-                const file_bytes = files.bytes orelse return 0;
-                const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
-                for (0..files.len()) |i| {
-                    const file = file_slice[i];
-                    stdout.writeAll("  - ") catch {};
-                    stdout.writeAll(file.name.asSlice()) catch {};
-                    stdout.writeAll("\n") catch {};
+                // Write files to output directory if specified
+                if (files.bytes) |file_bytes| {
+                    const file_slice: [*]const File = @ptrCast(@alignCast(file_bytes));
+
+                    if (output_dir) |out_dir| {
+                        // Create output directory if needed
+                        std.fs.cwd().makePath(out_dir) catch |err| {
+                            stderr.writeAll("Error: Could not create output directory: ") catch {};
+                            var err_buf: [256]u8 = undefined;
+                            const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
+                            stderr.writeAll(err_msg) catch {};
+                            break :blk 1;
+                        };
+
+                        // Write each file
+                        for (0..files.len()) |i| {
+                            const file = file_slice[i];
+                            const file_name = file.name.asSlice();
+                            const file_path = std.fs.path.join(allocator, &.{ out_dir, file_name }) catch {
+                                stderr.writeAll("Error: Out of memory allocating file path\n") catch {};
+                                break :blk 1;
+                            };
+                            defer allocator.free(file_path);
+
+                            std.fs.cwd().writeFile(.{
+                                .sub_path = file_path,
+                                .data = file.content.asSlice(),
+                            }) catch |err| {
+                                stderr.writeAll("Error: Could not write file '") catch {};
+                                stderr.writeAll(file_path) catch {};
+                                stderr.writeAll("': ") catch {};
+                                var err_buf: [256]u8 = undefined;
+                                const err_msg = std.fmt.bufPrint(&err_buf, "{}\n", .{err}) catch "unknown error\n";
+                                stderr.writeAll(err_msg) catch {};
+                                break :blk 1;
+                            };
+
+                            stdout.writeAll("  Wrote: ") catch {};
+                            stdout.writeAll(file_path) catch {};
+                            stdout.writeAll("\n") catch {};
+                        }
+                    } else {
+                        // No output directory specified, just list file names
+                        for (0..files.len()) |i| {
+                            const file = file_slice[i];
+                            stdout.writeAll("  - ") catch {};
+                            stdout.writeAll(file.name.asSlice()) catch {};
+                            stdout.writeAll("\n") catch {};
+                        }
+                    }
                 }
             }
-            return 0;
+            break :blk 0;
         },
-        .Err => {
+        .Err => blk: {
             const err_str = result.payload.err;
             stderr.writeAll("Glue spec error: ") catch {};
             stderr.writeAll(err_str.asSlice()) catch {};
             stderr.writeAll("\n") catch {};
-            return 1;
+            break :blk 1;
         },
-    }
+    };
+
+    // Clean up modules_list (RocStr values and container allocations)
+    cleanupModulesList(modules_list, allocator, &roc_ops);
+
+    // Clean up result payload (File names/contents or error string)
+    cleanupResult(&result, &roc_ops);
+
+    return exit_code;
 }

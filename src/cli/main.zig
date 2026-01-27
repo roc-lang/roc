@@ -4286,6 +4286,17 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
             return;
         };
 
+        // Pass output directory as argument
+        const output_dir_arg = std.fmt.allocPrint(ctx.gpa, "--output-dir={s}", .{args.output_dir}) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+        defer ctx.gpa.free(output_dir_arg);
+        run_argv.append(ctx.gpa, output_dir_arg) catch {
+            stderr.print("Error: Out of memory\n", .{}) catch {};
+            return;
+        };
+
         // Pass entry point names as additional arguments
         for (platform_info.requires_entries) |entry| {
             run_argv.append(ctx.gpa, entry.name) catch {

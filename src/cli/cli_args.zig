@@ -155,6 +155,7 @@ pub const ReplArgs = struct {
 /// Arguments for `roc glue`
 pub const GlueArgs = struct {
     glue_spec: []const u8, // path to the glue spec .roc file (REQUIRED)
+    output_dir: []const u8, // path to the output directory for generated glue files (REQUIRED)
     platform_path: []const u8, // path to the platform .roc file (default: main.roc)
 };
 
@@ -680,6 +681,7 @@ fn parseRepl(args: []const []const u8) CliArgs {
 
 fn parseGlue(args: []const []const u8) CliArgs {
     var glue_spec: ?[]const u8 = null;
+    var output_dir: ?[]const u8 = null;
     var platform_path: ?[]const u8 = null;
 
     for (args) |arg| {
@@ -687,11 +689,12 @@ fn parseGlue(args: []const []const u8) CliArgs {
             return CliArgs{ .help =
             \\Generate glue code from a platform using a glue spec
             \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> [PLATFORM_FILE]
+            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
             \\
             \\Arguments:
-            \\  <GLUE_SPEC>      The glue spec .roc file that defines how to generate glue code
-            \\  [PLATFORM_FILE]  The platform .roc file to analyze [default: main.roc]
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
             \\  -h, --help  Print help
@@ -700,6 +703,8 @@ fn parseGlue(args: []const []const u8) CliArgs {
         } else {
             if (glue_spec == null) {
                 glue_spec = arg;
+            } else if (output_dir == null) {
+                output_dir = arg;
             } else if (platform_path == null) {
                 platform_path = arg;
             } else {
@@ -715,11 +720,32 @@ fn parseGlue(args: []const []const u8) CliArgs {
             \\
             \\Generate glue code from a platform using a glue spec
             \\
-            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> [PLATFORM_FILE]
+            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
             \\
             \\Arguments:
-            \\  <GLUE_SPEC>      The glue spec .roc file that defines how to generate glue code
-            \\  [PLATFORM_FILE]  The platform .roc file to analyze [default: main.roc]
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
+            \\
+            \\Options:
+            \\  -h, --help  Print help
+            \\
+        };
+    }
+
+    // output_dir is required
+    if (output_dir == null) {
+        return CliArgs{ .help =
+            \\Error: Missing required argument <GLUE_DIR>
+            \\
+            \\Generate glue code from a platform using a glue spec
+            \\
+            \\Usage: roc glue [OPTIONS] <GLUE_SPEC> <GLUE_DIR> [ROC_FILE]
+            \\
+            \\Arguments:
+            \\  <GLUE_SPEC>  The glue spec .roc file that defines how to generate glue code
+            \\  <GLUE_DIR>   The output directory for generated glue files
+            \\  [ROC_FILE]   The platform .roc file to analyze [default: main.roc]
             \\
             \\Options:
             \\  -h, --help  Print help
@@ -729,6 +755,7 @@ fn parseGlue(args: []const []const u8) CliArgs {
 
     return CliArgs{ .glue = GlueArgs{
         .glue_spec = glue_spec.?,
+        .output_dir = output_dir.?,
         .platform_path = platform_path orelse "main.roc",
     } };
 }
