@@ -1939,7 +1939,6 @@ test "check type - record - update - fail - field mismatch" {
         \\  { ..r, hello: 10.U8 }
         \\}
     ;
-    // Number literal 10 used where Str is expected (data field type)
     try checkTypesModule(source, .fail_with,
         \\**TYPE MISMATCH**
         \\The type of the field `hello` is incompatible:
@@ -1951,13 +1950,77 @@ test "check type - record - update - fail - field mismatch" {
         \\
         \\You are trying to update the `hello` field to be the type:
         \\
-        \\    { hello: U8 }
+        \\    U8
         \\
         \\But the `r` record needs it to be
         \\
-        \\    { hello: Str }
+        \\    Str
         \\
         \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 2" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, hello: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `hello` is incompatible:
+        \\**test:5:17:5:23:**
+        \\```roc
+        \\  { ..r, hello: 10.Dec }
+        \\```
+        \\                ^^^^^^
+        \\
+        \\You are trying to update the `hello` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    Str
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `hello` to be the new type.
+        \\
+        \\
+    );
+}
+
+test "check type - record - update - fail - field mismatch 3" {
+    const source =
+        \\main! = |_| {}
+        \\
+        \\test = {
+        \\  r = { hello: "world", nice: 10.U8 }
+        \\  { ..r, nice: 10.Dec }
+        \\}
+    ;
+    try checkTypesModule(source, .fail_with,
+        \\**TYPE MISMATCH**
+        \\The type of the field `nice` is incompatible:
+        \\**test:5:16:5:22:**
+        \\```roc
+        \\  { ..r, nice: 10.Dec }
+        \\```
+        \\               ^^^^^^
+        \\
+        \\You are trying to update the `nice` field to be the type:
+        \\
+        \\    Dec
+        \\
+        \\But the `r` record needs it to be
+        \\
+        \\    U8
+        \\
+        \\__Note:__ You cannot change the type of a record field with the record update syntax. You can do that by create a new record, copying over the unchanged fields, then transforming `nice` to be the new type.
         \\
         \\
     );

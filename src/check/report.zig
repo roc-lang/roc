@@ -31,6 +31,7 @@ const Ident = base.Ident;
 
 const SnapshotContentIdx = snapshot.SnapshotContentIdx;
 const SnapshotRecordFieldSafeList = snapshot.SnapshotRecordFieldSafeList;
+const SnapshotRecordField = snapshot.SnapshotRecordField;
 const SnapshotTagSafeList = snapshot.SnapshotTagSafeList;
 
 const ByteList = std.array_list.Managed(u8);
@@ -159,8 +160,8 @@ pub const ReportBuilder = struct {
     /// Reset report builder, only fields it owns
     pub fn reset(self: *Self) void {
         self.bytes_buf.clearRetainingCapacity();
-        self.diff_fields.items.shrinkRetainingCapacity(0);
-        self.diff_tags.items.shrinkRetainingCapacity(0);
+        self.diff_fields.items.clearRetainingCapacity();
+        self.diff_tags.items.clearRetainingCapacity();
         self.typo_suggestions.clearRetainingCapacity();
     }
 
@@ -692,15 +693,7 @@ pub const ReportBuilder = struct {
                         mismatch.types.expected_snapshot,
                         &.{},
                     ),
-                    .none => return try self.makeMismatchReport(
-                        ProblemRegion{ .simple = regionIdxFrom(mismatch.types.actual_var) },
-                        &.{D.bytes("This expression is used in an unexpected way:")},
-                        &.{D.bytes("It has the type:")},
-                        mismatch.types.actual_snapshot,
-                        &.{D.bytes("But you are trying to use it as:")},
-                        mismatch.types.expected_snapshot,
-                        &.{},
-                    ),
+                    .none => return try self.buildGenericMismatch(mismatch.types),
                 };
             },
             .type_apply_mismatch_arities => |data| {
@@ -747,6 +740,18 @@ pub const ReportBuilder = struct {
     }
 
     // type mismatch //
+
+    fn buildGenericMismatch(self: *Self, types: TypePair) !Report {
+        return try self.makeMismatchReport(
+            ProblemRegion{ .simple = regionIdxFrom(types.actual_var) },
+            &.{D.bytes("This expression is used in an unexpected way:")},
+            &.{D.bytes("It has the type:")},
+            types.actual_snapshot,
+            &.{D.bytes("But you are trying to use it as:")},
+            types.expected_snapshot,
+            &.{},
+        );
+    }
 
     /// Build a report for if condition type error
     fn buildIfConditionReport(self: *Self, types: TypePair) !Report {
@@ -2154,42 +2159,17 @@ pub const ReportBuilder = struct {
         types: TypePair,
         ctx: Context.RecordUpdateContext,
     ) !Report {
-        // Check the inferred type
-        const expected_content = self.snapshots.getContentUnwrapAlias(types.expected_snapshot);
-        const expected_record =
-            switch (expected_content) {
-                .structure => |structure| switch (structure) {
-                    .record => |record| blk: {
-                        const range = diff.gatherFieldsFromRecord(self.snapshots, record, self.gpa, &self.diff_fields);
-                        if (range.count == 0) {
-                            break :blk Record.empty_record;
-                        } else {
-                            const fields = self.diff_fields.sliceRange(range).items(.name);
-                            break :blk Record{ .record = fields };
-                        }
-                    },
-                    .record_unbound => |rec_fields_range| blk: {
-                        const fields = self.snapshots.sliceRecordFields(rec_fields_range).items(.name);
-                        if (fields.len == 0) {
-                            break :blk Record.empty_record;
-                        } else {
-                            break :blk Record{ .record = fields };
-                        }
-                    },
-                    .empty_record => Record.empty_record,
-                    else => Record.not_a_record,
-                },
-                else => Record.not_a_record,
-            };
+        self.diff_fields.items.clearRetainingCapacity();
 
-        const region = ProblemRegion{ .simple = ctx.record_region_idx };
+        // Get the record data of the type we tried to  update
+        const expected_record = try self.snapshots.gatherRecordFields(types.expected_snapshot, self.gpa, &self.diff_fields);
         switch (expected_record) {
             .not_a_record => {
                 return try self.makeBadTypeReport(
-                    region,
+                    ProblemRegion{ .simple = ctx.record_region_idx },
                     &.{D.bytes("This is not a record, so it does not have any fields to update:")},
                     &.{D.bytes("It is:")},
-                    types.actual_snapshot,
+                    types.expected_snapshot,
                     &.{
                         &.{D.bytes("But I need a record with a record!")},
                     },
@@ -2197,7 +2177,7 @@ pub const ReportBuilder = struct {
             },
             .empty_record => {
                 return try self.makeCustomReport(
-                    region,
+                    ProblemRegion{ .simple = ctx.record_region_idx },
                     if (ctx.record_name) |record_name| &.{
                         D.bytes("The"),
                         D.ident(record_name).withAnnotation(.inline_code),
@@ -2220,20 +2200,47 @@ pub const ReportBuilder = struct {
                 // makeCustomReport  abstraction, so we fall back to the more
                 // robust full record builder
 
-                // Get a sorted list of the most similar field names
-                try diff.findBestTypoSuggestions(
-                    ctx.field_name,
-                    expected_fields,
-                    self.can_ir.getIdentStoreConst(),
-                    &self.typo_suggestions,
-                );
-                std.debug.assert(self.typo_suggestions.items.len > 0);
-                const best_suggestion = self.typo_suggestions.items[0];
+                // Get the record data of the type we tried to  update
+                const actual_record = try self.snapshots.gatherRecordFields(types.actual_snapshot, self.gpa, &self.diff_fields);
+                const actual_field = switch (actual_record) {
+                    .record => |fields| blk: {
+                        const slice = self.diff_fields.sliceRange(fields);
+                        for (slice.items(.name), slice.items(.content)) |name, content| {
+                            if (name == ctx.field_name) break :blk SnapshotRecordField{
+                                .name = name,
+                                .content = content,
+                            };
+                        }
 
-                // Check if the most similar field name is the field we were updating
-                // If so, then it means we have a mismatch, rather than a typo
-                if (best_suggestion.ident == ctx.field_name) {
-                    // TODO: Get the record exact field snapshots and compare
+                        // Should be impossible for the thing we're updating to
+                        // not have the field, but if so show a generic message.
+                        std.debug.assert(false);
+                        return try self.buildGenericMismatch(types);
+                    },
+                    else => {
+                        // Should be impossible for the thing we're updating to
+                        // not be a record, but if so show a generic message.
+                        std.debug.assert(false);
+                        return try self.buildGenericMismatch(types);
+                    },
+                };
+
+                // Get the possible field we're trying to update
+                const mb_expected_field = blk: {
+                    const slice = self.diff_fields.sliceRange(expected_fields);
+                    for (slice.items(.name), slice.items(.content)) |name, content| {
+                        if (name == ctx.field_name) break :blk SnapshotRecordField{
+                            .name = name,
+                            .content = content,
+                        };
+                    }
+                    break :blk null;
+                };
+
+                if (mb_expected_field) |expected_field| {
+                    // If the expected  field exist, but we're here in a
+                    // type mismatch, then it must mean that the fields are
+                    // incompatible
 
                     return try self.makeMismatchReport(
                         ProblemRegion{ .simple = ctx.field_region_idx },
@@ -2247,7 +2254,7 @@ pub const ReportBuilder = struct {
                             D.ident(ctx.field_name).withAnnotation(.inline_code),
                             D.bytes("field to be the type:"),
                         },
-                        types.actual_snapshot,
+                        actual_field.content,
                         if (ctx.record_name) |record_name| &.{
                             D.bytes("But the"),
                             D.ident(record_name).withAnnotation(.inline_code),
@@ -2255,7 +2262,7 @@ pub const ReportBuilder = struct {
                         } else &.{
                             D.bytes("But it should be:"),
                         },
-                        types.expected_snapshot,
+                        expected_field.content,
                         &.{
                             &.{
                                 D.bytes("Note:").withAnnotation(.underline),
@@ -2267,6 +2274,19 @@ pub const ReportBuilder = struct {
                         },
                     );
                 } else {
+                    // If the expected field does NOT exist, then it likely means
+                    // there was a typo.
+
+                    self.typo_suggestions.clearRetainingCapacity();
+                    try diff.findBestTypoSuggestions(
+                        ctx.field_name,
+                        self.diff_fields.sliceRange(expected_fields).items(.name),
+                        self.can_ir.getIdentStoreConst(),
+                        &self.typo_suggestions,
+                    );
+                    std.debug.assert(self.typo_suggestions.items.len > 0);
+                    const best_suggestion = self.typo_suggestions.items[0];
+
                     // Create report directly and render dynamic suggestions inline
                     var report = Report.init(self.gpa, "TYPE MISMATCH", .runtime_error);
                     errdefer report.deinit();
