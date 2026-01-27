@@ -5,9 +5,6 @@ import pf.File exposing [File]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
-    # Debug: print the types list (includes module info)
-    dbg types_list
-
     # Collect all hosted functions from all modules, with module name prefix
     var $hosted_functions = []
     for types in types_list {

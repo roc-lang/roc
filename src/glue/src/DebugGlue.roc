@@ -5,9 +5,7 @@ import pf.File exposing [File]
 
 make_glue : List(Types) -> Try(List(File), Str)
 make_glue = |types_list| {
-    # Debug: print the types list (includes module info)
     dbg types_list
 
-    # Return empty list of files
     Ok([])
 }
