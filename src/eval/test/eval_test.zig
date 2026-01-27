@@ -2383,3 +2383,26 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\}
     , 42, .no_trace);
 }
+
+test "Bool.True and Bool.False raw values - bug confirmation" {
+    // Test that Bool.True and Bool.False have different raw byte values
+    // Bug report: both Bool.True and Bool.False write 0x00 to memory
+    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False", false, .no_trace);
+}
+
+test "Bool in record field - bug confirmation" {
+    // Test Bool values when stored in record fields
+    // This is closer to the bug report scenario where Bool is in a struct
+    try runExpectBool("{ flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
+}
+
+test "Bool in record with mixed alignment fields - bug confirmation" {
+    // Test Bool in a record with fields of different alignments
+    // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
+    try runExpectBool("{ key: 42u64, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
+}

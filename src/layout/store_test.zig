@@ -49,7 +49,7 @@ test "addTypeVar - bool type" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -74,7 +74,7 @@ test "addTypeVar - host opaque types compile to opaque_ptr" {
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -109,7 +109,7 @@ test "addTypeVar - zero-sized types (ZST)" {
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -150,7 +150,7 @@ test "addTypeVar - record with only zero-sized fields" {
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -179,7 +179,7 @@ test "record extension with empty_record succeeds" {
     lt.gpa = testing.allocator;
     lt.module_env = try ModuleEnv.init(lt.gpa, "");
     lt.type_store = try types_store.Store.init(lt.gpa);
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -208,7 +208,7 @@ test "deeply nested containers with inner ZST" {
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -262,7 +262,7 @@ test "nested ZST detection - List of record with ZST field" {
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -291,7 +291,7 @@ test "nested ZST detection - Box of tuple with ZST elements" {
     const builtin_module_idx = try lt.module_env.insertIdent(base.Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -325,7 +325,7 @@ test "nested ZST detection - deeply nested" {
     // Set the builtin_module_ident so the layout store can recognize Builtin types
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -380,7 +380,7 @@ test "addTypeVar - flex var with method constraint returning open tag union" {
     lt.module_env.idents.builtin_module = builtin_module_idx;
     const first_ident_idx = try lt.module_env.insertIdent(Ident.for_text("first"));
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -497,7 +497,7 @@ test "addTypeVar - type alias inside Try nominal (issue #8708)" {
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -584,7 +584,7 @@ test "addTypeVar - recursive nominal type with nested Box at depth 2+ (issue #88
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -678,7 +678,7 @@ test "layoutSizeAlign - recursive nominal type with record containing List (issu
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 
@@ -788,7 +788,7 @@ test "addTypeVar - recursive nominal with Box has no double-boxing (issue #8916)
     const builtin_module_idx = try lt.module_env.insertIdent(Ident.for_text("Builtin"));
     lt.module_env.idents.builtin_module = builtin_module_idx;
 
-    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null);
+    lt.layout_store = try Store.init(&lt.module_env, &lt.type_store, null, base.target.TargetUsize.native);
     lt.type_scope = TypeScope.init(lt.gpa);
     defer lt.deinit();
 

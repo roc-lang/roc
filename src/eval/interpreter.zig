@@ -8,6 +8,10 @@ const tracy = @import("tracy");
 /// Stack size for the interpreter. WASM targets use a smaller stack to avoid
 /// memory pressure from repeated allocations that can't be efficiently coalesced.
 const stack_size: u32 = if (builtin.cpu.arch == .wasm32) 4 * 1024 * 1024 else 64 * 1024 * 1024;
+
+/// Target usize for layout calculations. This is determined at compile time based on the
+/// target architecture, ensuring correct struct layouts when cross-compiling (e.g., wasm32).
+const interpreter_target_usize: base_pkg.target.TargetUsize = if (builtin.cpu.arch == .wasm32) .u32 else .u64;
 const trace_refcount = if (@hasDecl(build_options, "trace_refcount")) build_options.trace_refcount else false;
 // Module tracing flag - enabled via `zig build -Dtrace-modules`
 const trace_modules = if (@hasDecl(build_options, "trace_modules")) build_options.trace_modules else false;
@@ -552,7 +556,7 @@ pub const Interpreter = struct {
         };
 
         // Use the pre-interned "Builtin.Str" identifier from the module env
-        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str);
+        result.runtime_layout_store = try layout.Store.init(env, result.runtime_types, env.idents.builtin_str, interpreter_target_usize);
 
         // Build translated_module_envs for runtime method lookups
         // This maps module names in runtime_layout_store.env's ident space to their ModuleEnvs
