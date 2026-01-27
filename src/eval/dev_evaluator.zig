@@ -144,10 +144,16 @@ const DevRocEnv = struct {
     }
 
     /// Reallocation function for RocOps.
-    /// For arena-based allocation, we just allocate new memory.
-    /// Since free is a no-op, we don't need to worry about freeing the old allocation.
+    /// Allocates new memory, copies data, frees old memory, and tracks the new allocation.
     fn rocReallocFn(roc_realloc: *RocRealloc, env: *anyopaque) callconv(.c) void {
         const self: *DevRocEnv = @ptrCast(@alignCast(env));
+
+        const old_ptr_addr = @intFromPtr(roc_realloc.answer);
+
+        // Look up the old allocation to get its size for the copy
+        const old_alloc_info = self.allocations.get(old_ptr_addr);
+        const old_length = if (old_alloc_info) |info| info.len else roc_realloc.new_length;
+        const copy_length = @min(old_length, roc_realloc.new_length);
 
         // Allocate new memory with the requested alignment
         const new_ptr = switch (roc_realloc.alignment) {
@@ -162,10 +168,29 @@ const DevRocEnv = struct {
         };
 
         // Copy old data from the existing allocation
-        // Note: The old pointer is in roc_realloc.answer
-        // We copy new_length bytes (assuming the old allocation was at least that large)
         const old_ptr: [*]u8 = @ptrCast(@alignCast(roc_realloc.answer));
-        @memcpy(new_ptr[0..roc_realloc.new_length], old_ptr[0..roc_realloc.new_length]);
+        @memcpy(new_ptr[0..copy_length], old_ptr[0..copy_length]);
+
+        // Free the old allocation if it was tracked
+        if (old_alloc_info) |info| {
+            _ = self.allocations.remove(old_ptr_addr);
+            switch (info.alignment) {
+                1 => self.allocator.free(@as([*]align(1) u8, @alignCast(old_ptr))[0..info.len]),
+                2 => self.allocator.free(@as([*]align(2) u8, @alignCast(old_ptr))[0..info.len]),
+                4 => self.allocator.free(@as([*]align(4) u8, @alignCast(old_ptr))[0..info.len]),
+                8 => self.allocator.free(@as([*]align(8) u8, @alignCast(old_ptr))[0..info.len]),
+                16 => self.allocator.free(@as([*]align(16) u8, @alignCast(old_ptr))[0..info.len]),
+                else => {},
+            }
+        }
+
+        // Track the new allocation
+        self.allocations.put(@intFromPtr(new_ptr.ptr), .{
+            .len = roc_realloc.new_length,
+            .alignment = roc_realloc.alignment,
+        }) catch {
+            @panic("DevRocEnv: Failed to track reallocation");
+        };
 
         // Return the new pointer
         roc_realloc.answer = @ptrCast(new_ptr.ptr);
