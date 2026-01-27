@@ -4046,28 +4046,10 @@ fn rocGlue(ctx: *CliContext, args: cli_args.GlueArgs) void {
 
     // Generate stub implementations for each requires entry
     for (platform_info.requires_entries) |entry| {
-        // Generate a stub: entry_name = stub_value based on type
-        // For effectful functions like "main! : {} => {}", generate: main! = || {}
-        // For pure functions like "process : Str -> Str", generate: process = |_| ...
-        // For values/records (starts with '{'), generate: value = ...
         app_source.appendSlice(ctx.gpa, entry.name) catch {};
-
-        // Trim leading whitespace to check the type structure
-        const trimmed_type = std.mem.trimLeft(u8, entry.type_str, " \t\n");
-
-        if (trimmed_type.len > 0 and trimmed_type[0] == '{') {
-            // Record type - use ... placeholder directly
-            app_source.appendSlice(ctx.gpa, " = ...\n") catch {};
-        } else if (std.mem.indexOf(u8, entry.type_str, "=>")) |_| {
-            // Effectful function - return unit
-            app_source.appendSlice(ctx.gpa, " = || {}\n") catch {};
-        } else if (std.mem.indexOf(u8, entry.type_str, "->")) |_| {
-            // Pure function - use ... placeholder
-            app_source.appendSlice(ctx.gpa, " = |_| ...\n") catch {};
-        } else {
-            // Other value - use ... placeholder
-            app_source.appendSlice(ctx.gpa, " = ...\n") catch {};
-        }
+        app_source.appendSlice(ctx.gpa, " = ") catch {};
+        app_source.appendSlice(ctx.gpa, entry.stub_expr) catch {};
+        app_source.appendSlice(ctx.gpa, "\n") catch {};
     }
 
     // Write synthetic app to temp file
@@ -4320,12 +4302,14 @@ const PlatformHeaderInfo = struct {
     const RequiresEntry = struct {
         name: []const u8,
         type_str: []const u8,
+        stub_expr: []const u8,
     };
 
     fn deinit(self: *const PlatformHeaderInfo, gpa: std.mem.Allocator) void {
         for (self.requires_entries) |entry| {
             gpa.free(entry.name);
             gpa.free(entry.type_str);
+            gpa.free(entry.stub_expr);
         }
         gpa.free(self.requires_entries);
         for (self.type_aliases) |alias| {
@@ -4377,6 +4361,7 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
                 for (requires_entries.items) |entry| {
                     ctx.gpa.free(entry.name);
                     ctx.gpa.free(entry.type_str);
+                    ctx.gpa.free(entry.stub_expr);
                 }
                 requires_entries.deinit(ctx.gpa);
             }
@@ -4409,9 +4394,16 @@ fn parsePlatformHeader(ctx: *CliContext, platform_path: []const u8) !PlatformHea
 
                     printTypeAnnoToBuf(ctx.gpa, &env, &parse_ast, entry.type_anno, &type_buf);
 
+                    // Generate stub expression from type annotation
+                    var stub_buf = std.ArrayList(u8).empty;
+                    defer stub_buf.deinit(ctx.gpa);
+
+                    generateStubExprFromTypeAnno(ctx.gpa, &env, &parse_ast, entry.type_anno, &stub_buf);
+
                     try requires_entries.append(ctx.gpa, .{
                         .name = try ctx.gpa.dupe(u8, name),
                         .type_str = try type_buf.toOwnedSlice(ctx.gpa),
+                        .stub_expr = try stub_buf.toOwnedSlice(ctx.gpa),
                     });
                 }
             }
@@ -4692,6 +4684,68 @@ fn printTypeAnnoToBuf(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse
         },
         .malformed => {
             buf.appendSlice(gpa, "<malformed>") catch {};
+        },
+    }
+}
+
+/// Generate a stub expression from a type annotation.
+/// This produces valid Roc expressions that will crash at runtime rather than compile-time.
+/// Uses `...` inside lambdas to defer the crash to runtime.
+fn generateStubExprFromTypeAnno(gpa: std.mem.Allocator, env: *ModuleEnv, ast: *const parse.AST, type_anno_idx: parse.AST.TypeAnno.Idx, buf: *std.ArrayList(u8)) void {
+    const type_anno = ast.store.getTypeAnno(type_anno_idx);
+
+    switch (type_anno) {
+        .@"fn" => |f| {
+            // Generate lambda stub
+            const args = ast.store.typeAnnoSlice(f.args);
+            if (args.len == 0) {
+                // No args: || body
+                buf.appendSlice(gpa, "|| ") catch {};
+            } else {
+                // Has args: |_, _, ...| body
+                buf.append(gpa, '|') catch {};
+                for (0..args.len) |i| {
+                    if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                    buf.append(gpa, '_') catch {};
+                }
+                buf.appendSlice(gpa, "| ") catch {};
+            }
+
+            // Check if return type is unit {}
+            const ret_anno = ast.store.getTypeAnno(f.ret);
+            if (ret_anno == .record) {
+                const record = ret_anno.record;
+                const fields = ast.store.annoRecordFieldSlice(record.fields);
+                if (fields.len == 0 and record.ext == null) {
+                    // Return type is {} (unit) - return empty record
+                    buf.appendSlice(gpa, "{}") catch {};
+                    return;
+                }
+            }
+
+            // Non-unit return type - use { ... } to crash at runtime (not compile-time)
+            // The block syntax is required for single-line lambdas
+            buf.appendSlice(gpa, "{ ... }") catch {};
+        },
+        .record => |r| {
+            // Generate record stub with stub values for each field
+            // Use ":" syntax for record literals (not "=" which is for blocks)
+            buf.appendSlice(gpa, "{ ") catch {};
+            const fields = ast.store.annoRecordFieldSlice(r.fields);
+            for (fields, 0..) |field_idx, i| {
+                if (i > 0) buf.appendSlice(gpa, ", ") catch {};
+                const field = ast.store.getAnnoRecordField(field_idx) catch continue;
+                if (ast.tokens.resolveIdentifier(field.name)) |ident_idx| {
+                    buf.appendSlice(gpa, env.common.getIdent(ident_idx)) catch {};
+                    buf.appendSlice(gpa, ": ") catch {};
+                }
+                generateStubExprFromTypeAnno(gpa, env, ast, field.ty, buf);
+            }
+            buf.appendSlice(gpa, " }") catch {};
+        },
+        else => {
+            // For all other types, use { ... } to crash at runtime
+            buf.appendSlice(gpa, "{ ... }") catch {};
         },
     }
 }
