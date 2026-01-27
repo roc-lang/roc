@@ -247,9 +247,15 @@ fn devEvaluatorStr(allocator: std.mem.Allocator, module_env: *ModuleEnv, expr_id
             const layout_idx_val = @intFromEnum(code_result.result_layout);
             if (layout_idx_val >= 16) {
                 // This is a computed layout (record, tuple, tag union, etc.)
-                // For records, we need to look up the layout from the layout store
                 if (code_result.layout_store) |ls| {
                     const stored_layout = ls.getLayout(code_result.result_layout);
+
+                    // Handle list_of_zst - represents empty lists or lists of zero-sized types
+                    if (stored_layout.tag == .list_of_zst) {
+                        break :blk allocator.dupe(u8, "[]") catch unreachable;
+                    }
+
+                    // For records, look up the layout from the layout store
                     if (stored_layout.tag == .record) {
                         // Get record field count from record_data
                         const record_idx = stored_layout.data.record.idx.int_idx;

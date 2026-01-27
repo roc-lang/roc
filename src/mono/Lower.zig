@@ -236,6 +236,66 @@ fn lowerExternalDefByIdx(self: *Self, symbol: MonoSymbol, target_def_idx: u16) A
     try self.lowered_symbols.put(symbol_key, expr_id);
 }
 
+/// Find the definition index for a given pattern (if it's a top-level def).
+/// Returns null if the pattern doesn't correspond to a top-level definition.
+fn findDefForPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) ?CIR.Def.Idx {
+    _ = self;
+    const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
+    for (defs_slice) |def_idx| {
+        const def = module_env.store.getDef(def_idx);
+        if (def.pattern == pattern_idx) {
+            return def_idx;
+        }
+    }
+    return null;
+}
+
+/// Lower a local definition using its pattern index.
+/// This handles same-module function references (like walk calling walk_help).
+fn lowerLocalDefByPattern(self: *Self, module_env: *ModuleEnv, symbol: MonoSymbol, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
+    // Find the definition for this pattern
+    const def_idx = self.findDefForPattern(module_env, pattern_idx) orelse {
+        // Not a top-level definition (e.g., local variable, function parameter)
+        // These are handled by block/statement lowering, not here
+        return;
+    };
+
+    // Get the definition
+    const def = module_env.store.getDef(def_idx);
+
+    // Create symbol key for deduplication
+    const symbol_key: u48 = @bitCast(symbol);
+
+    // Avoid infinite recursion - check if already lowered
+    if (self.lowered_symbols.contains(symbol_key)) return;
+
+    // Debug assertion: verify pattern matches
+    if (std.debug.runtime_safety) {
+        std.debug.assert(def.pattern == pattern_idx);
+    }
+
+    // Set up binding context for recursive closure detection
+    const old_binding = self.current_binding_pattern;
+    const old_symbol = self.current_binding_symbol;
+    self.current_binding_pattern = pattern_idx;
+    self.current_binding_symbol = symbol;
+    defer {
+        self.current_binding_pattern = old_binding;
+        self.current_binding_symbol = old_symbol;
+    }
+
+    // Lower the definition's expression
+    const expr_id = self.lowerExprFromIdx(module_env, def.expr) catch {
+        // If lowering fails, don't register - the lookup will fail at codegen time
+        // This matches the behavior of lowerExternalDefByIdx
+        return;
+    };
+
+    // Register the symbol definition
+    try self.store.registerSymbolDef(symbol, expr_id);
+    try self.lowered_symbols.put(symbol_key, expr_id);
+}
+
 /// Compute layout from an expression index using the global layout store
 fn computeLayoutFromExprIdx(self: *Self, _: *ModuleEnv, expr_idx: CIR.Expr.Idx) ?LayoutIdx {
     const ls = self.layout_store orelse return null;
@@ -610,6 +670,13 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
 
         .e_lookup_local => |lookup| blk: {
             const symbol = self.patternToSymbol(lookup.pattern_idx);
+
+            // Ensure the local definition is lowered if it's a top-level def
+            const symbol_key: u48 = @bitCast(symbol);
+            if (!self.lowered_symbols.contains(symbol_key)) {
+                try self.lowerLocalDefByPattern(module_env, symbol, lookup.pattern_idx);
+            }
+
             break :blk .{ .lookup = .{
                 .symbol = symbol,
                 .layout_idx = self.getExprLayoutFromIdx(module_env, expr_idx),
@@ -672,7 +739,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
                 const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
                     .list_len => .list_len,
                     .list_is_empty => .list_is_empty,
-                    else => break :blk .{ .runtime_error = {} }, // Not yet implemented
+                    else => {
+                        std.debug.print("UNHANDLED LOW-LEVEL OP in Lower.zig: {s}\n", .{@tagName(ll.op)});
+                        unreachable;
+                    },
                 };
                 const args = try self.lowerExprSpan(module_env, call.args);
                 break :blk .{
@@ -1101,11 +1171,67 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_typed_frac => |tf| .{ .dec_literal = tf.value.toI128() },
 
         // Low-level lambda - these are compiler-generated intrinsics
-        .e_low_level_lambda => |_| blk: {
-            // Low-level lambdas are typically called, not evaluated directly
-            // When called, we intercept them in e_call handling
-            // If we encounter one directly, it's like a closure reference
-            break :blk .{ .runtime_error = {} };
+        .e_low_level_lambda => |ll| blk: {
+            // When a low-level lambda is evaluated directly (not called),
+            // we need to produce a lambda that wraps the low-level call.
+            // This happens when a low-level function is passed as a value
+            // or stored as a definition that's looked up later.
+
+            // Lower the parameter patterns
+            const params = try self.lowerPatternSpan(module_env, ll.args);
+
+            // Convert CIR LowLevel ops to MonoExpr LowLevel ops
+            const mono_op: ir.MonoExpr.LowLevel = switch (ll.op) {
+                .list_len => .list_len,
+                .list_is_empty => .list_is_empty,
+                .list_get_unsafe => .list_get,
+                .list_append => .list_append,
+                .list_append_unsafe => .list_append,
+                .list_concat => .list_concat,
+                .list_with_capacity => .list_with_capacity,
+                .list_drop_at => .list_drop_first,
+                .list_sublist => .list_take_first,
+                else => {
+                    std.debug.print("UNHANDLED LOW-LEVEL OP in e_low_level_lambda: {s}\n", .{@tagName(ll.op)});
+                    unreachable;
+                },
+            };
+
+            // Create argument expressions from the parameter patterns
+            // Each parameter becomes a lookup to itself
+            const param_patterns = module_env.store.slicePatterns(ll.args);
+            var arg_list = std.ArrayList(MonoExprId).empty;
+            defer arg_list.deinit(self.allocator);
+
+            for (param_patterns) |patt_idx| {
+                const symbol = self.patternToSymbol(patt_idx);
+                const arg_id = try self.store.addExpr(.{
+                    .lookup = .{
+                        .symbol = symbol,
+                        .layout_idx = .i64, // TODO: get proper layout
+                    },
+                }, region);
+                try arg_list.append(self.allocator, arg_id);
+            }
+            const args_span = try self.store.addExprSpan(arg_list.items);
+
+            // Create the low-level call as the body
+            const body_id = try self.store.addExpr(.{
+                .low_level = .{
+                    .op = mono_op,
+                    .args = args_span,
+                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                },
+            }, region);
+
+            break :blk .{
+                .lambda = .{
+                    .fn_layout = .i64, // TODO: compute proper function layout
+                    .params = params,
+                    .body = body_id,
+                    .ret_layout = self.getExprLayoutFromIdx(module_env, expr_idx),
+                },
+            };
         },
 
         // These are inserted by the RC insertion pass after canonicalization
@@ -1113,8 +1239,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_incref => |rc_op| blk: {
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
-            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
+            const ls = self.layout_store orelse unreachable;
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1136,8 +1262,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_decref => |rc_op| blk: {
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
-            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
+            const ls = self.layout_store orelse unreachable;
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1158,8 +1284,8 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
         .e_free => |rc_op| blk: {
             // Compute the layout from the pattern's type variable
             const patt_type_var = ModuleEnv.varFrom(rc_op.pattern_idx);
-            const ls = self.layout_store orelse break :blk .{ .runtime_error = {} };
-            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch break :blk .{ .runtime_error = {} };
+            const ls = self.layout_store orelse unreachable;
+            const patt_layout = ls.addTypeVar(self.current_module_idx, patt_type_var, &self.type_scope, self.type_scope_caller_module) catch unreachable;
 
             // Convert pattern reference to a lookup expression
             const symbol = self.patternToSymbol(rc_op.pattern_idx);
@@ -1200,7 +1326,10 @@ fn lowerExprInner(self: *Self, module_env: *ModuleEnv, expr: CIR.Expr, region: R
             };
         },
 
-        else => .{ .runtime_error = {} }, // Placeholder for unsupported expressions
+        else => {
+            std.debug.print("UNHANDLED EXPR TYPE in Lower.zig: {s}\n", .{@tagName(expr)});
+            unreachable;
+        },
     };
 
     return self.store.addExpr(mono_expr, region);
@@ -1296,7 +1425,7 @@ fn lowerPattern(self: *Self, module_env: *ModuleEnv, pattern_idx: CIR.Pattern.Id
         .assign => |_| .{
             .bind = .{
                 .symbol = self.patternToSymbol(pattern_idx),
-                .layout_idx = .i64, // TODO: get from type
+                .layout_idx = self.getPatternLayout(pattern_idx),
             },
         },
 
@@ -1478,6 +1607,14 @@ fn lowerCaptures(self: *Self, module_env: *ModuleEnv, captures: CIR.Expr.Capture
     for (capture_indices) |capture_idx| {
         const cap = module_env.store.getCapture(capture_idx);
         const symbol = self.patternToSymbol(cap.pattern_idx);
+
+        // Ensure the captured symbol's definition is lowered if it's a top-level def
+        // This handles cases like closures capturing local functions
+        const symbol_key: u48 = @bitCast(symbol);
+        if (!self.lowered_symbols.contains(symbol_key)) {
+            try self.lowerLocalDefByPattern(module_env, symbol, cap.pattern_idx);
+        }
+
         try lowered.append(self.allocator, .{
             .symbol = symbol,
             .layout_idx = .i64, // TODO: get from type

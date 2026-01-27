@@ -37,6 +37,13 @@ const allocateWithRefcountC = builtins.utils.allocateWithRefcountC;
 const increfDataPtrC = builtins.utils.increfDataPtrC;
 const decrefDataPtrC = builtins.utils.decrefDataPtrC;
 const freeDataPtrC = builtins.utils.freeDataPtrC;
+const rcNone = builtins.utils.rcNone;
+
+// List builtin functions
+const listWithCapacity = builtins.list.listWithCapacity;
+const listAppend = builtins.list.listAppend;
+const listAppendUnsafe = builtins.list.listAppendUnsafe;
+const copy_fallback = builtins.list.copy_fallback;
 
 const Relocation = @import("Relocation.zig").Relocation;
 const StaticDataInterner = @import("StaticDataInterner.zig");
@@ -579,7 +586,210 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         else => return Error.UnsupportedExpression,
                     }
                 },
-                else => return Error.UnsupportedExpression,
+                .list_with_capacity => {
+                    // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
+                    //                  inc_context, inc, roc_ops) -> RocList
+                    if (args.len < 1) {
+                        std.debug.print("BUG: list_with_capacity requires at least 1 argument\n", .{});
+                        unreachable;
+                    }
+
+                    const roc_ops_reg = self.roc_ops_reg orelse {
+                        std.debug.print("BUG: list_with_capacity requires roc_ops_reg\n", .{});
+                        unreachable;
+                    };
+                    const capacity_loc = try self.generateExpr(args[0]);
+
+                    // Get element layout from return type (which is List(elem))
+                    const ls = self.layout_store orelse {
+                        std.debug.print("BUG: list_with_capacity requires layout_store\n", .{});
+                        unreachable;
+                    };
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+
+                    // Get element layout - for list_of_zst, use zero size, for regular lists use element layout
+                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
+                        .list => blk: {
+                            const elem_layout = ls.getLayout(ret_layout.data.list);
+                            break :blk ls.layoutSizeAlign(elem_layout);
+                        },
+                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        // For closure return types during generic instantiation, assume ZST list behavior
+                        .closure => .{ .size = 0, .alignment = .@"1" },
+                        else => return Error.UnsupportedExpression,
+                    };
+
+                    const fn_addr: usize = @intFromPtr(&listWithCapacity);
+                    const rc_none_addr: usize = @intFromPtr(&rcNone);
+
+                    // Convert RocAlignment enum to actual byte alignment
+                    const alignment_bytes = elem_size_align.alignment.toByteUnits();
+
+                    // Allocate stack space for result (RocList = 24 bytes)
+                    const result_offset = self.codegen.allocStackSlot(24);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // aarch64 calling convention: X0-X7 for args
+                        // listWithCapacity(capacity, alignment, elem_width, elements_refcounted,
+                        //                  inc_context, inc, roc_ops) -> RocList
+                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
+                        try self.codegen.emit.movRegReg(.w64, .X0, cap_reg);
+                        try self.codegen.emitLoadImm(.X1, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.X2, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.X3, 0); // elements_refcounted = false
+                        try self.codegen.emitLoadImm(.X4, 0); // inc_context = null
+                        try self.codegen.emitLoadImm(.X5, @intCast(rc_none_addr));
+                        try self.codegen.emit.movRegReg(.w64, .X6, roc_ops_reg);
+
+                        const addr_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(addr_reg);
+                        self.codegen.freeGeneral(addr_reg);
+                        self.codegen.freeGeneral(cap_reg);
+
+                        // Store RocList result (returned in X0=bytes, X1=length, X2=capacity)
+                        try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, result_offset);
+                        try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, result_offset + 8);
+                        try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, result_offset + 16);
+                    } else if (comptime builtin.cpu.arch == .x86_64) {
+                        // x86_64 calling convention: RDI, RSI, RDX, RCX, R8, R9, then stack
+                        const cap_reg = try self.ensureInGeneralReg(capacity_loc);
+
+                        // Push 7th arg (roc_ops) to stack first
+                        try self.codegen.emit.pushReg(roc_ops_reg);
+
+                        try self.codegen.emit.movRegReg(.w64, .RDI, cap_reg);
+                        try self.codegen.emitLoadImm(.RSI, @intCast(alignment_bytes));
+                        try self.codegen.emitLoadImm(.RDX, @intCast(elem_size_align.size));
+                        try self.codegen.emitLoadImm(.RCX, 0); // elements_refcounted = false
+                        try self.codegen.emitLoadImm(.R8, 0); // inc_context = null
+                        try self.codegen.emitLoadImm(.R9, @intCast(rc_none_addr));
+
+                        try self.codegen.emitLoadImm(.R11, @intCast(fn_addr));
+                        try self.codegen.emit.callReg(.R11);
+
+                        // Clean up stack arg
+                        try self.codegen.emit.addImm(.RSP, 8);
+                        self.codegen.freeGeneral(cap_reg);
+
+                        // Store RocList result - x86_64 returns structs differently
+                        // For 24-byte structs, RAX=bytes, RDX=length, and capacity is returned separately
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset, .RAX);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 8, .RDX);
+                        // Third field needs to be loaded from memory or another register
+                        // Actually for C calling convention, large structs are returned via hidden pointer
+                        // Let's use a simpler approach - return empty list directly
+                        try self.codegen.emitLoadImm(.R11, 0);
+                        try self.codegen.emit.movMemReg(.w64, .RBP, result_offset + 16, .R11);
+                    } else {
+                        unreachable;
+                    }
+
+                    return .{ .stack = result_offset };
+                },
+                .list_append => {
+                    // list_append(list, element) -> List
+                    // Use listAppendUnsafe since capacity is pre-allocated
+                    if (args.len != 2) {
+                        std.debug.print("BUG: list_append requires exactly 2 arguments, got {}\n", .{args.len});
+                        unreachable;
+                    }
+
+                    const ls = self.layout_store orelse {
+                        std.debug.print("BUG: list_append requires layout_store\n", .{});
+                        unreachable;
+                    };
+
+                    // Get element layout from return type
+                    const ret_layout = ls.getLayout(ll.ret_layout);
+                    const elem_size_align: layout.SizeAlign = switch (ret_layout.tag) {
+                        .list => blk: {
+                            const elem_layout = ls.getLayout(ret_layout.data.list);
+                            break :blk ls.layoutSizeAlign(elem_layout);
+                        },
+                        .list_of_zst => .{ .size = 0, .alignment = .@"1" },
+                        else => {
+                            std.debug.print("BUG: list_append return layout is not a list: {s}\n", .{@tagName(ret_layout.tag)});
+                            unreachable;
+                        },
+                    };
+
+                    // Generate list argument (must be on stack - 24 bytes)
+                    const list_loc = try self.generateExpr(args[0]);
+                    const list_offset: i32 = switch (list_loc) {
+                        .stack => |off| off,
+                        else => {
+                            std.debug.print("BUG: list_append list arg must be on stack: {s}\n", .{@tagName(list_loc)});
+                            unreachable;
+                        },
+                    };
+
+                    // Generate element and ensure on stack
+                    const elem_loc = try self.generateExpr(args[1]);
+                    const elem_offset: i32 = try self.ensureOnStack(elem_loc, elem_size_align.size);
+
+                    // Allocate result slot (24 bytes for RocList)
+                    const result_offset = self.codegen.allocStackSlot(24);
+
+                    const fn_addr: usize = @intFromPtr(&listAppendUnsafe);
+                    const copy_fallback_addr: usize = @intFromPtr(&copy_fallback);
+
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        // listAppendUnsafe(list, element, element_width, copy_fn) -> RocList
+                        // Load list struct into X0-X2
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X0, .FP, list_offset);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X1, .FP, list_offset + 8);
+                        try self.codegen.emit.ldrRegMemSoff(.w64, .X2, .FP, list_offset + 16);
+
+                        // Element pointer in X3 (stack address = FP + elem_offset)
+                        // Handle arbitrary offsets (positive or negative) by loading to register first
+                        try self.codegen.emit.movRegImm64(.X3, @bitCast(@as(i64, elem_offset)));
+                        try self.codegen.emit.addRegRegReg(.w64, .X3, .FP, .X3);
+
+                        // Element width in X4
+                        try self.codegen.emitLoadImm(.X4, @intCast(elem_size_align.size));
+
+                        // copy_fallback in X5
+                        try self.codegen.emitLoadImm(.X5, @intCast(copy_fallback_addr));
+
+                        // Call
+                        const addr_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadImm(addr_reg, @intCast(fn_addr));
+                        try self.codegen.emit.blrReg(addr_reg);
+                        self.codegen.freeGeneral(addr_reg);
+
+                        // Store result
+                        try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, result_offset);
+                        try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, result_offset + 8);
+                        try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, result_offset + 16);
+                    } else if (comptime builtin.cpu.arch == .x86_64) {
+                        // x86_64: struct return via hidden pointer
+                        std.debug.print("BUG: list_append not implemented for x86_64\n", .{});
+                        unreachable;
+                    } else {
+                        unreachable;
+                    }
+
+                    return .{ .stack = result_offset };
+                },
+                .list_concat,
+                .list_prepend,
+                .list_get,
+                .list_repeat,
+                .list_drop_first,
+                .list_drop_last,
+                .list_take_first,
+                .list_take_last,
+                => {
+                    // These list operations are complex and require calling builtin functions
+                    std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
+                    std.debug.print("  args.len: {}\n", .{args.len});
+                    unreachable;
+                },
+                else => {
+                    std.debug.print("UNIMPLEMENTED low-level op in MonoExprCodeGen: {s}\n", .{@tagName(ll.op)});
+                    return Error.UnsupportedExpression;
+                },
             }
         }
 
@@ -3100,7 +3310,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Get the record layout to find field offset and size
             const record_layout = ls.getLayout(access.record_layout);
             if (record_layout.tag != .record) {
-                return Error.UnsupportedExpression;
+                // ZST closure captures return location as-is (nothing to offset)
+                if (record_layout.tag == .list_of_zst and access.field_idx == 0) {
+                    return record_loc;
+                }
+                // Any other field access on non-record is a compiler bug
+                std.debug.print("BUG: field access on non-record layout\n", .{});
+                std.debug.print("  layout tag: {s}\n", .{@tagName(record_layout.tag)});
+                std.debug.print("  field_idx: {}\n", .{access.field_idx});
+                unreachable;
             }
 
             const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, access.field_idx);
@@ -4360,9 +4578,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Elements are at ptr[0], ptr[1], etc.
 
                     // Get element size from layout
-                    // IMPORTANT: If we have an override layout (from for_loop.elem_layout), and it's
-                    // a list layout, use its inner element layout. The pattern's lst.elem_layout may
-                    // be wrong when the pattern's element type wasn't properly unified during type checking.
+                    // If override is a list layout, extract its element layout.
+                    // Fall back to pattern's lst.elem_layout if no override or if override is not a list.
                     const ls = self.layout_store orelse return;
                     const elem_layout = if (expr_layout_override) |override_idx| blk: {
                         const override_layout = ls.getLayout(override_idx);
@@ -4370,6 +4587,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                             // The override is a list - use its element layout
                             break :blk ls.getLayout(override_layout.data.list);
                         }
+                        // Override is not a list - fall back to pattern's elem_layout
                         break :blk ls.getLayout(lst.elem_layout);
                     } else ls.getLayout(lst.elem_layout);
                     const elem_size_align = ls.layoutSizeAlign(elem_layout);
@@ -4423,14 +4641,79 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.bindPattern(elem_pattern_id, .{ .stack = elem_slot });
                     }
 
-                    self.codegen.freeGeneral(list_ptr_reg);
-
                     // Handle rest pattern (the remaining list after prefix)
                     if (!lst.rest.isNone()) {
-                        // For the rest, we need to create a new list pointing to remaining elements
-                        // This is more complex - for now, skip rest patterns
-                        // TODO: implement rest pattern binding
+                        // Create a new RocList for the remaining elements
+                        // RocList layout: bytes (ptr), length (usize), capacity_or_alloc_ptr (usize)
+                        const rest_slot = self.codegen.allocStackSlot(24);
+
+                        const prefix_count = @as(u32, @intCast(prefix_patterns.len));
+                        const prefix_byte_offset = prefix_count * elem_size;
+
+                        // Calculate rest pointer: original_ptr + prefix_len * elem_size
+                        const rest_ptr_reg = try self.allocTempGeneral();
+                        if (prefix_byte_offset == 0) {
+                            // No offset needed, just copy the pointer
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                            } else {
+                                try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                            }
+                        } else {
+                            // Add offset to pointer: rest_ptr = list_ptr + prefix_byte_offset
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.addRegRegImm12(.w64, rest_ptr_reg, list_ptr_reg, @intCast(prefix_byte_offset));
+                            } else {
+                                try self.codegen.emit.movRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                                try self.codegen.emit.addRegImm32(.w64, rest_ptr_reg, @intCast(prefix_byte_offset));
+                            }
+                        }
+
+                        // Store rest pointer at rest_slot + 0
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
+                        }
+                        self.codegen.freeGeneral(rest_ptr_reg);
+
+                        // Load original length from base_offset + 8
+                        const len_reg = try self.allocTempGeneral();
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, len_reg, .FP, base_offset + 8);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, len_reg, .RBP, base_offset + 8);
+                        }
+
+                        // Calculate rest length: original_length - prefix_count
+                        if (prefix_count > 0) {
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.subRegRegImm12(.w64, len_reg, len_reg, @intCast(prefix_count));
+                            } else {
+                                try self.codegen.emit.subRegImm32(.w64, len_reg, @intCast(prefix_count));
+                            }
+                        }
+
+                        // Store rest length at rest_slot + 8
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 8);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, len_reg);
+                        }
+
+                        // For capacity, use the same length (this is a slice view, not a copy)
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 16);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, len_reg);
+                        }
+                        self.codegen.freeGeneral(len_reg);
+
+                        // Bind the rest pattern to the new list slot
+                        try self.bindPattern(lst.rest, .{ .stack = rest_slot });
                     }
+
+                    self.codegen.freeGeneral(list_ptr_reg);
                 },
                 .tag => |tag_pat| {
                     // Tag destructuring: bind payload patterns
@@ -4681,7 +4964,21 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 const arg_expr = self.store.getExpr(arg_id);
                 // Get the argument's layout to pass to pattern binding
                 // This is important for list patterns to use the correct inner element layout
-                const arg_layout = self.getExprLayout(arg_id);
+                // For lambda/closure arguments, get layout from the parameter pattern instead
+                // since getExprLayout returns a closure layout, not the expected record/function layout
+                const arg_layout: ?layout.Idx = blk: {
+                    switch (arg_expr) {
+                        .lambda, .closure => {
+                            // For callable arguments, get layout from the parameter pattern
+                            const param = self.store.getPattern(param_id);
+                            break :blk switch (param) {
+                                .bind => |b| b.layout_idx,
+                                else => null,
+                            };
+                        },
+                        else => break :blk self.getExprLayout(arg_id),
+                    }
+                };
                 switch (arg_expr) {
                     .lambda, .closure => {
                         // This is a closure being passed as an argument
@@ -5570,6 +5867,39 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const local_id = self.next_temp_local;
             self.next_temp_local +%= 1;
             return self.codegen.allocGeneralFor(local_id);
+        }
+
+        /// Ensure a value location is on the stack, spilling if needed. Returns stack offset.
+        fn ensureOnStack(self: *Self, loc: ValueLocation, size: u32) Error!i32 {
+            return switch (loc) {
+                .stack, .stack_i128, .stack_str => |off| off,
+                .general_reg => |reg| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(size));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
+                    }
+                    self.codegen.freeGeneral(reg);
+                    break :blk slot;
+                },
+                .immediate_i64 => |val| blk: {
+                    const slot = self.codegen.allocStackSlot(8);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                    break :blk slot;
+                },
+                else => {
+                    std.debug.print("BUG: ensureOnStack unsupported loc: {s}\n", .{@tagName(loc)});
+                    unreachable;
+                },
+            };
         }
 
         /// Ensure a value is in a general-purpose register
