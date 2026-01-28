@@ -3255,6 +3255,7 @@ fn addMainExe(
             cross_shim_lib.root_module.addImport("reporting", roc_modules.reporting);
             cross_shim_lib.root_module.addImport("tracy", roc_modules.tracy);
             cross_shim_lib.root_module.addImport("build_options", roc_modules.build_options);
+            cross_shim_lib.root_module.addImport("roc_target", roc_modules.roc_target);
             // Note: ipc module is NOT added for wasm32-freestanding as it uses POSIX calls
             // The interpreter shim main.zig has a stub for wasm32
         } else {

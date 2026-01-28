@@ -31,6 +31,7 @@ const EvalError = Interpreter.Error;
 const CrashContext = eval_mod.CrashContext;
 const BuiltinTypes = eval_mod.BuiltinTypes;
 const layout_mod = @import("layout");
+const roc_target = @import("roc_target");
 
 fn comptimeRocAlloc(alloc_args: *RocAlloc, env: *anyopaque) callconv(.c) void {
     const evaluator: *ComptimeEvaluator = @ptrCast(@alignCast(env));
@@ -178,8 +179,9 @@ pub const ComptimeEvaluator = struct {
         builtin_types: BuiltinTypes,
         builtin_module_env: ?*const ModuleEnv,
         import_mapping: *const import_mapping_mod.ImportMapping,
+        target: roc_target.RocTarget,
     ) !ComptimeEvaluator {
-        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null);
+        const interp = try Interpreter.init(allocator, cir, builtin_types, builtin_module_env, other_envs, import_mapping, null, null, target);
 
         return ComptimeEvaluator{
             .allocator = allocator,

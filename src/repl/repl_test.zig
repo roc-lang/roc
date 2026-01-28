@@ -15,6 +15,7 @@ const CIR = can_mod.CIR;
 const Repl = @import("eval.zig").Repl;
 const TestEnv = @import("repl_test_env.zig").TestEnv;
 const eval_mod = @import("eval");
+const roc_target = @import("roc_target");
 const Interpreter = eval_mod.Interpreter;
 
 // Tests
@@ -348,7 +349,7 @@ test "Repl - minimal interpreter integration" {
 
     // Step 6: Create interpreter
     const builtin_types = eval.BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &imported_envs, &checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(gpa, &module_env, builtin_types, builtin_module.env, &imported_envs, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinitAndFreeOtherEnvs();
 
     // Step 7: Evaluate

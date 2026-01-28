@@ -108,7 +108,7 @@ test "polymorphic record constructor" {
     ;
     try typeCheck(
         source,
-        \\{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, .._others], second: [False, .._others2] } }
+        \\{ pair1: { first: a, second: Str }, pair2: { first: Str, second: b }, pair3: { first: [True, ..], second: [False, ..] } }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
@@ -129,7 +129,7 @@ test "polymorphic identity with various numeric types" {
     ;
     try typeCheck(
         source,
-        \\{ bool_val: [True, .._others], float_val: a, int_val: b }
+        \\{ bool_val: [True, ..], float_val: a, int_val: b }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),
@@ -193,7 +193,7 @@ test "polymorphic swap function" {
     ;
     try typeCheck(
         source,
-        \\{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True, .._others] } }
+        \\{ swapped1: { first: Str, second: a }, swapped2: { first: b, second: [True, ..] } }
         \\  where [
         \\    a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]),
         \\    b.from_numeral : Numeral -> Try(b, [InvalidNumeral(Str)]),

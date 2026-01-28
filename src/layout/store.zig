@@ -106,6 +106,10 @@ pub const Store = struct {
     // Identifier for unqualified "Bool" in the Builtin module
     bool_plain_ident: ?Ident.Idx,
 
+    // The target's usize type (32-bit or 64-bit) - used for layout calculations
+    // This is critical for cross-compilation (e.g., compiling for wasm32 on a 64-bit host)
+    target_usize: target.TargetUsize,
+
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const num_scalars = 16;
@@ -149,6 +153,7 @@ pub const Store = struct {
         env: *ModuleEnv,
         type_store: *const types_store.Store,
         builtin_str_ident: ?Ident.Idx,
+        target_usize: target.TargetUsize,
     ) std.mem.Allocator.Error!Self {
         // Get the number of variables from the type store's slots
         const capacity = type_store.slots.backing.len();
@@ -211,6 +216,7 @@ pub const Store = struct {
             .dec_ident = env.idents.dec_type,
             .bool_ident = env.idents.bool_type,
             .bool_plain_ident = env.idents.bool,
+            .target_usize = target_usize,
         };
     }
 
@@ -649,8 +655,8 @@ pub const Store = struct {
         return @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(requested_element_size_align.alignment.toByteUnits()))));
     }
 
-    pub fn targetUsize(_: *const Self) target.TargetUsize {
-        return target.TargetUsize.native;
+    pub fn targetUsize(self: *const Self) target.TargetUsize {
+        return self.target_usize;
     }
 
     /// Get or create an empty record layout (for closures with no captures)

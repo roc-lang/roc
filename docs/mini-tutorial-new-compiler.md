@@ -10,7 +10,7 @@ By the way, if you want help, **the** best place to get it is [Roc Zulip](https:
 
 With those disclaimers in mind, let's get into the adventure!
 
-# Hello, World
+## Hello, World
 
 First, [grab a nightly build of the new compiler](https://github.com/roc-lang/nightlies/releases). It'll have an executable named `roc` (or `roc.exe` on Windows). You'll want to [put that executable on your PATH] - you'll know it worked if you can run `roc version` in a terminal and see it print something like `Roc compiler version release-fast-123c5d78` (the hash at the very end there will be different from this one, as it changes with each nightly release).
 
@@ -682,7 +682,7 @@ Roc has a first-class concept of _platforms_ and _applications_. You can [read a
 - The platform provides all the I/O primitives (such as `Stdout` and `Stdin` - that's why they're imported as `pf.Stdout` and `pf.Stdin`)
 - Roc's standard library does not include any effectful functions; they all come from the platform. We still have some platforms published in the old version of the compiler (e.g. [basic-cli](https://roc-lang.github.io/basic-cli/0.20.0/Stdout/) and [basic-webserver](https://roc-lang.github.io/basic-webserver/0.13.0/Http/#Request)) but at least as of December 1, 2025, the only platform that has been ported over to the new compiler is the one in this tutorial!
 
-# Additional Resources
+## Additional Resources
 
 For more, check out:
 - [All builtin functions](https://github.com/roc-lang/roc/blob/main/src/build/roc/Builtin.roc)

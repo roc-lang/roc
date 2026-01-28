@@ -51,6 +51,7 @@ const cache_manager_mod = @import("cache_manager.zig");
 const CacheManager = cache_manager_mod.CacheManager;
 const ImportInfo = cache_manager_mod.ImportInfo;
 const CacheModule = @import("cache_module.zig").CacheModule;
+const roc_target = @import("roc_target");
 
 // Compile-time flag for build tracing - enabled via `zig build -Dtrace-build`
 const trace_build = if (@hasDecl(build_options, "trace_build")) build_options.trace_build else false;
@@ -369,6 +370,15 @@ pub const PackageState = struct {
         if (mod.phase != .Done) return null;
         return mod.env;
     }
+
+    /// Check if a module is done (regardless of whether it has an env).
+    /// This is used to check if dependents can proceed - a module that failed
+    /// to parse is still "done" and shouldn't block dependents.
+    pub fn isDone(self: *PackageState, name: []const u8) bool {
+        const id = self.module_names.get(name) orelse return false;
+        const mod = &self.modules.items[id];
+        return mod.phase == .Done;
+    }
 };
 
 /// A reference to a module in a specific package
@@ -382,6 +392,7 @@ pub const Coordinator = struct {
     gpa: Allocator,
     mode: Mode,
     max_threads: usize,
+    target: roc_target.RocTarget,
 
     /// All packages in the workspace
     packages: std.StringHashMap(*PackageState),
@@ -468,6 +479,7 @@ pub const Coordinator = struct {
         gpa: Allocator,
         mode: Mode,
         max_threads: usize,
+        target: roc_target.RocTarget,
         builtin_modules: *const BuiltinModules,
         compiler_version: []const u8,
         cache_manager: ?*CacheManager,
@@ -480,6 +492,7 @@ pub const Coordinator = struct {
             .gpa = gpa,
             .mode = mode,
             .max_threads = max_threads,
+            .target = target,
             .packages = std.StringHashMap(*PackageState).init(gpa),
             .result_channel = try Channel(WorkerResult).init(gpa, channel.DEFAULT_CAPACITY),
             .task_queue = try std.ArrayList(WorkerTask).initCapacity(std.heap.page_allocator, initial_task_capacity),
@@ -1798,7 +1811,9 @@ pub const Coordinator = struct {
         const target_pkg_name = source.shorthands.get(qual) orelse return true;
         const target_pkg = self.packages.get(target_pkg_name) orelse return true;
 
-        return target_pkg.getEnvIfDone(rest) != null;
+        // Use isDone instead of getEnvIfDone - a module that failed to parse
+        // is still "done" and shouldn't block dependents (even if it has no env)
+        return target_pkg.isDone(rest);
     }
 
     /// Get the ModuleEnv for an external import
@@ -2137,6 +2152,7 @@ pub const Coordinator = struct {
             env,
             self.builtin_modules.builtin_module.env,
             task.imported_envs,
+            self.target,
         ) catch {
             return .{
                 .type_checked = .{
@@ -2172,7 +2188,22 @@ pub const Coordinator = struct {
             task.path,
             task.imported_envs,
             &checker.import_mapping,
-        );
+        ) catch {
+            // On allocation failure, return result with empty reports
+            self.gpa.free(task.imported_envs);
+            return .{
+                .type_checked = .{
+                    .package_name = task.package_name,
+                    .module_id = task.module_id,
+                    .module_name = task.module_name,
+                    .path = task.path,
+                    .module_env = env,
+                    .reports = reports,
+                    .type_check_ns = 0,
+                    .check_diagnostics_ns = 0,
+                },
+            };
+        };
         defer rb.deinit();
 
         for (checker.problems.problems.items) |prob| {
@@ -2263,6 +2294,7 @@ test "Coordinator basic initialization" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined, // builtin_modules - not used in this test
         "test",
         null, // cache_manager
@@ -2281,6 +2313,7 @@ test "Coordinator package creation" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2305,6 +2338,7 @@ test "Coordinator module creation" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2331,6 +2365,7 @@ test "Coordinator task queue" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2368,6 +2403,7 @@ test "Coordinator isComplete logic" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2414,6 +2450,7 @@ test "Channel in coordinator context" {
         allocator,
         .multi_threaded,
         2,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2446,6 +2483,7 @@ test "Coordinator enqueueParseTask flow" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager
@@ -2483,6 +2521,7 @@ test "Coordinator single-threaded loop with mock result" {
         allocator,
         .single_threaded,
         1,
+        roc_target.RocTarget.detectNative(),
         undefined,
         "test",
         null, // cache_manager

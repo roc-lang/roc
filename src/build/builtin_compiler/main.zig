@@ -1751,7 +1751,7 @@ fn compileModule(
         const config = reporting.ReportingConfig.initColorTerminal();
 
         const problem = check.problem;
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = try check.report.ReportBuilder.init(
             gpa,
             module_env,
             module_env,
