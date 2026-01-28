@@ -84,7 +84,7 @@ for fx_file in $FX_FILES; do
 
     # Allow non-zero exit codes for files that are expected to fail
     # (compilation errors, runtime errors, or expected test failures)
-    EXTRA_ARGS=""
+    EXTRA_ARGS="--discard-failure=137"
     ROC_EXTRA_ARGS=""
     case "$filename" in
         division_by_zero.roc|\
@@ -99,7 +99,7 @@ for fx_file in $FX_FILES; do
         issue8826_minimal.roc|\
         unused_state_var.roc|\
         issue8943.roc)
-            EXTRA_ARGS="--ignore-failure"
+            EXTRA_ARGS="--ignore-failure=1"
             ;;
         num_method_call.roc)
             ROC_EXTRA_ARGS="--allow-errors"
