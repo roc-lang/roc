@@ -2,7 +2,7 @@ on:
   workflow_call:
   workflow_dispatch:
   # temporary for testing
-  pull_request:
+  # pull_request:
 
 name: Zig Interpreter Benchmarks
 
