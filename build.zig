@@ -1998,6 +1998,7 @@ fn setupTestPlatforms(
     test_platforms_step: *Step,
     strip: bool,
     omit_frame_pointer: ?bool,
+    platform_filter: ?[]const u8,
 ) void {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
@@ -2005,6 +2006,9 @@ fn setupTestPlatforms(
 
     // Build all test platforms for native target
     for (all_test_platform_dirs) |platform_dir| {
+        if (platform_filter) |filter| {
+            if (!std.mem.eql(u8, platform_dir, filter)) continue;
+        }
         const copy_step = buildAndCopyTestPlatformHostLib(
             b,
             platform_dir,
@@ -2023,6 +2027,9 @@ fn setupTestPlatforms(
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
             const copy_step = buildAndCopyTestPlatformHostLib(
                 b,
                 platform_dir,
@@ -2042,6 +2049,9 @@ fn setupTestPlatforms(
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
 
         for (all_test_platform_dirs) |platform_dir| {
+            if (platform_filter) |filter| {
+                if (!std.mem.eql(u8, platform_dir, filter)) continue;
+            }
             const copy_step = buildAndCopyTestPlatformHostLib(
                 b,
                 platform_dir,
@@ -2116,6 +2126,7 @@ pub fn build(b: *std.Build) void {
     const trace_eval = b.option(bool, "trace-eval", "Enable detailed evaluation tracing for debugging") orelse (optimize == .Debug);
     const trace_refcount = b.option(bool, "trace-refcount", "Enable detailed refcount tracing for debugging memory issues") orelse false;
     const trace_modules = b.option(bool, "trace-modules", "Enable module compilation and import resolution tracing") orelse false;
+    const platform_filter = b.option([]const u8, "platform", "Filter which test platform to build (e.g., fx, str, int, fx-open)");
     const trace_build = b.option(bool, "trace-build", "Enable detailed build pipeline tracing") orelse false;
 
     const parsed_args = parseBuildArgs(b);
@@ -2257,7 +2268,7 @@ pub fn build(b: *std.Build) void {
     roc_modules.lsp.addImport("compiled_builtins", compiled_builtins_module);
 
     // Setup test platform host libraries
-    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer);
+    setupTestPlatforms(b, target, optimize, roc_modules, test_platforms_step, strip, omit_frame_pointer, platform_filter);
 
     const roc_exe = addMainExe(b, roc_modules, target, optimize, strip, omit_frame_pointer, use_system_llvm, user_llvm_path, flag_enable_tracy, zstd, compiled_builtins_module, write_compiled_builtins, flag_enable_tracy) orelse return;
     roc_modules.addAll(roc_exe);
