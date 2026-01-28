@@ -99,7 +99,7 @@ for fx_file in $FX_FILES; do
         issue8826_minimal.roc|\
         unused_state_var.roc|\
         issue8943.roc)
-            EXTRA_ARGS="--ignore-failure=1,2"
+            EXTRA_ARGS+=" --ignore-failure=1,2"
             ;;
         num_method_call.roc)
             ROC_EXTRA_ARGS="--allow-errors"
