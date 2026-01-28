@@ -201,6 +201,25 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             immediate_f64: f64,
             /// Immediate 128-bit value
             immediate_i128: i128,
+            /// Compiled lambda/closure code location (for first-class functions)
+            lambda_code: struct {
+                /// Offset into code buffer where the procedure starts
+                code_offset: usize,
+                /// Layout of the function's return type
+                ret_layout: layout.Idx,
+                /// Lambda parameters (for potential inlining with closure args)
+                params: mono.MonoPatternSpan,
+                /// Lambda body expression (for potential inlining)
+                body: mono.MonoExprId,
+            },
+            /// Closure value on stack - for lambda set dispatch at call sites.
+            /// Used when a closure is passed as an argument to a higher-order function.
+            closure_value: struct {
+                /// Stack offset where closure data is stored
+                stack_offset: i32,
+                /// The closure representation (contains lambda set info for dispatch)
+                representation: mono.ClosureRepresentation,
+            },
         };
 
         /// Result of code generation
@@ -465,11 +484,26 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
                 // Function calls and lambdas
                 .call => |call| try self.generateCall(call),
-                // Lambdas and closures should only appear in call position
-                // (handled by generateCall). Standalone lambda/closure values
-                // are not supported without inlining.
-                .lambda => return Error.UnsupportedExpression,
-                .closure => return Error.UnsupportedExpression,
+                // Lambdas and closures as first-class values (stored to variables)
+                .lambda => |lambda| {
+                    // Check if this lambda has any closure-typed parameters
+                    // If so, defer compilation - it will be inlined at call sites
+                    const has_closure_params = self.lambdaHasClosureParams(lambda);
+                    const code_offset = if (has_closure_params)
+                        std.math.maxInt(usize) // Sentinel for "needs inlining"
+                    else
+                        try self.compileLambdaAsProc(expr_id, lambda);
+
+                    return .{ .lambda_code = .{
+                        .code_offset = code_offset,
+                        .ret_layout = lambda.ret_layout,
+                        .params = lambda.params,
+                        .body = lambda.body,
+                    } };
+                },
+                .closure => |closure| {
+                    return try self.generateClosure(closure);
+                },
 
                 // Records
                 .empty_record => .{ .immediate_i64 = 0 },
@@ -1082,34 +1116,53 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // might be a function call that returns a record/tuple/list
             if (binop.op == .eq or binop.op == .neq) {
                 const lhs_expr = self.store.getExpr(binop.lhs);
-                // First try expression-based detection for direct literals
+                const rhs_expr = self.store.getExpr(binop.rhs);
+
+                // First try expression-based detection for direct literals (on either side)
                 if (lhs_expr == .record or lhs_expr == .tuple) {
                     return self.generateStructuralComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
+                }
+                if (rhs_expr == .record) {
+                    // RHS is a record literal - use layout-based comparison with its layout
+                    if (self.layout_store != null) {
+                        const record_layout = rhs_expr.record.record_layout;
+                        return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, record_layout, binop.op);
+                    }
+                }
+                if (rhs_expr == .tuple) {
+                    return self.generateStructuralComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
                 }
                 if (lhs_expr == .list) {
                     return self.generateListComparison(lhs_loc, rhs_loc, lhs_expr, binop.op);
                 }
+                if (rhs_expr == .list) {
+                    return self.generateListComparison(lhs_loc, rhs_loc, rhs_expr, binop.op);
+                }
 
-                // For calls/lookups, check the layout to detect composite types
+                // For calls/lookups/blocks, check the layout to detect composite types
                 if (self.layout_store) |ls| {
+                    // Try to get layout from LHS first, then RHS
                     const operand_layout: ?layout.Idx = switch (lhs_expr) {
                         .call => |call| call.ret_layout,
                         .lookup => |lookup| lookup.layout_idx,
-                        else => null, // not a call/lookup, skip
+                        .block => |block| block.result_layout,
+                        else => switch (rhs_expr) {
+                            .call => |call| call.ret_layout,
+                            .lookup => |lookup| lookup.layout_idx,
+                            .block => |block| block.result_layout,
+                            else => null,
+                        },
                     };
 
                     if (operand_layout) |op_layout| {
-                        const operand_layout_val = @intFromEnum(op_layout);
-                        if (operand_layout_val >= 16) {
-                            // This is a composite type - use layout-based comparison
-                            const stored_layout = ls.getLayout(op_layout);
-                            if (stored_layout.tag == .record) {
-                                return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                            } else if (stored_layout.tag == .tuple) {
-                                return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                            } else if (stored_layout.tag == .list) {
-                                return self.generateListComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
-                            }
+                        // Always check the layout tag to detect composite types
+                        const stored_layout = ls.getLayout(op_layout);
+                        if (stored_layout.tag == .record) {
+                            return self.generateRecordComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
+                        } else if (stored_layout.tag == .tuple) {
+                            return self.generateTupleComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
+                        } else if (stored_layout.tag == .list) {
+                            return self.generateListComparisonByLayout(lhs_loc, rhs_loc, op_layout, binop.op);
                         }
                     }
                 }
@@ -2569,6 +2622,63 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 return .{ .immediate_i64 = if (op == .eq) 1 else 0 };
             }
 
+            // Get the record size to ensure values are on stack
+            const record_size = ls.layoutSizeAlign(stored_layout).size;
+
+            // Ensure LHS is on stack (small records might be in registers)
+            const lhs_stack = switch (lhs_loc) {
+                .stack, .stack_str, .stack_i128 => |off| off,
+                .general_reg => |reg| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
+                    }
+                    break :blk slot;
+                },
+                .immediate_i64 => |val| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                    break :blk slot;
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
+            // Ensure RHS is on stack (small records might be in registers)
+            const rhs_stack = switch (rhs_loc) {
+                .stack, .stack_str, .stack_i128 => |off| off,
+                .general_reg => |reg| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, reg, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, reg);
+                    }
+                    break :blk slot;
+                },
+                .immediate_i64 => |val| blk: {
+                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, val);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                    break :blk slot;
+                },
+                else => return Error.UnsupportedExpression,
+            };
+
             const result_reg = try self.allocTempGeneral();
             try self.codegen.emitLoadImm(result_reg, 1);
 
@@ -2587,28 +2697,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 for (0..num_chunks) |chunk| {
                     const chunk_offset = offset + @as(i32, @intCast(chunk)) * 8;
 
-                    // Load LHS chunk
-                    switch (lhs_loc) {
-                        .stack, .stack_str => |base_offset| {
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, base_offset + chunk_offset);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, base_offset + chunk_offset);
-                            }
-                        },
-                        else => return Error.UnsupportedExpression,
+                    // Load LHS chunk from stack
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_lhs, .FP, lhs_stack + chunk_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_lhs, .RBP, lhs_stack + chunk_offset);
                     }
 
-                    // Load RHS chunk
-                    switch (rhs_loc) {
-                        .stack, .stack_str => |base_offset| {
-                            if (comptime builtin.cpu.arch == .aarch64) {
-                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, base_offset + chunk_offset);
-                            } else {
-                                try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, base_offset + chunk_offset);
-                            }
-                        },
-                        else => return Error.UnsupportedExpression,
+                    // Load RHS chunk from stack
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.ldrRegMemSoff(.w64, temp_rhs, .FP, rhs_stack + chunk_offset);
+                    } else {
+                        try self.codegen.emit.movRegMem(.w64, temp_rhs, .RBP, rhs_stack + chunk_offset);
                     }
 
                     // Compare
@@ -3934,11 +4034,27 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitStoreStack(.w64, offset + 16, reg);
                     self.codegen.freeGeneral(reg);
                 },
+                .lambda_code => {
+                    // lambda_code should not be copied to stack - it's only used for calling
+                    unreachable;
+                },
+                .closure_value => |cv| {
+                    // Copy the closure value from stack
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
+                    try self.codegen.emitStoreStack(.w64, offset, reg);
+                    self.codegen.freeGeneral(reg);
+                },
             }
         }
         /// Copy a specific number of bytes from a value location to a stack offset
         /// This uses the layout-determined size rather than inferring from ValueLocation type
         fn copyBytesToStackOffset(self: *Self, dest_offset: i32, loc: ValueLocation, size: u32) Error!void {
+            // Handle ZST (zero-sized types) - nothing to copy
+            if (size == 0) {
+                return;
+            }
+
             switch (loc) {
                 .immediate_i64 => |val| {
                     const reg = try self.allocTempGeneral();
@@ -4023,27 +4139,52 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     return;
                 },
                 .general_reg => |reg| {
-                    if (comptime builtin.cpu.arch == .aarch64) {
-                        switch (size) {
-                            1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
-                            2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
-                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            else => unreachable, // general_reg only valid for sizes 1, 2, 4, 8
+                    if (size <= 8) {
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            switch (size) {
+                                1 => try self.codegen.emitStoreStackByte(dest_offset, reg),
+                                2 => try self.codegen.emitStoreStackHalfword(dest_offset, reg),
+                                4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                                else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            }
+                        } else {
+                            switch (size) {
+                                1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
+                                2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
+                                4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
+                                else => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
+                            }
                         }
                     } else {
-                        switch (size) {
-                            1 => try self.codegen.emitStoreStack(.w8, dest_offset, reg),
-                            2 => try self.codegen.emitStoreStack(.w16, dest_offset, reg),
-                            4 => try self.codegen.emitStoreStack(.w32, dest_offset, reg),
-                            8 => try self.codegen.emitStoreStack(.w64, dest_offset, reg),
-                            else => unreachable, // general_reg only valid for sizes 1, 2, 4, 8
+                        // Large values (> 8 bytes) shouldn't be in a general_reg.
+                        // This can happen during inlining when a procedure call returns
+                        // a large value. Just store the first 8 bytes.
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                        } else {
+                            try self.codegen.emitStoreStack(.w64, dest_offset, reg);
                         }
                     }
                     return;
                 },
                 .stack, .stack_str, .stack_i128, .list_stack => {
                     // Handle stack locations below
+                },
+                .lambda_code => |lc| {
+                    // Store the code offset as an 8-byte pointer value
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    self.codegen.freeGeneral(reg);
+                    return;
+                },
+                .closure_value => |cv| {
+                    // Copy the closure value from its stack location
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
+                    try self.codegen.emitStoreStack(.w64, dest_offset, reg);
+                    self.codegen.freeGeneral(reg);
+                    return;
                 },
                 else => {
                     // For other locations, fall through to copyValueToStackOffset
@@ -4264,16 +4405,19 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const ls = self.layout_store orelse unreachable;
             const elem_layout = ls.getLayout(for_loop.elem_layout);
             const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
-            std.debug.assert(elem_size > 0);
+            // ZST elements (size 0) are valid - they have no data but we still iterate
             std.debug.assert(elem_size <= 1024 * 1024); // Sanity check: < 1MB
+
+            const is_zst = elem_size == 0;
 
             // CRITICAL: Store loop state on stack, not in registers!
             // The loop body may call C functions which clobber caller-saved registers.
-            // We allocate stack slots for: ptr, len, idx
+            // We allocate stack slots for: ptr, len, idx (and elem_slot only for non-ZST)
             const ptr_slot = self.codegen.allocStackSlot(8);
             const len_slot = self.codegen.allocStackSlot(8);
             const idx_slot = self.codegen.allocStackSlot(8);
-            const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+            // Only allocate element slot for non-ZST elements
+            const elem_slot: i32 = if (is_zst) 0 else self.codegen.allocStackSlot(@intCast(elem_size));
 
             // Initialize loop state on stack
             {
@@ -4323,9 +4467,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Jump to end if index >= length (we'll patch this later)
             const exit_patch = try self.emitJumpIfGreaterOrEqual();
 
-            // Load current element from list[idx] to elem_slot
+            // Load current element from list[idx] to elem_slot (skip for ZST)
             // Calculate element address: ptr + idx * elem_size
-            {
+            if (!is_zst) {
                 const ptr_reg = try self.allocTempGeneral();
                 const idx_reg = try self.allocTempGeneral();
                 const addr_reg = try self.allocTempGeneral();
@@ -4390,7 +4534,9 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
 
             // Bind the element to the pattern, passing the element layout so list patterns
             // can use the correct inner element size (the pattern's stored elem_layout may be wrong)
-            try self.bindPatternWithLayout(for_loop.elem_pattern, .{ .stack = elem_slot }, for_loop.elem_layout);
+            // For ZST elements, bind to immediate 0 (no actual data)
+            const elem_loc: ValueLocation = if (is_zst) .{ .immediate_i64 = 0 } else .{ .stack = elem_slot };
+            try self.bindPatternWithLayout(for_loop.elem_pattern, elem_loc, for_loop.elem_layout);
 
             // Execute the body (result is discarded)
             // NOTE: This may call C functions which clobber all caller-saved registers
@@ -5199,39 +5345,500 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
         }
 
-        /// Generate code for a function call (procedure-based, no inlining)
+        /// Generate code for a function call (with inlining for closures)
         fn generateCall(self: *Self, call: anytype) Error!ValueLocation {
             // Get the function expression
             const fn_expr = self.store.getExpr(call.fn_expr);
 
             return switch (fn_expr) {
-                // Direct lambda call: compile as procedure and emit CALL
+                // Direct lambda call: inline the lambda by binding params and evaluating body
+                // This allows closures to work correctly since we stay in the same stack frame
                 .lambda => |lambda| {
-                    const offset = try self.compileLambdaAsProc(call.fn_expr, lambda);
-                    return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                    // Bind the lambda's parameters to the call's arguments
+                    const args = self.store.getExprSpan(call.args);
+                    const params = self.store.getPatternSpan(lambda.params);
+                    for (params, 0..) |pattern_id, i| {
+                        if (i >= args.len) break;
+                        const arg_loc = try self.generateExpr(args[i]);
+                        // Use bindInlineParam to handle all pattern types (bind, record, list, etc.)
+                        try self.bindInlineParam(pattern_id, arg_loc);
+                    }
+                    // Evaluate the lambda body directly (inlined)
+                    return try self.generateExpr(lambda.body);
                 },
 
-                // Direct closure call: compile inner lambda as procedure
+                // Direct closure call: inline the inner lambda
                 .closure => |closure| {
                     const inner = self.store.getExpr(closure.lambda);
                     if (inner == .lambda) {
-                        const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
-                        return try self.generateCallToLambda(offset, call.args, call.ret_layout);
+                        const lambda = inner.lambda;
+                        const args = self.store.getExprSpan(call.args);
+                        const params = self.store.getPatternSpan(lambda.params);
+                        for (params, 0..) |pattern_id, i| {
+                            if (i >= args.len) break;
+                            const arg_loc = try self.generateExpr(args[i]);
+                            // Use bindInlineParam to handle all pattern types (bind, record, list, etc.)
+                            try self.bindInlineParam(pattern_id, arg_loc);
+                        }
+                        return try self.generateExpr(lambda.body);
                     }
                     return Error.UnsupportedExpression;
                 },
 
-                // Chained calls not supported without inlining
-                .call => return Error.UnsupportedExpression,
+                // Chained calls: for curried functions, we inline all nested lambdas.
+                // This handles any depth of currying: (|a| |b| a * b)(5)(10)
+                // or triple curried: (((|a| |b| |c| a + b + c)(100))(20))(3)
+                .call => |inner_call| {
+                    // Try to inline the curried function call chain
+                    const maybe_result = try self.tryInlineCurriedCall(call, inner_call);
+                    if (maybe_result) |result| {
+                        return result;
+                    }
 
-                // Block calls not supported without inlining
-                .block => return Error.UnsupportedExpression,
+                    // Fallback: try calling and check result (may not work for all cases)
+                    const inner_result = try self.generateCall(inner_call);
+                    if (inner_result == .lambda_code) {
+                        return try self.generateCallToLambda(
+                            inner_result.lambda_code.code_offset,
+                            call.args,
+                            call.ret_layout,
+                        );
+                    }
+                    return Error.UnsupportedExpression;
+                },
+
+                // Block calls: evaluate block, if it returns lambda_code, call it
+                .block => |block| {
+                    const block_result = try self.generateBlock(block);
+                    if (block_result == .lambda_code) {
+                        return try self.generateCallToLambda(
+                            block_result.lambda_code.code_offset,
+                            call.args,
+                            call.ret_layout,
+                        );
+                    }
+                    return Error.UnsupportedExpression;
+                },
 
                 // Lookup a function and call it
-                .lookup => |lookup| try self.generateLookupCall(lookup, call.args, call.ret_layout),
+                .lookup => |lookup| {
+                    // Check if the symbol is bound to a lambda_code or closure_value location
+                    const symbol_key: u48 = @bitCast(lookup.symbol);
+                    if (self.symbol_locations.get(symbol_key)) |loc| {
+                        switch (loc) {
+                            .lambda_code => |lc| {
+                                // If lambda was deferred (has closure params) or any argument
+                                // is a closure, we need to inline the function
+                                const needs_inlining = lc.code_offset == std.math.maxInt(usize);
+                                if (needs_inlining or try self.anyArgIsClosure(call.args)) {
+                                    return try self.inlineLambdaCallFromLC(lc, call.args);
+                                }
+                                return try self.generateCallToLambda(
+                                    lc.code_offset,
+                                    call.args,
+                                    call.ret_layout,
+                                );
+                            },
+                            .closure_value => |cv| {
+                                return try self.generateClosureDispatch(cv, call.args, call.ret_layout);
+                            },
+                            else => {},
+                        }
+                    }
+                    return try self.generateLookupCall(lookup, call.args, call.ret_layout);
+                },
 
                 else => return Error.UnsupportedExpression,
             };
+        }
+
+        /// Generate code for a closure expression.
+        /// Handles different closure representations based on the lambda set.
+        fn generateClosure(self: *Self, closure: anytype) Error!ValueLocation {
+            switch (closure.representation) {
+                .enum_dispatch => |repr| {
+                    // Multiple functions, no captures - just store the tag byte
+                    // Use 8-byte slot for simplicity (tag is only 1 byte but stack alignment matters)
+                    const slot = self.codegen.allocStackSlot(8);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, repr.tag);
+                    // Store as 64-bit value (low byte is the tag, rest is padding)
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                    return .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = closure.representation,
+                    } };
+                },
+                .union_repr => |repr| {
+                    // Multiple functions with captures - store tag + captures as tagged union
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const union_layout = ls.getLayout(repr.union_layout);
+                    const union_size = ls.layoutSizeAlign(union_layout).size;
+                    const slot = self.codegen.allocStackSlot(@intCast(union_size));
+                    // Store tag at offset 0 as 64-bit (low 16 bits are the tag)
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, repr.tag);
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                    // Materialize captures at payload offset (+8 for tag with padding)
+                    try self.materializeCaptures(closure.captures, slot + 8);
+                    return .{ .closure_value = .{
+                        .stack_offset = slot,
+                        .representation = closure.representation,
+                    } };
+                },
+                .unwrapped_capture, .struct_captures => {
+                    // Single function with captures - compile the lambda as a procedure.
+                    // The captures are already bound in symbol_locations when the closure
+                    // expression is evaluated, so the lambda body can access them.
+                    // This is the same as direct_call - no dispatch needed, just call the function.
+                    const inner = self.store.getExpr(closure.lambda);
+                    if (inner != .lambda) return Error.UnsupportedExpression;
+                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                    return .{ .lambda_code = .{
+                        .code_offset = code_offset,
+                        .ret_layout = inner.lambda.ret_layout,
+                        .params = inner.lambda.params,
+                        .body = inner.lambda.body,
+                    } };
+                },
+                .direct_call => {
+                    // Direct call - compile as procedure for direct calling
+                    const inner = self.store.getExpr(closure.lambda);
+                    if (inner != .lambda) return Error.UnsupportedExpression;
+                    const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                    return .{ .lambda_code = .{
+                        .code_offset = code_offset,
+                        .ret_layout = inner.lambda.ret_layout,
+                        .params = inner.lambda.params,
+                        .body = inner.lambda.body,
+                    } };
+                },
+            }
+        }
+
+        /// Materialize captured values to a stack location.
+        /// Used when creating closure values with captures.
+        fn materializeCaptures(self: *Self, captures_span: mono.MonoIR.MonoCaptureSpan, base_offset: i32) Error!void {
+            const captures = self.store.getCaptures(captures_span);
+            var offset: i32 = 0;
+            for (captures) |capture| {
+                const symbol_key: u48 = @bitCast(capture.symbol);
+                if (self.symbol_locations.get(symbol_key)) |capture_loc| {
+                    // Get size of this capture
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const capture_layout = ls.getLayout(capture.layout_idx);
+                    const capture_size = ls.layoutSizeAlign(capture_layout).size;
+
+                    // Copy value to the struct offset
+                    switch (capture_loc) {
+                        .general_reg => |reg| {
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, reg);
+                        },
+                        .stack => |src_offset| {
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadStack(.w64, temp, src_offset);
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            self.codegen.freeGeneral(temp);
+                        },
+                        .immediate_i64 => |val| {
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(temp, @bitCast(val));
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            self.codegen.freeGeneral(temp);
+                        },
+                        else => {
+                            // For complex types, just store 8 bytes for now
+                            const slot = try self.ensureOnStack(capture_loc, 8);
+                            const temp = try self.allocTempGeneral();
+                            try self.codegen.emitLoadStack(.w64, temp, slot);
+                            try self.codegen.emitStoreStack(.w64, base_offset + offset, temp);
+                            self.codegen.freeGeneral(temp);
+                        },
+                    }
+                    offset += @intCast(capture_size);
+                } else {
+                    return Error.LocalNotFound;
+                }
+            }
+        }
+
+        /// Generate code for dispatching a closure call.
+        /// Handles the different closure representations with appropriate dispatch.
+        fn generateClosureDispatch(
+            self: *Self,
+            cv: anytype,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            switch (cv.representation) {
+                .enum_dispatch => |repr| {
+                    return try self.dispatchEnumClosure(cv.stack_offset, repr.lambda_set, args_span, ret_layout);
+                },
+                .union_repr => |repr| {
+                    return try self.dispatchUnionClosure(cv.stack_offset, repr, args_span, ret_layout);
+                },
+                .unwrapped_capture => |repr| {
+                    // Single function - call directly with the captured value
+                    return try self.callSingleClosureUnwrapped(repr, cv.stack_offset, args_span, ret_layout);
+                },
+                .struct_captures => |repr| {
+                    // Single function - call directly with captures struct
+                    return try self.callSingleClosureStruct(repr, cv.stack_offset, args_span, ret_layout);
+                },
+                .direct_call => {
+                    // Should have been handled as lambda_code
+                    return Error.UnsupportedExpression;
+                },
+            }
+        }
+
+        /// Dispatch an enum closure (multiple functions, no captures).
+        /// Generates a switch on the tag to dispatch to the correct function.
+        fn dispatchEnumClosure(
+            self: *Self,
+            tag_offset: i32,
+            lambda_set: mono.LambdaSetMemberSpan,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            const members = self.store.getLambdaSetMembers(lambda_set);
+
+            if (members.len == 0) {
+                return Error.UnsupportedExpression;
+            }
+
+            if (members.len == 1) {
+                // Single function - no dispatch needed
+                const member = members[0];
+                return try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
+            }
+
+            // Load tag from stack (stored as 64-bit value, tag is in low byte)
+            const tag_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, tag_reg, tag_offset);
+
+            // Allocate result slot
+            const result_slot = self.codegen.allocStackSlot(8);
+
+            // Track end jumps for patching
+            var end_jumps = std.ArrayList(usize).empty;
+            defer end_jumps.deinit(self.allocator);
+
+            for (members, 0..) |member, i| {
+                const is_last = (i == members.len - 1);
+
+                if (!is_last) {
+                    // Compare tag with this member's tag
+                    try self.emitCmpImm(tag_reg, member.tag);
+                    const skip_jump = try self.emitJumpIfNotEqual();
+
+                    // Generate code for this branch
+                    const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
+                    try self.copyToStackSlot(result_slot, result, ret_layout);
+
+                    // Jump to end
+                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
+
+                    // Patch skip_jump to here
+                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                } else {
+                    // Last case - no comparison needed (fallthrough)
+                    const result = try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
+                    try self.copyToStackSlot(result_slot, result, ret_layout);
+                }
+            }
+
+            // Patch all end jumps to current location
+            for (end_jumps.items) |jump| {
+                self.codegen.patchJump(jump, self.codegen.currentOffset());
+            }
+
+            self.codegen.freeGeneral(tag_reg);
+            return .{ .stack = result_slot };
+        }
+
+        /// Dispatch a union closure (multiple functions, some with captures).
+        fn dispatchUnionClosure(
+            self: *Self,
+            union_offset: i32,
+            repr: anytype,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            const members = self.store.getLambdaSetMembers(repr.lambda_set);
+
+            if (members.len == 0) {
+                return Error.UnsupportedExpression;
+            }
+
+            if (members.len == 1) {
+                // Single function - call with captures from payload
+                const member = members[0];
+                // Captures start at offset +8 (after tag with padding)
+                return try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span, ret_layout);
+            }
+
+            // Load tag from stack (stored as 64-bit value, tag is in low bits)
+            const tag_reg = try self.allocTempGeneral();
+            try self.codegen.emitLoadStack(.w64, tag_reg, union_offset);
+
+            // Allocate result slot
+            const result_slot = self.codegen.allocStackSlot(8);
+
+            // Track end jumps for patching
+            var end_jumps = std.ArrayList(usize).empty;
+            defer end_jumps.deinit(self.allocator);
+
+            for (members, 0..) |member, i| {
+                const is_last = (i == members.len - 1);
+
+                if (!is_last) {
+                    // Compare tag with this member's tag
+                    try self.emitCmpImm(tag_reg, member.tag);
+                    const skip_jump = try self.emitJumpIfNotEqual();
+
+                    // Generate code for this branch (captures at +8 after tag with padding)
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span, ret_layout);
+                    try self.copyToStackSlot(result_slot, result, ret_layout);
+
+                    // Jump to end
+                    try end_jumps.append(self.allocator, try self.codegen.emitJump());
+
+                    // Patch skip_jump to here
+                    self.codegen.patchJump(skip_jump, self.codegen.currentOffset());
+                } else {
+                    // Last case - no comparison needed (fallthrough)
+                    const result = try self.compileLambdaAndCallWithCaptures(member, union_offset + 8, args_span, ret_layout);
+                    try self.copyToStackSlot(result_slot, result, ret_layout);
+                }
+            }
+
+            // Patch all end jumps to current location
+            for (end_jumps.items) |jump| {
+                self.codegen.patchJump(jump, self.codegen.currentOffset());
+            }
+
+            self.codegen.freeGeneral(tag_reg);
+            return .{ .stack = result_slot };
+        }
+
+        /// Call a single closure with an unwrapped capture (capture IS the closure value).
+        fn callSingleClosureUnwrapped(
+            self: *Self,
+            repr: anytype,
+            capture_offset: i32,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            _ = self;
+            _ = repr;
+            _ = capture_offset;
+            _ = args_span;
+            _ = ret_layout;
+            // For unwrapped_capture, there's only one function in the lambda set.
+            // This representation is used when a closure has exactly one capture.
+            // TODO: Implement when we have full lambda set tracking.
+            return Error.UnsupportedExpression;
+        }
+
+        /// Call a single closure with struct captures.
+        fn callSingleClosureStruct(
+            self: *Self,
+            repr: anytype,
+            captures_offset: i32,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            _ = self;
+            _ = repr;
+            _ = captures_offset;
+            _ = args_span;
+            _ = ret_layout;
+            // TODO: Implement when we have full lambda set tracking.
+            return Error.UnsupportedExpression;
+        }
+
+        /// Compile a lambda body expression and call it.
+        fn compileLambdaAndCall(
+            self: *Self,
+            lambda_body: mono.MonoExprId,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            const lambda_expr = self.store.getExpr(lambda_body);
+            switch (lambda_expr) {
+                .lambda => |lambda| {
+                    const code_offset = try self.compileLambdaAsProc(lambda_body, lambda);
+                    return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                },
+                .closure => |closure| {
+                    const inner = self.store.getExpr(closure.lambda);
+                    if (inner == .lambda) {
+                        const code_offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
+                        return try self.generateCallToLambda(code_offset, args_span, ret_layout);
+                    }
+                    return Error.UnsupportedExpression;
+                },
+                else => return Error.UnsupportedExpression,
+            }
+        }
+
+        /// Compile a lambda and call it, binding captures from a stack location.
+        fn compileLambdaAndCallWithCaptures(
+            self: *Self,
+            member: mono.LambdaSetMember,
+            captures_offset: i32,
+            args_span: anytype,
+            ret_layout: layout.Idx,
+        ) Error!ValueLocation {
+            // First, bind the captures from the stack to their symbols
+            const captures = self.store.getCaptures(member.captures);
+            var offset: i32 = 0;
+            for (captures) |capture| {
+                const symbol_key: u48 = @bitCast(capture.symbol);
+                const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                const capture_layout = ls.getLayout(capture.layout_idx);
+                const capture_size = ls.layoutSizeAlign(capture_layout).size;
+
+                // Bind the capture to its stack location
+                try self.symbol_locations.put(symbol_key, .{ .stack = captures_offset + offset });
+                offset += @intCast(capture_size);
+            }
+
+            // Now compile and call the lambda
+            return try self.compileLambdaAndCall(member.lambda_body, args_span, ret_layout);
+        }
+
+        /// Copy a value location to a stack slot.
+        fn copyToStackSlot(self: *Self, slot: i32, loc: ValueLocation, ret_layout: layout.Idx) Error!void {
+            _ = ret_layout;
+            switch (loc) {
+                .general_reg => |reg| {
+                    try self.codegen.emitStoreStack(.w64, slot, reg);
+                },
+                .stack => |src_offset| {
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, temp, src_offset);
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                },
+                .immediate_i64 => |val| {
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadImm(temp, @bitCast(val));
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                },
+                else => {
+                    // For other types, load to temp and store
+                    const temp_slot = try self.ensureOnStack(loc, 8);
+                    const temp = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, temp, temp_slot);
+                    try self.codegen.emitStoreStack(.w64, slot, temp);
+                    self.codegen.freeGeneral(temp);
+                },
+            }
         }
 
         /// Emit compare immediate instruction
@@ -5322,18 +5929,28 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 return try self.generateCallToCompiledProc(proc, args_span, ret_layout);
             }
 
-            // Look up the function in top-level definitions and compile as procedure
+            // Look up the function in top-level definitions
             if (self.store.getSymbolDef(lookup.symbol)) |def_expr_id| {
                 const def_expr = self.store.getExpr(def_expr_id);
 
                 return switch (def_expr) {
                     .lambda => |lambda| {
+                        // Check if any argument is a closure - if so, inline the function
+                        // so the closure can be properly dispatched
+                        if (try self.anyArgIsClosure(args_span)) {
+                            return try self.inlineLambdaCall(lambda, args_span);
+                        }
+                        // Otherwise compile as a procedure for efficiency
                         const offset = try self.compileLambdaAsProc(def_expr_id, lambda);
                         return try self.generateCallToLambda(offset, args_span, ret_layout);
                     },
                     .closure => |closure| {
                         const inner = self.store.getExpr(closure.lambda);
                         if (inner == .lambda) {
+                            // Check if any argument is a closure - if so, inline the function
+                            if (try self.anyArgIsClosure(args_span)) {
+                                return try self.inlineLambdaCall(inner.lambda, args_span);
+                            }
                             const offset = try self.compileLambdaAsProc(closure.lambda, inner.lambda);
                             return try self.generateCallToLambda(offset, args_span, ret_layout);
                         }
@@ -5344,6 +5961,269 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             }
 
             return Error.LocalNotFound;
+        }
+
+        /// Check if any argument expression is a closure (lambda or closure expression).
+        /// Used to determine if a function call should be inlined for proper closure dispatch.
+        fn anyArgIsClosure(self: *Self, args_span: anytype) Error!bool {
+            const args = self.store.getExprSpan(args_span);
+            for (args) |arg_id| {
+                const arg_expr = self.store.getExpr(arg_id);
+                switch (arg_expr) {
+                    .lambda, .closure => return true,
+                    else => {},
+                }
+            }
+            return false;
+        }
+
+        /// Check if a lambda needs inlining rather than being compiled as a procedure.
+        /// Returns true if:
+        /// - Any parameter has a closure type (can't pass closures to compiled procedures)
+        /// - Any parameter uses destructuring patterns (bindLambdaParams only handles simple .bind)
+        fn lambdaHasClosureParams(self: *Self, lambda: anytype) bool {
+            const ls = self.layout_store orelse return false;
+            const params = self.store.getPatternSpan(lambda.params);
+            for (params) |pattern_id| {
+                const pattern = self.store.getPattern(pattern_id);
+                switch (pattern) {
+                    .bind => |bind| {
+                        const layout_val = ls.getLayout(bind.layout_idx);
+                        if (layout_val.tag == .closure) {
+                            return true;
+                        }
+                    },
+                    // Non-trivial patterns (record/list destructuring) require inlining
+                    // because bindLambdaParams doesn't handle them
+                    .record, .list => return true,
+                    else => {},
+                }
+            }
+            return false;
+        }
+
+        /// Inline a lambda call by binding parameters to arguments and evaluating the body.
+        /// This is used for higher-order functions to preserve closure dispatch information.
+        fn inlineLambdaCall(self: *Self, lambda: anytype, args_span: anytype) Error!ValueLocation {
+            const args = self.store.getExprSpan(args_span);
+            const params = self.store.getPatternSpan(lambda.params);
+            for (params, 0..) |pattern_id, i| {
+                if (i >= args.len) break;
+                const arg_loc = try self.generateExpr(args[i]);
+                try self.bindInlineParam(pattern_id, arg_loc);
+            }
+            // Evaluate the lambda body directly (inlined)
+            return try self.generateExpr(lambda.body);
+        }
+
+        /// Inline a lambda call from a lambda_code location.
+        /// Used when calling a higher-order function with closure arguments.
+        fn inlineLambdaCallFromLC(self: *Self, lc: anytype, args_span: anytype) Error!ValueLocation {
+            const args = self.store.getExprSpan(args_span);
+            const params = self.store.getPatternSpan(lc.params);
+            for (params, 0..) |pattern_id, i| {
+                if (i >= args.len) break;
+                const arg_loc = try self.generateExpr(args[i]);
+                try self.bindInlineParam(pattern_id, arg_loc);
+            }
+            // Evaluate the lambda body directly (inlined)
+            return try self.generateExpr(lc.body);
+        }
+
+        /// Bind a parameter pattern to an argument location during inlining.
+        /// Handles both simple .bind patterns and destructuring patterns.
+        fn bindInlineParam(self: *Self, pattern_id: MonoPatternId, arg_loc: ValueLocation) Error!void {
+            const pattern = self.store.getPattern(pattern_id);
+            switch (pattern) {
+                .bind => |bind| {
+                    const symbol_key: u48 = @bitCast(bind.symbol);
+                    // Preserve the full type information for special types
+                    switch (arg_loc) {
+                        .stack_str, .list_stack, .stack_i128, .lambda_code, .closure_value => {
+                            try self.symbol_locations.put(symbol_key, arg_loc);
+                        },
+                        else => {
+                            const stack_slot = try self.ensureOnStack(arg_loc, 8);
+                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_slot });
+                        },
+                    }
+                },
+                .record => |rec| {
+                    // Record destructuring: {x, y} or {x: a, y: b}
+                    // The arg_loc should point to a record on the stack
+                    const base_offset: i32 = switch (arg_loc) {
+                        .stack => |off| off,
+                        else => blk: {
+                            // Ensure the record is on the stack
+                            const off = try self.ensureOnStack(arg_loc, 8);
+                            break :blk off;
+                        },
+                    };
+
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const record_layout = ls.getLayout(rec.record_layout);
+
+                    const field_patterns = self.store.getPatternSpan(rec.fields);
+                    for (field_patterns, 0..) |field_pattern_id, field_idx| {
+                        const field_pattern = self.store.getPattern(field_pattern_id);
+                        if (field_pattern == .bind) {
+                            const field_bind = field_pattern.bind;
+                            const field_symbol_key: u48 = @bitCast(field_bind.symbol);
+
+                            // Get the field offset from the record layout
+                            const field_offset = ls.getRecordFieldOffset(record_layout.data.record.idx, @intCast(field_idx));
+
+                            // Bind the field to its stack location
+                            try self.symbol_locations.put(field_symbol_key, .{ .stack = base_offset + @as(i32, @intCast(field_offset)) });
+                        }
+                    }
+                },
+                .list => |list_pat| {
+                    // List destructuring: [first, second, ..rest]
+                    // The arg_loc should point to a list (ptr, len, capacity) on the stack
+                    const list_offset: i32 = switch (arg_loc) {
+                        .list_stack => |info| info.struct_offset,
+                        .stack => |off| off,
+                        else => blk: {
+                            // Ensure the list is on the stack
+                            const off = try self.ensureOnStack(arg_loc, 24);
+                            break :blk off;
+                        },
+                    };
+
+                    // Load the list's data pointer
+                    const list_ptr_reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, list_ptr_reg, list_offset); // ptr
+
+                    const ls = self.layout_store orelse return Error.UnsupportedExpression;
+                    const elem_layout = ls.getLayout(list_pat.elem_layout);
+                    const elem_size = ls.layoutSizeAlign(elem_layout).size;
+
+                    // Handle prefix patterns (the known elements at the beginning)
+                    const prefix_patterns = self.store.getPatternSpan(list_pat.prefix);
+                    for (prefix_patterns, 0..) |elem_pattern_id, elem_idx| {
+                        // Allocate stack space for this element
+                        const elem_slot = self.codegen.allocStackSlot(@intCast(elem_size));
+
+                        // Copy element from list to stack
+                        const elem_offset_in_list = @as(i32, @intCast(elem_idx * elem_size));
+                        const temp_reg = try self.allocTempGeneral();
+
+                        if (elem_size <= 8) {
+                            // Load element from list[i] to temp
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, elem_slot);
+                            } else {
+                                try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, elem_offset_in_list);
+                                try self.codegen.emit.movMemReg(.w64, .RBP, elem_slot, temp_reg);
+                            }
+                        } else {
+                            // For larger elements (e.g., nested lists), copy 8 bytes at a time
+                            var copied: u32 = 0;
+                            while (copied < elem_size) : (copied += 8) {
+                                const src_off = elem_offset_in_list + @as(i32, @intCast(copied));
+                                const dst_off = elem_slot + @as(i32, @intCast(copied));
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, temp_reg, list_ptr_reg, src_off);
+                                    try self.codegen.emit.strRegMemSoff(.w64, temp_reg, .FP, dst_off);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, temp_reg, list_ptr_reg, src_off);
+                                    try self.codegen.emit.movMemReg(.w64, .RBP, dst_off, temp_reg);
+                                }
+                            }
+                        }
+
+                        self.codegen.freeGeneral(temp_reg);
+
+                        // Bind the element pattern to the stack slot
+                        // Use stack_i128 for 16-byte elements (Dec/i128) so that i128 operations
+                        // know to load the full 16 bytes
+                        const elem_loc: ValueLocation = if (elem_size == 16)
+                            .{ .stack_i128 = elem_slot }
+                        else
+                            .{ .stack = elem_slot };
+                        try self.bindPattern(elem_pattern_id, elem_loc);
+                    }
+
+                    // Handle rest pattern (list_pat.rest) for [a, b, ..rest]
+                    if (!list_pat.rest.isNone()) {
+                        // Create a list struct for the remaining elements
+                        // The rest list shares data with the original (a slice)
+                        const rest_slot = self.codegen.allocStackSlot(24); // ptr, len, cap
+
+                        // Calculate rest pointer: list_ptr + prefix_count * elem_size
+                        const prefix_count = prefix_patterns.len;
+                        const prefix_offset = @as(i32, @intCast(prefix_count * elem_size));
+
+                        const rest_ptr_reg = try self.allocTempGeneral();
+                        if (prefix_offset == 0) {
+                            // No prefix - rest pointer is same as list pointer
+                            try self.emitMovRegReg(rest_ptr_reg, list_ptr_reg);
+                        } else {
+                            // rest_ptr = list_ptr + prefix_offset
+                            try self.codegen.emitLoadImm(rest_ptr_reg, prefix_offset);
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.addRegRegReg(.w64, rest_ptr_reg, list_ptr_reg, rest_ptr_reg);
+                            } else {
+                                try self.codegen.emit.addRegReg(.w64, rest_ptr_reg, list_ptr_reg);
+                            }
+                        }
+
+                        // Store rest pointer at rest_slot
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, rest_ptr_reg, .FP, rest_slot);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot, rest_ptr_reg);
+                        }
+                        self.codegen.freeGeneral(rest_ptr_reg);
+
+                        // Calculate rest length: list_len - prefix_count
+                        const len_reg = try self.allocTempGeneral();
+                        try self.codegen.emitLoadStack(.w64, len_reg, list_offset + 8); // len
+                        if (prefix_count > 0) {
+                            const prefix_count_reg = try self.allocTempGeneral();
+                            try self.codegen.emitLoadImm(prefix_count_reg, @as(i64, @intCast(prefix_count)));
+                            if (comptime builtin.cpu.arch == .aarch64) {
+                                try self.codegen.emit.subRegRegReg(.w64, len_reg, len_reg, prefix_count_reg);
+                            } else {
+                                try self.codegen.emit.subRegReg(.w64, len_reg, prefix_count_reg);
+                            }
+                            self.codegen.freeGeneral(prefix_count_reg);
+                        }
+                        // Store rest length
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 8);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 8, len_reg);
+                        }
+
+                        // Store rest capacity (same as length for a slice view)
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.strRegMemSoff(.w64, len_reg, .FP, rest_slot + 16);
+                        } else {
+                            try self.codegen.emit.movMemReg(.w64, .RBP, rest_slot + 16, len_reg);
+                        }
+                        self.codegen.freeGeneral(len_reg);
+
+                        // Bind the rest pattern
+                        const rest_loc = ValueLocation{ .list_stack = .{
+                            .struct_offset = rest_slot,
+                            .data_offset = 0,
+                            .num_elements = 0, // Unknown at compile time
+                        } };
+                        try self.bindPattern(list_pat.rest, rest_loc);
+                    }
+
+                    self.codegen.freeGeneral(list_ptr_reg);
+                },
+                .wildcard => {
+                    // Wildcard: just ignore the value
+                },
+                else => {
+                    return Error.UnsupportedExpression;
+                },
+            }
         }
 
         /// Generate a call to an already-compiled procedure.
@@ -5477,6 +6357,31 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 } };
             }
 
+            // Check if return type is a record > 8 bytes that needs stack storage
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(ret_layout);
+                if (layout_val.tag == .record) {
+                    const size_align = ls.layoutSizeAlign(layout_val);
+                    if (size_align.size > 8) {
+                        // Large record return - save multiple registers to stack
+                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
+                        const num_regs = (size_align.size + 7) / 8;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        }
+                        return .{ .stack = stack_offset };
+                    }
+                }
+            }
+
             // Result is in the return register - mark it as allocated
             const ret_reg = self.getReturnRegister();
             self.codegen.markRegisterInUse(ret_reg);
@@ -5514,6 +6419,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // Load ptr (first 8 bytes of list struct)
                     try self.codegen.emitLoadStack(.w64, target_reg, list_info.struct_offset);
                 },
+                .lambda_code => |lc| {
+                    // Load the code offset into the register - used when passing lambdas as arguments
+                    try self.codegen.emitLoadImm(target_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                },
+                .closure_value => |cv| {
+                    // Load the closure value from stack
+                    try self.codegen.emitLoadStack(.w64, target_reg, cv.stack_offset);
+                },
                 .float_reg, .immediate_f64 => {
                     return Error.InvalidLocalLocation;
                 },
@@ -5533,6 +6446,7 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
         fn ensureOnStack(self: *Self, loc: ValueLocation, size: u32) Error!i32 {
             return switch (loc) {
                 .stack, .stack_i128, .stack_str => |off| off,
+                .list_stack => |info| info.struct_offset,
                 .general_reg => |reg| blk: {
                     const slot = self.codegen.allocStackSlot(@intCast(size));
                     if (comptime builtin.cpu.arch == .aarch64) {
@@ -5551,6 +6465,27 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
                     } else {
                         try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    self.codegen.freeGeneral(temp);
+                    break :blk slot;
+                },
+                .immediate_i128 => |val| blk: {
+                    // Store 128-bit immediate to stack
+                    const slot = self.codegen.allocStackSlot(16);
+                    const temp = try self.allocTempGeneral();
+                    const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                    const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                    try self.codegen.emitLoadImm(temp, @bitCast(low));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot, temp);
+                    }
+                    try self.codegen.emitLoadImm(temp, @bitCast(high));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emit.strRegMemSoff(.w64, temp, .FP, slot + 8);
+                    } else {
+                        try self.codegen.emit.movMemReg(.w64, .RBP, slot + 8, temp);
                     }
                     self.codegen.freeGeneral(temp);
                     break :blk slot;
@@ -5601,8 +6536,14 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadStack(.w64, reg, list_info.struct_offset);
                     return reg;
                 },
-                .float_reg, .immediate_f64 => {
-                    // Convert float to int - this shouldn't happen in normal code
+                .closure_value => |cv| {
+                    // Load the closure value from stack
+                    const reg = try self.allocTempGeneral();
+                    try self.codegen.emitLoadStack(.w64, reg, cv.stack_offset);
+                    return reg;
+                },
+                .float_reg, .immediate_f64, .lambda_code => {
+                    // Convert float to int or lambda_code to register - this shouldn't happen in normal code
                     return Error.InvalidLocalLocation;
                 },
             }
@@ -5644,8 +6585,8 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     try self.codegen.emitLoadStackF64(reg, offset);
                     return reg;
                 },
-                .general_reg, .immediate_i64, .immediate_i128, .stack_i128, .stack_str, .list_stack => {
-                    // Convert int to float - not supported
+                .general_reg, .immediate_i64, .immediate_i128, .stack_i128, .stack_str, .list_stack, .lambda_code, .closure_value => {
+                    // Convert int to float or lambda_code/closure_value - not supported
                     return Error.InvalidLocalLocation;
                 },
             }
@@ -6188,6 +7129,106 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             return code_start;
         }
 
+        /// Try to inline a curried function call chain.
+        /// Returns the result if successful, or null if this isn't a curried call.
+        /// Handles any depth of currying by collecting all args and binding them inline.
+        fn tryInlineCurriedCall(self: *Self, outer_call: anytype, inner_call: anytype) Error!?ValueLocation {
+            // Collect all the nested calls' arguments from outermost to innermost
+            var collected_args: std.ArrayListUnmanaged([]const MonoExprId) = .{};
+            defer collected_args.deinit(self.allocator);
+
+            // Add the outer call's args first
+            try collected_args.append(self.allocator, self.store.getExprSpan(outer_call.args));
+            // Add inner call's args
+            try collected_args.append(self.allocator, self.store.getExprSpan(inner_call.args));
+
+            // Walk the chain of calls to find more nested calls and the root lambda
+            var current_fn_expr_id = inner_call.fn_expr;
+            while (true) {
+                const expr = self.store.getExpr(current_fn_expr_id);
+                switch (expr) {
+                    .call => |nested_call| {
+                        try collected_args.append(self.allocator, self.store.getExprSpan(nested_call.args));
+                        current_fn_expr_id = nested_call.fn_expr;
+                    },
+                    .lambda, .closure => break, // Found the root lambda
+                    else => return null, // Can't inline this
+                }
+            }
+
+            // Get the root lambda
+            const root_expr = self.store.getExpr(current_fn_expr_id);
+            var lambda = switch (root_expr) {
+                .lambda => |l| l,
+                .closure => |c| blk: {
+                    const inner = self.store.getExpr(c.lambda);
+                    if (inner == .lambda) break :blk inner.lambda;
+                    return null;
+                },
+                else => return null,
+            };
+
+            // Process args from innermost to outermost (reverse order)
+            // collected_args[0] = outer call's args (last to apply)
+            // collected_args[len-1] = innermost call's args (first to apply)
+            const args_list = collected_args.items;
+            var arg_idx: usize = args_list.len;
+            while (arg_idx > 0) : (arg_idx -= 1) {
+                const args = args_list[arg_idx - 1];
+                const params = self.store.getPatternSpan(lambda.params);
+
+                // Bind this level's parameters
+                for (params, 0..) |pattern_id, i| {
+                    if (i >= args.len) break;
+                    const arg_loc = try self.generateExpr(args[i]);
+                    const pattern = self.store.getPattern(pattern_id);
+                    if (pattern == .bind) {
+                        const symbol_key: u48 = @bitCast(pattern.bind.symbol);
+                        const stack_slot = try self.ensureOnStack(arg_loc, 8);
+                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_slot });
+                    }
+                }
+
+                // If there are more levels, get the next nested lambda
+                // The body might be a direct lambda, or a block whose final expr is a lambda
+                if (arg_idx > 1) {
+                    const body_expr = self.store.getExpr(lambda.body);
+                    lambda = switch (body_expr) {
+                        .lambda => |l| l,
+                        .closure => |c| blk: {
+                            const inner = self.store.getExpr(c.lambda);
+                            if (inner == .lambda) break :blk inner.lambda;
+                            return null;
+                        },
+                        .block => |block| blk: {
+                            // Evaluate the block's statements to bind any local variables
+                            const stmts = self.store.getStmts(block.stmts);
+                            for (stmts) |stmt| {
+                                // MonoStmt is a let binding with pattern and expr fields
+                                const val_loc = try self.generateExpr(stmt.expr);
+                                try self.bindPattern(stmt.pattern, val_loc);
+                            }
+                            // Now check if the final expression is a lambda
+                            const final_expr = self.store.getExpr(block.final_expr);
+                            switch (final_expr) {
+                                .lambda => |l| break :blk l,
+                                .closure => |c| {
+                                    const inner = self.store.getExpr(c.lambda);
+                                    if (inner == .lambda) break :blk inner.lambda;
+                                    return null;
+                                },
+                                else => return null,
+                            }
+                        },
+                        else => return null,
+                    };
+                }
+            }
+
+            // Finally, evaluate the innermost lambda's body
+            return try self.generateExpr(lambda.body);
+        }
+
         /// Bind lambda parameters from argument registers.
         /// Similar to bindProcParams but works with pattern spans.
         fn bindLambdaParams(self: *Self, params: mono.MonoPatternSpan) Error!void {
@@ -6199,16 +7240,70 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 switch (pattern) {
                     .bind => |bind| {
                         const symbol_key: u48 = @bitCast(bind.symbol);
-                        const arg_reg = self.getArgumentRegister(reg_idx);
 
-                        // Spill argument to stack slot
-                        const stack_offset = self.codegen.allocStackSlot(8);
-                        try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                        // Check if this is a string parameter (24 bytes, 3 registers)
+                        if (bind.layout_idx == .str) {
+                            const arg_reg0 = self.getArgumentRegister(reg_idx);
+                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                            const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
 
-                        // Record the location
-                        try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                            const stack_offset = self.codegen.allocStackSlot(24);
+                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
 
-                        reg_idx += 1;
+                            try self.symbol_locations.put(symbol_key, .{ .stack_str = stack_offset });
+                            reg_idx += 3;
+                        }
+                        // Check if this is an i128/Dec parameter (16 bytes, 2 registers)
+                        else if (bind.layout_idx == .i128 or bind.layout_idx == .u128 or bind.layout_idx == .dec) {
+                            const arg_reg0 = self.getArgumentRegister(reg_idx);
+                            const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+
+                            const stack_offset = self.codegen.allocStackSlot(16);
+                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                            try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+
+                            try self.symbol_locations.put(symbol_key, .{ .stack_i128 = stack_offset });
+                            reg_idx += 2;
+                        }
+                        // Check if this is a list parameter (24 bytes, 3 registers)
+                        else if (self.layout_store) |ls| {
+                            if (@intFromEnum(bind.layout_idx) < ls.layouts.len()) {
+                                const layout_val = ls.getLayout(bind.layout_idx);
+                                if (layout_val.tag == .list or layout_val.tag == .list_of_zst) {
+                                    const arg_reg0 = self.getArgumentRegister(reg_idx);
+                                    const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                                    const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+
+                                    const stack_offset = self.codegen.allocStackSlot(24);
+                                    try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg0);
+                                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, arg_reg1);
+                                    try self.codegen.emitStoreStack(.w64, stack_offset + 16, arg_reg2);
+
+                                    try self.symbol_locations.put(symbol_key, .{ .list_stack = .{
+                                        .struct_offset = stack_offset,
+                                        .data_offset = 0,
+                                        .num_elements = 0,
+                                    } });
+                                    reg_idx += 3;
+                                    continue;
+                                }
+                            }
+                            // Default: single 8-byte value
+                            const arg_reg = self.getArgumentRegister(reg_idx);
+                            const stack_offset = self.codegen.allocStackSlot(8);
+                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                            reg_idx += 1;
+                        } else {
+                            // Default: single 8-byte value
+                            const arg_reg = self.getArgumentRegister(reg_idx);
+                            const stack_offset = self.codegen.allocStackSlot(8);
+                            try self.codegen.emitStoreStack(.w64, stack_offset, arg_reg);
+                            try self.symbol_locations.put(symbol_key, .{ .stack = stack_offset });
+                            reg_idx += 1;
+                        }
                     },
                     .wildcard => {
                         // Skip this argument register
@@ -6237,13 +7332,26 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .immediate_i64 => |val| {
                     try self.codegen.emitLoadImm(ret_reg, @bitCast(val));
                 },
-                .list_stack => |info| {
-                    // Return pointer to list struct on stack
+                .stack_str => |offset| {
+                    // String return (24 bytes) - load into X0/X1/X2 or RAX/RDX/RCX
+                    try self.codegen.emitLoadStack(.w64, ret_reg, offset);
                     if (comptime builtin.cpu.arch == .aarch64) {
-                        try self.codegen.emit.movRegImm64(ret_reg, @bitCast(@as(i64, info.struct_offset)));
-                        try self.codegen.emit.addRegRegReg(.w64, ret_reg, .FP, ret_reg);
+                        try self.codegen.emitLoadStack(.w64, .X1, offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .X2, offset + 16);
                     } else {
-                        try self.codegen.emit.leaRegMem(ret_reg, .RBP, info.struct_offset);
+                        try self.codegen.emitLoadStack(.w64, .RDX, offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .RCX, offset + 16);
+                    }
+                },
+                .list_stack => |info| {
+                    // List return (24 bytes) - load into X0/X1/X2 or RAX/RDX/RCX
+                    try self.codegen.emitLoadStack(.w64, ret_reg, info.struct_offset);
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadStack(.w64, .X1, info.struct_offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .X2, info.struct_offset + 16);
+                    } else {
+                        try self.codegen.emitLoadStack(.w64, .RDX, info.struct_offset + 8);
+                        try self.codegen.emitLoadStack(.w64, .RCX, info.struct_offset + 16);
                     }
                 },
                 .stack_i128 => |offset| {
@@ -6267,6 +7375,15 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                         try self.codegen.emitLoadImm(.RDX, high);
                     }
                 },
+                .lambda_code => |lc| {
+                    // Return lambda code location: code_offset in X0/RAX, ret_layout in X1/RDX
+                    try self.codegen.emitLoadImm(ret_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                    if (comptime builtin.cpu.arch == .aarch64) {
+                        try self.codegen.emitLoadImm(.X1, @intFromEnum(lc.ret_layout));
+                    } else {
+                        try self.codegen.emitLoadImm(.RDX, @intFromEnum(lc.ret_layout));
+                    }
+                },
                 else => {
                     // For other types (like float_reg), try to handle appropriately
                 },
@@ -6279,41 +7396,188 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             const args = self.store.getExprSpan(args_span);
 
             // Put arguments in registers
-            for (args, 0..) |arg_id, i| {
+            // Track register index separately since some args use multiple registers
+            var reg_idx: u8 = 0;
+            for (args) |arg_id| {
                 const arg_loc = try self.generateExpr(arg_id);
-                const arg_reg = self.getArgumentRegister(@intCast(i));
+                const arg_reg = self.getArgumentRegister(reg_idx);
 
                 switch (arg_loc) {
                     .general_reg => |reg| {
                         if (reg != arg_reg) {
                             try self.codegen.emit.movRegReg(.w64, arg_reg, reg);
                         }
+                        reg_idx += 1;
                     },
                     .stack => |offset| {
                         try self.codegen.emitLoadStack(.w64, arg_reg, offset);
+                        reg_idx += 1;
                     },
                     .immediate_i64 => |val| {
                         try self.codegen.emitLoadImm(arg_reg, @bitCast(val));
+                        reg_idx += 1;
+                    },
+                    .stack_str => |offset| {
+                        // Strings need 3 registers (24 bytes: ptr/data, len, capacity)
+                        const arg_reg0 = self.getArgumentRegister(reg_idx);
+                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, offset);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, offset + 8);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg2, .FP, offset + 16);
+                        } else {
+                            try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, offset);
+                            try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, arg_reg2, .RBP, offset + 16);
+                        }
+                        reg_idx += 3;
                     },
                     .list_stack => |info| {
-                        // Pass pointer to list struct
+                        // Lists need 3 registers (24 bytes: ptr, len, capacity)
+                        const arg_reg0 = self.getArgumentRegister(reg_idx);
+                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                        const arg_reg2 = self.getArgumentRegister(reg_idx + 2);
                         if (comptime builtin.cpu.arch == .aarch64) {
-                            try self.codegen.emit.movRegImm64(arg_reg, @bitCast(@as(i64, info.struct_offset)));
-                            try self.codegen.emit.addRegRegReg(.w64, arg_reg, .FP, arg_reg);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, info.struct_offset);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, info.struct_offset + 8);
+                            try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg2, .FP, info.struct_offset + 16);
                         } else {
-                            try self.codegen.emit.leaRegMem(arg_reg, .RBP, info.struct_offset);
+                            try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, info.struct_offset);
+                            try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, info.struct_offset + 8);
+                            try self.codegen.emit.movRegMem(.w64, arg_reg2, .RBP, info.struct_offset + 16);
                         }
+                        reg_idx += 3;
                     },
-                    else => {},
+                    .stack_i128, .immediate_i128 => {
+                        // i128 needs 2 registers
+                        const arg_reg0 = self.getArgumentRegister(reg_idx);
+                        const arg_reg1 = self.getArgumentRegister(reg_idx + 1);
+                        switch (arg_loc) {
+                            .stack_i128 => |offset| {
+                                if (comptime builtin.cpu.arch == .aarch64) {
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg0, .FP, offset);
+                                    try self.codegen.emit.ldrRegMemSoff(.w64, arg_reg1, .FP, offset + 8);
+                                } else {
+                                    try self.codegen.emit.movRegMem(.w64, arg_reg0, .RBP, offset);
+                                    try self.codegen.emit.movRegMem(.w64, arg_reg1, .RBP, offset + 8);
+                                }
+                            },
+                            .immediate_i128 => |val| {
+                                const low: u64 = @truncate(@as(u128, @bitCast(val)));
+                                const high: u64 = @truncate(@as(u128, @bitCast(val)) >> 64);
+                                try self.codegen.emitLoadImm(arg_reg0, @bitCast(low));
+                                try self.codegen.emitLoadImm(arg_reg1, @bitCast(high));
+                            },
+                            else => unreachable,
+                        }
+                        reg_idx += 2;
+                    },
+                    .lambda_code => |lc| {
+                        // For lambda_code, pass the code offset as a pointer-sized value
+                        try self.codegen.emitLoadImm(arg_reg, @bitCast(@as(i64, @intCast(lc.code_offset))));
+                        reg_idx += 1;
+                    },
+                    .closure_value => |cv| {
+                        // For closure_value, pass the stack offset pointer
+                        try self.codegen.emitLoadStack(.w64, arg_reg, cv.stack_offset);
+                        reg_idx += 1;
+                    },
+                    else => {
+                        // For other types (float_reg, immediate_f64), skip
+                        reg_idx += 1;
+                    },
                 }
             }
 
             // Emit call to the procedure
             try self.emitCallToOffset(code_offset);
 
-            // Result is in return register
-            _ = ret_layout;
-            return .{ .general_reg = self.getReturnRegister() };
+            // Handle i128/Dec return values (returned in two registers)
+            if (ret_layout == .i128 or ret_layout == .u128 or ret_layout == .dec) {
+                const stack_offset = self.codegen.allocStackSlot(16);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emitStoreStack(.w64, stack_offset, .X0);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .X1);
+                } else {
+                    try self.codegen.emitStoreStack(.w64, stack_offset, .RAX);
+                    try self.codegen.emitStoreStack(.w64, stack_offset + 8, .RDX);
+                }
+                return .{ .stack_i128 = stack_offset };
+            }
+
+            // Check if return type is a string (24 bytes)
+            if (ret_layout == .str) {
+                // String return (24 bytes) - save X0/X1/X2 to stack
+                const stack_offset = self.codegen.allocStackSlot(24);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, stack_offset + 16);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .RAX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
+                }
+                return .{ .stack_str = stack_offset };
+            }
+
+            // Check if return type is a list (24 bytes)
+            const is_list_return = if (self.layout_store) |ls| blk: {
+                const layout_val = ls.getLayout(ret_layout);
+                break :blk layout_val.tag == .list or layout_val.tag == .list_of_zst;
+            } else false;
+
+            if (is_list_return) {
+                // List return (24 bytes) - save X0/X1/X2 to stack
+                const stack_offset = self.codegen.allocStackSlot(24);
+                if (comptime builtin.cpu.arch == .aarch64) {
+                    try self.codegen.emit.strRegMemSoff(.w64, .X0, .FP, stack_offset);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X1, .FP, stack_offset + 8);
+                    try self.codegen.emit.strRegMemSoff(.w64, .X2, .FP, stack_offset + 16);
+                } else {
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset, .RAX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 8, .RDX);
+                    try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + 16, .RCX);
+                }
+                return .{ .list_stack = .{
+                    .struct_offset = stack_offset,
+                    .data_offset = 0,
+                    .num_elements = 0,
+                } };
+            }
+
+            // Check if return type is a record > 8 bytes that needs stack storage
+            if (self.layout_store) |ls| {
+                const layout_val = ls.getLayout(ret_layout);
+                if (layout_val.tag == .record) {
+                    const size_align = ls.layoutSizeAlign(layout_val);
+                    if (size_align.size > 8) {
+                        // Large record return - save multiple registers to stack
+                        const stack_offset = self.codegen.allocStackSlot(size_align.size);
+                        const num_regs = (size_align.size + 7) / 8;
+                        if (comptime builtin.cpu.arch == .aarch64) {
+                            // Save X0, X1, X2, X3... to stack based on size
+                            const regs = [_]@TypeOf(GeneralReg.X0){ .X0, .X1, .X2, .X3 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emit.strRegMemSoff(.w64, regs[i], .FP, stack_offset + @as(i32, @intCast(i * 8)));
+                            }
+                        } else {
+                            // x86_64: RAX, RDX, RCX, R8
+                            const regs = [_]@TypeOf(GeneralReg.RAX){ .RAX, .RDX, .RCX, .R8 };
+                            for (0..@min(num_regs, 4)) |i| {
+                                try self.codegen.emit.movMemReg(.w64, .RBP, stack_offset + @as(i32, @intCast(i * 8)), regs[i]);
+                            }
+                        }
+                        return .{ .stack = stack_offset };
+                    }
+                }
+            }
+
+            // Result is in the return register - mark it as allocated
+            const ret_reg = self.getReturnRegister();
+            self.codegen.markRegisterInUse(ret_reg);
+            return .{ .general_reg = ret_reg };
         }
 
         /// Fixed stack frame size for procedures (includes space for spills)

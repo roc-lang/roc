@@ -2476,3 +2476,33 @@ test "str_inspekt - empty string" {
 test "str_inspekt - large integer" {
     try runExpectStr("Str.inspect(1234567890)", "1234567890", .no_trace);
 }
+
+// ============ Higher-Order Function Tests ============
+
+test "higher-order function - simple apply" {
+    try runExpectI64(
+        \\{
+        \\    apply = |f, x| f(x)
+        \\    apply(|n| n + 1i64, 5i64)
+        \\}
+    , 6, .no_trace);
+}
+
+test "higher-order function - apply with closure" {
+    try runExpectI64(
+        \\{
+        \\    offset = 10i64
+        \\    apply = |f, x| f(x)
+        \\    apply(|n| n + offset, 5i64)
+        \\}
+    , 15, .no_trace);
+}
+
+test "higher-order function - twice" {
+    try runExpectI64(
+        \\{
+        \\    twice = |f, x| f(f(x))
+        \\    twice(|n| n * 2i64, 3i64)
+        \\}
+    , 12, .no_trace);
+}
