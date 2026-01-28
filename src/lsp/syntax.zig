@@ -1868,6 +1868,14 @@ pub const SyntaxChecker = struct {
                 }
                 // Get completions from the specified module
                 try builder.addModuleMemberCompletions(module_lookup_env, resolved_module_name, module_env_opt);
+
+                // Fallback: for local nominal types, extract tags from the type annotation
+                // (builtins and explicitly exposed items are handled above via addModuleMemberCompletions)
+                if (items.items.len == 0) {
+                    if (module_env_opt) |module_env| {
+                        _ = try builder.addTagCompletionsForNominalType(module_env, module_name, null);
+                    }
+                }
             },
             .after_value_dot => |record_access| {
                 std.debug.print("completion: after_record_dot for '{s}' at offset {d}\n", .{ record_access.access_chain, record_access.member_start });
@@ -1949,10 +1957,11 @@ pub const SyntaxChecker = struct {
                 try builder.addTypeCompletionsFromEnv(env);
             },
             .expression => {
-                // General expression context - add local definitions + module names
+                // General expression context - add local definitions + module names + structural tags
                 if (module_env_opt) |module_env| {
                     try builder.addLocalCompletions(module_env, cursor_offset);
                     try builder.addModuleNameCompletions(module_env);
+                    try builder.addAmbientTagCompletions(module_env);
                 }
                 try builder.addModuleNameCompletionsFromEnv(env);
             },
