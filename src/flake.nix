@@ -45,6 +45,7 @@
             zls
             git # for use in ci/zig_lints.sh
             typos # used in CI, helpful to run before committing to catch typos
+            jq # see ci/benchmarks_zig.sh
           ])
           ++ pkgs.lib.optionals isLinux kcovBuildDeps;
 
