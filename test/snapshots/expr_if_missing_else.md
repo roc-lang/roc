@@ -30,7 +30,7 @@ foo = if tru 0
 ```
              ^
 
-The value's type, which does not have a method named **from_numeral**, is:
+The value's type, which does not have a method named**from_numeral**, is:
 
     {}
 

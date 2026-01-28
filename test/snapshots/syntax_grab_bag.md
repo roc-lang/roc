@@ -264,10 +264,10 @@ UNUSED VARIABLE - syntax_grab_bag.md:180:2:180:17
 UNUSED VARIABLE - syntax_grab_bag.md:188:2:188:15
 UNUSED VARIABLE - syntax_grab_bag.md:189:2:189:23
 UNDECLARED TYPE - syntax_grab_bag.md:201:9:201:14
-INVALID IF CONDITION - syntax_grab_bag.md:70:5:70:5
-INCOMPATIBLE MATCH PATTERNS - syntax_grab_bag.md:84:2:84:2
-TOO FEW ARGUMENTS - syntax_grab_bag.md:155:2:157:3
-TYPE MISMATCH - syntax_grab_bag.md:168:4:169:11
+TYPE MISMATCH - syntax_grab_bag.md:70:5:70:8
+TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
+TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
+TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
 TYPE MISMATCH - syntax_grab_bag.md:144:9:196:2
 TYPE MISMATCH - syntax_grab_bag.md:150:3:150:6
 # PROBLEMS
@@ -847,22 +847,22 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**syntax_grab_bag.md:70:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**syntax_grab_bag.md:70:5:70:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The fourth branch of this `match` does not match the previous ones:
 **syntax_grab_bag.md:84:2:**
 ```roc
 	match a {
@@ -923,18 +923,18 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 ```
   ^^^^^
 
-The fourth pattern has this type:
+This fourth branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Red, ..[Blue, Green, .._others]]
+    [Red, ..[Blue, Green, ..]]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **syntax_grab_bag.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -942,16 +942,20 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
-    [Red, ..[Blue, Green, .._others]], _arg -> Error
+    [Red, ..[Blue, Green, ..]], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**syntax_grab_bag.md:168:4:169:11:**
+**syntax_grab_bag.md:167:3:**
 ```roc
+		add_one(
 			dbg # After dbg in list
 				number, # after dbg expr as arg
+		), # Comment one
 ```
 
 This argument has the type:
@@ -1025,9 +1029,11 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 **TYPE MISMATCH**
 This `return` does not match the function's return type:
@@ -1039,7 +1045,7 @@ This `return` does not match the function's return type:
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
 But the function's return type is:
 
@@ -2717,7 +2723,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2763,7 +2769,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

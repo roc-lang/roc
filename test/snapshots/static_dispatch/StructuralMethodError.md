@@ -55,7 +55,7 @@ This **greet** method is being called on a value whose type doesn't have that me
 ```
       ^^^^^
 
-The value's type, which does not have a method named **greet**, is:
+The value's type, which does not have a method named**greet**, is:
 
     {}
 

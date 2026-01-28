@@ -273,11 +273,11 @@ UNUSED VARIABLE - fuzz_crash_023.md:180:2:180:17
 UNUSED VARIABLE - fuzz_crash_023.md:188:2:188:15
 UNUSED VARIABLE - fuzz_crash_023.md:189:2:189:23
 UNDECLARED TYPE - fuzz_crash_023.md:201:9:201:14
-INVALID IF CONDITION - fuzz_crash_023.md:70:5:70:5
-INCOMPATIBLE MATCH PATTERNS - fuzz_crash_023.md:84:2:84:2
-TOO FEW ARGUMENTS - fuzz_crash_023.md:155:2:157:3
-TYPE MISMATCH - fuzz_crash_023.md:168:4:169:11
-UNUSED VALUE - fuzz_crash_023.md:178:42:178:42
+TYPE MISMATCH - fuzz_crash_023.md:70:5:70:8
+TYPE MISMATCH - fuzz_crash_023.md:84:2:84:2
+TOO FEW ARGS - fuzz_crash_023.md:155:2:157:3
+TYPE MISMATCH - fuzz_crash_023.md:167:3:167:3
+TYPE MISMATCH - fuzz_crash_023.md:178:42:178:45
 TYPE MISMATCH - fuzz_crash_023.md:144:9:196:2
 # PROBLEMS
 **PARSE ERROR**
@@ -955,22 +955,22 @@ tuple : Value((a, b, c))
         ^^^^^
 
 
-**INVALID IF CONDITION**
-This `if` condition needs to be a _Bool_:
-**fuzz_crash_023.md:70:5:**
+**TYPE MISMATCH**
+This `if` condition must evaluate to a `Bool`–either `True` or `False`:
+**fuzz_crash_023.md:70:5:70:8:**
 ```roc
 	if num {
 ```
-    ^^^
+	   ^^^
 
-Right now, it has the type:
+It is:
 
     U64
 
-Every `if` condition must evaluate to a _Bool_–either `True` or `False`.
+But I need this to be a `Bool` value.
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern in the fourth branch of this `match` differs from previous ones:
+**TYPE MISMATCH**
+The fourth branch of this `match` does not match the previous ones:
 **fuzz_crash_023.md:84:2:**
 ```roc
 	match a {
@@ -1031,18 +1031,18 @@ The pattern in the fourth branch of this `match` differs from previous ones:
 ```
   ^^^^^
 
-The fourth pattern has this type:
+This fourth branch is trying to match:
 
     Str
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
-    [Red, ..[Blue, Green, .._others]]
+    [Red, ..[Blue, Green, ..]]
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
-**TOO FEW ARGUMENTS**
-The function `match_time` expects 2 arguments, but 1 was provided:
+**TOO FEW ARGS**
+The `match_time` function expects 2 arguments, but it got 1 instead:
 **fuzz_crash_023.md:155:2:157:3:**
 ```roc
 	match_time(
@@ -1050,16 +1050,20 @@ The function `match_time` expects 2 arguments, but 1 was provided:
 	)
 ```
 
-The function has the signature:
+The `match_time` function has the type:
 
-    [Red, ..[Blue, Green, .._others]], _arg -> Error
+    [Red, ..[Blue, Green, ..]], _arg -> Error
+
+Are there any missing commas?
 
 **TYPE MISMATCH**
 The first argument being passed to this function has the wrong type:
-**fuzz_crash_023.md:168:4:169:11:**
+**fuzz_crash_023.md:167:3:**
 ```roc
+		add_one(
 			dbg # After dbg in list
 				number, # after dbg expr as arg
+		), # Comment one
 ```
 
 This argument has the type:
@@ -1070,19 +1074,20 @@ But `add_one` needs the first argument to be:
 
     U64
 
-**UNUSED VALUE**
+**TYPE MISMATCH**
 This expression produces a value, but it's not being used:
-**fuzz_crash_023.md:178:42:**
+**fuzz_crash_023.md:178:42:178:45:**
 ```roc
 	record = { foo: 123, bar: "Hello", ;az: tag, qux: Ok(world), punned }
 ```
-                                         ^^^
+	                                        ^^^
 
 It has the type:
 
-    [Blue, .._others]
+    [Blue, ..]
 
-Since this expression is used as a statement, it must evaluate to _{}_. If you don't need the value, you can ignore it with `_ =`.
+Since this expression is used as a statement, it must evaluate to `{}`.
+If you don't need the value, you can ignore it with `_ =`.
 
 **TYPE MISMATCH**
 This expression is used in an unexpected way:
@@ -1147,9 +1152,11 @@ It has the type:
 
     List(Error) => Try({  }, _d)
 
-But the type annotation says it should have the type:
+But the annotation say it should be:
 
     List(Error) -> Try({  }, _d)
+
+**Hint:** This function is effectful, but a pure function is expected.
 
 # TOKENS
 ~~~zig
@@ -2815,7 +2822,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(patt (type "Error -> U64"))
-		(patt (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(patt (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(patt (type "Error"))
 		(patt (type "List(Error) -> Try({  }, _d)"))
 		(patt (type "{}"))
@@ -2862,7 +2869,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Error)])]"))
 		(expr (type "Error -> U64"))
-		(expr (type "[Red, ..[Blue, Green, .._others]], _arg -> Error"))
+		(expr (type "[Red, ..[Blue, Green, ..]], _arg -> Error"))
 		(expr (type "Error"))
 		(expr (type "List(Error) -> Try({  }, _d)"))
 		(expr (type "{}"))

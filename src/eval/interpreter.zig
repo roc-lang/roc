@@ -10195,7 +10195,7 @@ pub const Interpreter = struct {
 
         var i: usize = 0;
         while (i < params.len) : (i += 1) {
-            _ = try unify.unifyWithConf(
+            _ = try unify.unifyInContext(
                 self.runtime_layout_store.env,
                 self.runtime_types,
                 &self.problems,
@@ -10205,7 +10205,7 @@ pub const Interpreter = struct {
                 &self.unify_scratch.occurs_scratch,
                 params[i],
                 args[i],
-                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                .none,
             );
         }
         // ret_var may now be constrained
@@ -12748,7 +12748,7 @@ pub const Interpreter = struct {
                 // call_ret_rt_var (fresh translation) because the function's return var
                 // has concrete type args while call_ret_rt_var may have rigid type args.
                 const effective_ret_var = if (poly_entry) |entry| blk: {
-                    _ = try unify.unifyWithConf(
+                    _ = try unify.unifyInContext(
                         self.runtime_layout_store.env,
                         self.runtime_types,
                         &self.problems,
@@ -12758,7 +12758,7 @@ pub const Interpreter = struct {
                         &self.unify_scratch.occurs_scratch,
                         call_ret_rt_var,
                         entry.return_var,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                        .none,
                     );
                     // Use the function's return type - it has properly instantiated type args
                     break :blk entry.return_var;
@@ -18050,7 +18050,7 @@ pub const Interpreter = struct {
                         // Unify the method's first parameter with the receiver type
                         const method_params = self.runtime_types.sliceVars(func_info.args);
                         if (method_params.len >= 1) {
-                            _ = try unify.unifyWithConf(
+                            _ = try unify.unifyInContext(
                                 self.env,
                                 self.runtime_types,
                                 &self.problems,
@@ -18060,7 +18060,7 @@ pub const Interpreter = struct {
                                 &self.unify_scratch.occurs_scratch,
                                 method_params[0],
                                 da.receiver_rt_var,
-                                unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                                .none,
                             );
                         }
 
@@ -18353,7 +18353,7 @@ pub const Interpreter = struct {
                                 // Create a fresh copy of the argument's type to avoid corrupting the original
                                 const arg_resolved = self.runtime_types.resolveVar(all_args[unify_idx].rt_var);
                                 const arg_copy = try self.runtime_types.freshFromContent(arg_resolved.desc.content);
-                                _ = unify.unifyWithConf(
+                                _ = unify.unifyInContext(
                                     self.runtime_layout_store.env,
                                     self.runtime_types,
                                     &self.problems,
@@ -18363,7 +18363,7 @@ pub const Interpreter = struct {
                                     &self.unify_scratch.occurs_scratch,
                                     param_vars[unify_idx],
                                     arg_copy,
-                                    unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                                    .none,
                                 ) catch {};
                             }
                             // Return type is now properly instantiated through unification
@@ -18469,7 +18469,7 @@ pub const Interpreter = struct {
                     // Create a copy of the receiver's type to avoid corrupting the original
                     const recv_resolved = self.runtime_types.resolveVar(dac.receiver_rt_var);
                     const recv_copy = try self.runtime_types.freshFromContent(recv_resolved.desc.content);
-                    _ = unify.unifyWithConf(
+                    _ = unify.unifyInContext(
                         self.env,
                         self.runtime_types,
                         &self.problems,
@@ -18479,7 +18479,7 @@ pub const Interpreter = struct {
                         &self.unify_scratch.occurs_scratch,
                         fn_args[0],
                         recv_copy,
-                        unify.Conf{ .ctx = .anon, .constraint_origin_var = null },
+                        .none,
                     ) catch {};
                 }
 

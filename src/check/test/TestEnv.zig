@@ -11,6 +11,7 @@ const collections = @import("collections");
 
 const Check = @import("../Check.zig");
 const problem_mod = @import("../problem.zig");
+const report_mod = @import("../report.zig");
 
 const testing = std.testing;
 
@@ -542,7 +543,7 @@ pub fn assertOneTypeError(self: *TestEnv, expected: []const u8) !void {
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = problem_mod.ReportBuilder.init(
+    var report_builder = try report_mod.ReportBuilder.init(
         self.gpa,
         self.module_env,
         self.module_env,
@@ -571,7 +572,7 @@ pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) !void {
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = problem_mod.ReportBuilder.init(
+    var report_builder = try report_mod.ReportBuilder.init(
         self.gpa,
         self.module_env,
         self.module_env,
@@ -603,7 +604,7 @@ pub fn assertFirstTypeError(self: *TestEnv, expected: []const u8) !void {
     const problem = self.checker.problems.problems.items[0];
 
     // Assert the rendered problem matches the expected problem
-    var report_builder = problem_mod.ReportBuilder.init(
+    var report_builder = try report_mod.ReportBuilder.init(
         self.gpa,
         self.module_env,
         self.module_env,
@@ -681,7 +682,7 @@ fn assertNoCanProblems(self: *TestEnv) !void {
 }
 
 fn assertNoTypeProblems(self: *TestEnv) !void {
-    var report_builder = problem_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping);
+    var report_builder = try report_mod.ReportBuilder.init(self.gpa, self.module_env, self.module_env, &self.checker.snapshots, &self.checker.problems, "test", &.{}, &self.checker.import_mapping);
     defer report_builder.deinit();
 
     var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
