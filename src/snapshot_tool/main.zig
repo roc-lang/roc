@@ -42,7 +42,6 @@ const LineColMode = base.SExprTree.LineColMode;
 const CacheModule = compile.CacheModule;
 const AST = parse.AST;
 const Report = reporting.Report;
-const types_problem_mod = check.problem;
 const parallel = base.parallel;
 
 var verbose_log: bool = false;

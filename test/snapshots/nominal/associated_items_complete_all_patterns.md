@@ -7387,14 +7387,14 @@ Is there an `import` or `exposing` missing up-top?
 
 
 **TYPE MODULE MISSING MATCHING TYPE**
-Type modules must have a type declaration matching the module name.
+Type modules must have a nominal type declaration matching the module name.
 
-This file is named `Test`.roc, but no top-level type declaration named `Test` was found.
+This file is named `Test`.roc, but no top-level nominal type named `Test` was found.
 
-Add either:
-`Test := ...` (nominal type)
+Add a nominal type like:
+`Test := ...`
 or:
-`Test : ...` (type alias)
+`Test :: ...` (opaque nominal type)
 **associated_items_complete_all_patterns.md:2:1:433:2:**
 ```roc
 d1_forward := [A].{

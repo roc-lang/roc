@@ -1706,33 +1706,96 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const module_name_bytes = self.getIdent(data.module_name);
             const module_name = try report.addOwnedString(module_name_bytes);
 
-            try report.document.addReflowingText("Type modules must have a type declaration matching the module name.");
+            try report.document.addReflowingText("Type modules must have a nominal type declaration matching the module name.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
             try report.document.addText("This file is named ");
             try report.document.addInlineCode(module_name);
-            try report.document.addReflowingText(".roc, but no top-level type declaration named ");
+            try report.document.addReflowingText(".roc, but no top-level nominal type named ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(" was found.");
             try report.document.addLineBreak();
             try report.document.addLineBreak();
 
-            try report.document.addReflowingText("Add either:");
+            try report.document.addReflowingText("Add a nominal type like:");
             try report.document.addLineBreak();
             const nominal_msg = try std.fmt.allocPrint(allocator, "{s} := ...", .{module_name_bytes});
             defer allocator.free(nominal_msg);
             const owned_nominal = try report.addOwnedString(nominal_msg);
             try report.document.addInlineCode(owned_nominal);
-            try report.document.addReflowingText(" (nominal type)");
             try report.document.addLineBreak();
             try report.document.addReflowingText("or:");
             try report.document.addLineBreak();
-            const alias_msg = try std.fmt.allocPrint(allocator, "{s} : ...", .{module_name_bytes});
-            defer allocator.free(alias_msg);
-            const owned_alias = try report.addOwnedString(alias_msg);
-            try report.document.addInlineCode(owned_alias);
-            try report.document.addReflowingText(" (type alias)");
+            const opaque_msg = try std.fmt.allocPrint(allocator, "{s} :: ...", .{module_name_bytes});
+            defer allocator.free(opaque_msg);
+            const owned_opaque = try report.addOwnedString(opaque_msg);
+            try report.document.addInlineCode(owned_opaque);
+            try report.document.addReflowingText(" (opaque nominal type)");
+            try report.document.addLineBreak();
+
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                region_info,
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+
+            break :blk report;
+        },
+        .type_module_has_alias_not_nominal => |data| blk: {
+            const region_info = self.calcRegionInfo(data.region);
+
+            var report = Report.init(allocator, "TYPE MODULE REQUIRES NOMINAL TYPE", .runtime_error);
+
+            const module_name_bytes = self.getIdent(data.module_name);
+            const module_name = try report.addOwnedString(module_name_bytes);
+
+            try report.document.addText("This file is named ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addText(".roc, and contains a type alias ");
+            try report.document.addInlineCode(module_name);
+            try report.document.addReflowingText(".");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Type modules must use nominal types (");
+            try report.document.addInlineCode(":=");
+            try report.document.addReflowingText(" or ");
+            try report.document.addInlineCode("::");
+            try report.document.addReflowingText("), not type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(").");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Nominal types must be records or tag unions:");
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Record example:");
+            try report.document.addLineBreak();
+            const record_example = try std.fmt.allocPrint(allocator, "{s} := {{ data: List(U8) }}.{{}}", .{module_name_bytes});
+            defer allocator.free(record_example);
+            const owned_record = try report.addOwnedString(record_example);
+            try report.document.addInlineCode(owned_record);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("# Tag union example:");
+            try report.document.addLineBreak();
+            const tag_example = try std.fmt.allocPrint(allocator, "{s} := [ State(List(U8)) ].{{}}", .{module_name_bytes});
+            defer allocator.free(tag_example);
+            const owned_tag = try report.addOwnedString(tag_example);
+            try report.document.addInlineCode(owned_tag);
+            try report.document.addLineBreak();
+            try report.document.addLineBreak();
+
+            try report.document.addReflowingText("Tip: Nominal types have their own identity and can have associated functions. Type aliases (");
+            try report.document.addInlineCode(":");
+            try report.document.addReflowingText(") are just shorthand for another type and cannot define modules.");
             try report.document.addLineBreak();
 
             const owned_filename = try report.addOwnedString(filename);

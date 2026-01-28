@@ -1249,6 +1249,7 @@ pub const PackageEnv = struct {
 
         var czer = try Can.init(env, parse_ast, &module_envs_map);
         try czer.canonicalizeFile();
+        try czer.validateForChecking();
         czer.deinit();
     }
 
@@ -1499,10 +1500,10 @@ pub const PackageEnv = struct {
         return null;
     }
 
+    /// Extract the module name from a file path.
+    /// Delegates to base.module_path.getModuleName for the implementation.
     pub fn moduleNameFromPath(path: []const u8) []const u8 {
-        const base_name = std.fs.path.basename(path);
-        if (std.mem.lastIndexOfScalar(u8, base_name, '.')) |dot| return base_name[0..dot];
-        return base_name;
+        return base.module_path.getModuleName(path);
     }
 
     pub fn tryEmitReady(self: *PackageEnv) !void {
