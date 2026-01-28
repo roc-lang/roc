@@ -500,11 +500,6 @@ pub fn listWithCapacityC(
     inc: Inc,
     roc_ops: *RocOps,
 ) callconv(.c) void {
-    // DEBUG: Panic if capacity is too large
-    if (capacity > 1000000) {
-        @panic("listWithCapacityC: capacity too large - likely garbage value");
-    }
-
     out.* = listWithCapacity(
         capacity,
         alignment,

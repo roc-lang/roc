@@ -329,6 +329,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             result_layout: layout.Idx,
             tuple_len: usize,
         ) Error!CodeResult {
+            // Clear any leftover state from compileAllProcs to ensure clean slate
+            // for the main expression. This is critical because procedure compilation
+            // uses positive stack offsets while main expression uses negative offsets.
+            self.symbol_locations.clearRetainingCapacity();
+            self.mutable_var_slots.clearRetainingCapacity();
+
             // Track where the main expression code starts
             // (procedures may have been compiled before this, at the start of the buffer)
             const main_code_start = self.codegen.currentOffset();
@@ -574,7 +580,6 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                     // List is a (ptr, len, capacity) triple - length is at offset 8
                     if (args.len < 1) return Error.UnsupportedExpression;
                     const list_loc = try self.generateExpr(args[0]);
-
 
                     // Get base offset from either stack or list_stack location
                     const base_offset: i32 = switch (list_loc) {
@@ -7048,6 +7053,17 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
                 .name = proc.name,
             });
 
+            // Save current state - procedure has its own scope that shouldn't pollute caller
+            const saved_stack_offset = self.codegen.stack_offset;
+            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
+            defer saved_symbol_locations.deinit();
+            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
+            defer saved_mutable_var_slots.deinit();
+
+            // Clear state for procedure's scope
+            self.symbol_locations.clearRetainingCapacity();
+            self.mutable_var_slots.clearRetainingCapacity();
+
             // Generate function prologue (save frame, allocate stack)
             try self.emitPrologue();
 
@@ -7079,6 +7095,13 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             if (self.proc_registry.getPtr(key)) |entry| {
                 entry.code_end = code_end;
             }
+
+            // Restore state
+            self.codegen.stack_offset = saved_stack_offset;
+            self.symbol_locations.deinit();
+            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+            self.mutable_var_slots.deinit();
+            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
         }
 
         /// Compile a lambda expression as a standalone procedure.
@@ -7101,8 +7124,18 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Register before generating (for potential recursive calls)
             try self.compiled_lambdas.put(key, code_start);
 
-            // Save current stack state
+            // Save current state - both stack offset AND symbol locations
+            // IMPORTANT: We must save symbol_locations because the procedure has its own
+            // parameter bindings that shouldn't pollute the caller's symbol map
             const saved_stack_offset = self.codegen.stack_offset;
+            var saved_symbol_locations = self.symbol_locations.clone() catch return Error.OutOfMemory;
+            defer saved_symbol_locations.deinit();
+            var saved_mutable_var_slots = self.mutable_var_slots.clone() catch return Error.OutOfMemory;
+            defer saved_mutable_var_slots.deinit();
+
+            // Clear state for the procedure's scope
+            self.symbol_locations.clearRetainingCapacity();
+            self.mutable_var_slots.clearRetainingCapacity();
 
             // Emit prologue
             try self.emitPrologue();
@@ -7119,8 +7152,12 @@ pub fn MonoExprCodeGenFor(comptime CodeGen: type, comptime GeneralReg: type, com
             // Emit epilogue and return
             try self.emitEpilogue();
 
-            // Restore stack state
+            // Restore state
             self.codegen.stack_offset = saved_stack_offset;
+            self.symbol_locations.deinit();
+            self.symbol_locations = saved_symbol_locations.clone() catch return Error.OutOfMemory;
+            self.mutable_var_slots.deinit();
+            self.mutable_var_slots = saved_mutable_var_slots.clone() catch return Error.OutOfMemory;
 
             // Patch the skip jump to point here (after the lambda code)
             const after_lambda = self.codegen.currentOffset();
