@@ -16,7 +16,7 @@ match ... {
 ~~~
 # EXPECTED
 TYPE MISMATCH - pattern_alternatives_mixed.md:2:10:2:11
-INCOMPATIBLE MATCH PATTERNS - pattern_alternatives_mixed.md:1:1:1:1
+TYPE MISMATCH - pattern_alternatives_mixed.md:1:1:1:1
 # PROBLEMS
 **TYPE MISMATCH**
 This number is being used where a non-number type is needed:
@@ -37,8 +37,8 @@ Other code expects this to have the type:
 
     Str
 
-**INCOMPATIBLE MATCH PATTERNS**
-The pattern first pattern in this third`match` differs from previous ones:
+**TYPE MISMATCH**
+This pattern in the  third branch of this `match` does not match the previous ones:
 **pattern_alternatives_mixed.md:1:1:**
 ```roc
 match ... {
@@ -52,15 +52,15 @@ match ... {
 ```
  ^^^^^
 
-The third pattern has this type:
+This pattern is trying to match:
 
-    [Ok(_a), .._others]
+    [Ok(_a), ..]
 
-But all the previous patterns have this type: 
+But the expression between the `match` parenthesis has the type:
 
     Str
 
-All patterns in an `match` must have compatible types.
+These can never match! Either the pattern or expression has a problem.
 
 # TOKENS
 ~~~zig

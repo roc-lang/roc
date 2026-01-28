@@ -1148,7 +1148,7 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
         logDebug("compileSource: Type checking complete\n", .{});
 
         // Collect type checking problems and convert them to reports using ReportBuilder
-        var report_builder = problem.ReportBuilder.init(
+        var report_builder = check.report.ReportBuilder.init(
             allocator,
             result.module_env,
             type_can_ir,
@@ -1157,7 +1157,11 @@ fn compileSource(source: []const u8, module_name: []const u8) !CompilerStageData
             "main.roc",
             &.{}, // other_modules - empty for playground
             &solver.import_mapping,
-        );
+        ) catch |err| {
+            // On allocation failure, return result with current reports
+            logDebug("compileSource: ReportBuilder.init failed: {}\n", .{err});
+            return result;
+        };
         defer report_builder.deinit();
 
         for (solver.problems.problems.items) |type_problem| {

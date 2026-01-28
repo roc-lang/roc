@@ -8,6 +8,7 @@ const check = @import("check");
 const builtins = @import("builtins");
 const collections = @import("collections");
 const compiled_builtins = @import("compiled_builtins");
+const roc_target = @import("roc_target");
 
 const helpers = @import("helpers.zig");
 const builtin_loading = @import("../builtin_loading.zig");
@@ -410,7 +411,7 @@ fn runExpectSuccess(src: []const u8, should_trace: enum { trace, no_trace }) !vo
     const resources = try helpers.parseAndCanonicalizeExpr(std.testing.allocator, src);
     defer helpers.cleanupParseAndCanonical(std.testing.allocator, resources);
 
-    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null);
+    var interpreter = try Interpreter.init(testing.allocator, resources.module_env, resources.builtin_types, resources.builtin_module.env, &[_]*const can.ModuleEnv{}, &resources.checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
     defer interpreter.deinit();
 
     const enable_trace = should_trace == .trace;
@@ -768,7 +769,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
     // Test 1: Evaluate with the original ModuleEnv
     {
         const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+        var interpreter = try Interpreter.init(gpa, &original_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
         defer interpreter.deinit();
 
         const ops = test_env_instance.get_ops();
@@ -846,7 +847,7 @@ test "ModuleEnv serialization and interpreter evaluation" {
         // The original expression index should still be valid since the NodeStore structure is preserved
         {
             const builtin_types_local = BuiltinTypes.init(builtin_indices, builtin_module.env, builtin_module.env, builtin_module.env);
-            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null);
+            var interpreter = try Interpreter.init(gpa, deserialized_env, builtin_types_local, builtin_module.env, &[_]*const can.ModuleEnv{}, &checker.import_mapping, null, null, roc_target.RocTarget.detectNative());
             defer interpreter.deinit();
 
             const ops = test_env_instance.get_ops();
@@ -2382,4 +2383,27 @@ test "issue 8978: incref alignment with recursive tag unions in tuples" {
         \\    n
         \\}
     , 42, .no_trace);
+}
+
+test "Bool.True and Bool.False raw values - bug confirmation" {
+    // Test that Bool.True and Bool.False have different raw byte values
+    // Bug report: both Bool.True and Bool.False write 0x00 to memory
+    try runExpectBool("Bool.True", true, .no_trace);
+    try runExpectBool("Bool.False", false, .no_trace);
+}
+
+test "Bool in record field - bug confirmation" {
+    // Test Bool values when stored in record fields
+    // This is closer to the bug report scenario where Bool is in a struct
+    try runExpectBool("{ flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ flag: Bool.False }.flag", false, .no_trace);
+}
+
+test "Bool in record with mixed alignment fields - bug confirmation" {
+    // Test Bool in a record with fields of different alignments
+    // Similar to the bug report: { key: U64, childCount: U32, isElement: Bool }
+    try runExpectBool("{ key: 42u64, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, flag: Bool.False }.flag", false, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.True }.flag", true, .no_trace);
+    try runExpectBool("{ key: 42u64, count: 1u32, flag: Bool.False }.flag", false, .no_trace);
 }

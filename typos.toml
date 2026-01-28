@@ -19,6 +19,12 @@ extend-exclude = [
 
 [default]
 extend-ignore-identifiers-re = [".*_SME_.*"]
+extend-ignore-re = [
+    # Ignore the line after `# spellchecker:ignore-next-line`:
+    "(#|//)\\s*spellchecker:ignore-next-line\\n.*",
+    # Ignore blocks between `# spellchecker:off` and `# spellchecker:on`
+    "(?s)(#|//)\\s*spellchecker:off.*?\\n\\s*(#|//)\\s*spellchecker:on",
+]
 
 [default.extend-words]
 typ = "typ"

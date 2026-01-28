@@ -22,6 +22,7 @@ const tracy = @import("tracy");
 
 const Repl = repl.Repl;
 const CrashContext = eval_mod.CrashContext;
+const roc_target = @import("roc_target");
 const CommonEnv = base.CommonEnv;
 const Check = check.Check;
 const CIR = can.CIR;
@@ -399,7 +400,7 @@ fn generateAllReports(
     // Generate type checking reports
     for (solver.problems.problems.items) |problem| {
         const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = types_problem_mod.ReportBuilder.init(
+        var report_builder = check.ReportBuilder.init(
             allocator,
             module_env,
             can_ir,
@@ -408,7 +409,7 @@ fn generateAllReports(
             snapshot_path,
             empty_modules,
             &solver.import_mapping,
-        );
+        ) catch continue;
         defer report_builder.deinit();
 
         const report = report_builder.build(problem) catch |err| {
@@ -1334,7 +1335,7 @@ fn processSnapshotContent(
             const ComptimeEvaluator = eval_mod.ComptimeEvaluator;
             const builtin_types = BuiltinTypes.init(config.builtin_indices, builtin_env, builtin_env, builtin_env);
             const imported_envs: []const *const ModuleEnv = builtin_modules.items;
-            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping);
+            var comptime_evaluator = try ComptimeEvaluator.init(allocator, can_ir, imported_envs, &solver.problems, builtin_types, builtin_env, &solver.import_mapping, roc_target.RocTarget.detectNative());
             defer comptime_evaluator.deinit();
 
             // First evaluate any top-level defs

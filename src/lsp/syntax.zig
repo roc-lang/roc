@@ -18,6 +18,7 @@ const compiled_builtins = @import("compiled_builtins");
 
 const BuildEnv = compile.BuildEnv;
 const CacheManager = compile.CacheManager;
+const roc_target = @import("roc_target");
 const CacheConfig = compile.CacheConfig;
 const FileProvider = compile.package.FileProvider;
 const ModuleEnv = can.ModuleEnv;
@@ -212,7 +213,7 @@ pub const SyntaxChecker = struct {
         const env_ptr = try self.allocator.create(BuildEnv);
         errdefer self.allocator.destroy(env_ptr);
 
-        env_ptr.* = try BuildEnv.init(self.allocator, .single_threaded, 1);
+        env_ptr.* = try BuildEnv.init(self.allocator, .single_threaded, 1, roc_target.RocTarget.detectNative());
         env_ptr.compiler_version = build_options.compiler_version;
 
         if (self.cache_config.enabled) {

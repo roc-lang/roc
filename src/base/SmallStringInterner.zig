@@ -72,27 +72,27 @@ pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) std.mem.Allocator.E
 /// This copies the deserialized data into newly allocated memory that can be grown.
 /// Call this after deserialization but before using the interner for runtime operations.
 pub fn enableRuntimeInserts(self: *SmallStringInterner, gpa: std.mem.Allocator) std.mem.Allocator.Error!void {
-    // Copy the bytes array into newly allocated memory
-    const bytes_slice = self.bytes.items.items;
-    var new_bytes = try collections.SafeList(u8).initCapacity(gpa, bytes_slice.len);
-    if (bytes_slice.len > 0) {
-        @memcpy(new_bytes.items.items.ptr, bytes_slice);
-        new_bytes.items.items.len = bytes_slice.len;
+    // Skip if already supports inserts (avoid memory leak from double-call)
+    if (self.supports_inserts) {
+        return;
     }
+
+    // Copy the bytes array into newly allocated memory using proper ArrayList API
+    const bytes_slice = self.bytes.items.items;
+    var new_bytes = collections.SafeList(u8){};
+    try new_bytes.items.ensureTotalCapacity(gpa, bytes_slice.len);
+    try new_bytes.items.appendSlice(gpa, bytes_slice);
     self.bytes = new_bytes;
 
-    // Copy the hash_table array into newly allocated memory
+    // Copy the hash_table array into newly allocated memory using proper ArrayList API
     const hash_table_slice = self.hash_table.items.items;
-    var new_hash_table = try collections.SafeList(Idx).initCapacity(gpa, hash_table_slice.len);
-    if (hash_table_slice.len > 0) {
-        @memcpy(new_hash_table.items.items.ptr, hash_table_slice);
-        new_hash_table.items.items.len = hash_table_slice.len;
-    }
+    var new_hash_table = collections.SafeList(Idx){};
+    try new_hash_table.items.ensureTotalCapacity(gpa, hash_table_slice.len);
+    try new_hash_table.items.appendSlice(gpa, hash_table_slice);
     self.hash_table = new_hash_table;
 
-    if (std.debug.runtime_safety) {
-        self.supports_inserts = true;
-    }
+    // Mark as supporting inserts so deinit will free the memory
+    self.supports_inserts = true;
 }
 
 /// Free all memory consumed by this interner.
